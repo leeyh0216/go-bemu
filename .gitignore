@@ -3,6 +3,11 @@
 *.duckdb
 *.duckdb.wal
 coverage.out
+.envrc.local
+.pytest_cache/
+.venv/
+__pycache__/
+*.pyc
 .DS_Store
 certs/*.pem
 !certs/.gitkeep

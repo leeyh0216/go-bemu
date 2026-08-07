@@ -1,0 +1,7 @@
+# Safe local defaults. Copy only machine-specific overrides to .envrc.local.
+export BQEMU_CONFIG="${BQEMU_CONFIG:-$PWD/configs/bqemu.yaml}"
+export BQEMU_DATABASE_DSN="${BQEMU_DATABASE_DSN:-$PWD/data/bqemu.duckdb}"
+export BQEMU_TEMP_DIRECTORY="${BQEMU_TEMP_DIRECTORY:-${TMPDIR:-/tmp}/bqemu}"
+export BQEMU_GO_TEST_TIMEOUT="${BQEMU_GO_TEST_TIMEOUT:-10m}"
+export BQEMU_PYTEST_TIMEOUT_SECONDS="${BQEMU_PYTEST_TIMEOUT_SECONDS:-300}"
+export BQEMU_DOCKER_START_TIMEOUT_SECONDS="${BQEMU_DOCKER_START_TIMEOUT_SECONDS:-120}"
