@@ -1,5 +1,13 @@
 package domain
 
+// BigQuery Job and JobStatus state provenance:
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/JobStatus
+//
+// DONE is terminal for both success and failure. A successful DONE job has a
+// result and no errorResult; a failed DONE job has an errorResult. Clients must
+// inspect both state and errorResult rather than treating DONE as success.
+
 import (
 	"fmt"
 	"time"
@@ -51,6 +59,10 @@ func NewQueryJob(reference JobReference, query string, now time.Time) (*Job, err
 		return nil, fmt.Errorf("%w: job reference and query are required", ErrInvalid)
 	}
 	if reference.Location == "" {
+		// US is BigQuery's documented default multi-region for callers that use
+		// the domain constructor directly. Runtime composition supplies its
+		// configured default before this boundary.
+		// https://cloud.google.com/bigquery/docs/locations
 		reference.Location = "US"
 	}
 	return &Job{Reference: reference, Query: query, State: JobPending, CreatedAt: now}, nil
@@ -75,6 +87,9 @@ func (j *Job) Complete(result QueryResult, now time.Time) error {
 	return nil
 }
 
+// Fail intentionally transitions RUNNING to DONE. This mirrors the REST wire
+// contract where status.state remains DONE and status.errorResult carries the
+// terminal failure; there is no separate FAILED state.
 func (j *Job) Fail(reason, message string, now time.Time) error {
 	if j.State != JobRunning {
 		return fmt.Errorf("%w: cannot fail job in state %s", ErrConflict, j.State)

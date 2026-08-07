@@ -30,6 +30,23 @@ func TestJobStateMachine(t *testing.T) {
 	}
 }
 
+func TestFailedJobIsTerminalDoneWithErrorResult(t *testing.T) {
+	now := time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC)
+	job, err := NewQueryJob(JobReference{ProjectID: "test-project", JobID: "job-failed"}, "SELECT missing", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Start(now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Fail("invalidQuery", "column not found", now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if job.State != JobDone || job.Error == nil || job.Error.Reason != "invalidQuery" || job.Result != nil || job.EndedAt == nil {
+		t.Fatalf("failed jobs must be terminal DONE with errorResult: %#v", job)
+	}
+}
+
 func TestFieldValidationRejectsDuplicateAndInvalidTypes(t *testing.T) {
 	table := Table{
 		ProjectID: "test-project", DatasetID: "analytics", ID: "events",
