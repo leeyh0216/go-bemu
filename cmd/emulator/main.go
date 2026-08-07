@@ -167,9 +167,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	// Storage adapters are registered independently. A nil application service
 	// retains the generated RPC surface but reports NOT_SERVING and returns
 	// UNIMPLEMENTED rather than advertising a false capability.
-	grpcService := grpcserver.NewWithServices(grpcserver.Services{
+	grpcRuntime := grpcserver.NewRuntimeWithServices(grpcserver.Services{
 		Read: readRuntime.Service, Write: writeRuntime.Service,
 	}, grpcOptions...)
+	grpcService := grpcRuntime.Server()
 
 	endpoints := make([]servingEndpoint, 0, 3)
 	publicListener, err := net.Listen("tcp", cfg.Server.HTTP.Address)
@@ -253,12 +254,15 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())
-	defer cancel()
-	shutdownErr := shutdownServers(shutdownCtx, publicHTTP, adminHTTP, grpcService)
-	readCloseErr := readRuntime.Close(shutdownCtx)
+	grpcRuntime.MarkNotServing()
+	drainContext, drainCancel := context.WithTimeout(context.Background(), cfg.Runtime.ServerDrainTimeout.Value())
+	shutdownErr := shutdownServers(drainContext, publicHTTP, adminHTTP, grpcService)
+	drainCancel()
+	storageContext, storageCancel := context.WithTimeout(context.Background(), cfg.Runtime.StorageCloseTimeout.Value())
+	defer storageCancel()
+	readCloseErr := readRuntime.Close(storageContext)
 	readRuntime = nil
-	writeCloseErr := writeRuntime.Close(shutdownCtx)
+	writeCloseErr := writeRuntime.Close(storageContext)
 	writeRuntime = nil
 	if servingFailure != nil {
 		return errors.Join(servingFailure, shutdownErr, readCloseErr, writeCloseErr)
