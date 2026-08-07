@@ -1,0 +1,343 @@
+package duckdb
+
+// GoogleSQL lexical and DML provenance:
+//   - https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical
+//   - https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement
+//   - https://duckdb.org/docs/stable/sql/statements/merge_into
+//
+// Query translation is isolated from physical catalog/schema administration so
+// a future GoogleSQL parser or backend can replace it without changing metadata
+// use cases.
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/observability"
+	"github.com/leeyh0216/go-bemu/internal/ports"
+)
+
+var _ ports.QueryEngine = (*Warehouse)(nil)
+
+func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (result domain.QueryResult, err error) {
+	queryAttrs := observability.PayloadAttrs("query", []byte(request.SQL))
+	queryAttrs = append(queryAttrs,
+		"project_id", request.ProjectID, "default_dataset", request.DefaultDataset,
+		"statement_type", queryStatementType(request.SQL), "transaction_mode", "autocommit",
+	)
+	started := observability.LogSideEffectStart(ctx, "duckdb", "query", queryAttrs...)
+	defer func() {
+		resultSummary := fmt.Sprintf("%v", result.Rows)
+		columnsSummary := fmt.Sprintf("%v", result.Columns)
+		observability.LogSideEffectEnd(ctx, "duckdb", "query", started, err,
+			"project_id", request.ProjectID, "statement_type", queryStatementType(request.SQL),
+			"row_count", len(result.Rows), "affected_rows", result.AffectedRows,
+			"result_bytes", len(resultSummary), "result_digest", observability.Digest([]byte(resultSummary)),
+			"schema_fingerprint", observability.Digest([]byte(columnsSummary)), "transaction_mode", "autocommit")
+	}()
+	statement, err := translateSQL(request)
+	if err != nil {
+		return domain.QueryResult{}, err
+	}
+	if !returnsRows(statement) {
+		execResult, err := w.db.ExecContext(ctx, statement)
+		if err != nil {
+			return domain.QueryResult{}, fmt.Errorf("execute query: %w", err)
+		}
+		affected, _ := execResult.RowsAffected()
+		return domain.QueryResult{AffectedRows: affected}, nil
+	}
+	rows, err := w.db.QueryContext(ctx, statement)
+	if err != nil {
+		return domain.QueryResult{}, fmt.Errorf("execute query: %w", err)
+	}
+	defer rows.Close()
+	columnTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return domain.QueryResult{}, fmt.Errorf("read result schema: %w", err)
+	}
+	result = domain.QueryResult{Columns: make([]domain.Column, len(columnTypes))}
+	for i, columnType := range columnTypes {
+		result.Columns[i] = domain.Column{Name: columnType.Name(), Type: bigQueryType(columnType.DatabaseTypeName())}
+	}
+	for rows.Next() {
+		values := make([]any, len(columnTypes))
+		destinations := make([]any, len(columnTypes))
+		for i := range values {
+			destinations[i] = &values[i]
+		}
+		if err := rows.Scan(destinations...); err != nil {
+			return domain.QueryResult{}, fmt.Errorf("scan result row: %w", err)
+		}
+		result.Rows = append(result.Rows, values)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.QueryResult{}, fmt.Errorf("read result rows: %w", err)
+	}
+	return result, nil
+}
+
+func queryStatementType(statement string) string {
+	fields := strings.Fields(strings.ToUpper(strings.TrimSpace(statement)))
+	if len(fields) == 0 {
+		return "UNKNOWN"
+	}
+	return fields[0]
+}
+
+func translateSQL(request ports.QueryRequest) (string, error) {
+	return rewriteGoogleSQLIdentifiers(request)
+}
+
+// rewriteGoogleSQLIdentifiers is a lexical boundary, not a general GoogleSQL
+// parser. It preserves quoted strings and comments byte-for-byte, converts
+// backtick column/alias identifiers to DuckDB quotes, and maps only identifiers
+// that occur where DML/DDL grammar expects a relation. Unsupported or malformed
+// quoted input fails before reaching DuckDB.
+func rewriteGoogleSQLIdentifiers(request ports.QueryRequest) (string, error) {
+	var result strings.Builder
+	result.Grow(len(request.SQL) + 32)
+	expectRelation := false
+	relationList := false
+	relationDepth := 0
+	depth := 0
+	cteNames := make(map[string]struct{})
+	expectCTEName := false
+
+	for index := 0; index < len(request.SQL); {
+		current := request.SQL[index]
+		switch {
+		case current == '\'' || current == '"':
+			end, err := scanQuotedLiteral(request.SQL, index, current)
+			if err != nil {
+				return "", err
+			}
+			result.WriteString(request.SQL[index:end])
+			index = end
+		case current == '-' && index+1 < len(request.SQL) && request.SQL[index+1] == '-':
+			end := scanLineComment(request.SQL, index)
+			result.WriteString(request.SQL[index:end])
+			index = end
+		case current == '#':
+			end := scanLineComment(request.SQL, index)
+			result.WriteString(request.SQL[index:end])
+			index = end
+		case current == '/' && index+1 < len(request.SQL) && request.SQL[index+1] == '*':
+			end, err := scanBlockComment(request.SQL, index)
+			if err != nil {
+				return "", err
+			}
+			result.WriteString(request.SQL[index:end])
+			index = end
+		case current == '`':
+			identifier, end, err := scanBacktickIdentifier(request.SQL, index)
+			if err != nil {
+				return "", err
+			}
+			if expectCTEName {
+				cteNames[strings.ToLower(identifier)] = struct{}{}
+				result.WriteString(quoteIdentifier(identifier))
+				expectCTEName = false
+				expectRelation = false
+			} else if expectRelation {
+				translated, err := translateRelationIdentifier(request, identifier, cteNames)
+				if err != nil {
+					return "", err
+				}
+				result.WriteString(translated)
+				expectRelation = false
+			} else {
+				result.WriteString(quoteIdentifier(identifier))
+			}
+			index = end
+		case isIdentifierStart(current):
+			end := index + 1
+			for end < len(request.SQL) && isIdentifierPart(request.SQL[end]) {
+				end++
+			}
+			word := request.SQL[index:end]
+			upper := strings.ToUpper(word)
+			if expectCTEName {
+				cteNames[strings.ToLower(word)] = struct{}{}
+				expectCTEName = false
+			}
+			if expectRelation && !isRelationModifier(upper) {
+				expectRelation = false
+			}
+			switch upper {
+			case "WITH":
+				expectCTEName = true
+			case "FROM":
+				expectRelation, relationList, relationDepth = true, true, depth
+			case "JOIN":
+				expectRelation = true
+			case "MERGE", "INTO", "UPDATE", "USING":
+				expectRelation = true
+			case "TABLE":
+				expectRelation = true
+			case "WHERE", "GROUP", "HAVING", "QUALIFY", "WINDOW", "ORDER", "LIMIT", "UNION", "EXCEPT", "INTERSECT", "RETURNING":
+				if depth <= relationDepth {
+					relationList = false
+				}
+			}
+			result.WriteString(word)
+			index = end
+		case current == '(':
+			if expectRelation {
+				expectRelation = false
+			}
+			depth++
+			result.WriteByte(current)
+			index++
+		case current == ')':
+			if depth > 0 {
+				depth--
+			}
+			result.WriteByte(current)
+			index++
+		case current == ',':
+			if relationList && depth == relationDepth {
+				expectRelation = true
+			}
+			result.WriteByte(current)
+			index++
+		default:
+			result.WriteByte(current)
+			index++
+		}
+	}
+	return result.String(), nil
+}
+
+func translateRelationIdentifier(request ports.QueryRequest, reference string, cteNames map[string]struct{}) (string, error) {
+	parts := strings.Split(reference, ".")
+	switch len(parts) {
+	case 3:
+		return quoteIdentifier(physicalSchema(parts[0], parts[1])) + "." + quoteIdentifier(parts[2]), nil
+	case 2:
+		if request.ProjectID == "" {
+			return "", fmt.Errorf("%w: project is required for table reference %q", domain.ErrInvalid, reference)
+		}
+		return quoteIdentifier(physicalSchema(request.ProjectID, parts[0])) + "." + quoteIdentifier(parts[1]), nil
+	case 1:
+		if _, isCTE := cteNames[strings.ToLower(reference)]; isCTE {
+			return quoteIdentifier(reference), nil
+		}
+		if request.ProjectID == "" || request.DefaultDataset == "" {
+			return "", fmt.Errorf("%w: default dataset is required for table reference %q", domain.ErrInvalid, reference)
+		}
+		return quoteIdentifier(physicalSchema(request.ProjectID, request.DefaultDataset)) + "." + quoteIdentifier(parts[0]), nil
+	default:
+		return "", fmt.Errorf("%w: malformed table reference %q", domain.ErrInvalid, reference)
+	}
+}
+
+func scanQuotedLiteral(statement string, start int, quote byte) (int, error) {
+	for index := start + 1; index < len(statement); index++ {
+		if statement[index] == '\\' {
+			index++
+			continue
+		}
+		if statement[index] != quote {
+			continue
+		}
+		if index+1 < len(statement) && statement[index+1] == quote {
+			index++
+			continue
+		}
+		return index + 1, nil
+	}
+	return 0, fmt.Errorf("%w: unterminated quoted SQL literal", domain.ErrInvalid)
+}
+
+func scanBacktickIdentifier(statement string, start int) (string, int, error) {
+	var identifier strings.Builder
+	for index := start + 1; index < len(statement); index++ {
+		if statement[index] == '\\' && index+1 < len(statement) {
+			index++
+			identifier.WriteByte(statement[index])
+			continue
+		}
+		if statement[index] == '`' {
+			if identifier.Len() == 0 {
+				return "", 0, fmt.Errorf("%w: quoted identifier cannot be empty", domain.ErrInvalid)
+			}
+			return identifier.String(), index + 1, nil
+		}
+		identifier.WriteByte(statement[index])
+	}
+	return "", 0, fmt.Errorf("%w: unterminated backtick identifier", domain.ErrInvalid)
+}
+
+func scanLineComment(statement string, start int) int {
+	if newline := strings.IndexByte(statement[start:], '\n'); newline >= 0 {
+		return start + newline + 1
+	}
+	return len(statement)
+}
+
+func scanBlockComment(statement string, start int) (int, error) {
+	if end := strings.Index(statement[start+2:], "*/"); end >= 0 {
+		return start + 2 + end + 2, nil
+	}
+	return 0, fmt.Errorf("%w: unterminated block comment", domain.ErrInvalid)
+}
+
+func isIdentifierStart(value byte) bool {
+	return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+}
+
+func isIdentifierPart(value byte) bool {
+	return isIdentifierStart(value) || value >= '0' && value <= '9'
+}
+
+func isRelationModifier(word string) bool {
+	switch word {
+	case "IF", "NOT", "EXISTS", "ONLY":
+		return true
+	default:
+		return false
+	}
+}
+
+func returnsRows(statement string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(statement))
+	for _, prefix := range []string{"SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA"} {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func bigQueryType(databaseType string) string {
+	upper := strings.ToUpper(databaseType)
+	switch {
+	case strings.Contains(upper, "BOOL"):
+		return "BOOLEAN"
+	case strings.Contains(upper, "INT"):
+		return "INTEGER"
+	case strings.Contains(upper, "DOUBLE"), strings.Contains(upper, "FLOAT"):
+		return "FLOAT"
+	case strings.Contains(upper, "DECIMAL"):
+		return "NUMERIC"
+	case strings.Contains(upper, "TIMESTAMP WITH TIME ZONE"), strings.Contains(upper, "TIMESTAMPTZ"):
+		return "TIMESTAMP"
+	case strings.Contains(upper, "TIMESTAMP"):
+		return "DATETIME"
+	case strings.Contains(upper, "DATE"):
+		return "DATE"
+	case strings.Contains(upper, "TIME"):
+		return "TIME"
+	case strings.Contains(upper, "BLOB"):
+		return "BYTES"
+	case strings.Contains(upper, "JSON"):
+		return "JSON"
+	case strings.Contains(upper, "STRUCT"):
+		return "RECORD"
+	default:
+		return "STRING"
+	}
+}
