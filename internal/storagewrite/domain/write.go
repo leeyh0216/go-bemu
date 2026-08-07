@@ -114,6 +114,7 @@ type AppendRequest struct {
 	Offset            *int64
 	Descriptor        []byte
 	Rows              [][]byte
+	PayloadBytes      int
 	WireBytes         int
 	SchemaFingerprint string
 	PayloadDigest     string

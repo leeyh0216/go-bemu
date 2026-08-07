@@ -46,6 +46,7 @@ type fakeCoordinator struct {
 	discarded   []string
 	commits     int
 	failCommit  bool
+	commitHook  func()
 	stageErr    error
 }
 
@@ -89,6 +90,9 @@ func (c *fakeCoordinator) CommitPending(_ context.Context, request ports.CommitR
 	for _, name := range request.StreamNames {
 		delete(c.staged, name)
 	}
+	if c.commitHook != nil {
+		c.commitHook()
+	}
 	return nil
 }
 
@@ -106,7 +110,7 @@ func newTestService(t *testing.T, maxStreams int) (*Service, *fakeCoordinator, *
 	clock := &fakeClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	service, err := New(Config{
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
-		MaxStreams: maxStreams, MaxAppendBytes: 1024 * 1024,
+		MaxStreams: maxStreams, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 4,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}, coordinator, clock, &sequenceIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -118,7 +122,7 @@ func newTestService(t *testing.T, maxStreams int) (*Service, *fakeCoordinator, *
 func TestConfigAcceptsPinnedConnectorClientRequestLimit(t *testing.T) {
 	config := Config{
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
-		MaxStreams: 1, MaxAppendBytes: ProtocolMaxAppendBytes,
+		MaxStreams: 1, MaxAppendBytes: ProtocolMaxAppendBytes, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 1,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}
 	if err := validateConfig(config); err != nil {
@@ -130,6 +134,44 @@ func TestConfigAcceptsPinnedConnectorClientRequestLimit(t *testing.T) {
 	}
 }
 
+func TestAppendLimitMeasuresProtoDataNotRequestEnvelope(t *testing.T) {
+	ctx, cancel := storageWriteTestContext(t)
+	defer cancel()
+	service, _, _ := newTestService(t, 3)
+	stream, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := appendRequest(stream.Name, 0)
+	request.PayloadBytes = 1024 * 1024
+	request.WireBytes = request.PayloadBytes + 4096
+	if _, err := service.Append(ctx, request); err != nil {
+		t.Fatalf("client-valid ProtoData with request envelope: %v", err)
+	}
+
+	second, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = appendRequest(second.Name, 0)
+	request.PayloadBytes = 1024*1024 + 1
+	request.WireBytes = request.PayloadBytes + 4096
+	if _, err := service.Append(ctx, request); domain.CodeOf(err) != domain.ErrorInvalidArgument {
+		t.Fatalf("oversize ProtoData = %v (%s), want INVALID_ARGUMENT", err, domain.CodeOf(err))
+	}
+
+	third, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = appendRequest(third.Name, 0)
+	request.PayloadBytes = 1024
+	request.WireBytes = request.PayloadBytes + 64*1024 + 1
+	if _, err := service.Append(ctx, request); domain.CodeOf(err) != domain.ErrorInvalidArgument {
+		t.Fatalf("oversize envelope = %v (%s), want INVALID_ARGUMENT", err, domain.CodeOf(err))
+	}
+}
+
 func testParent() domain.TableReference {
 	return domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "events"}
 }
@@ -137,7 +179,7 @@ func testParent() domain.TableReference {
 func appendRequest(name string, offset int64) domain.AppendRequest {
 	return domain.AppendRequest{
 		StreamName: name, Offset: &offset, Descriptor: []byte("descriptor"),
-		Rows: [][]byte{{byte(offset)}}, WireBytes: 100,
+		Rows: [][]byte{{byte(offset)}}, PayloadBytes: 90, WireBytes: 100,
 		SchemaFingerprint: digest([]byte("descriptor")), PayloadDigest: rowsDigest([][]byte{{byte(offset)}}),
 	}
 }
@@ -241,6 +283,87 @@ func TestAppendPreservesCoordinatorResourceExhausted(t *testing.T) {
 	}
 }
 
+func TestAppendClassifiesCoordinatorTimeoutsWithoutAdvancingLedger(t *testing.T) {
+	for name, injected := range map[string]struct {
+		err  error
+		code domain.ErrorCode
+	}{
+		"queue wait": {err: ports.ErrQueueWaitTimeout, code: domain.ErrorResourceExhausted},
+		"operation":  {err: ports.ErrOperationTimeout, code: domain.ErrorDeadlineExceeded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := storageWriteTestContext(t)
+			defer cancel()
+			service, coordinator, _ := newTestService(t, 1)
+			stream, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+			if err != nil {
+				t.Fatal(err)
+			}
+			coordinator.mu.Lock()
+			coordinator.stageErr = injected.err
+			coordinator.mu.Unlock()
+			if _, err := service.Append(ctx, appendRequest(stream.Name, 0)); domain.CodeOf(err) != injected.code {
+				t.Fatalf("append error = %v (%s), want %s", err, domain.CodeOf(err), injected.code)
+			}
+			got, err := service.GetStream(ctx, stream.Name)
+			if err != nil || got.NextOffset != 0 || got.RowCount != 0 {
+				t.Fatalf("timed-out append advanced ledger: %#v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestPendingAppendMustReconcileAmbiguousAcknowledgementBeforeFinalize(t *testing.T) {
+	ctx, cancel := storageWriteTestContext(t)
+	defer cancel()
+	service, coordinator, _ := newTestService(t, 1)
+	stream, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := appendRequest(stream.Name, 0)
+	coordinator.mu.Lock()
+	coordinator.stageErr = ports.ErrOperationTimeout
+	coordinator.mu.Unlock()
+	if _, err := service.Append(ctx, original); domain.CodeOf(err) != domain.ErrorDeadlineExceeded {
+		t.Fatalf("ambiguous append = %v (%s), want DEADLINE_EXCEEDED", err, domain.CodeOf(err))
+	}
+	if _, err := service.Finalize(ctx, stream.Name); domain.CodeOf(err) != domain.ErrorFailedPrecondition {
+		t.Fatalf("finalize before reconciliation = %v (%s), want FAILED_PRECONDITION", err, domain.CodeOf(err))
+	}
+	different := appendRequest(stream.Name, 0)
+	different.Rows = [][]byte{{99}}
+	different.PayloadDigest = rowsDigest(different.Rows)
+	if _, err := service.Append(ctx, different); domain.CodeOf(err) != domain.ErrorFailedPrecondition {
+		t.Fatalf("different retry = %v (%s), want FAILED_PRECONDITION", err, domain.CodeOf(err))
+	}
+	coordinator.mu.Lock()
+	coordinator.stageErr = nil
+	coordinator.mu.Unlock()
+	if _, err := service.Append(ctx, original); err != nil {
+		t.Fatalf("identical receipt retry: %v", err)
+	}
+	if rows, err := service.Finalize(ctx, stream.Name); err != nil || rows != 1 {
+		t.Fatalf("finalize after reconciliation rows=%d err=%v", rows, err)
+	}
+}
+
+func TestAppendPreservesCallerCancellationCode(t *testing.T) {
+	ctx, cancel := storageWriteTestContext(t)
+	defer cancel()
+	service, coordinator, _ := newTestService(t, 1)
+	stream, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	coordinator.stageErr = context.Canceled
+	coordinator.mu.Unlock()
+	if _, err := service.Append(ctx, appendRequest(stream.Name, 0)); domain.CodeOf(err) != domain.ErrorCanceled {
+		t.Fatalf("canceled append = %v (%s), want CANCELED", err, domain.CodeOf(err))
+	}
+}
+
 func TestStorageWriteLogsFingerprintWithoutRawStreamOrRows(t *testing.T) {
 	ctx, cancel := storageWriteTestContext(t)
 	defer cancel()
@@ -249,7 +372,7 @@ func TestStorageWriteLogsFingerprintWithoutRawStreamOrRows(t *testing.T) {
 	var output bytes.Buffer
 	service, err := New(Config{
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
-		MaxStreams: 1, MaxAppendBytes: 1024 * 1024,
+		MaxStreams: 1, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 1,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}, coordinator, clock, &sequenceIDs{}, slog.New(slog.NewJSONHandler(&output, nil)))
 	if err != nil {
@@ -311,6 +434,28 @@ func TestCommitFaultLeavesEveryStreamRetryable(t *testing.T) {
 	result, err := service.BatchCommit(ctx, testParent(), names)
 	if err != nil || result.CommitTime == nil {
 		t.Fatalf("retry commit: %#v, %v", result, err)
+	}
+}
+
+func TestBatchCommitTimeIsCapturedAfterBackendVisibility(t *testing.T) {
+	ctx, cancel := storageWriteTestContext(t)
+	defer cancel()
+	service, coordinator, clock := newTestService(t, 1)
+	stream, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Append(ctx, appendRequest(stream.Name, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Finalize(ctx, stream.Name); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.commitHook = func() { clock.Advance(time.Minute) }
+	expected := clock.Now().Add(time.Minute)
+	result, err := service.BatchCommit(ctx, testParent(), []string{stream.Name})
+	if err != nil || result.CommitTime == nil || !result.CommitTime.Equal(expected) {
+		t.Fatalf("commit time = %v, err=%v, want backend-visible time %s", result.CommitTime, err, expected)
 	}
 }
 

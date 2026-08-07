@@ -38,7 +38,7 @@ func newCleanupTestService(
 	clock := &fakeClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	service, err := New(Config{
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
-		MaxStreams: maxStreams, MaxAppendBytes: 1024 * 1024,
+		MaxStreams: maxStreams, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 4,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}, coordinator, clock, &sequenceIDs{}, logger)
 	if err != nil {

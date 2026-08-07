@@ -234,7 +234,7 @@ func newWireWriteService(t *testing.T, coordinator writeports.Coordinator) *writ
 	t.Helper()
 	service, err := writeapp.New(writeapp.Config{
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
-		MaxStreams: 16, MaxAppendBytes: 9 * 1024 * 1024,
+		MaxStreams: 16, MaxAppendBytes: 9 * 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 4,
 		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
 	}, coordinator, wireClock{}, &wireIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -296,6 +296,74 @@ func wireProtoRows(t *testing.T, values ...int64) (*descriptorpb.DescriptorProto
 }
 
 var _ writeports.Coordinator = (*wireWriteCoordinator)(nil)
+
+func TestStorageWriteConfiguredDeadlineMapsToGRPCDeadlineExceeded(t *testing.T) {
+	err := writedomain.NewError(writedomain.ErrorDeadlineExceeded, "storage_write.append", errors.New("opaque backend timeout"))
+	if got := storageWriteCode(err); got != codes.DeadlineExceeded {
+		t.Fatalf("storageWriteCode = %s, want DEADLINE_EXCEEDED", got)
+	}
+	if got := safeStorageWriteMessage(err); got != "Storage Write operation exceeded its configured deadline" {
+		t.Fatalf("safe message = %q", got)
+	}
+}
+
+func TestStorageWriteCanceledAppendMapsToEmbeddedCanceled(t *testing.T) {
+	err := writedomain.NewError(writedomain.ErrorCanceled, "storage_write.append", context.Canceled)
+	if got := storageWriteCode(err); got != codes.Canceled {
+		t.Fatalf("storageWriteCode = %s, want CANCELED", got)
+	}
+	response := appendErrorResponse("projects/p/datasets/d/tables/t/streams/s", err)
+	if got := codes.Code(response.GetError().GetCode()); got != codes.Canceled {
+		t.Fatalf("embedded response code = %s, want CANCELED", got)
+	}
+	if got := response.GetError().GetMessage(); got != "Storage Write request canceled" {
+		t.Fatalf("safe message = %q", got)
+	}
+}
+
+func TestStorageWriteAppendReceiveAdmissionIsBoundedBeforeDecode(t *testing.T) {
+	ctx, cancel := grpcStorageWriteTestContext(t)
+	defer cancel()
+	server := &StorageWriteServer{appendSlots: make(chan struct{}, 1)}
+	release, err := server.acquireAppendSlot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitContext, cancelWait := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancelWait()
+	if _, err := server.acquireAppendSlot(waitContext); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second pre-decode admission = %v, want deadline exceeded", err)
+	}
+	release()
+	reacquired, err := server.acquireAppendSlot(ctx)
+	if err != nil {
+		t.Fatalf("reacquire after release: %v", err)
+	}
+	reacquired()
+}
+
+func TestAppendConnectionSeparatesProtoDataLimitFromWireAdmission(t *testing.T) {
+	descriptor, rows := wireProtoRows(t, 1)
+	protoData := &storagepb.AppendRowsRequest_ProtoData{
+		WriterSchema: &storagepb.ProtoSchema{ProtoDescriptor: descriptor},
+		Rows:         &storagepb.ProtoRows{SerializedRows: rows},
+	}
+	request := &storagepb.AppendRowsRequest{
+		WriteStream: "projects/test-project/datasets/analytics/tables/events/streams/pending-a",
+		TraceId:     "connector-trace-envelope",
+		Rows:        &storagepb.AppendRowsRequest_ProtoRows{ProtoRows: protoData},
+	}
+	converted, _, err := (appendConnection{}).convert(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if converted.PayloadBytes != proto.Size(protoData) {
+		t.Fatalf("payload bytes = %d, want ProtoData size %d", converted.PayloadBytes, proto.Size(protoData))
+	}
+	if converted.WireBytes != proto.Size(request) || converted.WireBytes <= converted.PayloadBytes {
+		t.Fatalf("wire bytes = %d, payload bytes = %d, request size = %d", converted.WireBytes, converted.PayloadBytes, proto.Size(request))
+	}
+}
 
 func TestStorageWriteCDCGapIsStable(t *testing.T) {
 	if writedomain.GapCDC != "GAP-STORAGE-WRITE-CDC-001" {

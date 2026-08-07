@@ -38,7 +38,35 @@ decoded requests waiting for the serialized DuckDB coordinator, and
 `maxStagedBytes*` bounds deterministic serialized-row charges held in hidden
 DuckDB PENDING tables. The configured append size must fit the per-stream limit,
 which must fit the global limit. Staged-byte accounting is deliberately stable
-and portable; it is not DuckDB's physical file/page size. `load.enabled`
+and portable; it is not DuckDB's physical file/page size.
+`storage.write.queueWaitTimeout` (default `5s`) bounds admission to the
+serialized coordinator after byte admission, and
+`storage.write.operationTimeout` (default `30s`) bounds the total residence of
+an accepted operation in the serialized queue plus its backend execution. It
+starts only after queue admission, so queue saturation remains independently
+bounded as `RESOURCE_EXHAUSTED`. They map to `BQEMU_STORAGE_WRITE_QUEUE_WAIT_TIMEOUT` and
+`BQEMU_STORAGE_WRITE_OPERATION_TIMEOUT`. Queue saturation is reported as the
+retryable gRPC `RESOURCE_EXHAUSTED`; a server operation deadline is reported as
+`DEADLINE_EXCEEDED`, while an earlier caller deadline still wins. A PENDING
+append that was staged before an acknowledgement timeout must be replayed with
+the same offset/schema/payload receipt before Finalize; that receipt is
+idempotent. DEFAULT streams retain
+their official at-least-once ambiguity. The official limit applies to the full
+request; the pinned Java 3.22.1 client batches by `ProtoData` size. The
+compatibility setting `maxAppendRequestBytes` models that client-visible
+payload, while transient admission charges the complete `AppendRowsRequest`.
+Startup also requires `server.grpc.maxReceiveMessageBytes`
+to fit the configured payload plus the file-configured
+`maxAppendEnvelopeBytes` (default 64 KiB). Its environment override is
+`BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES`. These rules follow the official
+[`AppendRows` request and retry contract](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows).
+The exact pinned client source is retained in the
+[`google-cloud-bigquerystorage` 3.22.1 source artifact](https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar).
+`maxConcurrentAppendRequests` (default `16`, environment
+`BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`) is acquired before gRPC
+`Recv`, bounding concurrent protobuf decode, clone, and digest memory across
+bidi streams before weighted coordinator admission begins.
+`load.enabled`
 requires an absolute `load.gcsEndpoint`; `load.allowFileSources` defaults false,
 and object/list/download limits are enforced. Authentication and runtime
 contract-profile negotiation remain uncomposed. A valid setting is not a claim

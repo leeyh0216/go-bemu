@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -32,6 +33,16 @@ const (
 // bounded ReadRows payload and reference schema; both data bounds remain
 // independently configurable and are checked against the gRPC send ceiling.
 // Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#createreadsessionrequest
+//
+// The official API limits the complete AppendRowsRequest. The Java Storage
+// client 3.22.1 pinned by connector 0.44.2 separately measures ProtoData when
+// batching, while grpc-go receives the enclosing request. BQEMU therefore
+// models the pinned client's payload bound and a configurable envelope bound;
+// this split is a compatibility profile, not a redefinition of the API limit.
+// Sources:
+//   - https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#appendrowsrequest
+//   - https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java
+//   - https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar
 
 // Duration uses Go duration strings on the wire, for example "5s" or "6h".
 // Numeric values are rejected because their unit would be ambiguous.
@@ -173,17 +184,21 @@ type StorageReadConfig struct {
 //   - https://cloud.google.com/bigquery/docs/write-api-batch
 //   - https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows
 type StorageWriteConfig struct {
-	Enabled                   bool     `yaml:"enabled" json:"enabled"`
-	MaxStreams                int      `yaml:"maxStreams" json:"maxStreams"`
-	MaxAppendRequestBytes     int      `yaml:"maxAppendRequestBytes" json:"maxAppendRequestBytes"`
-	QueueCapacity             int      `yaml:"queueCapacity" json:"queueCapacity"`
-	MaxInFlightBytes          int64    `yaml:"maxInFlightBytes" json:"maxInFlightBytes"`
-	MaxInFlightBytesPerStream int64    `yaml:"maxInFlightBytesPerStream" json:"maxInFlightBytesPerStream"`
-	MaxStagedBytes            int64    `yaml:"maxStagedBytes" json:"maxStagedBytes"`
-	MaxStagedBytesPerStream   int64    `yaml:"maxStagedBytesPerStream" json:"maxStagedBytesPerStream"`
-	OrphanTTL                 Duration `yaml:"orphanTtl" json:"orphanTtl"`
-	CleanupInterval           Duration `yaml:"cleanupInterval" json:"cleanupInterval"`
-	ProtocolModelVersion      string   `yaml:"protocolModelVersion" json:"protocolModelVersion"`
+	Enabled                     bool     `yaml:"enabled" json:"enabled"`
+	MaxStreams                  int      `yaml:"maxStreams" json:"maxStreams"`
+	MaxAppendRequestBytes       int      `yaml:"maxAppendRequestBytes" json:"maxAppendRequestBytes"`
+	MaxAppendEnvelopeBytes      int      `yaml:"maxAppendEnvelopeBytes" json:"maxAppendEnvelopeBytes"`
+	MaxConcurrentAppendRequests int      `yaml:"maxConcurrentAppendRequests" json:"maxConcurrentAppendRequests"`
+	QueueCapacity               int      `yaml:"queueCapacity" json:"queueCapacity"`
+	QueueWaitTimeout            Duration `yaml:"queueWaitTimeout" json:"queueWaitTimeout"`
+	OperationTimeout            Duration `yaml:"operationTimeout" json:"operationTimeout"`
+	MaxInFlightBytes            int64    `yaml:"maxInFlightBytes" json:"maxInFlightBytes"`
+	MaxInFlightBytesPerStream   int64    `yaml:"maxInFlightBytesPerStream" json:"maxInFlightBytesPerStream"`
+	MaxStagedBytes              int64    `yaml:"maxStagedBytes" json:"maxStagedBytes"`
+	MaxStagedBytesPerStream     int64    `yaml:"maxStagedBytesPerStream" json:"maxStagedBytesPerStream"`
+	OrphanTTL                   Duration `yaml:"orphanTtl" json:"orphanTtl"`
+	CleanupInterval             Duration `yaml:"cleanupInterval" json:"cleanupInterval"`
+	ProtocolModelVersion        string   `yaml:"protocolModelVersion" json:"protocolModelVersion"`
 }
 
 // LoadConfig bounds every network and filesystem side effect of a load job.
@@ -292,7 +307,9 @@ func Defaults() Config {
 				ProtocolModelVersion: "google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2",
 			},
 			Write: StorageWriteConfig{
-				Enabled: true, MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, QueueCapacity: 256,
+				Enabled: true, MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, MaxAppendEnvelopeBytes: 64 << 10,
+				MaxConcurrentAppendRequests: 16, QueueCapacity: 256,
+				QueueWaitTimeout: Duration(5 * time.Second), OperationTimeout: Duration(30 * time.Second),
 				MaxInFlightBytes: 256 << 20, MaxInFlightBytesPerStream: 32 << 20,
 				MaxStagedBytes: 4 << 30, MaxStagedBytesPerStream: 512 << 20,
 				OrphanTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
@@ -453,7 +470,11 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STORAGE_WRITE_MAX_STREAMS", "storage.write.maxStreams"},
 	{"BQEMU_STORAGE_WRITE_ENABLED", "storage.write.enabled"},
 	{"BQEMU_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES", "storage.write.maxAppendRequestBytes"},
+	{"BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES", "storage.write.maxAppendEnvelopeBytes"},
+	{"BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS", "storage.write.maxConcurrentAppendRequests"},
 	{"BQEMU_STORAGE_WRITE_QUEUE_CAPACITY", "storage.write.queueCapacity"},
+	{"BQEMU_STORAGE_WRITE_QUEUE_WAIT_TIMEOUT", "storage.write.queueWaitTimeout"},
+	{"BQEMU_STORAGE_WRITE_OPERATION_TIMEOUT", "storage.write.operationTimeout"},
 	{"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES", "storage.write.maxInFlightBytes"},
 	{"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES_PER_STREAM", "storage.write.maxInFlightBytesPerStream"},
 	{"BQEMU_STORAGE_WRITE_MAX_STAGED_BYTES", "storage.write.maxStagedBytes"},
@@ -586,8 +607,16 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setBool(&cfg.Storage.Write.Enabled)
 	case "storage.write.maxAppendRequestBytes":
 		return setInt(&cfg.Storage.Write.MaxAppendRequestBytes)
+	case "storage.write.maxAppendEnvelopeBytes":
+		return setInt(&cfg.Storage.Write.MaxAppendEnvelopeBytes)
+	case "storage.write.maxConcurrentAppendRequests":
+		return setInt(&cfg.Storage.Write.MaxConcurrentAppendRequests)
 	case "storage.write.queueCapacity":
 		return setInt(&cfg.Storage.Write.QueueCapacity)
+	case "storage.write.queueWaitTimeout":
+		return setDuration(&cfg.Storage.Write.QueueWaitTimeout)
+	case "storage.write.operationTimeout":
+		return setDuration(&cfg.Storage.Write.OperationTimeout)
 	case "storage.write.maxInFlightBytes":
 		return setInt64(&cfg.Storage.Write.MaxInFlightBytes)
 	case "storage.write.maxInFlightBytesPerStream":
@@ -743,14 +772,26 @@ func (cfg Config) Validate() error {
 	if strings.TrimSpace(cfg.Storage.Read.ProtocolModelVersion) == "" {
 		return errors.New("storage.read.protocolModelVersion is required")
 	}
-	if cfg.Storage.Write.MaxStreams < 1 || cfg.Storage.Write.QueueCapacity < 1 ||
+	if cfg.Storage.Write.MaxStreams < 1 || cfg.Storage.Write.QueueCapacity < 1 || cfg.Storage.Write.MaxAppendEnvelopeBytes < 1 ||
+		cfg.Storage.Write.MaxConcurrentAppendRequests < 1 ||
 		cfg.Storage.Write.MaxAppendRequestBytes < 1<<20 || cfg.Storage.Write.MaxAppendRequestBytes > 20<<20 {
-		return errors.New("storage.write stream limits and operation queueCapacity must be positive and maxAppendRequestBytes between 1 MiB and 20 MiB")
+		return errors.New("storage.write stream, queue, and envelope limits must be positive and maxAppendRequestBytes between 1 MiB and 20 MiB")
+	}
+	if cfg.Storage.Write.QueueWaitTimeout.Value() <= 0 || cfg.Storage.Write.OperationTimeout.Value() <= 0 {
+		return errors.New("storage.write queueWaitTimeout and operationTimeout must be positive")
 	}
 	appendBytes := int64(cfg.Storage.Write.MaxAppendRequestBytes)
-	if cfg.Storage.Write.MaxInFlightBytesPerStream < appendBytes ||
+	envelopeBytes := int64(cfg.Storage.Write.MaxAppendEnvelopeBytes)
+	if envelopeBytes > math.MaxInt64-appendBytes {
+		return errors.New("storage.write append payload and envelope byte limits overflow int64")
+	}
+	minimumReceiveBytes := appendBytes + envelopeBytes
+	if int64(cfg.Server.GRPC.MaxReceiveMessageBytes) < minimumReceiveBytes {
+		return fmt.Errorf("server.grpc.maxReceiveMessageBytes must be at least %d for the configured Storage Write ProtoData payload and envelope maximum", minimumReceiveBytes)
+	}
+	if cfg.Storage.Write.MaxInFlightBytesPerStream < minimumReceiveBytes ||
 		cfg.Storage.Write.MaxInFlightBytes < cfg.Storage.Write.MaxInFlightBytesPerStream {
-		return errors.New("storage.write byte limits must satisfy maxAppendRequestBytes <= maxInFlightBytesPerStream <= maxInFlightBytes")
+		return errors.New("storage.write byte limits must satisfy maxAppendRequestBytes + maxAppendEnvelopeBytes <= maxInFlightBytesPerStream <= maxInFlightBytes")
 	}
 	if cfg.Storage.Write.MaxStagedBytesPerStream < appendBytes ||
 		cfg.Storage.Write.MaxStagedBytes < cfg.Storage.Write.MaxStagedBytesPerStream {

@@ -112,7 +112,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"server.http.address=127.0.0.1:19050", "server.http.publicUrl=https://localhost:19050",
 		"server.http.readHeaderTimeout=1s", "server.http.readTimeout=2s", "server.http.writeTimeout=3s", "server.http.idleTimeout=4s",
 		"server.http.maxCompressedRequestBytes=1048576", "server.http.maxUncompressedRequestBytes=2097152",
-		"server.grpc.address=127.0.0.1:19060", "server.grpc.maxReceiveMessageBytes=1048576", "server.grpc.maxSendMessageBytes=3145728",
+		"server.grpc.address=127.0.0.1:19060", "server.grpc.maxReceiveMessageBytes=2097152", "server.grpc.maxSendMessageBytes=3145728",
 		"server.tls.certFile=cert.pem", "server.tls.keyFile=key.pem",
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
 		"runtime.shutdownTimeout=9s", "runtime.serverDrainTimeout=4s", "runtime.storageCloseTimeout=4s",
@@ -125,7 +125,10 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"storage.read.maxSnapshotRows=1000",
 		"storage.read.tempFilePattern=read-*", "storage.read.protocolModelVersion=test-read-v1",
 		"storage.write.enabled=true", "storage.write.maxStreams=16", "storage.write.maxAppendRequestBytes=1048576",
-		"storage.write.queueCapacity=8", "storage.write.maxInFlightBytes=4194304", "storage.write.maxInFlightBytesPerStream=2097152",
+		"storage.write.maxAppendEnvelopeBytes=65536",
+		"storage.write.maxConcurrentAppendRequests=4",
+		"storage.write.queueCapacity=8", "storage.write.queueWaitTimeout=2s", "storage.write.operationTimeout=20s",
+		"storage.write.maxInFlightBytes=4194304", "storage.write.maxInFlightBytesPerStream=2097152",
 		"storage.write.maxStagedBytes=8388608", "storage.write.maxStagedBytesPerStream=4194304",
 		"storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
 		"storage.write.protocolModelVersion=test-storage-v1",
@@ -219,6 +222,10 @@ func TestStorageReadSnapshotByteLimitsLoadFromEnvironment(t *testing.T) {
 
 func TestStorageWriteByteLimitsLoadFromEnvironment(t *testing.T) {
 	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_STORAGE_WRITE_QUEUE_WAIT_TIMEOUT":             "3s",
+		"BQEMU_STORAGE_WRITE_OPERATION_TIMEOUT":              "45s",
+		"BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES":      "131072",
+		"BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS": "8",
 		"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES":            "67108864",
 		"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES_PER_STREAM": "33554432",
 		"BQEMU_STORAGE_WRITE_MAX_STAGED_BYTES":               "1073741824",
@@ -228,7 +235,9 @@ func TestStorageWriteByteLimitsLoadFromEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	write := result.Config.Storage.Write
-	if write.MaxInFlightBytes != 64<<20 || write.MaxInFlightBytesPerStream != 32<<20 ||
+	if write.QueueWaitTimeout.Value() != 3*time.Second || write.OperationTimeout.Value() != 45*time.Second ||
+		write.MaxAppendEnvelopeBytes != 128<<10 || write.MaxConcurrentAppendRequests != 8 ||
+		write.MaxInFlightBytes != 64<<20 || write.MaxInFlightBytesPerStream != 32<<20 ||
 		write.MaxStagedBytes != 1<<30 || write.MaxStagedBytesPerStream != 512<<20 {
 		t.Fatalf("unexpected Storage Write byte limits: %#v", write)
 	}
@@ -236,10 +245,16 @@ func TestStorageWriteByteLimitsLoadFromEnvironment(t *testing.T) {
 
 func TestStorageWriteByteLimitRelationshipsAreValidated(t *testing.T) {
 	for name, override := range map[string][]string{
-		"in-flight-per-stream-below-append": {"--set", "storage.write.maxInFlightBytesPerStream=1048576"},
-		"in-flight-global-below-per-stream": {"--set", "storage.write.maxInFlightBytes=16777216"},
-		"staged-per-stream-below-append":    {"--set", "storage.write.maxStagedBytesPerStream=1048576"},
-		"staged-global-below-per-stream":    {"--set", "storage.write.maxStagedBytes=268435456"},
+		"grpc-receive-below-append-envelope": {"--set", "server.grpc.maxReceiveMessageBytes=20971520"},
+		"zero-append-envelope":               {"--set", "storage.write.maxAppendEnvelopeBytes=0"},
+		"zero-concurrent-appends":            {"--set", "storage.write.maxConcurrentAppendRequests=0"},
+		"zero-queue-wait":                    {"--set", "storage.write.queueWaitTimeout=0s"},
+		"zero-operation-timeout":             {"--set", "storage.write.operationTimeout=0s"},
+		"in-flight-per-stream-below-append":  {"--set", "storage.write.maxInFlightBytesPerStream=1048576"},
+		"in-flight-per-stream-below-wire":    {"--set", "storage.write.maxInFlightBytesPerStream=20971520"},
+		"in-flight-global-below-per-stream":  {"--set", "storage.write.maxInFlightBytes=16777216"},
+		"staged-per-stream-below-append":     {"--set", "storage.write.maxStagedBytesPerStream=1048576"},
+		"staged-global-below-per-stream":     {"--set", "storage.write.maxStagedBytes=268435456"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(override, lookup(nil)); err == nil {

@@ -50,8 +50,21 @@ type streamState struct {
 	mu              sync.Mutex
 	stream          domain.WriteStream
 	descriptor      []byte
+	unacknowledged  *appendReceipt
 	cleanupPhase    cleanupPhase
 	cleanupAttempts uint64
+}
+
+// appendReceipt identifies a PENDING append whose backend outcome may have
+// succeeded although the acknowledgement was lost. Finalize must not cross
+// this boundary until an identical retry reconciles the application ledger.
+// See the official offset retry contract:
+// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#appendrowsrequest
+type appendReceipt struct {
+	startOffset       int64
+	rowCount          int64
+	schemaFingerprint string
+	payloadDigest     string
 }
 
 type cleanupPhase string
@@ -75,6 +88,16 @@ func New(config Config, coordinator ports.Coordinator, clock ports.Clock, ids po
 	}
 	service.cleanupGate <- struct{}{}
 	return service, nil
+}
+
+// MaxConcurrentAppendRequests exposes only the transport admission contract,
+// not the full application configuration. The gRPC adapter acquires this gate
+// before Recv decodes and clones a potentially large AppendRowsRequest.
+func (s *Service) MaxConcurrentAppendRequests() int {
+	if s == nil {
+		return 0
+	}
+	return s.config.MaxConcurrentAppendRequests
 }
 
 func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamRequest) (domain.WriteStream, error) {
@@ -162,8 +185,14 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	if len(request.Rows) == 0 {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("at least one ProtoRow is required"))
 	}
-	if request.WireBytes <= 0 || request.WireBytes > s.config.MaxAppendBytes {
-		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, fmt.Errorf("append wire size %d exceeds configured limit %d", request.WireBytes, s.config.MaxAppendBytes))
+	if request.PayloadBytes <= 0 || request.PayloadBytes > s.config.MaxAppendBytes {
+		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, fmt.Errorf("append ProtoData size %d exceeds configured limit %d", request.PayloadBytes, s.config.MaxAppendBytes))
+	}
+	if request.WireBytes < request.PayloadBytes {
+		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("append wire size is smaller than ProtoData size"))
+	}
+	if request.WireBytes-request.PayloadBytes > s.config.MaxAppendEnvelopeBytes {
+		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, fmt.Errorf("append envelope size %d exceeds configured limit %d", request.WireBytes-request.PayloadBytes, s.config.MaxAppendEnvelopeBytes))
 	}
 	state, err := s.lookupOrCreateDefault(ctx, operation, table, canonical, isDefault)
 	if err != nil {
@@ -208,6 +237,16 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("payload digest does not match ProtoRows"))
 	}
 	startOffset := state.stream.NextOffset
+	receipt := appendReceipt{
+		startOffset: startOffset, rowCount: int64(len(request.Rows)),
+		schemaFingerprint: fingerprint, payloadDigest: computedPayloadDigest,
+	}
+	if state.unacknowledged != nil && *state.unacknowledged != receipt {
+		return domain.AppendResult{}, domain.NewError(
+			domain.ErrorFailedPrecondition, operation,
+			errors.New("an unacknowledged append must be retried with the same offset, schema, and payload before the stream can advance"),
+		)
+	}
 	if request.Offset != nil {
 		switch {
 		case *request.Offset < startOffset:
@@ -234,17 +273,26 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 		"operation", operation, "model_version", s.config.ProtocolModelVersion,
 		"stream_fingerprint", digest([]byte(canonical)), "table", table.Name(), "start_offset", startOffset,
 		"row_count", len(request.Rows), "row_bytes", rowsBytes(request.Rows),
+		"payload_bytes", request.PayloadBytes, "wire_bytes", request.WireBytes,
 		"schema_fingerprint", fingerprint, "payload_digest", batch.PayloadDigest,
 		"trace_id", safeTraceID(request.TraceID), "tx_state", pendingTxState(isDefault))
 	err = call(ctx, batch)
 	s.logSideEffectEnd(ctx, operation, sideEffect, canonical, table.Name(), startOffset, len(request.Rows), fingerprint, batch.PayloadDigest, err)
 	if err != nil {
-		code := domain.ErrorInternal
-		if errors.Is(err, ports.ErrResourceExhausted) {
-			code = domain.ErrorResourceExhausted
+		if !isDefault && appendOutcomeIsAmbiguous(err) {
+			state.unacknowledged = &receipt
+			s.logger.WarnContext(ctx, "pending append acknowledgement is unresolved",
+				"event", "domain.transition", "operation", operation,
+				"model_version", s.config.ProtocolModelVersion,
+				"stream_fingerprint", digest([]byte(canonical)), "start_offset", startOffset,
+				"row_count", len(request.Rows), "schema_fingerprint", fingerprint,
+				"payload_digest", batch.PayloadDigest, "state_after", "append_unacknowledged")
 		}
+		code := coordinatorErrorCode(err, domain.ErrorInternal)
 		return domain.AppendResult{}, domain.NewError(code, operation, err)
 	}
+	wasUnacknowledged := state.unacknowledged != nil
+	state.unacknowledged = nil
 	if len(state.descriptor) == 0 {
 		state.descriptor = slices.Clone(descriptor)
 		state.stream.SchemaFingerprint = fingerprint
@@ -252,6 +300,14 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	state.stream.RowCount += int64(len(request.Rows))
 	state.stream.NextOffset += int64(len(request.Rows))
 	state.stream.LastActivity = s.clock.Now()
+	if wasUnacknowledged {
+		s.logger.InfoContext(ctx, "pending append acknowledgement reconciled",
+			"event", "domain.transition", "operation", operation,
+			"model_version", s.config.ProtocolModelVersion,
+			"stream_fingerprint", digest([]byte(canonical)), "start_offset", startOffset,
+			"row_count", len(request.Rows), "schema_fingerprint", fingerprint,
+			"payload_digest", batch.PayloadDigest, "state_after", "append_acknowledged")
+	}
 	return domain.AppendResult{
 		StreamName: canonical, StartOffset: startOffset,
 		HasOffset: !isDefault, RowCount: int64(len(request.Rows)),
@@ -280,6 +336,9 @@ func (s *Service) Finalize(_ context.Context, name string) (int64, error) {
 	}
 	if state.stream.State == domain.StreamStateCommitted {
 		return 0, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("write stream is already committed"))
+	}
+	if state.unacknowledged != nil {
+		return 0, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("an unacknowledged append must be reconciled before finalizing the stream"))
 	}
 	state.stream.State = domain.StreamStateFinalized
 	state.stream.LastActivity = s.clock.Now()
@@ -357,7 +416,6 @@ func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference,
 	if len(streamErrors) > 0 {
 		return domain.BatchCommitResult{StreamErrors: streamErrors}, nil
 	}
-	commitTime := s.clock.Now()
 	canonicalNames := make([]string, len(states))
 	var rowCount int64
 	for index, item := range states {
@@ -370,11 +428,15 @@ func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference,
 		"table", parent.Name(), "stream_count", len(states), "row_count", rowCount,
 		"stream_set_fingerprint", digest([]byte(strings.Join(canonicalNames, "\n"))),
 		"tx_state", "begin")
-	err := s.coordinator.CommitPending(ctx, ports.CommitRequest{Parent: parent, StreamNames: canonicalNames, CommitTime: commitTime})
+	err := s.coordinator.CommitPending(ctx, ports.CommitRequest{Parent: parent, StreamNames: canonicalNames})
 	s.logCommitEnd(ctx, operation, parent.Name(), canonicalNames, rowCount, err)
 	if err != nil {
-		return domain.BatchCommitResult{}, domain.NewError(domain.ErrorInternal, operation, err)
+		return domain.BatchCommitResult{}, domain.NewError(coordinatorErrorCode(err, domain.ErrorInternal), operation, err)
 	}
+	// The response time represents successful atomic visibility, so capture it
+	// only after the coordinator transaction acknowledges its commit.
+	// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#batchcommitwritestreamsresponse
+	commitTime := s.clock.Now()
 	for _, item := range states {
 		item.state.stream.State = domain.StreamStateCommitted
 		item.state.stream.CommitTime = cloneTime(&commitTime)
@@ -452,13 +514,31 @@ func (s *Service) describeTable(ctx context.Context, operation string, table dom
 	}
 	s.logger.InfoContext(ctx, "Storage Write destination validated", attrs...)
 	if err != nil {
-		code := domain.ErrorInternal
+		code := coordinatorErrorCode(err, domain.ErrorInternal)
 		if errors.Is(err, ports.ErrTableNotFound) {
 			code = domain.ErrorNotFound
 		}
 		return domain.TableSchema{}, domain.NewError(code, operation, err)
 	}
 	return schema, nil
+}
+
+func coordinatorErrorCode(err error, fallback domain.ErrorCode) domain.ErrorCode {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return domain.ErrorCanceled
+	case errors.Is(err, ports.ErrQueueWaitTimeout), errors.Is(err, ports.ErrResourceExhausted):
+		return domain.ErrorResourceExhausted
+	case errors.Is(err, ports.ErrOperationTimeout), errors.Is(err, context.DeadlineExceeded):
+		return domain.ErrorDeadlineExceeded
+	default:
+		return fallback
+	}
+}
+
+func appendOutcomeIsAmbiguous(err error) bool {
+	return errors.Is(err, ports.ErrOperationTimeout) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 func (s *Service) admissionError(operation string) error {

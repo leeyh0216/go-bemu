@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	storagepb "cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
@@ -40,12 +41,19 @@ import (
 type StorageWriteServer struct {
 	storagepb.UnimplementedBigQueryWriteServer
 	write *writeapp.Service
+	// appendSlots is acquired before Recv so concurrent protobuf decode, clone,
+	// and digest memory is bounded across long-lived bidi connections.
+	appendSlots chan struct{}
 }
 
 var _ storagepb.BigQueryWriteServer = (*StorageWriteServer)(nil)
 
 func NewStorageWriteServer(service *writeapp.Service) *StorageWriteServer {
-	return &StorageWriteServer{write: service}
+	server := &StorageWriteServer{write: service}
+	if service != nil {
+		server.appendSlots = make(chan struct{}, service.MaxConcurrentAppendRequests())
+	}
+	return server
 }
 
 func (s *StorageWriteServer) CreateWriteStream(ctx context.Context, request *storagepb.CreateWriteStreamRequest) (*storagepb.WriteStream, error) {
@@ -142,16 +150,24 @@ func (s *StorageWriteServer) AppendRows(stream storagepb.BigQueryWrite_AppendRow
 	}
 	var connection appendConnection
 	for {
+		release, err := s.acquireAppendSlot(stream.Context())
+		if err != nil {
+			return storageWriteStatus(err)
+		}
 		request, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
+			release()
 			return nil
 		}
 		if err != nil {
+			release()
 			return storageWriteStatus(err)
 		}
 		converted, next, conversionErr := connection.convert(request)
 		if conversionErr != nil {
-			if sendErr := stream.Send(appendErrorResponse(connection.responseStream(request), conversionErr)); sendErr != nil {
+			sendErr := stream.Send(appendErrorResponse(connection.responseStream(request), conversionErr))
+			release()
+			if sendErr != nil {
 				return sendErr
 			}
 			continue
@@ -161,7 +177,9 @@ func (s *StorageWriteServer) AppendRows(stream storagepb.BigQueryWrite_AppendRow
 		connection = next
 		result, appendErr := s.write.Append(stream.Context(), converted)
 		if appendErr != nil {
-			if sendErr := stream.Send(appendErrorResponse(connection.streamName, appendErr)); sendErr != nil {
+			sendErr := stream.Send(appendErrorResponse(connection.streamName, appendErr))
+			release()
+			if sendErr != nil {
 				return sendErr
 			}
 			continue
@@ -173,9 +191,24 @@ func (s *StorageWriteServer) AppendRows(stream storagepb.BigQueryWrite_AppendRow
 		if result.HasOffset {
 			response.GetAppendResult().Offset = wrapperspb.Int64(result.StartOffset)
 		}
-		if err := stream.Send(response); err != nil {
+		err = stream.Send(response)
+		release()
+		if err != nil {
 			return err
 		}
+	}
+}
+
+func (s *StorageWriteServer) acquireAppendSlot(ctx context.Context) (func(), error) {
+	if s.appendSlots == nil {
+		return func() {}, nil
+	}
+	select {
+	case s.appendSlots <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-s.appendSlots }) }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -231,8 +264,9 @@ func (c appendConnection) convert(request *storagepb.AppendRowsRequest) (writedo
 	return writedomain.AppendRequest{
 		StreamName: canonical, Offset: cloneOffset(request.GetOffset()),
 		Descriptor: append([]byte(nil), descriptor...), Rows: cloneProtoRows(protoData.GetRows().GetSerializedRows()),
-		WireBytes: proto.Size(request), SchemaFingerprint: digestBytes(descriptor),
-		PayloadDigest: digestRows(protoData.GetRows().GetSerializedRows()), TraceID: traceID,
+		PayloadBytes: proto.Size(request.GetProtoRows()), WireBytes: proto.Size(request),
+		SchemaFingerprint: digestBytes(descriptor),
+		PayloadDigest:     digestRows(protoData.GetRows().GetSerializedRows()), TraceID: traceID,
 	}, next, nil
 }
 
@@ -410,6 +444,10 @@ func storageWriteCode(err error) codes.Code {
 		return codes.FailedPrecondition
 	case writedomain.ErrorResourceExhausted:
 		return codes.ResourceExhausted
+	case writedomain.ErrorCanceled:
+		return codes.Canceled
+	case writedomain.ErrorDeadlineExceeded:
+		return codes.DeadlineExceeded
 	case writedomain.ErrorAlreadyExists:
 		return codes.AlreadyExists
 	case writedomain.ErrorOutOfRange:
@@ -430,7 +468,11 @@ func safeStorageWriteMessage(err error) string {
 	case writedomain.ErrorFailedPrecondition:
 		return "Storage Write stream state does not permit this operation"
 	case writedomain.ErrorResourceExhausted:
-		return "Storage Write logical stream capacity reached"
+		return "Storage Write capacity exhausted"
+	case writedomain.ErrorCanceled:
+		return "Storage Write request canceled"
+	case writedomain.ErrorDeadlineExceeded:
+		return "Storage Write operation exceeded its configured deadline"
 	case writedomain.ErrorAlreadyExists:
 		return "append offset already exists"
 	case writedomain.ErrorOutOfRange:

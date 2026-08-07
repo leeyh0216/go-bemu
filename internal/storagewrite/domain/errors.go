@@ -16,6 +16,8 @@ const (
 	ErrorNotFound           ErrorCode = "NOT_FOUND"
 	ErrorFailedPrecondition ErrorCode = "FAILED_PRECONDITION"
 	ErrorResourceExhausted  ErrorCode = "RESOURCE_EXHAUSTED"
+	ErrorCanceled           ErrorCode = "CANCELED"
+	ErrorDeadlineExceeded   ErrorCode = "DEADLINE_EXCEEDED"
 	ErrorAlreadyExists      ErrorCode = "ALREADY_EXISTS"
 	ErrorOutOfRange         ErrorCode = "OUT_OF_RANGE"
 	ErrorUnimplemented      ErrorCode = "UNIMPLEMENTED"

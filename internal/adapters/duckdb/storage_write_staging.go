@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	writedomain "github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
@@ -36,6 +37,8 @@ const (
 // AppendRows operation can be close to the protocol's 20 MiB request limit.
 type StorageWriteCoordinatorConfig struct {
 	QueueCapacity             int
+	QueueWaitTimeout          time.Duration
+	OperationTimeout          time.Duration
 	MaxInFlightBytes          int64
 	MaxInFlightBytesPerStream int64
 	MaxStagedBytes            int64
@@ -45,6 +48,9 @@ type StorageWriteCoordinatorConfig struct {
 func (c StorageWriteCoordinatorConfig) validate() error {
 	if c.QueueCapacity <= 0 {
 		return fmt.Errorf("Storage Write operation queue capacity must be positive")
+	}
+	if c.QueueWaitTimeout <= 0 || c.OperationTimeout <= 0 {
+		return fmt.Errorf("Storage Write queue wait and operation timeouts must be positive")
 	}
 	if c.MaxInFlightBytesPerStream <= 0 || c.MaxInFlightBytes < c.MaxInFlightBytesPerStream {
 		return fmt.Errorf("Storage Write in-flight byte limits must satisfy 0 < per-stream <= global")

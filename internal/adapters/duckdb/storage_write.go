@@ -68,10 +68,11 @@ type StorageWriteCoordinator struct {
 }
 
 type coordinatorOperation struct {
-	ctx     context.Context
-	fn      func(context.Context) (any, error)
-	out     chan coordinatorResult
-	release func()
+	ctx       context.Context
+	callerCtx context.Context
+	fn        func(context.Context) (any, error)
+	out       chan coordinatorResult
+	release   func()
 }
 
 type coordinatorResult struct {
@@ -213,12 +214,12 @@ func (c *StorageWriteCoordinator) CommitPending(ctx context.Context, request wri
 	streamFingerprint := observability.Digest([]byte(strings.Join(request.StreamNames, "\n")))
 	started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_commit_pending",
 		"table", request.Parent.Name(), "stream_count", len(request.StreamNames),
-		"stream_set_fingerprint", streamFingerprint, "commit_time", request.CommitTime,
+		"stream_set_fingerprint", streamFingerprint,
 		"transaction_mode", "explicit")
 	defer func() {
 		observability.LogSideEffectEnd(ctx, "duckdb", "storage_write_commit_pending", started, err,
 			"table", request.Parent.Name(), "stream_count", len(request.StreamNames),
-			"stream_set_fingerprint", streamFingerprint, "commit_time", request.CommitTime,
+			"stream_set_fingerprint", streamFingerprint,
 			"transaction_mode", "explicit")
 	}()
 	_, err = c.submit(ctx, func(operationContext context.Context) (any, error) {
@@ -293,27 +294,46 @@ func (c *StorageWriteCoordinator) submitOperation(ctx context.Context, fn func(c
 		callRelease(release)
 		return nil, errStorageWriteCoordinatorClosed
 	}
-	operation := coordinatorOperation{ctx: ctx, fn: fn, out: make(chan coordinatorResult, 1), release: release}
+	operationContext, cancel := context.WithCancelCause(ctx)
+	operation := coordinatorOperation{
+		ctx: operationContext, callerCtx: ctx,
+		fn: fn, out: make(chan coordinatorResult, 1), release: release,
+	}
+	queueTimer := time.NewTimer(c.config.QueueWaitTimeout)
+	defer queueTimer.Stop()
 	select {
 	case c.queue <- operation:
 		c.submissionMu.RUnlock()
 	case <-ctx.Done():
 		c.submissionMu.RUnlock()
+		cancel(ctx.Err())
 		callRelease(release)
 		return nil, ctx.Err()
+	case <-queueTimer.C:
+		c.submissionMu.RUnlock()
+		cancel(writeports.ErrQueueWaitTimeout)
+		callRelease(release)
+		return nil, fmt.Errorf("%w after %s", writeports.ErrQueueWaitTimeout, c.config.QueueWaitTimeout)
 	case <-c.done:
 		c.submissionMu.RUnlock()
+		cancel(errStorageWriteCoordinatorClosed)
 		callRelease(release)
 		return nil, errStorageWriteCoordinatorClosed
 	}
-	return waitCoordinatorResult(ctx, c.done, operation)
+	operationTimer := time.AfterFunc(c.config.OperationTimeout, func() {
+		cancel(writeports.ErrOperationTimeout)
+	})
+	value, err := waitCoordinatorResult(c.done, operation)
+	operationTimer.Stop()
+	cancel(nil)
+	return value, err
 }
 
 func (c *StorageWriteCoordinator) submitInternal(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("operation context is required")
 	}
-	operation := coordinatorOperation{ctx: ctx, fn: fn, out: make(chan coordinatorResult, 1)}
+	operation := coordinatorOperation{ctx: ctx, callerCtx: ctx, fn: fn, out: make(chan coordinatorResult, 1)}
 	select {
 	case c.queue <- operation:
 	case <-ctx.Done():
@@ -321,18 +341,42 @@ func (c *StorageWriteCoordinator) submitInternal(ctx context.Context, fn func(co
 	case <-c.done:
 		return nil, errStorageWriteCoordinatorClosed
 	}
-	return waitCoordinatorResult(ctx, c.done, operation)
+	return waitCoordinatorResult(c.done, operation)
 }
 
-func waitCoordinatorResult(ctx context.Context, done <-chan struct{}, operation coordinatorOperation) (any, error) {
+func waitCoordinatorResult(done <-chan struct{}, operation coordinatorOperation) (any, error) {
+	// Prefer an acknowledgement that is already buffered when completion and a
+	// deadline become observable together. PENDING retries are receipt-backed;
+	// DEFAULT streams remain intentionally at-least-once on truly ambiguous
+	// commit/deadline races.
 	select {
 	case result := <-operation.out:
 		return result.value, result.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	default:
+	}
+	select {
+	case result := <-operation.out:
+		return result.value, result.err
+	case <-operation.ctx.Done():
+		return nil, coordinatorOperationContextError(operation)
 	case <-done:
 		return nil, errStorageWriteCoordinatorClosed
 	}
+}
+
+func coordinatorOperationContextError(operation coordinatorOperation) error {
+	if operation.callerCtx != nil {
+		if err := operation.callerCtx.Err(); err != nil {
+			return err
+		}
+	}
+	if errors.Is(context.Cause(operation.ctx), writeports.ErrOperationTimeout) {
+		return fmt.Errorf("%w after configured deadline", writeports.ErrOperationTimeout)
+	}
+	if cause := context.Cause(operation.ctx); cause != nil {
+		return cause
+	}
+	return fmt.Errorf("%w after configured deadline", writeports.ErrOperationTimeout)
 }
 
 func (c *StorageWriteCoordinator) run(ctx context.Context) {
@@ -355,10 +399,13 @@ func (c *StorageWriteCoordinator) run(ctx context.Context) {
 		case operation := <-c.queue:
 			if err := operation.ctx.Err(); err != nil {
 				callRelease(operation.release)
-				operation.out <- coordinatorResult{err: err}
+				operation.out <- coordinatorResult{err: coordinatorOperationContextError(operation)}
 				continue
 			}
 			value, err := operation.fn(operation.ctx)
+			if err != nil && operation.ctx.Err() != nil {
+				err = coordinatorOperationContextError(operation)
+			}
 			callRelease(operation.release)
 			operation.out <- coordinatorResult{value: value, err: err}
 		}

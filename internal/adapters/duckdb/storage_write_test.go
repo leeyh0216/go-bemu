@@ -68,7 +68,7 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 		t.Fatalf("PENDING rows were visible before commit: %d", got)
 	}
 	if err := coordinator.CommitPending(ctx, writeports.CommitRequest{
-		Parent: table, StreamNames: []string{pendingName}, CommitTime: time.Now().UTC(),
+		Parent: table, StreamNames: []string{pendingName},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestStorageWriteCommitFaultRollsBackAllStreams(t *testing.T) {
 		}
 	}
 	coordinator.beforeCommit = func() error { return errors.New("injected fault before commit") }
-	request := writeports.CommitRequest{Parent: table, StreamNames: streamNames, CommitTime: time.Now().UTC()}
+	request := writeports.CommitRequest{Parent: table, StreamNames: streamNames}
 	if err := coordinator.CommitPending(ctx, request); err == nil {
 		t.Fatal("expected injected commit fault")
 	}
@@ -238,7 +238,7 @@ func TestStorageWriteStagesHundredSequentialBatchesWithinLowByteBudget(t *testin
 	if global, perStream := coordinator.admission.snapshot(stream); global != 0 || perStream != 0 {
 		t.Fatalf("rejected staged batch retained in-flight bytes global=%d stream=%d", global, perStream)
 	}
-	if err := coordinator.CommitPending(ctx, writeports.CommitRequest{Parent: table, StreamNames: []string{stream}, CommitTime: time.Now().UTC()}); err != nil {
+	if err := coordinator.CommitPending(ctx, writeports.CommitRequest{Parent: table, StreamNames: []string{stream}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 100 {
@@ -370,6 +370,190 @@ func TestStorageWriteSixteenConcurrentPayloadsUseWeightedAdmission(t *testing.T)
 	}
 	if got := coordinator.stagedBytes.Load(); got != 0 {
 		t.Fatalf("discard retained %d staged bytes", got)
+	}
+}
+
+func TestStorageWriteQueueWaitTimeoutIsBounded(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	config := storageWriteCoordinatorTestConfig()
+	config.QueueCapacity = 1
+	config.QueueWaitTimeout = 25 * time.Millisecond
+	config.OperationTimeout = time.Second
+	_, coordinator, table := newStorageWriteFixtureWithConfig(t, []domain.Field{{Name: "id", Type: "INT64"}}, config)
+	descriptor := storageWriteDescriptor(t, protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL))
+	row := storageWriteRow(t, descriptor, map[string]any{"id": int64(1)})
+	batch := func(name string) writeports.AppendBatch {
+		return writeports.AppendBatch{
+			StreamName: table.Name() + "/streams/" + name, Table: table, WireBytes: 128,
+			Descriptor: descriptor, Rows: [][]byte{row}, SchemaFingerprint: "schema", PayloadDigest: "payload-" + name,
+		}
+	}
+
+	workerEntered := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	var once sync.Once
+	coordinator.afterStage = func() {
+		once.Do(func() {
+			close(workerEntered)
+			<-releaseWorker
+		})
+	}
+	results := make(chan error, 2)
+	go func() { results <- coordinator.StagePending(ctx, batch("active")) }()
+	select {
+	case <-workerEntered:
+	case <-ctx.Done():
+		t.Fatalf("waiting for active coordinator operation: %v", ctx.Err())
+	}
+	go func() { results <- coordinator.StagePending(ctx, batch("queued")) }()
+	for len(coordinator.queue) != 1 {
+		select {
+		case <-time.After(time.Millisecond):
+		case <-ctx.Done():
+			t.Fatalf("waiting for full coordinator queue: %v", ctx.Err())
+		}
+	}
+
+	started := time.Now()
+	err := coordinator.StagePending(ctx, batch("rejected"))
+	if !errors.Is(err, writeports.ErrQueueWaitTimeout) {
+		t.Fatalf("full queue error = %v, want queue wait timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("queue wait took %s, configured %s", elapsed, config.QueueWaitTimeout)
+	}
+	if global, stream := coordinator.admission.snapshot(batch("rejected").StreamName); global == 0 || stream != 0 {
+		t.Fatalf("queue rejection admission global=%d rejected_stream=%d", global, stream)
+	}
+
+	close(releaseWorker)
+	for range 2 {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("waiting for accepted coordinator operations: %v", ctx.Err())
+		}
+	}
+}
+
+func TestStorageWriteOperationTimeoutAllowsPendingReceiptRetry(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	config := storageWriteCoordinatorTestConfig()
+	config.QueueWaitTimeout = 5 * time.Millisecond
+	config.OperationTimeout = 25 * time.Millisecond
+	_, coordinator, table := newStorageWriteFixtureWithConfig(t, []domain.Field{{Name: "id", Type: "INT64"}}, config)
+	descriptor := storageWriteDescriptor(t, protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL))
+	batch := writeports.AppendBatch{
+		StreamName: table.Name() + "/streams/timeout-retry", Table: table, WireBytes: 128,
+		Descriptor: descriptor, Rows: [][]byte{storageWriteRow(t, descriptor, map[string]any{"id": int64(1)})},
+		SchemaFingerprint: "schema", PayloadDigest: "payload",
+	}
+	workerEntered := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	var once sync.Once
+	coordinator.afterStage = func() {
+		once.Do(func() {
+			close(workerEntered)
+			<-releaseWorker
+		})
+	}
+	result := make(chan error, 1)
+	go func() { result <- coordinator.StagePending(ctx, batch) }()
+	select {
+	case <-workerEntered:
+	case <-ctx.Done():
+		t.Fatalf("waiting for staged operation: %v", ctx.Err())
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, writeports.ErrOperationTimeout) {
+			t.Fatalf("operation timeout error = %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("waiting for configured operation timeout: %v", ctx.Err())
+	}
+	close(releaseWorker)
+	if err := coordinator.StagePending(ctx, batch); err != nil {
+		t.Fatalf("receipt-backed retry after acknowledgement timeout: %v", err)
+	}
+	if got := storageWriteReceiptCount(t, ctx, coordinator.warehouse, batch.StreamName); got != 1 {
+		t.Fatalf("receipt-backed retry count = %d, want 1", got)
+	}
+}
+
+func TestStorageWriteOperationBudgetStartsAfterQueueAdmission(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	config := storageWriteCoordinatorTestConfig()
+	config.QueueCapacity = 1
+	config.QueueWaitTimeout = 250 * time.Millisecond
+	config.OperationTimeout = 400 * time.Millisecond
+	_, coordinator, _ := newStorageWriteFixtureWithConfig(t, []domain.Field{{Name: "id", Type: "INT64"}}, config)
+
+	activeStarted := make(chan struct{})
+	releaseActive := make(chan struct{})
+	acceptedResults := make(chan error, 2)
+	go func() {
+		_, err := coordinator.submit(ctx, func(context.Context) (any, error) {
+			close(activeStarted)
+			<-releaseActive
+			return nil, nil
+		})
+		acceptedResults <- err
+	}()
+	select {
+	case <-activeStarted:
+	case <-ctx.Done():
+		t.Fatalf("waiting for active operation: %v", ctx.Err())
+	}
+	go func() {
+		_, err := coordinator.submit(ctx, func(context.Context) (any, error) { return nil, nil })
+		acceptedResults <- err
+	}()
+	for len(coordinator.queue) != 1 {
+		select {
+		case <-time.After(time.Millisecond):
+		case <-ctx.Done():
+			t.Fatalf("waiting for queued operation: %v", ctx.Err())
+		}
+	}
+
+	candidate := make(chan error, 1)
+	go func() {
+		_, err := coordinator.submit(ctx, func(operationContext context.Context) (any, error) {
+			select {
+			case <-time.After(300 * time.Millisecond):
+				return nil, nil
+			case <-operationContext.Done():
+				return nil, operationContext.Err()
+			}
+		})
+		candidate <- err
+	}()
+	time.Sleep(150 * time.Millisecond)
+	close(releaseActive)
+	for range 2 {
+		select {
+		case err := <-acceptedResults:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("waiting for accepted operations: %v", ctx.Err())
+		}
+	}
+	select {
+	case err := <-candidate:
+		if err != nil {
+			t.Fatalf("operation budget was consumed before queue admission: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("waiting for admitted operation: %v", ctx.Err())
 	}
 }
 
@@ -567,7 +751,7 @@ func TestStorageWriteLostStageAcknowledgementRecoversOnNewBidiCall(t *testing.T)
 	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "id", Type: "INT64"}})
 	service, err := writeapp.New(writeapp.Config{
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
-		MaxStreams: 2, MaxAppendBytes: 1024 * 1024,
+		MaxStreams: 2, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 2,
 		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
 	}, coordinator, storageWriteRetryClock{}, storageWriteRetryIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -642,6 +826,9 @@ func TestStorageWriteLostStageAcknowledgementRecoversOnNewBidiCall(t *testing.T)
 	}
 	if ledgerBeforeRetry.NextOffset != 0 || ledgerBeforeRetry.RowCount != 0 {
 		t.Fatalf("canceled application ledger advanced to offset=%d rows=%d", ledgerBeforeRetry.NextOffset, ledgerBeforeRetry.RowCount)
+	}
+	if _, err := client.FinalizeWriteStream(ctx, &storagepb.FinalizeWriteStreamRequest{Name: created.GetName()}); grpcstatus.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("finalize while staged acknowledgement is unresolved = %v, want FAILED_PRECONDITION", err)
 	}
 	release()
 	// This queued operation is a barrier: it proves the worker published the
@@ -940,7 +1127,8 @@ func storageWriteInternalTableCount(t *testing.T, ctx context.Context, warehouse
 
 func storageWriteCoordinatorTestConfig() StorageWriteCoordinatorConfig {
 	return StorageWriteCoordinatorConfig{
-		QueueCapacity: 32, MaxInFlightBytes: 64 << 20, MaxInFlightBytesPerStream: 32 << 20,
+		QueueCapacity: 32, QueueWaitTimeout: time.Second, OperationTimeout: 5 * time.Second,
+		MaxInFlightBytes: 64 << 20, MaxInFlightBytesPerStream: 32 << 20,
 		MaxStagedBytes: 1 << 30, MaxStagedBytesPerStream: 512 << 20,
 	}
 }

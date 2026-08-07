@@ -40,6 +40,8 @@ func composeStorageWrite(
 	}
 	coordinator, err := duckdb.NewStorageWriteCoordinator(ctx, warehouse, duckdb.StorageWriteCoordinatorConfig{
 		QueueCapacity:             cfg.Storage.Write.QueueCapacity,
+		QueueWaitTimeout:          cfg.Storage.Write.QueueWaitTimeout.Value(),
+		OperationTimeout:          cfg.Storage.Write.OperationTimeout.Value(),
 		MaxInFlightBytes:          cfg.Storage.Write.MaxInFlightBytes,
 		MaxInFlightBytesPerStream: cfg.Storage.Write.MaxInFlightBytesPerStream,
 		MaxStagedBytes:            cfg.Storage.Write.MaxStagedBytes,
@@ -51,7 +53,9 @@ func composeStorageWrite(
 	service, err := writeapplication.New(writeapplication.Config{
 		Location: cfg.Defaults.Location, ProtocolModelVersion: cfg.Storage.Write.ProtocolModelVersion,
 		MaxStreams: cfg.Storage.Write.MaxStreams, MaxAppendBytes: cfg.Storage.Write.MaxAppendRequestBytes,
-		OrphanTTL: cfg.Storage.Write.OrphanTTL.Value(), CleanupInterval: cfg.Storage.Write.CleanupInterval.Value(),
+		MaxAppendEnvelopeBytes:      cfg.Storage.Write.MaxAppendEnvelopeBytes,
+		MaxConcurrentAppendRequests: cfg.Storage.Write.MaxConcurrentAppendRequests,
+		OrphanTTL:                   cfg.Storage.Write.OrphanTTL.Value(), CleanupInterval: cfg.Storage.Write.CleanupInterval.Value(),
 	}, coordinator, clock, ids, logger)
 	if err != nil {
 		closeContext, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())

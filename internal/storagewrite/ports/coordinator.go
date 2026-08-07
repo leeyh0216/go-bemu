@@ -15,6 +15,8 @@ import (
 var (
 	ErrTableNotFound     = errors.New("storage write destination table not found")
 	ErrResourceExhausted = errors.New("storage write byte admission exhausted")
+	ErrQueueWaitTimeout  = errors.New("storage write coordinator queue wait timed out")
+	ErrOperationTimeout  = errors.New("storage write coordinator operation timed out")
 )
 
 type Clock interface {
@@ -47,7 +49,6 @@ type AppendBatch struct {
 type CommitRequest struct {
 	Parent      domain.TableReference
 	StreamNames []string
-	CommitTime  time.Time
 }
 
 // Coordinator is deliberately serializable. Implementations may execute every

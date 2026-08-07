@@ -38,6 +38,32 @@ request를 제한하고, `maxStagedBytes*`는 숨김 DuckDB PENDING table에 보
 deterministic serialized-row charge를 제한한다. Configured append size는 stream별
 limit 이하이고, stream별 limit은 global limit 이하여야 한다. Staged-byte 계산은
 안정적이고 이식 가능한 논리적 크기이며 DuckDB의 실제 file/page 크기는 아니다.
+`storage.write.queueWaitTimeout`(default `5s`)은 byte admission 이후 serialized
+coordinator에 들어갈 때까지의 대기를 제한하고,
+`storage.write.operationTimeout`(default `30s`)은 수락된 operation의 serialized
+queue 체류와 backend 실행을 합친 전체 시간을 제한한다. Timer는 queue admission
+성공 뒤에만 시작하므로 queue 포화는 독립적으로 `RESOURCE_EXHAUSTED` 경계가 된다.
+각각 `BQEMU_STORAGE_WRITE_QUEUE_WAIT_TIMEOUT`,
+`BQEMU_STORAGE_WRITE_OPERATION_TIMEOUT`에 mapping된다. Queue 포화는 재시도 가능한
+gRPC `RESOURCE_EXHAUSTED`, server operation deadline은 `DEADLINE_EXCEEDED`로
+보고하며 caller의 더 이른 deadline이 우선한다. PENDING append가 응답 전에 staging된
+경우 Finalize 전에 같은 offset/schema/payload receipt로 재전송해야 하며 이 retry는
+idempotent하다.
+DEFAULT stream은 공식 at-least-once ambiguity를 유지한다. 공식 제한은 전체 request에
+적용되지만 pinned Java 3.22.1 client는 `ProtoData` 크기로 batch를 구성한다.
+Compatibility 설정 `maxAppendRequestBytes`는 이 client-visible payload를 모델링하고
+transient admission은 전체 `AppendRowsRequest`를 계산한다. Startup 시에는
+`server.grpc.maxReceiveMessageBytes`가 설정된 payload와 file-configured
+`maxAppendEnvelopeBytes`(default 64 KiB)를 수용하는지도 검증한다. 환경 변수는
+`BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES`다. 이 규칙은 공식
+[`AppendRows` request와 retry 계약](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows)을
+따른다.
+정확한 pinned client source는
+[`google-cloud-bigquerystorage` 3.22.1 source artifact](https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar)에 고정한다.
+`maxConcurrentAppendRequests`(default `16`, 환경 변수
+`BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`)는 gRPC `Recv` 전에
+획득하여 bidi stream 전체에서 protobuf decode, clone, digest의 동시 메모리를
+weighted coordinator admission 이전부터 제한한다.
 `load.enabled`에는 absolute `load.gcsEndpoint`가 필요하고
 `load.allowFileSources`는 default false이며 object/list/download limit을 적용한다.
 Authentication과 runtime contract-profile negotiation은 아직 composition되지 않는다.
