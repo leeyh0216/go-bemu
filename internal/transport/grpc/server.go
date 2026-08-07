@@ -24,6 +24,22 @@ type Services struct {
 	Write *writeapp.Service
 }
 
+// Runtime retains the health controller so the composition root can announce
+// NOT_SERVING before draining transports. Shutdown follows the gRPC health and
+// graceful-stop guidance instead of leaving a construction-time status behind.
+//
+// Sources:
+//   - https://grpc.io/docs/guides/health-checking/
+//   - https://grpc.io/docs/guides/server-graceful-stop/
+type Runtime struct {
+	server *grpc.Server
+	health *health.Server
+}
+
+func (r *Runtime) Server() *grpc.Server { return r.server }
+
+func (r *Runtime) MarkNotServing() { r.health.Shutdown() }
+
 // StorageServer binds the official Google-generated service definitions.
 // Protocol source:
 // https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1
@@ -40,6 +56,10 @@ func New(options ...grpc.ServerOption) *grpc.Server {
 }
 
 func NewWithServices(services Services, options ...grpc.ServerOption) *grpc.Server {
+	return NewRuntimeWithServices(services, options...).Server()
+}
+
+func NewRuntimeWithServices(services Services, options ...grpc.ServerOption) *Runtime {
 	options = append(options,
 		grpc.ChainUnaryInterceptor(observability.UnaryServerInterceptor),
 		grpc.ChainStreamInterceptor(observability.StreamServerInterceptor),
@@ -50,7 +70,11 @@ func NewWithServices(services Services, options ...grpc.ServerOption) *grpc.Serv
 	storagepb.RegisterBigQueryWriteServer(server, NewStorageWriteServer(services.Write))
 
 	healthServer := health.NewServer()
-	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	overallStatus := grpc_health_v1.HealthCheckResponse_NOT_SERVING
+	if services.Read != nil || services.Write != nil {
+		overallStatus = grpc_health_v1.HealthCheckResponse_SERVING
+	}
+	healthServer.SetServingStatus("", overallStatus)
 	readStatus := grpc_health_v1.HealthCheckResponse_NOT_SERVING
 	if services.Read != nil {
 		readStatus = grpc_health_v1.HealthCheckResponse_SERVING
@@ -63,5 +87,5 @@ func NewWithServices(services Services, options ...grpc.ServerOption) *grpc.Serv
 	healthServer.SetServingStatus(storageWriteServiceName, writeStatus)
 	grpc_health_v1.RegisterHealthServer(server, healthServer)
 	reflection.Register(server)
-	return server
+	return &Runtime{server: server, health: healthServer}
 }
