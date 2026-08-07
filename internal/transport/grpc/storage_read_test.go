@@ -1,0 +1,368 @@
+package grpcserver
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	storagepb "cloud.google.com/go/bigquery/storage/apiv1/storagepb"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/test/bufconn"
+
+	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
+	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
+	"github.com/leeyh0216/go-bemu/internal/storageread/ports"
+)
+
+func TestStorageReadWireFormatsAndOffsetResume(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		format domain.Format
+		wire   storagepb.DataFormat
+	}{
+		{name: "arrow", format: domain.FormatArrow, wire: storagepb.DataFormat_ARROW},
+		{name: "avro", format: domain.FormatAvro, wire: storagepb.DataFormat_AVRO},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := grpcTestContext(t)
+			defer cancel()
+			materializer := newWireMaterializer(t, testCase.format, 8)
+			service := newWireReadService(t, materializer)
+			client, healthClient := startReadServer(t, service)
+
+			health, err := healthClient.Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: storageReadServiceName})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if health.Status != grpc_health_v1.HealthCheckResponse_SERVING {
+				t.Fatalf("Storage Read health = %s, want SERVING", health.Status)
+			}
+
+			session, err := client.CreateReadSession(ctx, &storagepb.CreateReadSessionRequest{
+				Parent:         "projects/reader-project",
+				MaxStreamCount: 4,
+				ReadSession: &storagepb.ReadSession{
+					Table:      "projects/data-project/datasets/analytics/tables/events",
+					DataFormat: testCase.wire,
+					TraceId:    "spark-stage-42",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if materializer.calls != 1 {
+				t.Fatalf("materialize calls = %d, want 1", materializer.calls)
+			}
+			if len(session.GetStreams()) != 4 || session.GetEstimatedRowCount() != 8 {
+				t.Fatalf("unexpected session streams/rows: %d/%d", len(session.GetStreams()), session.GetEstimatedRowCount())
+			}
+			assertReferenceSchemaWire(t, testCase.format, session)
+
+			rows, err := client.ReadRows(ctx, &storagepb.ReadRowsRequest{
+				ReadStream: session.GetStreams()[1].GetName(),
+				Offset:     1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := rows.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.GetRowCount() != 1 {
+				t.Fatalf("response row_count = %d, want 1", response.GetRowCount())
+			}
+			if response.GetStats().GetProgress().GetAtResponseStart() != 0.5 ||
+				response.GetStats().GetProgress().GetAtResponseEnd() != 1 {
+				t.Fatalf("unexpected progress: %+v", response.GetStats().GetProgress())
+			}
+			assertRowsWire(t, testCase.format, response)
+			if _, err := rows.Recv(); !errors.Is(err, io.EOF) {
+				t.Fatalf("second Recv error = %v, want io.EOF", err)
+			}
+			if got := materializer.snapshot.lastRange; got != (wireRange{start: 3, end: 4, maxRows: 2}) {
+				t.Fatalf("snapshot range = %+v, want [3,4) with max 2", got)
+			}
+		})
+	}
+}
+
+func TestStorageReadRejectsUnsupportedCompressionExplicitly(t *testing.T) {
+	ctx, cancel := grpcTestContext(t)
+	defer cancel()
+	materializer := newWireMaterializer(t, domain.FormatArrow, 1)
+	client, _ := startReadServer(t, newWireReadService(t, materializer))
+	_, err := client.CreateReadSession(ctx, &storagepb.CreateReadSessionRequest{
+		Parent: "projects/reader-project",
+		ReadSession: &storagepb.ReadSession{
+			Table:      "projects/data-project/datasets/analytics/tables/events",
+			DataFormat: storagepb.DataFormat_ARROW,
+			ReadOptions: &storagepb.ReadSession_TableReadOptions{
+				ResponseCompressionCodec: storagepb.ReadSession_TableReadOptions_RESPONSE_COMPRESSION_CODEC_LZ4.Enum(),
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "response compression is not implemented") {
+		t.Fatalf("compression error = %v, want explicit unsupported result", err)
+	}
+	if materializer.calls != 0 {
+		t.Fatalf("materializer called for unsupported request")
+	}
+}
+
+func assertReferenceSchemaWire(t *testing.T, format domain.Format, session *storagepb.ReadSession) {
+	t.Helper()
+	switch format {
+	case domain.FormatArrow:
+		assertSingleArrowMessage(t, session.GetArrowSchema().GetSerializedSchema(), ipc.MessageSchema)
+		if session.GetAvroSchema() != nil {
+			t.Fatal("ARROW session unexpectedly contains an Avro schema")
+		}
+	case domain.FormatAvro:
+		if !strings.Contains(session.GetAvroSchema().GetSchema(), `"type":"record"`) {
+			t.Fatalf("unexpected Avro schema: %q", session.GetAvroSchema().GetSchema())
+		}
+		if session.GetArrowSchema() != nil {
+			t.Fatal("AVRO session unexpectedly contains an Arrow schema")
+		}
+	}
+}
+
+func assertRowsWire(t *testing.T, format domain.Format, response *storagepb.ReadRowsResponse) {
+	t.Helper()
+	switch format {
+	case domain.FormatArrow:
+		assertSingleArrowMessage(t, response.GetArrowRecordBatch().GetSerializedRecordBatch(), ipc.MessageRecordBatch)
+		assertSingleArrowMessage(t, response.GetArrowSchema().GetSerializedSchema(), ipc.MessageSchema)
+		if response.GetAvroRows() != nil {
+			t.Fatal("ARROW response unexpectedly contains Avro rows")
+		}
+	case domain.FormatAvro:
+		payload := response.GetAvroRows().GetSerializedBinaryRows()
+		if bytes.HasPrefix(payload, []byte{'O', 'b', 'j', 1}) {
+			t.Fatalf("Avro response is an object-container file: %x", payload)
+		}
+		value, read := binary.Uvarint(payload)
+		if read <= 0 || value != 6 { // Avro zig-zag encoding of row id 3.
+			t.Fatalf("raw Avro datum = %x, want encoded id 3", payload)
+		}
+		if response.GetAvroSchema() == nil || response.GetArrowRecordBatch() != nil {
+			t.Fatalf("unexpected Avro response shape: %+v", response)
+		}
+	}
+}
+
+func assertSingleArrowMessage(t *testing.T, payload []byte, expected ipc.MessageType) {
+	t.Helper()
+	reader := ipc.NewMessageReader(bytes.NewReader(payload))
+	defer reader.Release()
+	message, err := reader.Message()
+	if err != nil {
+		t.Fatalf("decode Arrow IPC message: %v", err)
+	}
+	defer message.Release()
+	if message.Type() != expected {
+		t.Fatalf("Arrow IPC type = %s, want %s", message.Type(), expected)
+	}
+	if _, err := reader.Message(); !errors.Is(err, io.EOF) {
+		t.Fatalf("payload contains more than one Arrow IPC message: %v", err)
+	}
+}
+
+func startReadServer(t *testing.T, service *readapp.Service) (storagepb.BigQueryReadClient, grpc_health_v1.HealthClient) {
+	t.Helper()
+	listener := bufconn.Listen(1024 * 1024)
+	server := NewWithServices(Services{Read: service})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	connection, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	return storagepb.NewBigQueryReadClient(connection), grpc_health_v1.NewHealthClient(connection)
+}
+
+func newWireReadService(t *testing.T, materializer ports.SnapshotMaterializer) *readapp.Service {
+	t.Helper()
+	service, err := readapp.New(readapp.Config{
+		Location:             "test-location",
+		ProtocolModelVersion: "google.cloud.bigquery.storage.v1@cloud-bigquery-go-v1.79.0",
+		AllowedStreamCounts:  []int32{1, 2, 4, 16},
+		DefaultStreamCount:   4,
+		SessionTTL:           30 * time.Minute,
+		CleanupInterval:      time.Minute,
+		MaxRowsPerResponse:   2,
+		MaxSessions:          16,
+	}, materializer, wireClock{}, &wireIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+func grpcTestContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	timeout := 5 * time.Second
+	if configured := os.Getenv("BQEMU_STORAGE_READ_TEST_TIMEOUT"); configured != "" {
+		parsed, err := time.ParseDuration(configured)
+		if err != nil {
+			t.Fatalf("BQEMU_STORAGE_READ_TEST_TIMEOUT: %v", err)
+		}
+		timeout = parsed
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+type wireClock struct{}
+
+func (wireClock) Now() time.Time { return time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC) }
+
+type wireIDs struct {
+	mu   sync.Mutex
+	next int
+}
+
+func (g *wireIDs) NewID() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.next++
+	return fmt.Sprintf("wire-session-%d", g.next)
+}
+
+type wireMaterializer struct {
+	calls    int
+	snapshot *wireSnapshot
+}
+
+func newWireMaterializer(t *testing.T, format domain.Format, rows int64) *wireMaterializer {
+	t.Helper()
+	return &wireMaterializer{snapshot: &wireSnapshot{
+		format: format,
+		metadata: domain.SnapshotMetadata{
+			Schema:         domain.ReferenceSchema{Format: format, Serialized: wireReferenceSchema(t, format)},
+			RowCount:       rows,
+			EstimatedBytes: rows * 8,
+		},
+	}}
+}
+
+func (m *wireMaterializer) Materialize(context.Context, domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+	m.calls++
+	return m.snapshot, nil
+}
+
+type wireRange struct {
+	start   int64
+	end     int64
+	maxRows int64
+}
+
+type wireSnapshot struct {
+	format    domain.Format
+	metadata  domain.SnapshotMetadata
+	lastRange wireRange
+}
+
+func (s *wireSnapshot) Metadata() domain.SnapshotMetadata { return s.metadata }
+
+func (s *wireSnapshot) OpenRange(_ context.Context, start, end, maxRows int64) (ports.BatchIterator, error) {
+	s.lastRange = wireRange{start: start, end: end, maxRows: maxRows}
+	return &wireIterator{format: s.format, next: start, end: end, maxRows: maxRows}, nil
+}
+
+func (*wireSnapshot) Close(context.Context) error { return nil }
+
+type wireIterator struct {
+	format  domain.Format
+	next    int64
+	end     int64
+	maxRows int64
+}
+
+func (i *wireIterator) Next(context.Context) (domain.EncodedBatch, error) {
+	if i.next >= i.end {
+		return domain.EncodedBatch{}, io.EOF
+	}
+	end := min(i.end, i.next+i.maxRows)
+	payload, err := wireRows(i.format, i.next, end)
+	if err != nil {
+		return domain.EncodedBatch{}, err
+	}
+	batch := domain.EncodedBatch{Offset: i.next, RowCount: end - i.next, SerializedRows: payload}
+	i.next = end
+	return batch, nil
+}
+
+func (*wireIterator) Close() error { return nil }
+
+func wireReferenceSchema(t *testing.T, format domain.Format) []byte {
+	t.Helper()
+	if format == domain.FormatAvro {
+		return []byte(`{"type":"record","name":"row","fields":[{"name":"id","type":"long"}]}`)
+	}
+	schema := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	payload := ipc.GetSchemaPayload(schema, memory.DefaultAllocator)
+	defer payload.Release()
+	var output bytes.Buffer
+	if _, err := payload.WritePayload(&output); err != nil {
+		t.Fatal(err)
+	}
+	return output.Bytes()
+}
+
+func wireRows(format domain.Format, start, end int64) ([]byte, error) {
+	if format == domain.FormatAvro {
+		var output []byte
+		var buffer [binary.MaxVarintLen64]byte
+		for value := start; value < end; value++ {
+			encoded := uint64(value << 1)
+			written := binary.PutUvarint(buffer[:], encoded)
+			output = append(output, buffer[:written]...)
+		}
+		return output, nil
+	}
+	builder := array.NewInt64Builder(memory.DefaultAllocator)
+	defer builder.Release()
+	for value := start; value < end; value++ {
+		builder.Append(value)
+	}
+	values := builder.NewArray()
+	defer values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, end-start)
+	defer record.Release()
+	payload, err := ipc.GetRecordBatchPayload(record, ipc.WithAllocator(memory.DefaultAllocator))
+	if err != nil {
+		return nil, err
+	}
+	defer payload.Release()
+	var output bytes.Buffer
+	_, err = payload.WritePayload(&output)
+	return output.Bytes(), err
+}
+
+var _ ports.SnapshotMaterializer = (*wireMaterializer)(nil)
+var _ ports.ReadSnapshot = (*wireSnapshot)(nil)
+var _ ports.BatchIterator = (*wireIterator)(nil)
