@@ -1,0 +1,64 @@
+{
+  "profileId": "google-cloud-bigquery-python-3.43.0",
+  "consumerKind": "client",
+  "consumerName": "google-cloud-bigquery-python",
+  "consumerVersion": "3.43.0",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://pypi.org/project/google-cloud-bigquery/3.43.0/",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/tables"
+  ],
+  "flow": "python-table-schema-admin",
+  "events": [
+    {
+      "stage": "insert_table",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables",
+      "fields": {
+        "request.tableReference.tableId": "table_id",
+        "request.schema.fields": "ordered_fields",
+        "response.etag": "opaque_revision"
+      }
+    },
+    {
+      "stage": "get_table",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+      "fields": {
+        "response.tableReference": "present",
+        "response.schema.fields": "ordered_fields",
+        "response.etag": "opaque_revision"
+      }
+    },
+    {
+      "stage": "patch_table_schema",
+      "protocol": "REST",
+      "method": "PATCH",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+      "fields": {
+        "request.If-Match": "previous_etag",
+        "request.schema.fields": "existing_then_nullable_or_repeated_additions",
+        "response.schema.fields": "evolved_ordered_fields",
+        "response.etag": "new_revision"
+      }
+    },
+    {
+      "stage": "list_tables",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables",
+      "fields": {
+        "request.maxResults": "positive",
+        "response.tables": "page"
+      }
+    },
+    {
+      "stage": "delete_table",
+      "protocol": "REST",
+      "method": "DELETE",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}"
+    }
+  ]
+}

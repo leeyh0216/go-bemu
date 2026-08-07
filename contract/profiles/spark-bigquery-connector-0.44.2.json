@@ -1,7 +1,13 @@
 {
   "schemaVersion": "1",
   "id": "spark-bigquery-connector-0.44.2",
-  "connectorVersions": ["0.44.2"],
+  "consumers": [
+    {
+      "kind": "connector",
+      "name": "spark-bigquery-connector",
+      "versions": ["0.44.2"]
+    }
+  ],
   "description": "Source-derived protocol profile for Spark BigQuery connector 0.44.2. Capability state determines whether the emulator currently serves each flow.",
   "sources": [
     "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2",

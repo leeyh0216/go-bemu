@@ -1,0 +1,64 @@
+{
+  "profileId": "google-cloud-bigquery-python-3.43.0",
+  "consumerKind": "client",
+  "consumerName": "google-cloud-bigquery-python",
+  "consumerVersion": "3.43.0",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://pypi.org/project/google-cloud-bigquery/3.43.0/",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets"
+  ],
+  "flow": "python-dataset-admin",
+  "events": [
+    {
+      "stage": "insert_dataset",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/datasets",
+      "fields": {
+        "request.datasetReference.datasetId": "dataset_id",
+        "response.etag": "opaque_revision"
+      }
+    },
+    {
+      "stage": "get_dataset",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+      "fields": {
+        "response.datasetReference": "present",
+        "response.etag": "opaque_revision"
+      }
+    },
+    {
+      "stage": "patch_dataset",
+      "protocol": "REST",
+      "method": "PATCH",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+      "fields": {
+        "request.If-Match": "previous_etag",
+        "request.labels": "replacement_map",
+        "response.etag": "new_revision"
+      }
+    },
+    {
+      "stage": "list_datasets",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets",
+      "fields": {
+        "request.maxResults": "positive",
+        "response.datasets": "page"
+      }
+    },
+    {
+      "stage": "delete_dataset",
+      "protocol": "REST",
+      "method": "DELETE",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+      "fields": {
+        "request.deleteContents": "true_when_tables_exist"
+      }
+    }
+  ]
+}

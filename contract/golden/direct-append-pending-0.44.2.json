@@ -1,6 +1,8 @@
 {
   "profileId": "spark-bigquery-connector-0.44.2",
-  "connectorVersion": "0.44.2",
+  "consumerKind": "connector",
+  "consumerName": "spark-bigquery-connector",
+  "consumerVersion": "0.44.2",
   "fixtureKind": "source-derived",
   "sourceRefs": [
     "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java",
