@@ -1,0 +1,33 @@
+name: go-bemu
+
+services:
+  bqemu:
+    build:
+      context: .
+      args:
+        BQEMU_CONFIG_SOURCE: ${BQEMU_CONFIG_SOURCE:-configs/bqemu.yaml}
+    image: ${BQEMU_IMAGE:-go-bemu:dev}
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      BQEMU_CONFIG: /etc/bqemu/bqemu.yaml
+      BQEMU_HEALTHCHECK_URL: ${BQEMU_HEALTHCHECK_URL:-http://127.0.0.1:9050/readyz}
+      BQEMU_PUBLIC_URL: ${BQEMU_PUBLIC_URL:-http://localhost:${BQEMU_HTTP_PORT:-9050}}
+    ports:
+      - "${BQEMU_HTTP_PORT:-9050}:9050"
+      - "${BQEMU_GRPC_PORT:-9060}:9060"
+      - "127.0.0.1:${BQEMU_ADMIN_PORT:-9051}:9051"
+    volumes:
+      - bqemu-data:/data
+    tmpfs:
+      - /tmp/bqemu:uid=65532,gid=65532,mode=0700
+    stop_grace_period: ${BQEMU_STOP_GRACE_PERIOD:-15s}
+    healthcheck:
+      interval: ${BQEMU_HEALTHCHECK_INTERVAL:-5s}
+      timeout: ${BQEMU_HEALTHCHECK_TIMEOUT:-2s}
+      retries: ${BQEMU_HEALTHCHECK_RETRIES:-24}
+
+volumes:
+  bqemu-data:

@@ -1,0 +1,13 @@
+.git
+.github
+.local
+.venv
+bin
+data
+docs
+tests
+web
+*.duckdb
+*.duckdb.wal
+coverage.out
+__pycache__
