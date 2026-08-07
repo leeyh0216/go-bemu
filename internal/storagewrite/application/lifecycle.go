@@ -2,19 +2,39 @@ package application
 
 // Orphan cleanup models server-side disposal of uncommitted PENDING streams.
 // BigQuery does not expose a delete-stream RPC; finalized-but-uncommitted data
-// remains invisible and is eventually reclaimed by the service.
-// Source: https://cloud.google.com/bigquery/docs/write-api-streaming
+// remains invisible and is eventually reclaimed by the service. BQEMU therefore
+// keeps an application tombstone until its idempotent adapter discard succeeds.
+// A failed google.rpc.Status must leave that tombstone retryable.
+//
+// Official PENDING lifecycle and status contracts:
+//   - https://cloud.google.com/bigquery/docs/write-api-batch
+//   - https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.WriteStream
+//   - https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.rpc#status
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 )
 
 func (s *Service) SweepOrphans(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.cleanupGate:
+	}
+	defer func() { s.cleanupGate <- struct{}{} }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	cutoff := s.clock.Now().Add(-s.config.OrphanTTL)
 	type orphan struct {
 		name  string
@@ -24,34 +44,66 @@ func (s *Service) SweepOrphans(ctx context.Context) error {
 	s.mu.Lock()
 	for name, state := range s.streams {
 		state.mu.Lock()
-		eligible := state.stream.Type == domain.StreamTypePending &&
-			state.stream.State != domain.StreamStateCommitted &&
-			!state.stream.LastActivity.After(cutoff)
+		eligible := state.stream.Type == domain.StreamTypePending && state.stream.State != domain.StreamStateCommitted &&
+			(state.cleanupPhase == cleanupPhasePending ||
+				(state.cleanupPhase == cleanupPhaseActive && !state.stream.LastActivity.After(cutoff)))
 		if eligible {
-			state.orphaned = true
-			delete(s.streams, name)
-			s.pending.Add(-1)
+			if state.cleanupPhase == cleanupPhaseActive {
+				state.cleanupPhase = cleanupPhasePending
+				s.logger.InfoContext(ctx, "pending write stream entered cleanup",
+					"event", "domain.transition", "operation", "storage_write.sweep_orphans",
+					"model_version", s.config.ProtocolModelVersion,
+					"stream_fingerprint", digest([]byte(name)),
+					"state_before", cleanupPhaseActive, "state_after", cleanupPhasePending,
+					"retry_count", uint64(0))
+			}
 			orphans = append(orphans, orphan{name: name, state: state})
 		}
 		state.mu.Unlock()
 	}
 	s.mu.Unlock()
+	sort.Slice(orphans, func(i, j int) bool { return orphans[i].name < orphans[j].name })
 
 	var result error
 	for _, item := range orphans {
+		if err := ctx.Err(); err != nil {
+			result = errors.Join(result, err)
+			break
+		}
+		item.state.mu.Lock()
+		retryCount := item.state.cleanupAttempts
+		item.state.cleanupAttempts++
+		item.state.mu.Unlock()
 		s.logger.InfoContext(ctx, "discarding orphaned write stream",
 			"event", "side_effect.before", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
-			"stream_fingerprint", digest([]byte(item.name)), "tx_state", "discarding")
+			"stream_fingerprint", digest([]byte(item.name)),
+			"state_before", cleanupPhasePending, "state_after", cleanupPhasePending,
+			"retry_count", retryCount)
 		err := s.coordinator.DiscardPending(ctx, item.name)
+		stateAfter := cleanupPhasePending
+		if err == nil {
+			s.mu.Lock()
+			item.state.mu.Lock()
+			if s.streams[item.name] == item.state && item.state.cleanupPhase == cleanupPhasePending {
+				item.state.cleanupPhase = cleanupPhaseDiscarded
+				delete(s.streams, item.name)
+				s.pending.Add(-1)
+				stateAfter = cleanupPhaseDiscarded
+			}
+			item.state.mu.Unlock()
+			s.mu.Unlock()
+		}
 		attrs := []any{
 			"event", "side_effect.after", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
-			"stream_fingerprint", digest([]byte(item.name)), "success", err == nil, "tx_state", "discarded",
+			"stream_fingerprint", digest([]byte(item.name)), "success", err == nil,
+			"state_before", cleanupPhasePending, "state_after", stateAfter,
+			"retry_count", retryCount,
 		}
 		if err != nil {
 			attrs = append(attrs, errorLogAttrs(err)...)
-			result = errors.Join(result, fmt.Errorf("discard %s: %w", item.name, err))
+			result = errors.Join(result, fmt.Errorf("discard pending stream %s: %w", digest([]byte(item.name)), err))
 		}
 		s.logger.InfoContext(ctx, "orphaned write stream discard completed", attrs...)
 	}

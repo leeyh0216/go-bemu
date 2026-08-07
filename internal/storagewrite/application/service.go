@@ -39,14 +39,28 @@ type Service struct {
 	streams map[string]*streamState
 	closed  bool
 	pending atomic.Int64
+
+	// cleanupGate serializes orphan disposal without making a caller wait past
+	// its context deadline. This keeps DiscardPending exactly-once per sweep even
+	// when the periodic cleaner and shutdown race.
+	cleanupGate chan struct{}
 }
 
 type streamState struct {
-	mu         sync.Mutex
-	stream     domain.WriteStream
-	descriptor []byte
-	orphaned   bool
+	mu              sync.Mutex
+	stream          domain.WriteStream
+	descriptor      []byte
+	cleanupPhase    cleanupPhase
+	cleanupAttempts uint64
 }
+
+type cleanupPhase string
+
+const (
+	cleanupPhaseActive    cleanupPhase = "active"
+	cleanupPhasePending   cleanupPhase = "cleanup_pending"
+	cleanupPhaseDiscarded cleanupPhase = "discarded"
+)
 
 func New(config Config, coordinator ports.Coordinator, clock ports.Clock, ids ports.IDGenerator, logger *slog.Logger) (*Service, error) {
 	if coordinator == nil || clock == nil || ids == nil || logger == nil {
@@ -55,10 +69,12 @@ func New(config Config, coordinator ports.Coordinator, clock ports.Clock, ids po
 	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
-	return &Service{
+	service := &Service{
 		config: config, coordinator: coordinator, clock: clock, ids: ids,
-		logger: logger, streams: make(map[string]*streamState),
-	}, nil
+		logger: logger, streams: make(map[string]*streamState), cleanupGate: make(chan struct{}, 1),
+	}
+	service.cleanupGate <- struct{}{}
+	return service, nil
 }
 
 func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamRequest) (domain.WriteStream, error) {
@@ -106,7 +122,7 @@ func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamR
 		State: domain.StreamStateOpen, CreateTime: now, LastActivity: now,
 		Location: s.config.Location, Schema: cloneSchema(schema),
 	}
-	s.streams[name] = &streamState{stream: stream}
+	s.streams[name] = &streamState{stream: stream, cleanupPhase: cleanupPhaseActive}
 	s.pending.Add(1)
 	s.logger.InfoContext(ctx, "pending write stream created",
 		"event", "domain.transition", "operation", operation,
@@ -128,7 +144,7 @@ func (s *Service) GetStream(ctx context.Context, name string) (domain.WriteStrea
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.orphaned {
+	if state.cleanupPhase != cleanupPhaseActive {
 		return domain.WriteStream{}, domain.NewError(domain.ErrorNotFound, operation, errors.New("write stream was discarded"))
 	}
 	return cloneStream(state.stream), nil
@@ -155,7 +171,7 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.orphaned {
+	if state.cleanupPhase != cleanupPhaseActive {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorNotFound, operation, errors.New("write stream was discarded"))
 	}
 	if state.stream.Type == domain.StreamTypePending && state.stream.State != domain.StreamStateOpen {
@@ -259,7 +275,7 @@ func (s *Service) Finalize(_ context.Context, name string) (int64, error) {
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.orphaned {
+	if state.cleanupPhase != cleanupPhaseActive {
 		return 0, domain.NewError(domain.ErrorNotFound, operation, errors.New("write stream was discarded"))
 	}
 	if state.stream.State == domain.StreamStateCommitted {
@@ -328,7 +344,7 @@ func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference,
 	}()
 	for _, item := range states {
 		switch {
-		case item.state.orphaned:
+		case item.state.cleanupPhase != cleanupPhaseActive:
 			streamErrors = append(streamErrors, domain.StreamError{Code: domain.StreamNotFound, Stream: item.name, Message: "stream was discarded"})
 		case item.state.stream.Type != domain.StreamTypePending:
 			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamType, Stream: item.name, Message: "stream is not PENDING"})
@@ -406,7 +422,7 @@ func (s *Service) lookupOrCreateDefault(ctx context.Context, operation string, t
 		Name: canonical, Parent: table, Type: domain.StreamTypeDefault,
 		State: domain.StreamStateCommitted, CreateTime: now, CommitTime: &commitTime,
 		LastActivity: now, Location: s.config.Location, Schema: cloneSchema(schema),
-	}}
+	}, cleanupPhase: cleanupPhaseActive}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
