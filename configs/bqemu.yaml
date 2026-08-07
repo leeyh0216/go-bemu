@@ -45,8 +45,9 @@ storage:
     maxSessions: 128
     spillThresholdBytes: 67108864
     maxRowBytes: 8388608
+    maxSnapshotRows: 10000000
     tempFilePattern: bqemu-storage-read-*
-    protocolModelVersion: google.storage.v1+spark-bigquery-connector-0.44.2
+    protocolModelVersion: google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2
   write:
     enabled: true
     maxStreams: 1024
@@ -54,7 +55,7 @@ storage:
     queueCapacity: 256
     orphanTtl: "6h"
     cleanupInterval: "1m"
-    protocolModelVersion: google.storage.v1+spark-bigquery-connector-0.44.2
+    protocolModelVersion: google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2
 
 # Enable only with an explicit fake-GCS or GCS-compatible JSON endpoint.
 # file:// sources remain disabled unless allowFileSources is deliberately set.

@@ -130,6 +130,7 @@ type StorageReadConfig struct {
 	MaxSessions          int    `yaml:"maxSessions" json:"maxSessions"`
 	SpillThresholdBytes  int64  `yaml:"spillThresholdBytes" json:"spillThresholdBytes"`
 	MaxRowBytes          int64  `yaml:"maxRowBytes" json:"maxRowBytes"`
+	MaxSnapshotRows      int64  `yaml:"maxSnapshotRows" json:"maxSnapshotRows"`
 	TempFilePattern      string `yaml:"tempFilePattern" json:"tempFilePattern"`
 	ProtocolModelVersion string `yaml:"protocolModelVersion" json:"protocolModelVersion"`
 }
@@ -242,14 +243,14 @@ func Defaults() Config {
 			Read: StorageReadConfig{
 				Enabled: true, MaxStreams: 64, DefaultStreamCount: 4,
 				RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20, MaxSessions: 128,
-				SpillThresholdBytes: 64 << 20, MaxRowBytes: 8 << 20,
+				SpillThresholdBytes: 64 << 20, MaxRowBytes: 8 << 20, MaxSnapshotRows: 10_000_000,
 				TempFilePattern:      "bqemu-storage-read-*",
-				ProtocolModelVersion: "google.storage.v1+spark-bigquery-connector-0.44.2",
+				ProtocolModelVersion: "google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2",
 			},
 			Write: StorageWriteConfig{
 				Enabled: true, MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, QueueCapacity: 256,
 				OrphanTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
-				ProtocolModelVersion: "google.storage.v1+spark-bigquery-connector-0.44.2",
+				ProtocolModelVersion: "google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2",
 			},
 		},
 		Load: LoadConfig{
@@ -395,6 +396,7 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STORAGE_READ_MAX_SESSIONS", "storage.read.maxSessions"},
 	{"BQEMU_STORAGE_READ_SPILL_THRESHOLD_BYTES", "storage.read.spillThresholdBytes"},
 	{"BQEMU_STORAGE_READ_MAX_ROW_BYTES", "storage.read.maxRowBytes"},
+	{"BQEMU_STORAGE_READ_MAX_SNAPSHOT_ROWS", "storage.read.maxSnapshotRows"},
 	{"BQEMU_STORAGE_READ_TEMP_FILE_PATTERN", "storage.read.tempFilePattern"},
 	{"BQEMU_STORAGE_READ_PROTOCOL_MODEL_VERSION", "storage.read.protocolModelVersion"},
 	{"BQEMU_STORAGE_WRITE_MAX_STREAMS", "storage.write.maxStreams"},
@@ -503,6 +505,8 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt64(&cfg.Storage.Read.SpillThresholdBytes)
 	case "storage.read.maxRowBytes":
 		return setInt64(&cfg.Storage.Read.MaxRowBytes)
+	case "storage.read.maxSnapshotRows":
+		return setInt64(&cfg.Storage.Read.MaxSnapshotRows)
 	case "storage.read.tempFilePattern":
 		return setString(&cfg.Storage.Read.TempFilePattern)
 	case "storage.read.protocolModelVersion":
@@ -630,7 +634,8 @@ func (cfg Config) Validate() error {
 		return errors.New("storage.read stream counts must be positive, defaultStreamCount must not exceed maxStreams, and maxStreams must fit int32")
 	}
 	if cfg.Storage.Read.RowsPerResponse < 1 || cfg.Storage.Read.MaxResponseBytes < 1<<20 ||
-		cfg.Storage.Read.MaxSessions < 1 || cfg.Storage.Read.SpillThresholdBytes < 0 || cfg.Storage.Read.MaxRowBytes < 1 {
+		cfg.Storage.Read.MaxSessions < 1 || cfg.Storage.Read.SpillThresholdBytes < 0 ||
+		cfg.Storage.Read.MaxRowBytes < 1 || cfg.Storage.Read.MaxSnapshotRows < 1 {
 		return errors.New("storage.read row/session limits must be positive, spillThresholdBytes non-negative, and maxResponseBytes at least 1 MiB")
 	}
 	if cfg.Storage.Read.MaxRowBytes > int64(cfg.Storage.Read.MaxResponseBytes) {

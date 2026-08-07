@@ -118,6 +118,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"storage.read.enabled=true", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
 		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSessions=8",
 		"storage.read.spillThresholdBytes=524288", "storage.read.maxRowBytes=524288",
+		"storage.read.maxSnapshotRows=1000",
 		"storage.read.tempFilePattern=read-*", "storage.read.protocolModelVersion=test-read-v1",
 		"storage.write.enabled=true", "storage.write.maxStreams=16", "storage.write.maxAppendRequestBytes=1048576",
 		"storage.write.queueCapacity=8", "storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
@@ -167,6 +168,7 @@ func TestStorageReadConfigurationRejectsUnsafeOrInconsistentLimits(t *testing.T)
 			"--set", "storage.read.maxResponseBytes=1048576", "--set", "storage.read.maxRowBytes=1048577",
 		},
 		"negative-spill": {"--set", "storage.read.spillThresholdBytes=-1"},
+		"zero-snapshot":  {"--set", "storage.read.maxSnapshotRows=0"},
 		"path-pattern":   {"--set", "storage.read.tempFilePattern=outside/read-*"},
 		"missing-model":  {"--set", "storage.read.protocolModelVersion="},
 	} {
