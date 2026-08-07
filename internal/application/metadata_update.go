@@ -41,7 +41,9 @@ type TablePatch struct {
 }
 
 func (s *CatalogService) UpdateDataset(ctx context.Context, projectID, datasetID string, patch DatasetPatch) (domain.Dataset, error) {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return domain.Dataset{}, err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	dataset, err := s.catalog.GetDataset(ctx, projectID, datasetID)
@@ -74,7 +76,9 @@ func (s *CatalogService) UpdateDataset(ctx context.Context, projectID, datasetID
 }
 
 func (s *CatalogService) UpdateTable(ctx context.Context, projectID, datasetID, tableID string, patch TablePatch) (domain.Table, error) {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return domain.Table{}, err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	table, err := s.catalog.GetTable(ctx, projectID, datasetID, tableID)

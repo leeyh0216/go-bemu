@@ -15,6 +15,8 @@
 - [호환성](compatibility.md): 구현, 부분 지원, 등록, 계획, 미지원 동작.
 - [Schema evolution과 CDC](schema-evolution-cdc.md): additive schema 규칙,
   Storage Write schema 변경, CDC 순서 규칙, 명시적인 현재 한계.
+- [동적 파티션 덮어쓰기](dynamic-partition-overwrite.md): 고정된 Spark script
+  의미, atomic execution, type 검증, 승격 gap.
 - [Maintainer 안내서](maintainer-guide.md): clone부터 실행까지의 학습 경로,
   version 추가, drift 진단, release runbook.
 - [설정과 운영](operations.md): precedence, container hardening,

@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -41,7 +40,7 @@ type CatalogService struct {
 	// The repository port intentionally stays backend-agnostic and has no
 	// compare-and-create primitive. These locks make the two physical/metadata
 	// transactions single-writer within one emulator process.
-	anonymousDatasetMu sync.Mutex
+	anonymousDatasetMu contextMutex
 	// resourceMutationMu makes metadata/physical two-phase mutations linearizable
 	// within one emulator process. It covers dataset deletion as well as table
 	// publication so a successful query job cannot publish into a dataset that
@@ -141,7 +140,9 @@ func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.Warehous
 }
 
 func (s *CatalogService) CreateProject(ctx context.Context, project domain.Project) (domain.Project, error) {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return domain.Project{}, err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	if err := project.Validate(); err != nil {
@@ -165,7 +166,9 @@ func (s *CatalogService) ListProjects(ctx context.Context) ([]domain.Project, er
 }
 
 func (s *CatalogService) DeleteProject(ctx context.Context, id string) error {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	datasets, err := s.catalog.ListDatasets(ctx, id)
@@ -181,7 +184,9 @@ func (s *CatalogService) DeleteProject(ctx context.Context, id string) error {
 }
 
 func (s *CatalogService) CreateDataset(ctx context.Context, dataset domain.Dataset) (domain.Dataset, error) {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return domain.Dataset{}, err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	return s.createDataset(ctx, dataset)
@@ -229,9 +234,13 @@ func (s *CatalogService) GetDataset(ctx context.Context, projectID, datasetID st
 // anonymous datasets whose names start with an underscore:
 // https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored
 func (s *CatalogService) EnsureAnonymousDataset(ctx context.Context, projectID, datasetID, location string) (domain.Dataset, error) {
-	s.anonymousDatasetMu.Lock()
+	if err := s.anonymousDatasetMu.LockContext(ctx); err != nil {
+		return domain.Dataset{}, err
+	}
 	defer s.anonymousDatasetMu.Unlock()
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return domain.Dataset{}, err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	dataset, err := s.catalog.GetDataset(ctx, projectID, datasetID)
@@ -271,7 +280,9 @@ func (s *CatalogService) ListDatasets(ctx context.Context, projectID string) ([]
 }
 
 func (s *CatalogService) DeleteDataset(ctx context.Context, projectID, datasetID string, deleteContents bool) error {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	if _, err := s.catalog.GetDataset(ctx, projectID, datasetID); err != nil {
@@ -293,7 +304,9 @@ func (s *CatalogService) DeleteDataset(ctx context.Context, projectID, datasetID
 }
 
 func (s *CatalogService) CreateTable(ctx context.Context, table domain.Table) (domain.Table, error) {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return domain.Table{}, err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	return s.createTable(ctx, table)
@@ -347,7 +360,9 @@ func (s *CatalogService) createTable(ctx context.Context, table domain.Table) (d
 }
 
 func (s *CatalogService) GetTable(ctx context.Context, projectID, datasetID, tableID string) (domain.Table, error) {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return domain.Table{}, err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	return s.getTableLocked(ctx, projectID, datasetID, tableID)
@@ -477,7 +492,9 @@ func (s *CatalogService) getTableLocked(ctx context.Context, projectID, datasetI
 // completion update:
 // https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table domain.Table) error {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	if err := table.Validate(); err != nil {
@@ -506,7 +523,9 @@ func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table dom
 }
 
 func (s *CatalogService) ListTables(ctx context.Context, projectID, datasetID string) ([]domain.Table, error) {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	return s.listTablesLocked(ctx, projectID, datasetID)
@@ -579,7 +598,9 @@ func (s *CatalogService) removeExpiredTableLocked(ctx context.Context, projectID
 }
 
 func (s *CatalogService) DeleteTable(ctx context.Context, projectID, datasetID, tableID string) error {
-	s.resourceMutationMu.Lock()
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.resourceMutationMu.Unlock()
 
 	if _, err := s.catalog.GetTable(ctx, projectID, datasetID, tableID); err != nil {

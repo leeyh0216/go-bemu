@@ -192,6 +192,13 @@ func statementType(sql string) string {
 	if fields[0] == "WITH" {
 		return "SELECT"
 	}
+	// DECLARE is a procedural statement and can only run as part of a script.
+	// The currently accepted connector-owned multi-statement operation begins
+	// with DECLARE, so jobs.get must expose SCRIPT rather than DECLARE.
+	// https://cloud.google.com/bigquery/docs/multi-statement-queries#enumerate_child_jobs
+	if fields[0] == "DECLARE" {
+		return "SCRIPT"
+	}
 	if fields[0] == "CREATE" && len(fields) > 1 {
 		return "CREATE_" + fields[1]
 	}

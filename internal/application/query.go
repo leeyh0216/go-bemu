@@ -420,7 +420,7 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domai
 		DefaultDataset: configuration.DefaultDataset, SQL: configuration.SQL,
 	}
 	if configuration.Destination == nil {
-		return s.warehouse.Query(ctx, request)
+		return s.executeQueryWithoutDestination(ctx, request)
 	}
 	if s.materializer == nil || s.destinations == nil {
 		return domain.QueryResult{}, fmt.Errorf("%w: query destination requires query materializer and destination catalog ports; fix_hint=compose WithQueryDestinationCatalog", domain.ErrPrecondition)
@@ -510,12 +510,20 @@ func (s *QueryService) compensateMaterializedDestination(ctx context.Context, de
 
 func queryTerminalReason(err error) string {
 	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "stopped"
 	case errors.Is(err, domain.ErrNotFound):
 		return "notFound"
 	case errors.Is(err, domain.ErrConflict):
 		return "duplicate"
 	case errors.Is(err, domain.ErrPrecondition):
 		return "conditionNotMet"
+	case errors.Is(err, domain.ErrInvalidQuery), errors.Is(err, domain.ErrInvalid):
+		return "invalidQuery"
+	case errors.Is(err, domain.ErrBackend):
+		return "jobBackendError"
 	default:
 		return "invalidQuery"
 	}

@@ -16,6 +16,8 @@
   and unsupported behavior.
 - [Schema evolution and CDC](schema-evolution-cdc.md): additive schema rules,
   Storage Write schema changes, CDC ordering, and explicit current limits.
+- [Dynamic partition overwrite](dynamic-partition-overwrite.md): pinned Spark
+  script semantics, atomic execution, type validation, and promotion gaps.
 - [Maintainer guide](maintainer-guide.md): clone-to-run learning path, version
   onboarding, drift diagnosis, and release runbooks.
 - [Configuration and operations](operations.md): precedence, container hardening,

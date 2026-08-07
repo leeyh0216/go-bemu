@@ -26,6 +26,23 @@ import (
 var _ ports.QueryAnalyzer = (*Warehouse)(nil)
 
 func (w *Warehouse) AnalyzeQuery(ctx context.Context, request ports.QueryRequest) (ports.QueryAnalysis, error) {
+	if operation, matched, err := w.AnalyzeQueryOperation(ctx, request); matched {
+		if err != nil {
+			return ports.QueryAnalysis{}, err
+		}
+		analysis := ports.QueryAnalysis{
+			ReferencedTables: []domain.TableReference{operation.Destination, operation.Source},
+			MutationTargets:  []domain.TableReference{operation.Destination},
+		}
+		slog.InfoContext(ctx, "query analysis",
+			"event", "boundary.exit", "boundary", "duckdb.query_analysis",
+			"model_version", operation.ModelVersion, "capability", domain.CapabilitySparkDynamicTimePartitionOverwriteV1,
+			"query_bytes", len(request.SQL), "query_digest", observability.Digest([]byte(request.SQL)),
+			"statement_type", "SCRIPT", "referenced_table_count", len(analysis.ReferencedTables),
+			"mutation_target_count", len(analysis.MutationTargets), "produces_rows", false,
+			"requires_catalog_mutation", false)
+		return analysis, nil
+	}
 	if err := validateSingleQueryStatement(request.SQL); err != nil {
 		return ports.QueryAnalysis{}, err
 	}
