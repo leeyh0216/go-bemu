@@ -1,12 +1,14 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -44,6 +46,7 @@ type fakeCoordinator struct {
 	discarded   []string
 	commits     int
 	failCommit  bool
+	stageErr    error
 }
 
 func newFakeCoordinator() *fakeCoordinator {
@@ -64,6 +67,9 @@ func (c *fakeCoordinator) AppendDefault(_ context.Context, batch ports.AppendBat
 func (c *fakeCoordinator) StagePending(_ context.Context, batch ports.AppendBatch) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stageErr != nil {
+		return c.stageErr
+	}
 	c.staged[batch.StreamName] = append(c.staged[batch.StreamName], batch)
 	return nil
 }
@@ -212,6 +218,59 @@ func TestAppendOffsetErrorsDoNotAdvanceLedger(t *testing.T) {
 	}
 	if result.StartOffset != 1 {
 		t.Fatalf("got start offset %d, want 1", result.StartOffset)
+	}
+}
+
+func TestAppendPreservesCoordinatorResourceExhausted(t *testing.T) {
+	ctx, cancel := storageWriteTestContext(t)
+	defer cancel()
+	service, coordinator, _ := newTestService(t, 1)
+	stream, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	coordinator.stageErr = fmt.Errorf("%w: injected byte ceiling", ports.ErrResourceExhausted)
+	coordinator.mu.Unlock()
+	if _, err := service.Append(ctx, appendRequest(stream.Name, 0)); domain.CodeOf(err) != domain.ErrorResourceExhausted {
+		t.Fatalf("append admission error = %v (%s), want RESOURCE_EXHAUSTED", err, domain.CodeOf(err))
+	}
+	got, err := service.GetStream(ctx, stream.Name)
+	if err != nil || got.NextOffset != 0 || got.RowCount != 0 {
+		t.Fatalf("rejected append advanced ledger: %#v, %v", got, err)
+	}
+}
+
+func TestStorageWriteLogsFingerprintWithoutRawStreamOrRows(t *testing.T) {
+	ctx, cancel := storageWriteTestContext(t)
+	defer cancel()
+	coordinator := newFakeCoordinator()
+	clock := &fakeClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
+	var output bytes.Buffer
+	service, err := New(Config{
+		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		MaxStreams: 1, MaxAppendBytes: 1024 * 1024,
+		OrphanTTL: time.Minute, CleanupInterval: time.Second,
+	}, coordinator, clock, &sequenceIDs{}, slog.New(slog.NewJSONHandler(&output, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := service.CreateStream(ctx, domain.CreateStreamRequest{Parent: testParent(), Type: domain.StreamTypePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := appendRequest(stream.Name, 0)
+	request.Rows = [][]byte{[]byte("raw-row-sentinel")}
+	request.PayloadDigest = rowsDigest(request.Rows)
+	if _, err := service.Append(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	logs := output.String()
+	if strings.Contains(logs, stream.Name) || strings.Contains(logs, "raw-row-sentinel") {
+		t.Fatalf("Storage Write logs exposed raw stream or row payload: %s", logs)
+	}
+	if !strings.Contains(logs, `"stream_fingerprint":"`+digest([]byte(stream.Name))+`"`) {
+		t.Fatalf("Storage Write logs omit stream fingerprint: %s", logs)
 	}
 }
 

@@ -42,12 +42,12 @@ func (s *Service) SweepOrphans(ctx context.Context) error {
 		s.logger.InfoContext(ctx, "discarding orphaned write stream",
 			"event", "side_effect.before", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
-			"stream", item.name, "tx_state", "discarding")
+			"stream_fingerprint", digest([]byte(item.name)), "tx_state", "discarding")
 		err := s.coordinator.DiscardPending(ctx, item.name)
 		attrs := []any{
 			"event", "side_effect.after", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
-			"stream", item.name, "success", err == nil, "tx_state", "discarded",
+			"stream_fingerprint", digest([]byte(item.name)), "success", err == nil, "tx_state", "discarded",
 		}
 		if err != nil {
 			attrs = append(attrs, errorLogAttrs(err)...)

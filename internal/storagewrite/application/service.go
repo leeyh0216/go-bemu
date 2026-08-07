@@ -110,7 +110,7 @@ func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamR
 	s.pending.Add(1)
 	s.logger.InfoContext(ctx, "pending write stream created",
 		"event", "domain.transition", "operation", operation,
-		"model_version", s.config.ProtocolModelVersion, "stream", name,
+		"model_version", s.config.ProtocolModelVersion, "stream_fingerprint", digest([]byte(name)),
 		"table", request.Parent.Name(), "stream_type", stream.Type,
 		"stream_count", s.pending.Load())
 	return cloneStream(stream), nil
@@ -202,7 +202,7 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	}
 	batch := ports.AppendBatch{
 		StreamName: canonical, Table: table, StartOffset: startOffset,
-		Descriptor: slices.Clone(descriptor), Rows: cloneRows(request.Rows),
+		WireBytes: int64(request.WireBytes), Descriptor: descriptor, Rows: request.Rows,
 		SchemaFingerprint: fingerprint, PayloadDigest: request.PayloadDigest,
 		TraceID: request.TraceID,
 	}
@@ -216,14 +216,18 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	s.logger.InfoContext(ctx, "submitting Storage Write batch",
 		"event", "side_effect.before", "side_effect", sideEffect,
 		"operation", operation, "model_version", s.config.ProtocolModelVersion,
-		"stream", canonical, "table", table.Name(), "start_offset", startOffset,
+		"stream_fingerprint", digest([]byte(canonical)), "table", table.Name(), "start_offset", startOffset,
 		"row_count", len(request.Rows), "row_bytes", rowsBytes(request.Rows),
 		"schema_fingerprint", fingerprint, "payload_digest", batch.PayloadDigest,
 		"trace_id", safeTraceID(request.TraceID), "tx_state", pendingTxState(isDefault))
 	err = call(ctx, batch)
 	s.logSideEffectEnd(ctx, operation, sideEffect, canonical, table.Name(), startOffset, len(request.Rows), fingerprint, batch.PayloadDigest, err)
 	if err != nil {
-		return domain.AppendResult{}, domain.NewError(domain.ErrorInternal, operation, err)
+		code := domain.ErrorInternal
+		if errors.Is(err, ports.ErrResourceExhausted) {
+			code = domain.ErrorResourceExhausted
+		}
+		return domain.AppendResult{}, domain.NewError(code, operation, err)
 	}
 	if len(state.descriptor) == 0 {
 		state.descriptor = slices.Clone(descriptor)
@@ -457,7 +461,7 @@ func (s *Service) logSideEffectEnd(ctx context.Context, operation, sideEffect, s
 	attrs := []any{
 		"event", "side_effect.after", "side_effect", sideEffect,
 		"operation", operation, "model_version", s.config.ProtocolModelVersion,
-		"stream", stream, "table", table, "start_offset", offset,
+		"stream_fingerprint", digest([]byte(stream)), "table", table, "start_offset", offset,
 		"row_count", rowCount, "schema_fingerprint", schemaFingerprint,
 		"payload_digest", payloadDigest, "success", err == nil,
 	}
@@ -496,14 +500,6 @@ func cloneFields(fields []domain.Field) []domain.Field {
 	for index, field := range fields {
 		result[index] = field
 		result[index].Fields = cloneFields(field.Fields)
-	}
-	return result
-}
-
-func cloneRows(rows [][]byte) [][]byte {
-	result := make([][]byte, len(rows))
-	for index, row := range rows {
-		result[index] = slices.Clone(row)
 	}
 	return result
 }

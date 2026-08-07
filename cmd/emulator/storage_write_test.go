@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
@@ -12,6 +13,8 @@ import (
 )
 
 func TestComposeStorageWriteSupportsExplicitDisableAndCleanClose(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	warehouse, err := duckdb.New("")
 	if err != nil {
 		t.Fatal(err)
@@ -21,17 +24,17 @@ func TestComposeStorageWriteSupportsExplicitDisableAndCleanClose(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	cfg.Storage.Write.Enabled = false
-	disabled, err := composeStorageWrite(cfg, warehouse, system.Clock{}, system.IDGenerator{}, logger)
+	disabled, err := composeStorageWrite(ctx, cfg, warehouse, system.Clock{}, system.IDGenerator{}, logger)
 	if err != nil || disabled.Service != nil {
 		t.Fatalf("disabled Storage Write = %#v, %v", disabled, err)
 	}
 
 	cfg.Storage.Write.Enabled = true
-	runtime, err := composeStorageWrite(cfg, warehouse, system.Clock{}, system.IDGenerator{}, logger)
+	runtime, err := composeStorageWrite(ctx, cfg, warehouse, system.Clock{}, system.IDGenerator{}, logger)
 	if err != nil || runtime.Service == nil {
 		t.Fatalf("enabled Storage Write = %#v, %v", runtime, err)
 	}
-	if err := runtime.Close(context.Background()); err != nil {
+	if err := runtime.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

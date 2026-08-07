@@ -12,7 +12,10 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 )
 
-var ErrTableNotFound = errors.New("storage write destination table not found")
+var (
+	ErrTableNotFound     = errors.New("storage write destination table not found")
+	ErrResourceExhausted = errors.New("storage write byte admission exhausted")
+)
 
 type Clock interface {
 	Now() time.Time
@@ -24,11 +27,16 @@ type IDGenerator interface {
 
 // AppendBatch contains opaque ProtoRows bytes. The application records their
 // order, while the adapter decodes them using Descriptor before touching its
-// backend. Logs may include counts, fingerprints, and digests, but never Rows.
+// backend. WireBytes is the complete AppendRowsRequest envelope used for
+// transient weighted admission; staged storage uses a deterministic serialized
+// row estimate. Logs may include counts, fingerprints, and digests, but never
+// Descriptor or Rows.
+// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#appendrowsrequest
 type AppendBatch struct {
 	StreamName        string
 	Table             domain.TableReference
 	StartOffset       int64
+	WireBytes         int64
 	Descriptor        []byte
 	Rows              [][]byte
 	SchemaFingerprint string

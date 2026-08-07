@@ -1,9 +1,10 @@
 package main
 
 // Storage Write composition preserves many logical streams while serializing
-// DuckDB work through a bounded single-worker coordinator. This allows Spark
-// task parallelism without claiming that the embedded engine has BigQuery's
-// distributed write backend.
+// DuckDB work through a bounded single-worker coordinator. Request bytes use
+// weighted admission, while PENDING rows spill to hidden DuckDB staging tables
+// until atomic commit. This allows Spark task parallelism without claiming that
+// the embedded engine has BigQuery's distributed write backend.
 //
 // Official lifecycle:
 // https://cloud.google.com/bigquery/docs/write-api-batch
@@ -27,6 +28,7 @@ type storageWriteRuntime struct {
 }
 
 func composeStorageWrite(
+	ctx context.Context,
 	cfg config.Config,
 	warehouse *duckdb.Warehouse,
 	clock writeports.Clock,
@@ -36,7 +38,13 @@ func composeStorageWrite(
 	if !cfg.Storage.Write.Enabled {
 		return &storageWriteRuntime{}, nil
 	}
-	coordinator, err := duckdb.NewStorageWriteCoordinator(warehouse, cfg.Storage.Write.QueueCapacity)
+	coordinator, err := duckdb.NewStorageWriteCoordinator(ctx, warehouse, duckdb.StorageWriteCoordinatorConfig{
+		QueueCapacity:             cfg.Storage.Write.QueueCapacity,
+		MaxInFlightBytes:          cfg.Storage.Write.MaxInFlightBytes,
+		MaxInFlightBytesPerStream: cfg.Storage.Write.MaxInFlightBytesPerStream,
+		MaxStagedBytes:            cfg.Storage.Write.MaxStagedBytes,
+		MaxStagedBytesPerStream:   cfg.Storage.Write.MaxStagedBytesPerStream,
+	})
 	if err != nil {
 		return nil, err
 	}

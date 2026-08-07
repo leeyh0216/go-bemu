@@ -45,25 +45,33 @@ var errStorageWriteCoordinatorClosed = errors.New("DuckDB Storage Write coordina
 // not a stream-count constraint: 2, 8, or 16 task streams may negotiate in
 // parallel while database transactions remain serialized.
 type StorageWriteCoordinator struct {
-	warehouse *Warehouse
-	queue     chan coordinatorOperation
-	stop      context.CancelFunc
-	done      chan struct{}
-	closed    atomic.Bool
+	warehouse   *Warehouse
+	config      StorageWriteCoordinatorConfig
+	admission   *storageWriteByteAdmission
+	queue       chan coordinatorOperation
+	stop        context.CancelFunc
+	done        chan struct{}
+	closed      atomic.Bool
+	stagedBytes atomic.Int64
+	stagedMu    sync.Mutex
 
-	// The worker owns staged. Tests may set afterStage or beforeCommit before
-	// submitting any operation to inject faults at acknowledgement/transaction
+	// The worker owns stagedByStream. Payload rows and receipts live in hidden
+	// DuckDB tables; this map contains byte counters only. Tests may set the fault
+	// hooks before submitting operations to exercise acknowledgement/transaction
 	// boundaries without exposing those seams through the outbound port.
-	staged       map[string][]preparedBatch
-	afterStage   func()
-	beforeCommit func() error
-	closeOnce    sync.Once
+	stagedByStream map[string]int64
+	afterStage     func()
+	beforeCommit   func() error
+	submissionMu   sync.RWMutex
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 type coordinatorOperation struct {
-	ctx context.Context
-	fn  func(context.Context) (any, error)
-	out chan coordinatorResult
+	ctx     context.Context
+	fn      func(context.Context) (any, error)
+	out     chan coordinatorResult
+	release func()
 }
 
 type coordinatorResult struct {
@@ -72,21 +80,11 @@ type coordinatorResult struct {
 }
 
 type preparedBatch struct {
-	streamName        string
-	table             writedomain.TableReference
-	startOffset       int64
-	columns           []string
-	rows              [][]any
-	schemaFingerprint string
-	payloadDigest     string
-}
-
-type stageReceipt struct {
-	streamName        string
-	startOffset       int64
-	rowCount          int
-	schemaFingerprint string
-	payloadDigest     string
+	streamName  string
+	table       writedomain.TableReference
+	startOffset int64
+	columns     []string
+	rows        [][]any
 }
 
 type tableLayout struct {
@@ -100,17 +98,25 @@ type columnLayout struct {
 	isNullable bool
 }
 
-func NewStorageWriteCoordinator(warehouse *Warehouse, queueCapacity int) (*StorageWriteCoordinator, error) {
+func NewStorageWriteCoordinator(ctx context.Context, warehouse *Warehouse, config StorageWriteCoordinatorConfig) (*StorageWriteCoordinator, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("initialization context is required")
+	}
 	if warehouse == nil {
 		return nil, fmt.Errorf("warehouse is required")
 	}
-	if queueCapacity <= 0 {
-		return nil, fmt.Errorf("Storage Write queue capacity must be positive")
+	if err := config.validate(); err != nil {
+		return nil, err
 	}
 	workerContext, cancel := context.WithCancel(context.Background())
 	coordinator := &StorageWriteCoordinator{
-		warehouse: warehouse, queue: make(chan coordinatorOperation, queueCapacity),
-		stop: cancel, done: make(chan struct{}), staged: make(map[string][]preparedBatch),
+		warehouse: warehouse, config: config, admission: newStorageWriteByteAdmission(config),
+		queue: make(chan coordinatorOperation, config.QueueCapacity), stop: cancel, done: make(chan struct{}),
+		stagedByStream: make(map[string]int64),
+	}
+	if err := coordinator.initializeStaging(ctx); err != nil {
+		cancel()
+		return nil, err
 	}
 	go coordinator.run(workerContext)
 	return coordinator, nil
@@ -118,7 +124,7 @@ func NewStorageWriteCoordinator(warehouse *Warehouse, queueCapacity int) (*Stora
 
 func (c *StorageWriteCoordinator) DescribeTable(ctx context.Context, table writedomain.TableReference) (writedomain.TableSchema, error) {
 	value, err := c.submit(ctx, func(operationContext context.Context) (any, error) {
-		layout, err := c.describeTable(operationContext, table)
+		layout, err := c.describeTable(operationContext, c.warehouse.db, table)
 		return layout.schema, err
 	})
 	if err != nil {
@@ -128,19 +134,25 @@ func (c *StorageWriteCoordinator) DescribeTable(ctx context.Context, table write
 }
 
 func (c *StorageWriteCoordinator) AppendDefault(ctx context.Context, batch writeports.AppendBatch) (err error) {
+	admissionBytes := batchInFlightBytes(batch)
+	globalInFlight, streamInFlight := c.admission.snapshot(batch.StreamName)
 	started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_append_default",
-		"stream", batch.StreamName, "table", batch.Table.Name(), "start_offset", batch.StartOffset,
+		"stream_fingerprint", storageWriteStreamFingerprint(batch.StreamName), "table", batch.Table.Name(), "start_offset", batch.StartOffset,
 		"row_count", len(batch.Rows), "row_bytes", serializedRowsBytes(batch.Rows),
 		"schema_fingerprint", batch.SchemaFingerprint, "payload_digest", batch.PayloadDigest,
-		"transaction_mode", "explicit")
+		"admission_bytes", admissionBytes, "global_in_flight_bytes", globalInFlight,
+		"stream_in_flight_bytes", streamInFlight, "transaction_mode", "explicit")
 	defer func() {
+		globalInFlight, streamInFlight := c.admission.snapshot(batch.StreamName)
 		observability.LogSideEffectEnd(ctx, "duckdb", "storage_write_append_default", started, err,
-			"stream", batch.StreamName, "table", batch.Table.Name(), "start_offset", batch.StartOffset,
+			"stream_fingerprint", storageWriteStreamFingerprint(batch.StreamName), "table", batch.Table.Name(), "start_offset", batch.StartOffset,
 			"row_count", len(batch.Rows), "schema_fingerprint", batch.SchemaFingerprint,
-			"payload_digest", batch.PayloadDigest, "transaction_mode", "explicit")
+			"payload_digest", batch.PayloadDigest, "admission_bytes", admissionBytes,
+			"global_in_flight_bytes", globalInFlight, "stream_in_flight_bytes", streamInFlight,
+			"transaction_mode", "explicit")
 	}()
-	_, err = c.submit(ctx, func(operationContext context.Context) (_ any, resultErr error) {
-		prepared, prepareErr := c.prepareBatch(operationContext, batch)
+	_, err = c.submitBatch(ctx, batch, func(operationContext context.Context) (_ any, resultErr error) {
+		prepared, prepareErr := c.prepareBatch(operationContext, c.warehouse.db, batch)
 		if prepareErr != nil {
 			return nil, prepareErr
 		}
@@ -165,63 +177,36 @@ func (c *StorageWriteCoordinator) AppendDefault(ctx context.Context, batch write
 }
 
 func (c *StorageWriteCoordinator) StagePending(ctx context.Context, batch writeports.AppendBatch) (err error) {
+	admissionBytes := batchInFlightBytes(batch)
+	globalInFlight, streamInFlight := c.admission.snapshot(batch.StreamName)
+	globalStaged, streamStaged := c.stagedSnapshot(batch.StreamName)
 	started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_stage_pending",
-		"stream", batch.StreamName, "table", batch.Table.Name(), "start_offset", batch.StartOffset,
+		"stream_fingerprint", storageWriteStreamFingerprint(batch.StreamName), "table", batch.Table.Name(), "start_offset", batch.StartOffset,
 		"row_count", len(batch.Rows), "row_bytes", serializedRowsBytes(batch.Rows),
 		"schema_fingerprint", batch.SchemaFingerprint, "payload_digest", batch.PayloadDigest,
-		"transaction_mode", "memory_stage")
+		"admission_bytes", admissionBytes, "global_in_flight_bytes", globalInFlight,
+		"stream_in_flight_bytes", streamInFlight, "global_staged_bytes", globalStaged,
+		"stream_staged_bytes", streamStaged,
+		"transaction_mode", "duckdb_staging")
 	defer func() {
+		globalInFlight, streamInFlight := c.admission.snapshot(batch.StreamName)
+		globalStaged, streamStaged := c.stagedSnapshot(batch.StreamName)
 		observability.LogSideEffectEnd(ctx, "duckdb", "storage_write_stage_pending", started, err,
-			"stream", batch.StreamName, "table", batch.Table.Name(), "start_offset", batch.StartOffset,
+			"stream_fingerprint", storageWriteStreamFingerprint(batch.StreamName), "table", batch.Table.Name(), "start_offset", batch.StartOffset,
 			"row_count", len(batch.Rows), "schema_fingerprint", batch.SchemaFingerprint,
-			"payload_digest", batch.PayloadDigest, "transaction_mode", "memory_stage")
+			"payload_digest", batch.PayloadDigest, "admission_bytes", admissionBytes,
+			"global_in_flight_bytes", globalInFlight, "stream_in_flight_bytes", streamInFlight,
+			"global_staged_bytes", globalStaged, "stream_staged_bytes", streamStaged,
+			"transaction_mode", "duckdb_staging")
 	}()
-	_, err = c.submit(ctx, func(operationContext context.Context) (any, error) {
-		requestedReceipt := receiptForAppend(batch)
-		var stagedRows int64
-		for _, existing := range c.staged[batch.StreamName] {
-			if existing.startOffset == batch.StartOffset {
-				// AppendRows callers commonly retry after an acknowledgement is
-				// lost. The public offset ledger cannot advance until it receives
-				// that acknowledgement, so an identical durable staging receipt
-				// must be acknowledged again instead of being appended twice.
-				// A different receipt at the same offset remains a conflict.
-				// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows
-				if existing.receipt() == requestedReceipt && existing.table == batch.Table {
-					return nil, nil
-				}
-				return nil, fmt.Errorf("coordinator receipt conflict at offset %d for stream %s", batch.StartOffset, batch.StreamName)
-			}
-			stagedRows += int64(len(existing.rows))
-		}
-		if batch.StartOffset != stagedRows {
-			return nil, fmt.Errorf("coordinator offset invariant: got %d, want %d", batch.StartOffset, stagedRows)
-		}
-		prepared, prepareErr := c.prepareBatch(operationContext, batch)
-		if prepareErr != nil {
-			return nil, prepareErr
-		}
-		c.staged[batch.StreamName] = append(c.staged[batch.StreamName], prepared)
-		if c.afterStage != nil {
+	_, err = c.submitBatch(ctx, batch, func(operationContext context.Context) (any, error) {
+		created, stageErr := c.stagePending(operationContext, batch)
+		if stageErr == nil && created && c.afterStage != nil {
 			c.afterStage()
 		}
-		return nil, nil
+		return nil, stageErr
 	})
 	return err
-}
-
-func receiptForAppend(batch writeports.AppendBatch) stageReceipt {
-	return stageReceipt{
-		streamName: batch.StreamName, startOffset: batch.StartOffset, rowCount: len(batch.Rows),
-		schemaFingerprint: batch.SchemaFingerprint, payloadDigest: batch.PayloadDigest,
-	}
-}
-
-func (b preparedBatch) receipt() stageReceipt {
-	return stageReceipt{
-		streamName: b.streamName, startOffset: b.startOffset, rowCount: len(b.rows),
-		schemaFingerprint: b.schemaFingerprint, payloadDigest: b.payloadDigest,
-	}
 }
 
 func (c *StorageWriteCoordinator) CommitPending(ctx context.Context, request writeports.CommitRequest) (err error) {
@@ -236,73 +221,97 @@ func (c *StorageWriteCoordinator) CommitPending(ctx context.Context, request wri
 			"stream_set_fingerprint", streamFingerprint, "commit_time", request.CommitTime,
 			"transaction_mode", "explicit")
 	}()
-	_, err = c.submit(ctx, func(operationContext context.Context) (_ any, resultErr error) {
-		batches := make([]preparedBatch, 0)
-		for _, streamName := range request.StreamNames {
-			for _, batch := range c.staged[streamName] {
-				if batch.table != request.Parent {
-					return nil, fmt.Errorf("stream %s belongs to another table", streamName)
-				}
-				batches = append(batches, batch)
-			}
-		}
-		tx, beginErr := c.warehouse.db.BeginTx(operationContext, nil)
-		if beginErr != nil {
-			return nil, fmt.Errorf("begin pending stream transaction: %w", beginErr)
-		}
-		defer func() {
-			if resultErr != nil {
-				_ = tx.Rollback()
-			}
-		}()
-		for _, batch := range batches {
-			if insertErr := insertPreparedBatch(operationContext, tx, batch); insertErr != nil {
-				return nil, insertErr
-			}
-		}
-		if c.beforeCommit != nil {
-			if injectedErr := c.beforeCommit(); injectedErr != nil {
-				return nil, injectedErr
-			}
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, fmt.Errorf("commit pending stream transaction: %w", commitErr)
-		}
-		for _, streamName := range request.StreamNames {
-			delete(c.staged, streamName)
-		}
-		return nil, nil
+	_, err = c.submit(ctx, func(operationContext context.Context) (any, error) {
+		return nil, c.commitPending(operationContext, request)
 	})
 	return err
 }
 
 func (c *StorageWriteCoordinator) DiscardPending(ctx context.Context, streamName string) error {
-	_, err := c.submit(ctx, func(context.Context) (any, error) {
-		delete(c.staged, streamName)
-		return nil, nil
+	globalStaged, streamStaged := c.stagedSnapshot(streamName)
+	started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_discard_pending",
+		"stream_fingerprint", storageWriteStreamFingerprint(streamName),
+		"global_staged_bytes", globalStaged, "stream_staged_bytes", streamStaged,
+		"transaction_mode", "explicit")
+	_, err := c.submit(ctx, func(operationContext context.Context) (any, error) {
+		return nil, c.discardPending(operationContext, streamName)
 	})
+	globalStaged, streamStaged = c.stagedSnapshot(streamName)
+	observability.LogSideEffectEnd(ctx, "duckdb", "storage_write_discard_pending", started, err,
+		"stream_fingerprint", storageWriteStreamFingerprint(streamName),
+		"global_staged_bytes", globalStaged, "stream_staged_bytes", streamStaged,
+		"transaction_mode", "explicit")
 	return err
 }
 
 func (c *StorageWriteCoordinator) Close(ctx context.Context) error {
 	c.closeOnce.Do(func() {
+		// Taking the exclusive submission lock waits for every public submitter
+		// that already passed admission to finish enqueueing. Marking closed here
+		// rejects all later calls; the internal cleanup operation can then be put
+		// behind the complete pre-close FIFO without a post-cleanup append race.
+		c.submissionMu.Lock()
 		c.closed.Store(true)
+		c.submissionMu.Unlock()
+		started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_cleanup_staging",
+			"global_staged_bytes", c.stagedBytes.Load(), "transaction_mode", "explicit")
+		_, c.closeErr = c.submitInternal(ctx, func(operationContext context.Context) (any, error) {
+			return nil, c.cleanupAllStaging(operationContext)
+		})
+		observability.LogSideEffectEnd(ctx, "duckdb", "storage_write_cleanup_staging", started, c.closeErr,
+			"global_staged_bytes", c.stagedBytes.Load(), "transaction_mode", "explicit")
 		c.stop()
 	})
 	select {
 	case <-c.done:
-		return nil
+		return c.closeErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
 func (c *StorageWriteCoordinator) submit(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+	return c.submitOperation(ctx, fn, nil)
+}
+
+func (c *StorageWriteCoordinator) submitBatch(ctx context.Context, batch writeports.AppendBatch, fn func(context.Context) (any, error)) (any, error) {
+	release, err := c.admission.acquire(batch.StreamName, batchInFlightBytes(batch))
+	if err != nil {
+		return nil, err
+	}
+	return c.submitOperation(ctx, fn, release)
+}
+
+func (c *StorageWriteCoordinator) submitOperation(ctx context.Context, fn func(context.Context) (any, error), release func()) (any, error) {
 	if ctx == nil {
+		callRelease(release)
 		return nil, fmt.Errorf("operation context is required")
 	}
+	c.submissionMu.RLock()
 	if c.closed.Load() {
+		c.submissionMu.RUnlock()
+		callRelease(release)
 		return nil, errStorageWriteCoordinatorClosed
+	}
+	operation := coordinatorOperation{ctx: ctx, fn: fn, out: make(chan coordinatorResult, 1), release: release}
+	select {
+	case c.queue <- operation:
+		c.submissionMu.RUnlock()
+	case <-ctx.Done():
+		c.submissionMu.RUnlock()
+		callRelease(release)
+		return nil, ctx.Err()
+	case <-c.done:
+		c.submissionMu.RUnlock()
+		callRelease(release)
+		return nil, errStorageWriteCoordinatorClosed
+	}
+	return waitCoordinatorResult(ctx, c.done, operation)
+}
+
+func (c *StorageWriteCoordinator) submitInternal(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("operation context is required")
 	}
 	operation := coordinatorOperation{ctx: ctx, fn: fn, out: make(chan coordinatorResult, 1)}
 	select {
@@ -312,35 +321,56 @@ func (c *StorageWriteCoordinator) submit(ctx context.Context, fn func(context.Co
 	case <-c.done:
 		return nil, errStorageWriteCoordinatorClosed
 	}
+	return waitCoordinatorResult(ctx, c.done, operation)
+}
+
+func waitCoordinatorResult(ctx context.Context, done <-chan struct{}, operation coordinatorOperation) (any, error) {
 	select {
 	case result := <-operation.out:
 		return result.value, result.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-c.done:
+	case <-done:
 		return nil, errStorageWriteCoordinatorClosed
 	}
 }
 
 func (c *StorageWriteCoordinator) run(ctx context.Context) {
-	defer close(c.done)
+	defer func() {
+		for {
+			select {
+			case operation := <-c.queue:
+				callRelease(operation.release)
+				operation.out <- coordinatorResult{err: errStorageWriteCoordinatorClosed}
+			default:
+				close(c.done)
+				return
+			}
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case operation := <-c.queue:
 			if err := operation.ctx.Err(); err != nil {
+				callRelease(operation.release)
 				operation.out <- coordinatorResult{err: err}
 				continue
 			}
 			value, err := operation.fn(operation.ctx)
+			callRelease(operation.release)
 			operation.out <- coordinatorResult{value: value, err: err}
 		}
 	}
 }
 
-func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, batch writeports.AppendBatch) (preparedBatch, error) {
-	layout, err := c.describeTable(ctx, batch.Table)
+type storageWriteQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer storageWriteQueryer, batch writeports.AppendBatch) (preparedBatch, error) {
+	layout, err := c.describeTable(ctx, queryer, batch.Table)
 	if err != nil {
 		return preparedBatch{}, err
 	}
@@ -396,13 +426,12 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, batch writep
 	}
 	return preparedBatch{
 		streamName: batch.StreamName, table: batch.Table, startOffset: batch.StartOffset,
-		columns: columns, rows: decodedRows, schemaFingerprint: batch.SchemaFingerprint,
-		payloadDigest: batch.PayloadDigest,
+		columns: columns, rows: decodedRows,
 	}, nil
 }
 
-func (c *StorageWriteCoordinator) describeTable(ctx context.Context, table writedomain.TableReference) (tableLayout, error) {
-	rows, err := c.warehouse.db.QueryContext(ctx, `
+func (c *StorageWriteCoordinator) describeTable(ctx context.Context, queryer storageWriteQueryer, table writedomain.TableReference) (tableLayout, error) {
+	rows, err := queryer.QueryContext(ctx, `
 		SELECT column_name, data_type, is_nullable
 		FROM information_schema.columns
 		WHERE table_schema = ? AND table_name = ?
@@ -577,6 +606,13 @@ func decodePackedDateTimeMicros(packed int64) (time.Time, error) {
 func insertPreparedBatch(ctx context.Context, executor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, batch preparedBatch) error {
+	return insertPreparedBatchInto(ctx, executor, batch,
+		physicalSchema(batch.table.ProjectID, batch.table.DatasetID), batch.table.TableID)
+}
+
+func insertPreparedBatchInto(ctx context.Context, executor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, batch preparedBatch, targetSchema, targetTable string) error {
 	if len(batch.rows) == 0 {
 		return nil
 	}
@@ -587,8 +623,8 @@ func insertPreparedBatch(ctx context.Context, executor interface {
 		placeholders[index] = "?"
 	}
 	statement := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s)",
-		quoteIdentifier(physicalSchema(batch.table.ProjectID, batch.table.DatasetID)),
-		quoteIdentifier(batch.table.TableID), strings.Join(columnNames, ", "), strings.Join(placeholders, ", "))
+		quoteIdentifier(targetSchema), quoteIdentifier(targetTable),
+		strings.Join(columnNames, ", "), strings.Join(placeholders, ", "))
 	for rowIndex, row := range batch.rows {
 		if _, err := executor.ExecContext(ctx, statement, row...); err != nil {
 			return fmt.Errorf("insert staged ProtoRow %d at offset %d: %w", rowIndex, batch.startOffset+int64(rowIndex), err)
