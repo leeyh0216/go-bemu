@@ -54,9 +54,10 @@ jobs:
       - name: Install hash-locked dependencies
         run: uv pip sync --system --require-hashes tests/python/requirements.lock
       - name: Run real-process client contract
-        run: >-
-          python -m pytest -c tests/python/pytest.ini tests/python
-          --basetemp=.artifacts/python/pytest
+        run: |
+          mkdir -p .artifacts/python
+          python -m pytest -c tests/python/pytest.ini tests/python \
+            --basetemp=.artifacts/python/pytest
       - name: Upload redacted failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
