@@ -100,11 +100,20 @@ type DatabaseConfig struct {
 	TempDirectory string `yaml:"tempDirectory" json:"tempDirectory"`
 }
 
+// RuntimeConfig divides the bounded process shutdown into a network drain
+// phase followed by storage cleanup. The phase sum may not exceed the total,
+// so an open streaming RPC cannot consume the cleanup budget implicitly.
+//
+// Sources:
+//   - https://grpc.io/docs/guides/server-graceful-stop/
+//   - https://pkg.go.dev/net/http#Server.Shutdown
 type RuntimeConfig struct {
-	ShutdownTimeout Duration `yaml:"shutdownTimeout" json:"shutdownTimeout"`
-	JobPollInterval Duration `yaml:"jobPollInterval" json:"jobPollInterval"`
-	ReadSessionTTL  Duration `yaml:"readSessionTtl" json:"readSessionTtl"`
-	CleanupInterval Duration `yaml:"cleanupInterval" json:"cleanupInterval"`
+	ShutdownTimeout     Duration `yaml:"shutdownTimeout" json:"shutdownTimeout"`
+	ServerDrainTimeout  Duration `yaml:"serverDrainTimeout" json:"serverDrainTimeout"`
+	StorageCloseTimeout Duration `yaml:"storageCloseTimeout" json:"storageCloseTimeout"`
+	JobPollInterval     Duration `yaml:"jobPollInterval" json:"jobPollInterval"`
+	ReadSessionTTL      Duration `yaml:"readSessionTtl" json:"readSessionTtl"`
+	CleanupInterval     Duration `yaml:"cleanupInterval" json:"cleanupInterval"`
 }
 
 type StorageConfig struct {
@@ -236,7 +245,8 @@ func Defaults() Config {
 		},
 		Database: DatabaseConfig{Adapter: "duckdb", DSN: ":memory:", TempDirectory: os.TempDir()},
 		Runtime: RuntimeConfig{
-			ShutdownTimeout: Duration(10 * time.Second), JobPollInterval: Duration(100 * time.Millisecond),
+			ShutdownTimeout: Duration(10 * time.Second), ServerDrainTimeout: Duration(5 * time.Second),
+			StorageCloseTimeout: Duration(4 * time.Second), JobPollInterval: Duration(100 * time.Millisecond),
 			ReadSessionTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
 		},
 		Storage: StorageConfig{
@@ -483,6 +493,10 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setString(&cfg.Database.TempDirectory)
 	case "runtime.shutdownTimeout":
 		return setDuration(&cfg.Runtime.ShutdownTimeout)
+	case "runtime.serverDrainTimeout":
+		return setDuration(&cfg.Runtime.ServerDrainTimeout)
+	case "runtime.storageCloseTimeout":
+		return setDuration(&cfg.Runtime.StorageCloseTimeout)
 	case "runtime.jobPollInterval":
 		return setDuration(&cfg.Runtime.JobPollInterval)
 	case "runtime.readSessionTtl":
@@ -606,6 +620,8 @@ func (cfg Config) Validate() error {
 		"server.http.writeTimeout":      cfg.Server.HTTP.WriteTimeout,
 		"server.http.idleTimeout":       cfg.Server.HTTP.IdleTimeout,
 		"runtime.shutdownTimeout":       cfg.Runtime.ShutdownTimeout,
+		"runtime.serverDrainTimeout":    cfg.Runtime.ServerDrainTimeout,
+		"runtime.storageCloseTimeout":   cfg.Runtime.StorageCloseTimeout,
 		"runtime.jobPollInterval":       cfg.Runtime.JobPollInterval,
 		"runtime.readSessionTtl":        cfg.Runtime.ReadSessionTTL,
 		"runtime.cleanupInterval":       cfg.Runtime.CleanupInterval,
@@ -616,6 +632,9 @@ func (cfg Config) Validate() error {
 		if value.Value() <= 0 {
 			return fmt.Errorf("%s must be positive", name)
 		}
+	}
+	if cfg.Runtime.ServerDrainTimeout.Value()+cfg.Runtime.StorageCloseTimeout.Value() > cfg.Runtime.ShutdownTimeout.Value() {
+		return errors.New("runtime serverDrainTimeout plus storageCloseTimeout must not exceed shutdownTimeout")
 	}
 	if cfg.Server.GRPC.MaxReceiveMessageBytes < 1<<20 || cfg.Server.GRPC.MaxSendMessageBytes < 1<<20 {
 		return errors.New("gRPC message limits must be at least 1 MiB")

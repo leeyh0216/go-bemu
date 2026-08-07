@@ -31,6 +31,8 @@ database:
 
 runtime:
   shutdownTimeout: "10s"
+  serverDrainTimeout: "5s"
+  storageCloseTimeout: "4s"
   jobPollInterval: "100ms"
   readSessionTtl: "6h"
   cleanupInterval: "1m"

@@ -114,7 +114,8 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"server.grpc.address=127.0.0.1:19060", "server.grpc.maxReceiveMessageBytes=1048576", "server.grpc.maxSendMessageBytes=1048576",
 		"server.tls.certFile=cert.pem", "server.tls.keyFile=key.pem",
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
-		"runtime.shutdownTimeout=5s", "runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
+		"runtime.shutdownTimeout=9s", "runtime.serverDrainTimeout=4s", "runtime.storageCloseTimeout=4s",
+		"runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
 		"storage.read.enabled=true", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
 		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSessions=8",
 		"storage.read.spillThresholdBytes=524288", "storage.read.maxRowBytes=524288",
@@ -137,6 +138,17 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 	}
 	if _, err := load(args, lookup(nil)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestShutdownPhasesMustFitConfiguredTotal(t *testing.T) {
+	_, err := load([]string{
+		"--set", "runtime.shutdownTimeout=5s",
+		"--set", "runtime.serverDrainTimeout=3s",
+		"--set", "runtime.storageCloseTimeout=3s",
+	}, lookup(nil))
+	if err == nil || !strings.Contains(err.Error(), "must not exceed") {
+		t.Fatalf("shutdown phase validation error = %v", err)
 	}
 }
 
