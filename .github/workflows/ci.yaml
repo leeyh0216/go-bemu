@@ -12,6 +12,7 @@ permissions:
 env:
   BQEMU_GO_TEST_TIMEOUT: 10m
   BQEMU_PYTEST_TIMEOUT_SECONDS: "300"
+  BQEMU_BQCLI_TIMEOUT_SECONDS: "300"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -64,6 +65,38 @@ jobs:
         with:
           name: python-client-diagnostics-${{ github.run_id }}
           path: .artifacts/python
+          if-no-files-found: ignore
+          retention-days: 7
+
+  bq-cli:
+    name: Official bq CLI contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          version: 566.0.0
+          install_components: bq
+      - name: Verify exact bq consumer version
+        run: test "$(bq version)" = "This is BigQuery CLI 2.1.31"
+      - name: Run real-process bq contract
+        env:
+          BQEMU_BQCLI_VERSION: 2.1.31
+          BQEMU_BQCLI_ARTIFACT_DIR: .artifacts/bqcli
+        run: |
+          mkdir -p .artifacts/bqcli
+          python3 tests/bqcli/run_contract.py
+      - name: Upload payload-safe bq diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bq-cli-diagnostics-${{ github.run_id }}
+          path: .artifacts/bqcli
           if-no-files-found: ignore
           retention-days: 7
 

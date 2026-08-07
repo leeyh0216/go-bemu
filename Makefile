@@ -7,12 +7,16 @@ BQEMU_DATABASE_DSN ?= $(BQEMU_LOCAL_DATA_DIR)/bqemu.duckdb
 BQEMU_TEMP_DIRECTORY ?= $(if $(TMPDIR),$(TMPDIR),/tmp)/bqemu
 BQEMU_GO_TEST_TIMEOUT ?= 10m
 BQEMU_PYTEST_TIMEOUT_SECONDS ?= 300
+BQEMU_BQCLI_BIN ?= bq
+BQEMU_BQCLI_TIMEOUT_SECONDS ?= 300
+BQEMU_BQCLI_VERSION ?= 2.1.31
 BQEMU_DOCKER_START_TIMEOUT_SECONDS ?= 120
 GO_TEST_FLAGS ?=
 IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
+PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test vet check config-check docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test bq-test vet check config-check docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -23,6 +27,7 @@ help:
 	  'make run          Run locally with repository data and temp directories' \
 	  'make check        Run formatting, bounded race tests, and vet' \
 	  'make python-test  Run the official Python client real-process contract' \
+	  'make bq-test      Run the exact-version official bq CLI contract' \
 	  'make docker-build Build the standalone non-root image' \
 	  'make docker-up    Start the read-only Compose service and wait for readiness' \
 	  'make docker-down  Stop the Compose service and remove transient resources'
@@ -67,6 +72,14 @@ test-race:
 python-test:
 	BQEMU_PYTEST_TIMEOUT_SECONDS="$(BQEMU_PYTEST_TIMEOUT_SECONDS)" \
 	"$(PYTHON)" -m pytest -c tests/python/pytest.ini tests/python
+
+bq-test:
+	@command -v "$(BQEMU_BQCLI_BIN)" >/dev/null 2>&1 || \
+	  (printf '%s\n' 'stage=setup operation=find-bq shape=missing-binary fix_hint=install-Google-Cloud-SDK-566.0.0' >&2; exit 1)
+	BQEMU_BQCLI_VERSION="$(BQEMU_BQCLI_VERSION)" \
+	BQEMU_BQCLI_TIMEOUT_SECONDS="$(BQEMU_BQCLI_TIMEOUT_SECONDS)" \
+	BQEMU_BQCLI_ARTIFACT_DIR="$(CURDIR)/.artifacts/bqcli" \
+	"$(PYTHON3)" tests/bqcli/run_contract.py
 
 vet:
 	CGO_ENABLED=1 go vet ./...
