@@ -42,6 +42,7 @@ const (
 	GapQueryExactReplayExtensionV1          = "query.jobs.exact-replay-extension-v1"
 	GapQueryUnsupportedOptionsV1            = "query.options.unsupported-v1"
 	GapQueryDDLCatalogSyncV1                = "query.ddl.catalog-sync-v1"
+	GapQueryScriptsUnsupportedV1            = "query.scripts.unsupported-v1"
 )
 
 type JobReference struct {

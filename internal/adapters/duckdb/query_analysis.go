@@ -26,6 +26,19 @@ import (
 var _ ports.QueryAnalyzer = (*Warehouse)(nil)
 
 func (w *Warehouse) AnalyzeQuery(ctx context.Context, request ports.QueryRequest) (ports.QueryAnalysis, error) {
+	if err := validateSingleQueryStatement(request.SQL); err != nil {
+		return ports.QueryAnalysis{}, err
+	}
+	statement := leadingStatementKeyword(request.SQL)
+	switch statement {
+	case "SELECT", "WITH", "VALUES", "INSERT", "UPDATE", "DELETE", "MERGE":
+		// These are the declared query-engine statement classes. Catalog DDL
+		// is classified below and rejected by the application boundary.
+	case "CREATE", "ALTER", "DROP", "TRUNCATE":
+	default:
+		return ports.QueryAnalysis{}, fmt.Errorf("%w: query statement type is outside the declared engine subset; capability=%s",
+			domain.ErrUnsupported, domain.GapQueryScriptsUnsupportedV1)
+	}
 	translated, model, err := translateSQLWithModel(request)
 	if err != nil {
 		return ports.QueryAnalysis{}, err
@@ -34,7 +47,6 @@ func (w *Warehouse) AnalyzeQuery(ctx context.Context, request ports.QueryRequest
 	if err != nil {
 		return ports.QueryAnalysis{}, err
 	}
-	statement := leadingStatementKeyword(request.SQL)
 	analysis := ports.QueryAnalysis{ReferencedTables: references, ProducesRows: returnsRows(translated)}
 	switch statement {
 	case "INSERT", "UPDATE", "DELETE", "MERGE":
@@ -57,6 +69,80 @@ func (w *Warehouse) AnalyzeQuery(ctx context.Context, request ports.QueryRequest
 	}
 	slog.InfoContext(ctx, "query analysis", attrs...)
 	return analysis, nil
+}
+
+// validateSingleQueryStatement permits one optional trailing semicolon but
+// rejects scripts before translation or execution. Semicolons inside quoted
+// literals, identifiers, and comments are data, not statement separators.
+// Full BigQuery scripts require a parser and a multi-statement job transaction:
+// https://cloud.google.com/bigquery/docs/multi-statement-queries
+func validateSingleQueryStatement(sql string) error {
+	for index := 0; index < len(sql); {
+		switch {
+		case sql[index] == '\'' || sql[index] == '"':
+			end, err := scanQuotedLiteral(sql, index, sql[index])
+			if err != nil {
+				return err
+			}
+			index = end
+		case sql[index] == '`':
+			_, end, err := scanBacktickIdentifier(sql, index)
+			if err != nil {
+				return err
+			}
+			index = end
+		case sql[index] == '-' && index+1 < len(sql) && sql[index+1] == '-':
+			index = scanLineComment(sql, index)
+		case sql[index] == '#':
+			index = scanLineComment(sql, index)
+		case sql[index] == '/' && index+1 < len(sql) && sql[index+1] == '*':
+			end, err := scanBlockComment(sql, index)
+			if err != nil {
+				return err
+			}
+			index = end
+		case sql[index] == ';':
+			if queryScriptHasContent(sql, index+1) {
+				return fmt.Errorf("%w: multi-statement queries are not implemented; capability=%s",
+					domain.ErrUnsupported, domain.GapQueryScriptsUnsupportedV1)
+			}
+			return nil
+		default:
+			index++
+		}
+	}
+	return nil
+}
+
+func queryScriptHasContent(sql string, start int) bool {
+	for index := start; index < len(sql); {
+		switch {
+		case isSQLSpace(sql[index]):
+			index++
+		case sql[index] == '-' && index+1 < len(sql) && sql[index+1] == '-':
+			index = scanLineComment(sql, index)
+		case sql[index] == '#':
+			index = scanLineComment(sql, index)
+		case sql[index] == '/' && index+1 < len(sql) && sql[index+1] == '*':
+			end, err := scanBlockComment(sql, index)
+			if err != nil {
+				return true
+			}
+			index = end
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func isSQLSpace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\r', '\n', '\f':
+		return true
+	default:
+		return false
+	}
 }
 
 func analyzeRelationReferences(request ports.QueryRequest) ([]domain.TableReference, error) {

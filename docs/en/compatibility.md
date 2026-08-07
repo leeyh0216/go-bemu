@@ -75,6 +75,7 @@ not implied.
 | anonymous destination table | Partial | row-producing query jobs publish a generated hidden-dataset destination with 24-hour lazy expiration; capability `query.destination.anonymous-v1` |
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset only; gap `query.destination.truncate-schema-replacement-v1` |
 | SQL DDL | Unsupported | `CREATE`/`ALTER`/`DROP`/`TRUNCATE` fail before job or engine side effects until physical and canonical catalog changes share one application contract; gap `query.ddl.catalog-sync-v1` |
+| multi-statement queries | Unsupported | literal/comment-aware scanning permits one optional trailing semicolon and rejects scripts before job or engine side effects; gap `query.scripts.unsupported-v1`; see the official [multi-statement query contract](https://cloud.google.com/bigquery/docs/multi-statement-queries) |
 | cancellation | Unsupported | no route/state |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, existing destination table, process-local state |
 | copy/extract | Unsupported | configuration rejected |

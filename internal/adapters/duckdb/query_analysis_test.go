@@ -2,10 +2,12 @@ package duckdb
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
@@ -134,6 +136,46 @@ func TestAnalyzeQueryMarksCatalogDDLBeforeExecution(t *testing.T) {
 		}
 		if !analysis.RequiresCatalogMutation {
 			t.Fatalf("catalog DDL was not classified before execution: %q", query)
+		}
+	}
+}
+
+func TestAnalyzeQueryAllowsOnlyOneStatement(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+
+	for _, query := range []string{
+		"SELECT ';' AS value; -- one trailing separator is allowed",
+		"SELECT 1 /* ; is comment data */; /* trailing comment */",
+		"SELECT `semi;colon` FROM (VALUES (1)) AS source(`semi;colon`)",
+	} {
+		analysis, err := warehouse.AnalyzeQuery(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: query})
+		if err != nil {
+			t.Fatalf("single statement rejected: query=%q err=%v", query, err)
+		}
+		if !analysis.ProducesRows {
+			t.Fatalf("single SELECT was not classified as row-producing: %q", query)
+		}
+	}
+
+	for _, query := range []string{
+		"SELECT 1; DROP TABLE `test-project.analytics.events`",
+		"INSERT INTO `test-project.analytics.events` VALUES (1); ALTER TABLE `test-project.analytics.events` ADD COLUMN note VARCHAR",
+		"SELECT 1;;",
+		"BEGIN TRANSACTION",
+		"DECLARE row_count INT64",
+	} {
+		_, err := warehouse.AnalyzeQuery(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: query})
+		if !errors.Is(err, domain.ErrUnsupported) {
+			t.Fatalf("script error = %v, want ErrUnsupported for %q", err, query)
+		}
+		if !strings.Contains(err.Error(), domain.GapQueryScriptsUnsupportedV1) {
+			t.Fatalf("script error lacks stable capability: query=%q err=%v", query, err)
 		}
 	}
 }

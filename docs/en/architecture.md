@@ -206,6 +206,13 @@ The analyzer marks catalog-mutating DDL and the application rejects `CREATE`,
 `ALTER`, `DROP`, and `TRUNCATE` before job creation or engine execution under
 `query.ddl.catalog-sync-v1`. Implementing DDL requires an atomic canonical
 catalog reconciliation port, not direct DuckDB execution.
+The same boundary permits only one statement plus an optional trailing
+semicolon. A literal/comment-aware scan rejects all [multi-statement
+queries](https://cloud.google.com/bigquery/docs/multi-statement-queries) before
+job or engine side effects under `query.scripts.unsupported-v1`. Full script
+support requires statement-by-statement semantic analysis, variables, control
+flow, temporary objects, and job-level transaction semantics; passing an opaque
+script to DuckDB is never an acceptable fallback.
 
 One Static Partial exception is intentionally structural and versioned. A token
 parser recognizes the source-derived connector `0.44.2` shape from

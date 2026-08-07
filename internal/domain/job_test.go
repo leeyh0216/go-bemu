@@ -63,6 +63,7 @@ func TestQueryCapabilityAndGapIDsAreStable(t *testing.T) {
 		"exact_replay":          "query.jobs.exact-replay-extension-v1",
 		"unsupported_options":   "query.options.unsupported-v1",
 		"ddl_catalog_sync":      "query.ddl.catalog-sync-v1",
+		"scripts":               "query.scripts.unsupported-v1",
 	}
 	got := map[string]string{
 		"exact_schema":          CapabilityQueryDestinationExactSchemaV1,
@@ -78,6 +79,7 @@ func TestQueryCapabilityAndGapIDsAreStable(t *testing.T) {
 		"exact_replay":          GapQueryExactReplayExtensionV1,
 		"unsupported_options":   GapQueryUnsupportedOptionsV1,
 		"ddl_catalog_sync":      GapQueryDDLCatalogSyncV1,
+		"scripts":               GapQueryScriptsUnsupportedV1,
 	}
 	for name, expected := range want {
 		if got[name] != expected {

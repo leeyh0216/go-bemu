@@ -74,6 +74,7 @@ Schema support는 nested/repeated record를 포함한 append-only
 | anonymous destination table | Partial | row-producing query job은 24시간 lazy expiration을 가진 hidden-dataset destination을 생성·공개, capability `query.destination.anonymous-v1` |
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset만 지원, gap `query.destination.truncate-schema-replacement-v1` |
 | SQL DDL | Unsupported | physical/canonical catalog 변경이 하나의 application 계약을 공유할 때까지 `CREATE`/`ALTER`/`DROP`/`TRUNCATE`는 job/engine side effect 전에 실패, gap `query.ddl.catalog-sync-v1` |
+| multi-statement query | Unsupported | literal/comment를 구분하는 scan은 선택적인 마지막 semicolon 하나만 허용하고 script를 job/engine side effect 전에 거부, gap `query.scripts.unsupported-v1`, 공식 [multi-statement query 계약](https://cloud.google.com/bigquery/docs/multi-statement-queries) 참고 |
 | cancellation | Unsupported | route/state 없음 |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, 기존 destination table, process-local state |
 | copy/extract | Unsupported | configuration 거부 |

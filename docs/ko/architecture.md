@@ -197,6 +197,13 @@ Analyzer는 catalog-mutating DDL을 표시하고 application은
 `query.ddl.catalog-sync-v1`에 따라 `CREATE`, `ALTER`, `DROP`, `TRUNCATE`를 job
 생성이나 engine 실행 전에 거부한다. DDL 구현에는 DuckDB 직접 실행이 아니라 atomic
 canonical catalog reconciliation port가 필요하다.
+같은 경계는 하나의 statement와 선택적인 마지막 semicolon만 허용한다. Literal과
+comment를 구분하는 scan이 모든 [multi-statement
+query](https://cloud.google.com/bigquery/docs/multi-statement-queries)를
+`query.scripts.unsupported-v1`로 job 및 engine side effect 전에 거부한다. 완전한 script
+지원에는 statement별 semantic analysis, variable, control flow, temporary object,
+job 단위 transaction 의미가 필요하며 opaque script를 DuckDB에 그대로 넘기는 방식은
+fallback으로 허용하지 않는다.
 
 한 가지 Static Partial 예외는 의도적으로 structural하고 versioned되어 있다. Token
 parser가

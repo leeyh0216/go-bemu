@@ -55,13 +55,16 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 	t.Cleanup(func() { _ = warehouse.Close() })
 	now := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
 	clock := &anonymousRESTClock{now: now}
-	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
+	catalog := application.NewCatalogService(
+		memory.NewCatalogRepository(), warehouse, clock,
+		application.WithTableDataReader(warehouse),
+	)
 	queries := application.NewQueryService(
 		memory.NewJobRepository(), warehouse, clock, &testIDs{},
 		application.WithQueryAnalyzer(warehouse), application.WithQueryMaterializer(warehouse),
 		application.WithQueryDestinationCatalog(catalog), application.WithAnonymousQueryTTL(24*time.Hour),
 	)
-	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "").Handler())
+	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "", WithTableDataAPI(catalog)).Handler())
 	t.Cleanup(server.Close)
 	request := func(method, path, body string, wantStatus int) map[string]any {
 		t.Helper()
@@ -91,6 +94,39 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", `{
 		"query":"INSERT INTO `+"`test-project.us_source.events`"+` VALUES (3)","useLegacySql":false
 	}`, http.StatusOK)
+
+	jobsBeforeScripts := request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs?maxResults=100", "", http.StatusOK)
+	jobCountBeforeScripts := len(jobsBeforeScripts["jobs"].([]any))
+	scripts := []string{
+		"SELECT 1; DROP TABLE `test-project.eu_source.events`",
+		"SELECT 1; ALTER TABLE `test-project.eu_source.events` ADD COLUMN note VARCHAR",
+		"INSERT INTO `test-project.eu_source.events` VALUES (99); CREATE TABLE `test-project.eu_source.created_by_script` (id BIGINT)",
+	}
+	for index, script := range scripts {
+		syncFailure := request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", fmt.Sprintf(
+			`{"query":%q,"useLegacySql":false}`, script), http.StatusNotImplemented)
+		assertQueryScriptGap(t, syncFailure)
+
+		asyncFailure := request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", fmt.Sprintf(`{
+			"jobReference":{"projectId":"test-project","jobId":"rejected-script-%d"},
+			"configuration":{"query":{"query":%q,"useLegacySql":false}}
+		}`, index, script), http.StatusNotImplemented)
+		assertQueryScriptGap(t, asyncFailure)
+	}
+	jobsAfterScripts := request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs?maxResults=100", "", http.StatusOK)
+	if got := len(jobsAfterScripts["jobs"].([]any)); got != jobCountBeforeScripts {
+		t.Fatalf("rejected scripts created jobs: before=%d after=%d", jobCountBeforeScripts, got)
+	}
+	events := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/eu_source/tables/events", "", http.StatusOK)
+	fields := events["schema"].(map[string]any)["fields"].([]any)
+	if len(fields) != 1 || fields[0].(map[string]any)["name"] != "id" {
+		t.Fatalf("rejected ALTER changed canonical schema: %#v", fields)
+	}
+	data := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/eu_source/tables/events/data?maxResults=10", "", http.StatusOK)
+	if data["totalRows"] != "2" {
+		t.Fatalf("rejected DROP/INSERT changed physical rows: %#v", data)
+	}
+	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/eu_source/tables/created_by_script", "", http.StatusNotFound)
 
 	inserted := request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", `{
 		"jobReference":{"projectId":"test-project","jobId":"connector-anonymous"},
@@ -153,6 +189,14 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/"+datasetID+"/tables/"+tableID, "", http.StatusNotFound)
 	request(http.MethodDelete, "/bigquery/v2/projects/test-project/datasets/"+datasetID, "", http.StatusNoContent)
 	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/"+datasetID, "", http.StatusNotFound)
+}
+
+func assertQueryScriptGap(t *testing.T, response map[string]any) {
+	t.Helper()
+	errorResource := response["error"].(map[string]any)
+	if !strings.Contains(errorResource["message"].(string), domain.GapQueryScriptsUnsupportedV1) {
+		t.Fatalf("script error lacks stable capability: %#v", response)
+	}
 }
 
 func assertAnonymousDestinationReference(t *testing.T, destination map[string]any) {
