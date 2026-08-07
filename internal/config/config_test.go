@@ -120,10 +120,13 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSchemaBytes=1048576",
 		"storage.read.maxSessions=8",
 		"storage.read.spillThresholdBytes=524288", "storage.read.maxRowBytes=524288",
+		"storage.read.maxSnapshotBytes=1048576", "storage.read.maxTotalSnapshotBytes=8388608",
 		"storage.read.maxSnapshotRows=1000",
 		"storage.read.tempFilePattern=read-*", "storage.read.protocolModelVersion=test-read-v1",
 		"storage.write.enabled=true", "storage.write.maxStreams=16", "storage.write.maxAppendRequestBytes=1048576",
-		"storage.write.queueCapacity=8", "storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
+		"storage.write.queueCapacity=8", "storage.write.maxInFlightBytes=4194304", "storage.write.maxInFlightBytesPerStream=2097152",
+		"storage.write.maxStagedBytes=8388608", "storage.write.maxStagedBytesPerStream=4194304",
+		"storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
 		"storage.write.protocolModelVersion=test-storage-v1",
 		"load.enabled=true", "load.gcsEndpoint=http://fake-gcs:4443", "load.allowFileSources=true",
 		"load.operationTimeout=30s", "load.maxObjects=20", "load.maxObjectBytes=1048576",
@@ -150,6 +153,52 @@ func TestShutdownPhasesMustFitConfiguredTotal(t *testing.T) {
 	}, lookup(nil))
 	if err == nil || !strings.Contains(err.Error(), "must not exceed") {
 		t.Fatalf("shutdown phase validation error = %v", err)
+	}
+}
+
+func TestStorageReadSnapshotByteLimitsLoadFromEnvironment(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_STORAGE_READ_MAX_SNAPSHOT_BYTES":       "268435456",
+		"BQEMU_STORAGE_READ_MAX_TOTAL_SNAPSHOT_BYTES": "1073741824",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := result.Config.Storage.Read
+	if read.MaxSnapshotBytes != 256<<20 || read.MaxTotalSnapshotBytes != 1<<30 {
+		t.Fatalf("unexpected Storage Read snapshot byte limits: %#v", read)
+	}
+}
+
+func TestStorageWriteByteLimitsLoadFromEnvironment(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES":            "67108864",
+		"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES_PER_STREAM": "33554432",
+		"BQEMU_STORAGE_WRITE_MAX_STAGED_BYTES":               "1073741824",
+		"BQEMU_STORAGE_WRITE_MAX_STAGED_BYTES_PER_STREAM":    "536870912",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := result.Config.Storage.Write
+	if write.MaxInFlightBytes != 64<<20 || write.MaxInFlightBytesPerStream != 32<<20 ||
+		write.MaxStagedBytes != 1<<30 || write.MaxStagedBytesPerStream != 512<<20 {
+		t.Fatalf("unexpected Storage Write byte limits: %#v", write)
+	}
+}
+
+func TestStorageWriteByteLimitRelationshipsAreValidated(t *testing.T) {
+	for name, override := range map[string][]string{
+		"in-flight-per-stream-below-append": {"--set", "storage.write.maxInFlightBytesPerStream=1048576"},
+		"in-flight-global-below-per-stream": {"--set", "storage.write.maxInFlightBytes=16777216"},
+		"staged-per-stream-below-append":    {"--set", "storage.write.maxStagedBytesPerStream=1048576"},
+		"staged-global-below-per-stream":    {"--set", "storage.write.maxStagedBytes=268435456"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := load(override, lookup(nil)); err == nil {
+				t.Fatal("expected Storage Write byte limit validation error")
+			}
+		})
 	}
 }
 
@@ -181,10 +230,14 @@ func TestStorageReadConfigurationRejectsUnsafeOrInconsistentLimits(t *testing.T)
 		"row-over-response": {
 			"--set", "storage.read.maxResponseBytes=1048576", "--set", "storage.read.maxRowBytes=1048577",
 		},
-		"negative-spill": {"--set", "storage.read.spillThresholdBytes=-1"},
-		"zero-snapshot":  {"--set", "storage.read.maxSnapshotRows=0"},
-		"path-pattern":   {"--set", "storage.read.tempFilePattern=outside/read-*"},
-		"missing-model":  {"--set", "storage.read.protocolModelVersion="},
+		"negative-spill":      {"--set", "storage.read.spillThresholdBytes=-1"},
+		"zero-snapshot-bytes": {"--set", "storage.read.maxSnapshotBytes=0"},
+		"snapshot-over-total": {
+			"--set", "storage.read.maxSnapshotBytes=2097152", "--set", "storage.read.maxTotalSnapshotBytes=1048576",
+		},
+		"zero-snapshot": {"--set", "storage.read.maxSnapshotRows=0"},
+		"path-pattern":  {"--set", "storage.read.tempFilePattern=outside/read-*"},
+		"missing-model": {"--set", "storage.read.protocolModelVersion="},
 		"send-envelope": {
 			"--set", "server.grpc.maxSendMessageBytes=1048576",
 			"--set", "storage.read.maxResponseBytes=1048576",

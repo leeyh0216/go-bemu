@@ -139,28 +139,41 @@ type StorageConfig struct {
 //   - session lifetime: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession
 //   - response size behavior: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readrows
 type StorageReadConfig struct {
-	Enabled              bool   `yaml:"enabled" json:"enabled"`
-	MaxStreams           int    `yaml:"maxStreams" json:"maxStreams"`
-	DefaultStreamCount   int    `yaml:"defaultStreamCount" json:"defaultStreamCount"`
-	RowsPerResponse      int    `yaml:"rowsPerResponse" json:"rowsPerResponse"`
-	MaxResponseBytes     int    `yaml:"maxResponseBytes" json:"maxResponseBytes"`
-	MaxSchemaBytes       int    `yaml:"maxSchemaBytes" json:"maxSchemaBytes"`
-	MaxSessions          int    `yaml:"maxSessions" json:"maxSessions"`
-	SpillThresholdBytes  int64  `yaml:"spillThresholdBytes" json:"spillThresholdBytes"`
-	MaxRowBytes          int64  `yaml:"maxRowBytes" json:"maxRowBytes"`
-	MaxSnapshotRows      int64  `yaml:"maxSnapshotRows" json:"maxSnapshotRows"`
-	TempFilePattern      string `yaml:"tempFilePattern" json:"tempFilePattern"`
-	ProtocolModelVersion string `yaml:"protocolModelVersion" json:"protocolModelVersion"`
+	Enabled               bool   `yaml:"enabled" json:"enabled"`
+	MaxStreams            int    `yaml:"maxStreams" json:"maxStreams"`
+	DefaultStreamCount    int    `yaml:"defaultStreamCount" json:"defaultStreamCount"`
+	RowsPerResponse       int    `yaml:"rowsPerResponse" json:"rowsPerResponse"`
+	MaxResponseBytes      int    `yaml:"maxResponseBytes" json:"maxResponseBytes"`
+	MaxSchemaBytes        int    `yaml:"maxSchemaBytes" json:"maxSchemaBytes"`
+	MaxSessions           int    `yaml:"maxSessions" json:"maxSessions"`
+	SpillThresholdBytes   int64  `yaml:"spillThresholdBytes" json:"spillThresholdBytes"`
+	MaxRowBytes           int64  `yaml:"maxRowBytes" json:"maxRowBytes"`
+	MaxSnapshotBytes      int64  `yaml:"maxSnapshotBytes" json:"maxSnapshotBytes"`
+	MaxTotalSnapshotBytes int64  `yaml:"maxTotalSnapshotBytes" json:"maxTotalSnapshotBytes"`
+	MaxSnapshotRows       int64  `yaml:"maxSnapshotRows" json:"maxSnapshotRows"`
+	TempFilePattern       string `yaml:"tempFilePattern" json:"tempFilePattern"`
+	ProtocolModelVersion  string `yaml:"protocolModelVersion" json:"protocolModelVersion"`
 }
 
+// StorageWriteConfig separates the count-bounded coordinator queue from byte
+// admission. PENDING streams have an official aggregate buffer quota and remain
+// invisible until atomic BatchCommitWriteStreams, so both transient requests
+// and durable local staging need explicit independent byte ceilings.
+// Sources:
+//   - https://cloud.google.com/bigquery/docs/write-api-batch
+//   - https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows
 type StorageWriteConfig struct {
-	Enabled               bool     `yaml:"enabled" json:"enabled"`
-	MaxStreams            int      `yaml:"maxStreams" json:"maxStreams"`
-	MaxAppendRequestBytes int      `yaml:"maxAppendRequestBytes" json:"maxAppendRequestBytes"`
-	QueueCapacity         int      `yaml:"queueCapacity" json:"queueCapacity"`
-	OrphanTTL             Duration `yaml:"orphanTtl" json:"orphanTtl"`
-	CleanupInterval       Duration `yaml:"cleanupInterval" json:"cleanupInterval"`
-	ProtocolModelVersion  string   `yaml:"protocolModelVersion" json:"protocolModelVersion"`
+	Enabled                   bool     `yaml:"enabled" json:"enabled"`
+	MaxStreams                int      `yaml:"maxStreams" json:"maxStreams"`
+	MaxAppendRequestBytes     int      `yaml:"maxAppendRequestBytes" json:"maxAppendRequestBytes"`
+	QueueCapacity             int      `yaml:"queueCapacity" json:"queueCapacity"`
+	MaxInFlightBytes          int64    `yaml:"maxInFlightBytes" json:"maxInFlightBytes"`
+	MaxInFlightBytesPerStream int64    `yaml:"maxInFlightBytesPerStream" json:"maxInFlightBytesPerStream"`
+	MaxStagedBytes            int64    `yaml:"maxStagedBytes" json:"maxStagedBytes"`
+	MaxStagedBytesPerStream   int64    `yaml:"maxStagedBytesPerStream" json:"maxStagedBytesPerStream"`
+	OrphanTTL                 Duration `yaml:"orphanTtl" json:"orphanTtl"`
+	CleanupInterval           Duration `yaml:"cleanupInterval" json:"cleanupInterval"`
+	ProtocolModelVersion      string   `yaml:"protocolModelVersion" json:"protocolModelVersion"`
 }
 
 // LoadConfig bounds every network and filesystem side effect of a load job.
@@ -262,12 +275,15 @@ func Defaults() Config {
 			Read: StorageReadConfig{
 				Enabled: true, MaxStreams: 64, DefaultStreamCount: 4,
 				RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20, MaxSchemaBytes: 1 << 20, MaxSessions: 128,
-				SpillThresholdBytes: 64 << 20, MaxRowBytes: 8 << 20, MaxSnapshotRows: 10_000_000,
+				SpillThresholdBytes: 64 << 20, MaxRowBytes: 8 << 20,
+				MaxSnapshotBytes: 512 << 20, MaxTotalSnapshotBytes: 4 << 30, MaxSnapshotRows: 10_000_000,
 				TempFilePattern:      "bqemu-storage-read-*",
 				ProtocolModelVersion: "google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2",
 			},
 			Write: StorageWriteConfig{
 				Enabled: true, MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, QueueCapacity: 256,
+				MaxInFlightBytes: 256 << 20, MaxInFlightBytesPerStream: 32 << 20,
+				MaxStagedBytes: 4 << 30, MaxStagedBytesPerStream: 512 << 20,
 				OrphanTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
 				ProtocolModelVersion: "google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2",
 			},
@@ -416,6 +432,8 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STORAGE_READ_MAX_SESSIONS", "storage.read.maxSessions"},
 	{"BQEMU_STORAGE_READ_SPILL_THRESHOLD_BYTES", "storage.read.spillThresholdBytes"},
 	{"BQEMU_STORAGE_READ_MAX_ROW_BYTES", "storage.read.maxRowBytes"},
+	{"BQEMU_STORAGE_READ_MAX_SNAPSHOT_BYTES", "storage.read.maxSnapshotBytes"},
+	{"BQEMU_STORAGE_READ_MAX_TOTAL_SNAPSHOT_BYTES", "storage.read.maxTotalSnapshotBytes"},
 	{"BQEMU_STORAGE_READ_MAX_SNAPSHOT_ROWS", "storage.read.maxSnapshotRows"},
 	{"BQEMU_STORAGE_READ_TEMP_FILE_PATTERN", "storage.read.tempFilePattern"},
 	{"BQEMU_STORAGE_READ_PROTOCOL_MODEL_VERSION", "storage.read.protocolModelVersion"},
@@ -423,6 +441,10 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STORAGE_WRITE_ENABLED", "storage.write.enabled"},
 	{"BQEMU_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES", "storage.write.maxAppendRequestBytes"},
 	{"BQEMU_STORAGE_WRITE_QUEUE_CAPACITY", "storage.write.queueCapacity"},
+	{"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES", "storage.write.maxInFlightBytes"},
+	{"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES_PER_STREAM", "storage.write.maxInFlightBytesPerStream"},
+	{"BQEMU_STORAGE_WRITE_MAX_STAGED_BYTES", "storage.write.maxStagedBytes"},
+	{"BQEMU_STORAGE_WRITE_MAX_STAGED_BYTES_PER_STREAM", "storage.write.maxStagedBytesPerStream"},
 	{"BQEMU_STORAGE_WRITE_ORPHAN_TTL", "storage.write.orphanTtl"},
 	{"BQEMU_STORAGE_WRITE_CLEANUP_INTERVAL", "storage.write.cleanupInterval"},
 	{"BQEMU_STORAGE_WRITE_PROTOCOL_MODEL_VERSION", "storage.write.protocolModelVersion"},
@@ -531,6 +553,10 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt64(&cfg.Storage.Read.SpillThresholdBytes)
 	case "storage.read.maxRowBytes":
 		return setInt64(&cfg.Storage.Read.MaxRowBytes)
+	case "storage.read.maxSnapshotBytes":
+		return setInt64(&cfg.Storage.Read.MaxSnapshotBytes)
+	case "storage.read.maxTotalSnapshotBytes":
+		return setInt64(&cfg.Storage.Read.MaxTotalSnapshotBytes)
 	case "storage.read.maxSnapshotRows":
 		return setInt64(&cfg.Storage.Read.MaxSnapshotRows)
 	case "storage.read.tempFilePattern":
@@ -545,6 +571,14 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt(&cfg.Storage.Write.MaxAppendRequestBytes)
 	case "storage.write.queueCapacity":
 		return setInt(&cfg.Storage.Write.QueueCapacity)
+	case "storage.write.maxInFlightBytes":
+		return setInt64(&cfg.Storage.Write.MaxInFlightBytes)
+	case "storage.write.maxInFlightBytesPerStream":
+		return setInt64(&cfg.Storage.Write.MaxInFlightBytesPerStream)
+	case "storage.write.maxStagedBytes":
+		return setInt64(&cfg.Storage.Write.MaxStagedBytes)
+	case "storage.write.maxStagedBytesPerStream":
+		return setInt64(&cfg.Storage.Write.MaxStagedBytesPerStream)
 	case "storage.write.orphanTtl":
 		return setDuration(&cfg.Storage.Write.OrphanTTL)
 	case "storage.write.cleanupInterval":
@@ -666,11 +700,18 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.Storage.Read.RowsPerResponse < 1 || cfg.Storage.Read.MaxResponseBytes < 1<<20 || cfg.Storage.Read.MaxSchemaBytes < 1 ||
 		cfg.Storage.Read.MaxSessions < 1 || cfg.Storage.Read.SpillThresholdBytes < 0 ||
-		cfg.Storage.Read.MaxRowBytes < 1 || cfg.Storage.Read.MaxSnapshotRows < 1 {
+		cfg.Storage.Read.MaxRowBytes < 1 || cfg.Storage.Read.MaxSnapshotBytes < 1 ||
+		cfg.Storage.Read.MaxTotalSnapshotBytes < 1 || cfg.Storage.Read.MaxSnapshotRows < 1 {
 		return errors.New("storage.read row/session limits must be positive, spillThresholdBytes non-negative, and maxResponseBytes at least 1 MiB")
 	}
 	if cfg.Storage.Read.MaxRowBytes > int64(cfg.Storage.Read.MaxResponseBytes) {
 		return errors.New("storage.read.maxRowBytes must not exceed maxResponseBytes")
+	}
+	if cfg.Storage.Read.MaxRowBytes > cfg.Storage.Read.MaxSnapshotBytes {
+		return errors.New("storage.read.maxRowBytes must not exceed maxSnapshotBytes")
+	}
+	if cfg.Storage.Read.MaxSnapshotBytes > cfg.Storage.Read.MaxTotalSnapshotBytes {
+		return errors.New("storage.read.maxSnapshotBytes must not exceed maxTotalSnapshotBytes")
 	}
 	minimumSendBytes := int64(cfg.Storage.Read.MaxResponseBytes) + int64(cfg.Storage.Read.MaxSchemaBytes) + storageReadGRPCEnvelopeReserve
 	if int64(cfg.Server.GRPC.MaxSendMessageBytes) < minimumSendBytes {
@@ -684,7 +725,16 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.Storage.Write.MaxStreams < 1 || cfg.Storage.Write.QueueCapacity < 1 ||
 		cfg.Storage.Write.MaxAppendRequestBytes < 1<<20 || cfg.Storage.Write.MaxAppendRequestBytes > 20<<20 {
-		return errors.New("storage.write stream/queue limits must be positive and maxAppendRequestBytes between 1 MiB and 20 MiB")
+		return errors.New("storage.write stream limits and operation queueCapacity must be positive and maxAppendRequestBytes between 1 MiB and 20 MiB")
+	}
+	appendBytes := int64(cfg.Storage.Write.MaxAppendRequestBytes)
+	if cfg.Storage.Write.MaxInFlightBytesPerStream < appendBytes ||
+		cfg.Storage.Write.MaxInFlightBytes < cfg.Storage.Write.MaxInFlightBytesPerStream {
+		return errors.New("storage.write byte limits must satisfy maxAppendRequestBytes <= maxInFlightBytesPerStream <= maxInFlightBytes")
+	}
+	if cfg.Storage.Write.MaxStagedBytesPerStream < appendBytes ||
+		cfg.Storage.Write.MaxStagedBytes < cfg.Storage.Write.MaxStagedBytesPerStream {
+		return errors.New("storage.write byte limits must satisfy maxAppendRequestBytes <= maxStagedBytesPerStream <= maxStagedBytes")
 	}
 	if strings.TrimSpace(cfg.Storage.Write.ProtocolModelVersion) == "" {
 		return errors.New("storage.write.protocolModelVersion is required")

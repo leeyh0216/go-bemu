@@ -48,6 +48,8 @@ storage:
     maxSessions: 128
     spillThresholdBytes: 67108864
     maxRowBytes: 8388608
+    maxSnapshotBytes: 536870912
+    maxTotalSnapshotBytes: 4294967296
     maxSnapshotRows: 10000000
     tempFilePattern: bqemu-storage-read-*
     protocolModelVersion: google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2
@@ -56,6 +58,10 @@ storage:
     maxStreams: 1024
     maxAppendRequestBytes: 20971520
     queueCapacity: 256
+    maxInFlightBytes: 268435456
+    maxInFlightBytesPerStream: 33554432
+    maxStagedBytes: 4294967296
+    maxStagedBytesPerStream: 536870912
     orphanTtl: "6h"
     cleanupInterval: "1m"
     protocolModelVersion: google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2
