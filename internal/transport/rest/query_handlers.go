@@ -4,9 +4,12 @@ package rest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -16,8 +19,8 @@ import (
 type QueryUseCases interface {
 	RunSync(context.Context, application.QueryInput) (*domain.Job, error)
 	Submit(context.Context, application.QueryInput) (*domain.Job, error)
-	Get(context.Context, string, string) (*domain.Job, error)
-	List(context.Context, string) ([]*domain.Job, error)
+	Get(context.Context, domain.JobReference) (*domain.Job, error)
+	List(context.Context, string, string) ([]*domain.Job, error)
 }
 
 var _ QueryUseCases = (*application.QueryService)(nil)
@@ -55,16 +58,29 @@ func (h *queryHandlers) query(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("%w: legacy SQL is not supported", domain.ErrInvalid))
 		return
 	}
-	input := application.QueryInput{ProjectID: r.PathValue("projectId"), SQL: request.Query, Location: request.Location}
-	if request.DefaultDataset != nil {
-		input.DefaultDataset = request.DefaultDataset.DatasetID
+	if err := validateSynchronousQueryOptions(request); err != nil {
+		writeError(w, err)
+		return
 	}
+	input := queryInputFromWire(r.PathValue("projectId"), "", request.Location, request.Query,
+		request.DefaultDataset, request.DestinationTable, request.WriteDisposition, request.CreateDisposition, "", nil)
 	job, err := h.queries.RunSync(r.Context(), input)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, queryResponseFromDomain(job, request.MaxResults, 0))
+	pageRequest := r.Clone(r.Context())
+	query := pageRequest.URL.Query()
+	if request.MaxResults != 0 {
+		query.Set("maxResults", strconv.Itoa(request.MaxResults))
+	}
+	pageRequest.URL.RawQuery = query.Encode()
+	start, end, next, err := queryResultPageBounds(pageRequest, job)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, queryResponseFromDomain(job, start, end, next))
 }
 
 func (h *queryHandlers) insertJob(w http.ResponseWriter, r *http.Request) {
@@ -78,17 +94,22 @@ func (h *queryHandlers) insertJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := request.Configuration.Query
+	projectID := r.PathValue("projectId")
+	if request.JobReference.ProjectID != "" && request.JobReference.ProjectID != projectID {
+		writeError(w, fmt.Errorf("%w: route and jobReference projectId differ", domain.ErrInvalid))
+		return
+	}
 	if query.UseLegacySQL {
 		writeError(w, fmt.Errorf("%w: legacy SQL is not supported", domain.ErrInvalid))
 		return
 	}
-	input := application.QueryInput{
-		ProjectID: r.PathValue("projectId"), JobID: request.JobReference.JobID,
-		Location: request.JobReference.Location, SQL: query.Query,
+	if err := validateQueryJobOptions(request.Configuration); err != nil {
+		writeError(w, err)
+		return
 	}
-	if query.DefaultDataset != nil {
-		input.DefaultDataset = query.DefaultDataset.DatasetID
-	}
+	input := queryInputFromWire(projectID, request.JobReference.JobID, request.JobReference.Location, query.Query,
+		query.DefaultDataset, query.DestinationTable, query.WriteDisposition, query.CreateDisposition,
+		query.Priority, request.Configuration.Labels)
 	job, err := h.queries.Submit(r.Context(), input)
 	if err != nil {
 		writeError(w, err)
@@ -97,8 +118,77 @@ func (h *queryHandlers) insertJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jobFromDomain(job))
 }
 
+// Unsupported request options are represented as RawMessage so a syntactically
+// valid option can never disappear through Go's zero values. Only field names
+// are reported; parameter values, labels, and other payload content stay out of
+// errors and logs.
+//   - QueryRequest: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest
+//   - JobConfigurationQuery: https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
+func validateSynchronousQueryOptions(request queryRequest) error {
+	return rejectPresentQueryOptions(map[string]json.RawMessage{
+		"requestId": request.RequestID, "timeoutMs": request.TimeoutMs, "jobTimeoutMs": request.JobTimeoutMs,
+		"dryRun": request.DryRun, "priority": request.Priority, "parameterMode": request.ParameterMode,
+		"queryParameters": request.QueryParameters, "labels": request.Labels, "useQueryCache": request.UseQueryCache,
+		"maximumBytesBilled": request.MaximumBytesBilled,
+	})
+}
+
+func validateQueryJobOptions(configuration jobConfiguration) error {
+	options := map[string]json.RawMessage{
+		"configuration.dryRun":       configuration.DryRun,
+		"configuration.jobTimeoutMs": configuration.JobTimeoutMs,
+	}
+	if configuration.Query != nil {
+		options["configuration.query.parameterMode"] = configuration.Query.ParameterMode
+		options["configuration.query.queryParameters"] = configuration.Query.QueryParameters
+		options["configuration.query.useQueryCache"] = configuration.Query.UseQueryCache
+		options["configuration.query.maximumBytesBilled"] = configuration.Query.MaximumBytesBilled
+	}
+	return rejectPresentQueryOptions(options)
+}
+
+func rejectPresentQueryOptions(options map[string]json.RawMessage) error {
+	unsupported := make([]string, 0, len(options))
+	for name, value := range options {
+		if rawPresent(value) {
+			unsupported = append(unsupported, name)
+		}
+	}
+	if len(unsupported) == 0 {
+		return nil
+	}
+	sort.Strings(unsupported)
+	return fmt.Errorf("%w: unsupported query options=%s capability=%s", domain.ErrInvalid,
+		strings.Join(unsupported, ","), domain.GapQueryUnsupportedOptionsV1)
+}
+
+func queryInputFromWire(projectID, jobID, location, sql string, defaultDataset *datasetReference, destination *tableReference, writeDisposition, createDisposition, priority string, labels *map[string]string) application.QueryInput {
+	input := application.QueryInput{
+		ProjectID: projectID, JobID: jobID, Location: location, SQL: sql,
+		WriteDisposition: domain.WriteDisposition(writeDisposition), CreateDisposition: domain.CreateDisposition(createDisposition),
+		Priority: domain.QueryPriority(priority),
+	}
+	if labels != nil {
+		input.Labels = make(map[string]string, len(*labels))
+		for key, value := range *labels {
+			input.Labels[key] = value
+		}
+	}
+	if defaultDataset != nil {
+		input.DefaultDataset = defaultDataset.DatasetID
+	}
+	if destination != nil {
+		input.Destination = &domain.TableReference{
+			ProjectID: destination.ProjectID, DatasetID: destination.DatasetID, TableID: destination.TableID,
+		}
+	}
+	return input
+}
+
 func (h *queryHandlers) getJob(w http.ResponseWriter, r *http.Request) {
-	job, err := h.queries.Get(r.Context(), r.PathValue("projectId"), r.PathValue("jobId"))
+	job, err := h.queries.Get(r.Context(), domain.JobReference{
+		ProjectID: r.PathValue("projectId"), Location: r.URL.Query().Get("location"), JobID: r.PathValue("jobId"),
+	})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -107,29 +197,39 @@ func (h *queryHandlers) getJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *queryHandlers) listJobs(w http.ResponseWriter, r *http.Request) {
-	jobs, err := h.queries.List(r.Context(), r.PathValue("projectId"))
+	jobs, err := h.queries.List(r.Context(), r.PathValue("projectId"), r.URL.Query().Get("location"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	maxResults, _ := strconv.Atoi(r.URL.Query().Get("maxResults"))
-	if maxResults > 0 && maxResults < len(jobs) {
-		jobs = jobs[:maxResults]
+	jobs, nextPageToken, err := paginateQueryJobs(r, jobs, r.PathValue("projectId"), r.URL.Query().Get("location"))
+	if err != nil {
+		writeError(w, err)
+		return
 	}
 	resources := make([]jobResource, len(jobs))
 	for i, job := range jobs {
 		resources[i] = jobFromDomain(job)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"kind": "bigquery#jobList", "jobs": resources})
+	response := map[string]any{"kind": "bigquery#jobList", "jobs": resources}
+	if nextPageToken != "" {
+		response["nextPageToken"] = nextPageToken
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *queryHandlers) getQueryResults(w http.ResponseWriter, r *http.Request) {
-	job, err := h.queries.Get(r.Context(), r.PathValue("projectId"), r.PathValue("jobId"))
+	job, err := h.queries.Get(r.Context(), domain.JobReference{
+		ProjectID: r.PathValue("projectId"), Location: r.URL.Query().Get("location"), JobID: r.PathValue("jobId"),
+	})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	maxResults, _ := strconv.Atoi(r.URL.Query().Get("maxResults"))
-	startIndex, _ := strconv.Atoi(r.URL.Query().Get("startIndex"))
-	writeJSON(w, http.StatusOK, queryResponseFromDomain(job, maxResults, startIndex))
+	start, end, next, err := queryResultPageBounds(r, job)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, queryResponseFromDomain(job, start, end, next))
 }

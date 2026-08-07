@@ -175,6 +175,36 @@ func (s *CatalogService) GetTable(ctx context.Context, projectID, datasetID, tab
 	return s.catalog.GetTable(ctx, projectID, datasetID, tableID)
 }
 
+// PublishMaterializedTable publishes metadata for physical storage that a
+// QueryMaterializer has already committed. It intentionally does not call
+// WarehouseAdmin.CreateTable: query destination creation is a CTAS transaction,
+// and publishing metadata before that transaction succeeds would expose a table
+// clients cannot read.
+//
+// BigQuery documents destination creation as part of the atomic query-job
+// completion update:
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
+func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table domain.Table) error {
+	if err := table.Validate(); err != nil {
+		return err
+	}
+	dataset, err := s.catalog.GetDataset(ctx, table.ProjectID, table.DatasetID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.catalog.GetTable(ctx, table.ProjectID, table.DatasetID, table.ID); err == nil {
+		return fmt.Errorf("%w: table %s/%s/%s", domain.ErrConflict, table.ProjectID, table.DatasetID, table.ID)
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+	now := s.clock.Now()
+	table.Type = "TABLE"
+	table.Location = dataset.Location
+	table.CreatedAt = now
+	table.UpdatedAt = now
+	return s.catalog.CreateTable(ctx, table)
+}
+
 func (s *CatalogService) ListTables(ctx context.Context, projectID, datasetID string) ([]domain.Table, error) {
 	return s.catalog.ListTables(ctx, projectID, datasetID)
 }

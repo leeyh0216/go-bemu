@@ -46,6 +46,24 @@ type QueryEngine interface {
 	Query(context.Context, QueryRequest) (domain.QueryResult, error)
 }
 
+// QueryMaterializer owns the atomic physical side of a query destination. The
+// application publishes canonical table metadata only after this transaction
+// succeeds. A compensating drop is available when metadata publication fails.
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
+type QueryMaterializer interface {
+	MaterializeQuery(context.Context, QueryMaterializationRequest) (QueryMaterializationResult, error)
+	DropMaterializedDestination(context.Context, domain.TableReference) error
+}
+
+// QueryDestinationCatalog is deliberately narrower than CatalogService. It
+// lets query jobs validate location/existence and publish metadata for a table
+// whose physical storage was already created by QueryMaterializer.
+type QueryDestinationCatalog interface {
+	GetDataset(context.Context, string, string) (domain.Dataset, error)
+	GetTable(context.Context, string, string, string) (domain.Table, error)
+	PublishMaterializedTable(context.Context, domain.Table) error
+}
+
 // Warehouse remains as a composition boundary for wiring code that owns the
 // complete backend lifecycle. Use cases depend on the narrower ports above.
 type Warehouse interface {
@@ -58,4 +76,18 @@ type QueryRequest struct {
 	ProjectID      string
 	DefaultDataset string
 	SQL            string
+}
+
+type QueryMaterializationRequest struct {
+	Query             QueryRequest
+	Destination       domain.TableReference
+	DestinationExists bool
+	DestinationSchema []domain.Field
+	WriteDisposition  domain.WriteDisposition
+	CreateDisposition domain.CreateDisposition
+}
+
+type QueryMaterializationResult struct {
+	QueryResult        domain.QueryResult
+	DestinationCreated bool
 }

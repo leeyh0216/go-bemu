@@ -95,15 +95,41 @@ BigQuery reports both successful and failed jobs as `DONE`; clients inspect
 `status.errorResult`, per the official [JobStatus
 resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatus).
 The current repository stores state and materialized results in memory.
-`jobs.insert` executes on an unbounded background goroutine; worker admission,
-durable terminal state, cancellation, location-aware keys, and idempotent replay
-remain design work.
+Query job identity is `(project, location, jobId)` plus a canonical configuration
+fingerprint. Every reused ID returns `409 duplicate`; the fingerprint only makes
+same-versus-different configuration drift visible without logging SQL. This
+follows BigQuery's documented retry behavior; see the official
+[reliability guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions).
+`jobs.insert` still executes on an unbounded background goroutine and every
+query result row remains in Go memory. Worker admission, execution deadlines,
+durable terminal state, and cancellation remain gaps
+`query.execution.unbounded-v1` and `query.results.unbounded-memory-v1`. Cross-type
+query/load uniqueness and terminal-update recovery remain
+`query.jobs.cross-repository-identity-v1` and `query.terminal-persistence-v1`.
+REST DTOs preserve the presence of known unsupported query controls and reject
+them before execution under `query.options.unsupported-v1`; diagnostics contain
+field names, never parameter values, labels, SQL, or rows. This boundary follows
+the official [`QueryRequest`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest)
+and [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)
+field sets.
+Connector-required `configuration.query.priority` and `configuration.labels`
+are domain data rather than scheduler policy: priority is enum-validated, labels
+are validated and round-tripped (including an empty map), and both participate
+in the configuration fingerprint. Logs expose only priority, label count, and a
+sorted label-key fingerprint, never label values.
 
 <!-- section: transactions -->
 ## Transactions and Visibility
 
 An engine statement transaction is not automatically a BigQuery operation
-transaction. Metadata plus physical DDL still spans separate stores. A Parquet
+transaction. Metadata plus physical DDL still spans separate stores. An explicit
+query destination evaluates once into a DuckDB staging table and applies
+`WRITE_EMPTY`, `WRITE_APPEND`, or exact-schema `WRITE_TRUNCATE` in the same
+transaction, following
+[`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery).
+New-table metadata is published after CTAS commit and a publication failure
+triggers a compensating physical drop. Anonymous destinations and schema-replacing
+truncate remain explicit gaps. A Parquet
 load validates a temporary staging table and applies its destination disposition
 inside one DuckDB transaction. Storage Write validates all named PENDING streams
 before its serialized coordinator applies one DuckDB transaction, following the

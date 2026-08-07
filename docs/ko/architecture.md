@@ -93,15 +93,40 @@ PENDING -> RUNNING -> DONE(result)
 BigQuery는 성공과 실패 job을 모두 `DONE`으로 보고하며 client는 공식 [JobStatus
 resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatus)에
 따라 `status.errorResult`를 검사한다. 현재 repository는 state와 materialized
-result를 메모리에 저장한다. `jobs.insert`는 제한 없는 background goroutine에서
-실행된다. Worker admission, durable terminal state, cancellation, location-aware
-key, idempotent replay는 아직 설계 대상이다.
+result를 메모리에 저장한다. Query job identity는 `(project, location, jobId)`와
+canonical configuration fingerprint다. 모든 재사용 ID는 동일 configuration 여부와
+무관하게 `409 duplicate`이며 fingerprint는
+SQL을 기록하지 않고 same/different configuration drift를 구분하는 진단 값이다. 이는
+BigQuery의 공식 retry 동작을 따른다. 공식
+[reliability guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions)를
+참고한다. `jobs.insert`는 여전히 제한 없는 background goroutine에서 실행되고 모든
+query result row는 Go memory에 남는다. Worker admission, execution deadline,
+durable terminal state, cancellation은 `query.execution.unbounded-v1`과
+`query.results.unbounded-memory-v1` gap이다. Cross-type query/load uniqueness와
+terminal-update recovery는 `query.jobs.cross-repository-identity-v1`과
+`query.terminal-persistence-v1` gap이다.
+REST DTO는 알려진 미지원 query control의 presence를 보존하고
+`query.options.unsupported-v1`로 실행 전에 거부한다. 진단에는 field 이름만 포함하며
+parameter 값, label, SQL, row는 포함하지 않는다. 이 경계는 공식
+[`QueryRequest`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest)와
+[`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)
+field 집합을 따른다.
+Connector 필수 `configuration.query.priority`와 `configuration.labels`는 scheduler
+policy가 아닌 domain data다. Priority는 enum을 검증하고 label은 empty map을 포함해
+검증하고 round-trip하며 둘 다 configuration fingerprint에 포함한다. 로그에는
+priority, label 수, 정렬한 label-key fingerprint만 남기며 label 값은 남기지 않는다.
 
 <!-- section: transactions -->
 ## Transaction과 Visibility
 
 Engine statement transaction이 자동으로 BigQuery operation transaction이 되는
-것은 아니다. Metadata와 physical DDL은 여전히 별도 store에 걸쳐 있다. Parquet
+것은 아니다. Metadata와 physical DDL은 여전히 별도 store에 걸쳐 있다. Explicit
+query destination은 DuckDB staging table에 한 번 평가되고
+`WRITE_EMPTY`, `WRITE_APPEND`, exact-schema `WRITE_TRUNCATE`를 같은 transaction에
+적용한다. 기준은
+[`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)다.
+New-table metadata는 CTAS commit 이후 공개하며 publication 실패 시 physical drop으로
+보상한다. Anonymous destination과 schema-replacing truncate는 명시적 gap이다. Parquet
 load는 temporary staging table을 검증하고 destination disposition을 DuckDB
 transaction 하나에서 적용한다. Storage Write는 명명한 모든 PENDING stream을 먼저
 검증한 뒤 serialized coordinator의 DuckDB transaction 하나로 적용하며, 이는

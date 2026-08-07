@@ -56,20 +56,43 @@ Schema support는 nested/repeated record를 포함한 append-only
 | `jobs.query` | Partial | Python 3.43.0 path verified, synchronous DuckDB-compatible SQL subset |
 | query `jobs.insert` | Partial | Python 3.43.0 polling path verified, process-local asynchronous execution |
 | `jobs.get` | Verified basic | `PENDING/RUNNING/DONE`, terminal error |
-| `jobs.list` | Partial | `maxResults` truncation만 지원 |
-| `jobs.getQueryResults` | Partial | `startIndex`/max results, opaque page token 없음 |
-| destination table/disposition | Unsupported | job domain에 없음 |
+| `jobs.list` | Partial | location-aware identity와 opaque cursor token, process-local snapshot만 지원 |
+| `jobs.getQueryResults` | Partial | location-aware lookup, `startIndex`, `maxResults`, job/result-bound opaque page token |
+| explicit destination table | Partial | scalar exact-schema `WRITE_EMPTY`/`WRITE_APPEND`/`WRITE_TRUNCATE`, capability `query.destination.exact-schema-v1` |
+| connector query metadata | Verified basic | `INTERACTIVE`/`BATCH` priority와 검증된 label을 fingerprint/round-trip하며 명시적 empty label map도 보존 |
+| anonymous destination table | Unsupported | gap `query.destination.anonymous-v1` |
+| `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset만 지원, gap `query.destination.truncate-schema-replacement-v1` |
 | cancellation | Unsupported | route/state 없음 |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, 기존 destination table, process-local state |
 | copy/extract | Unsupported | configuration 거부 |
 | durable job/result state | Unsupported | in-memory repository |
-| same-ID idempotent replay | Partial | load는 `(project, location, jobId)` fingerprint 사용, query duplicate는 conflict |
+| bounded query result retention | Unsupported | 모든 result row가 Go memory에 남음, gap `query.results.unbounded-memory-v1` |
+| bounded async query execution | Unsupported | queue/execution deadline 없음, gap `query.execution.unbounded-v1` |
+| same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness, 모든 재사용은 `409 duplicate`, fingerprint는 진단용으로 유지 |
+| exact-request replay extension | Unsupported | 향후 opt-in 전용, gap `query.jobs.exact-replay-extension-v1` |
+| query/load cross-type identity | Unsupported | 분리된 repository의 check/create race, gap `query.jobs.cross-repository-identity-v1` |
+| synchronous request controls | Unsupported | `requestId`, `timeoutMs`, `jobTimeoutMs`, gap `query.sync.request-controls-v1` |
+| unsupported query option | Strict gap | parameter, `dryRun`, cache/billing control, request control은 명시적으로 `400` 거부, gap `query.options.unsupported-v1` |
+| omitted-location dataset inference | Unsupported | configured default가 우선함, gap `query.location.dataset-inference-v1` |
+| terminal persistence recovery | Unsupported | terminal repository update 실패 시 `RUNNING` 잔류 가능, gap `query.terminal-persistence-v1` |
 
 Canonical job state와 error field는 공식
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job) resource를
 기준으로 한다. Nested/repeated result cell과 type별 temporal value는 아직 완전한
 [`TableRow`](https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow)
-encoding이 아니다.
+encoding이 아니다. Explicit destination은
+[`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)를,
+result token은
+[`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults)를
+따른다. 공식
+[`QueryRequest`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest)와
+`JobConfigurationQuery`의 알려졌지만 미구현된 field는 REST 경계에서 presence를
+보존해 실행 전에 실패한다. Zero value가 구현된 것처럼 조용히 수용되지 않는다.
+BigQuery는 재사용한 모든 job ID를 `409 duplicate`로 거부하고 `jobs.get`
+복구를 권장한다. BQEMU도 이를 기본 동작으로 따르며 configuration fingerprint는
+안전한 drift 진단에만 사용한다. 공식
+[retry guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions)를
+참고한다.
 
 <!-- section: sql -->
 ## SQL과 MERGE

@@ -7,8 +7,8 @@ import (
 )
 
 type JobRepository interface {
-	Create(context.Context, *domain.Job) error
+	CreateOrGet(context.Context, *domain.Job) (*domain.Job, bool, error)
 	Update(context.Context, *domain.Job) error
-	Get(context.Context, string, string) (*domain.Job, error)
-	List(context.Context, string) ([]*domain.Job, error)
+	Get(context.Context, domain.JobReference) (*domain.Job, error)
+	List(context.Context, string, string) ([]*domain.Job, error)
 }

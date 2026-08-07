@@ -104,6 +104,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	queryService := application.NewQueryService(
 		jobRepository, warehouse, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
+		application.WithQueryMaterializer(warehouse),
+		application.WithQueryDestinationCatalog(catalogService),
 	)
 	loadService, err := composeLoadJobs(cfg, catalogService, warehouse, clock, system.IDGenerator{})
 	if err != nil {

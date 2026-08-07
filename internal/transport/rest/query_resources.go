@@ -4,6 +4,7 @@ package rest
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,11 +14,24 @@ import (
 )
 
 type queryRequest struct {
-	Query          string            `json:"query"`
-	UseLegacySQL   bool              `json:"useLegacySql"`
-	MaxResults     int               `json:"maxResults,omitempty"`
-	DefaultDataset *datasetReference `json:"defaultDataset,omitempty"`
-	Location       string            `json:"location,omitempty"`
+	Query              string            `json:"query"`
+	UseLegacySQL       bool              `json:"useLegacySql"`
+	MaxResults         int               `json:"maxResults,omitempty"`
+	DefaultDataset     *datasetReference `json:"defaultDataset,omitempty"`
+	DestinationTable   *tableReference   `json:"destinationTable,omitempty"`
+	WriteDisposition   string            `json:"writeDisposition,omitempty"`
+	CreateDisposition  string            `json:"createDisposition,omitempty"`
+	Location           string            `json:"location,omitempty"`
+	RequestID          json.RawMessage   `json:"requestId,omitempty"`
+	TimeoutMs          json.RawMessage   `json:"timeoutMs,omitempty"`
+	JobTimeoutMs       json.RawMessage   `json:"jobTimeoutMs,omitempty"`
+	DryRun             json.RawMessage   `json:"dryRun,omitempty"`
+	Priority           json.RawMessage   `json:"priority,omitempty"`
+	ParameterMode      json.RawMessage   `json:"parameterMode,omitempty"`
+	QueryParameters    json.RawMessage   `json:"queryParameters,omitempty"`
+	Labels             json.RawMessage   `json:"labels,omitempty"`
+	UseQueryCache      json.RawMessage   `json:"useQueryCache,omitempty"`
+	MaximumBytesBilled json.RawMessage   `json:"maximumBytesBilled,omitempty"`
 }
 
 type jobReferenceResource struct {
@@ -33,13 +47,24 @@ type jobStatusResource struct {
 }
 
 type jobConfigurationQuery struct {
-	Query          string            `json:"query"`
-	UseLegacySQL   bool              `json:"useLegacySql"`
-	DefaultDataset *datasetReference `json:"defaultDataset,omitempty"`
+	Query              string            `json:"query"`
+	UseLegacySQL       bool              `json:"useLegacySql"`
+	DefaultDataset     *datasetReference `json:"defaultDataset,omitempty"`
+	DestinationTable   *tableReference   `json:"destinationTable,omitempty"`
+	WriteDisposition   string            `json:"writeDisposition,omitempty"`
+	CreateDisposition  string            `json:"createDisposition,omitempty"`
+	Priority           string            `json:"priority,omitempty"`
+	ParameterMode      json.RawMessage   `json:"parameterMode,omitempty"`
+	QueryParameters    json.RawMessage   `json:"queryParameters,omitempty"`
+	UseQueryCache      json.RawMessage   `json:"useQueryCache,omitempty"`
+	MaximumBytesBilled json.RawMessage   `json:"maximumBytesBilled,omitempty"`
 }
 
 type jobConfiguration struct {
-	Query *jobConfigurationQuery `json:"query,omitempty"`
+	Query        *jobConfigurationQuery `json:"query,omitempty"`
+	DryRun       json.RawMessage        `json:"dryRun,omitempty"`
+	JobTimeoutMs json.RawMessage        `json:"jobTimeoutMs,omitempty"`
+	Labels       *map[string]string     `json:"labels,omitempty"`
 }
 
 type jobStatistics struct {
@@ -81,22 +106,48 @@ type queryResponse struct {
 	Schema             *tableSchema         `json:"schema,omitempty"`
 	Rows               []tableRow           `json:"rows,omitempty"`
 	TotalRows          string               `json:"totalRows,omitempty"`
+	PageToken          string               `json:"pageToken,omitempty"`
 	NumDMLAffectedRows string               `json:"numDmlAffectedRows,omitempty"`
 	Errors             []errorProto         `json:"errors,omitempty"`
 }
 
 func jobFromDomain(job *domain.Job) jobResource {
+	query := job.Configuration
+	if query.SQL == "" {
+		query.SQL = job.Query
+	}
+	wireQuery := &jobConfigurationQuery{
+		Query: query.SQL, UseLegacySQL: false,
+		WriteDisposition: string(query.WriteDisposition), CreateDisposition: string(query.CreateDisposition),
+		Priority: string(query.Priority),
+	}
+	if query.DefaultDataset != "" {
+		wireQuery.DefaultDataset = &datasetReference{ProjectID: job.Reference.ProjectID, DatasetID: query.DefaultDataset}
+	}
+	if query.Destination != nil {
+		wireQuery.DestinationTable = &tableReference{
+			ProjectID: query.Destination.ProjectID, DatasetID: query.Destination.DatasetID, TableID: query.Destination.TableID,
+		}
+	}
+	wireConfiguration := jobConfiguration{Query: wireQuery}
+	if query.Labels != nil {
+		labels := make(map[string]string, len(query.Labels))
+		for key, value := range query.Labels {
+			labels[key] = value
+		}
+		wireConfiguration.Labels = &labels
+	}
 	resource := jobResource{
 		Kind: "bigquery#job",
 		JobReference: jobReferenceResource{
 			ProjectID: job.Reference.ProjectID, JobID: job.Reference.JobID, Location: job.Reference.Location,
 		},
-		Configuration: jobConfiguration{Query: &jobConfigurationQuery{Query: job.Query, UseLegacySQL: false}},
+		Configuration: wireConfiguration,
 		Status:        jobStatusResource{State: job.State},
 		Statistics: jobStatistics{
 			CreationTime: millis(job.CreatedAt),
 			Query: jobQueryStatistics{
-				StatementType: statementType(job.Query), TotalBytesProcessed: "0", TotalBytesBilled: "0",
+				StatementType: statementType(query.SQL), TotalBytesProcessed: "0", TotalBytesBilled: "0",
 			},
 		},
 	}
@@ -138,7 +189,7 @@ func statementType(sql string) string {
 	return fields[0]
 }
 
-func queryResponseFromDomain(job *domain.Job, maxResults, startIndex int) queryResponse {
+func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPageToken string) queryResponse {
 	response := queryResponse{
 		Kind: "bigquery#getQueryResultsResponse",
 		JobReference: jobReferenceResource{
@@ -159,18 +210,14 @@ func queryResponseFromDomain(job *domain.Job, maxResults, startIndex int) queryR
 	if len(fields) > 0 {
 		response.Schema = &tableSchema{Fields: fields}
 	}
-	if startIndex < 0 {
-		startIndex = 0
-	}
 	if startIndex > len(job.Result.Rows) {
 		startIndex = len(job.Result.Rows)
 	}
-	end := len(job.Result.Rows)
-	if maxResults > 0 && startIndex+maxResults < end {
-		end = startIndex + maxResults
+	if endIndex < startIndex || endIndex > len(job.Result.Rows) {
+		endIndex = len(job.Result.Rows)
 	}
-	response.Rows = make([]tableRow, 0, end-startIndex)
-	for _, row := range job.Result.Rows[startIndex:end] {
+	response.Rows = make([]tableRow, 0, endIndex-startIndex)
+	for _, row := range job.Result.Rows[startIndex:endIndex] {
 		cells := make([]tableCell, len(row))
 		for i, value := range row {
 			cells[i] = tableCell{Value: encodeCell(value)}
@@ -178,6 +225,7 @@ func queryResponseFromDomain(job *domain.Job, maxResults, startIndex int) queryR
 		response.Rows = append(response.Rows, tableRow{Fields: cells})
 	}
 	response.TotalRows = strconv.Itoa(len(job.Result.Rows))
+	response.PageToken = nextPageToken
 	if job.Result.AffectedRows != 0 {
 		response.NumDMLAffectedRows = strconv.FormatInt(job.Result.AffectedRows, 10)
 	}

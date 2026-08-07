@@ -56,20 +56,42 @@ not implied.
 | `jobs.query` | Partial | Python 3.43.0 path verified; synchronous DuckDB-compatible SQL subset |
 | query `jobs.insert` | Partial | Python 3.43.0 polling path verified; process-local asynchronous execution |
 | `jobs.get` | Verified basic | `PENDING/RUNNING/DONE`, terminal errors |
-| `jobs.list` | Partial | `maxResults` truncation only |
-| `jobs.getQueryResults` | Partial | `startIndex`/max results, no opaque page token |
-| destination table/dispositions | Unsupported | not represented in job domain |
+| `jobs.list` | Partial | location-aware identity and opaque cursor token; process-local snapshot only |
+| `jobs.getQueryResults` | Partial | location-aware lookup, `startIndex`, `maxResults`, and job/result-bound opaque page tokens |
+| explicit destination table | Partial | scalar exact-schema `WRITE_EMPTY`/`WRITE_APPEND`/`WRITE_TRUNCATE`; capability `query.destination.exact-schema-v1` |
+| connector query metadata | Verified basic | `INTERACTIVE`/`BATCH` priority and validated labels, including an explicitly empty label map, are fingerprinted and round-tripped |
+| anonymous destination table | Unsupported | gap `query.destination.anonymous-v1` |
+| `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset only; gap `query.destination.truncate-schema-replacement-v1` |
 | cancellation | Unsupported | no route/state |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, existing destination table, process-local state |
 | copy/extract | Unsupported | configuration rejected |
 | durable job/result state | Unsupported | in-memory repository |
-| same-ID idempotent replay | Partial | load fingerprints `(project, location, jobId)`; query duplicates conflict |
+| bounded query result retention | Unsupported | all result rows remain in Go memory; gap `query.results.unbounded-memory-v1` |
+| bounded async query execution | Unsupported | no queue/execution deadline; gap `query.execution.unbounded-v1` |
+| same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness; every reuse returns `409 duplicate`, fingerprint retained for diagnostics |
+| exact-request replay extension | Unsupported | future opt-in only; gap `query.jobs.exact-replay-extension-v1` |
+| query/load cross-type identity | Unsupported | separate repositories have a check/create race; gap `query.jobs.cross-repository-identity-v1` |
+| synchronous request controls | Unsupported | `requestId`, `timeoutMs`, and `jobTimeoutMs`; gap `query.sync.request-controls-v1` |
+| unsupported query options | Strict gap | parameters, `dryRun`, cache/billing controls, and request controls are explicitly rejected with `400`; gap `query.options.unsupported-v1` |
+| omitted-location dataset inference | Unsupported | configured default wins; gap `query.location.dataset-inference-v1` |
+| terminal persistence recovery | Unsupported | a failed terminal repository update can leave `RUNNING`; gap `query.terminal-persistence-v1` |
 
 Canonical job state and error fields come from the official
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job) resource.
 Nested/repeated result cells and type-specific temporal values are not yet full
 [`TableRow`](https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow)
-encodings.
+encodings. Explicit destinations follow
+[`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery),
+and result tokens follow
+[`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults).
+Known-but-unimplemented fields from the official
+[`QueryRequest`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest)
+and `JobConfigurationQuery` are presence-aware at the REST boundary and fail
+before execution; a zero value is never silently accepted as implemented.
+BigQuery rejects every reused job ID with `409 duplicate` and recommends
+`jobs.get` recovery; BQEMU follows that default and retains a configuration
+fingerprint only for safe drift diagnostics. See the official
+[retry guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions).
 
 <!-- section: sql -->
 ## SQL and MERGE

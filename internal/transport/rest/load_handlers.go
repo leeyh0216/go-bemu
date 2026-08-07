@@ -112,7 +112,9 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if request.JobReference.JobID != "" {
-		if _, err := h.query.queries.Get(r.Context(), projectID, request.JobReference.JobID); err == nil {
+		if _, err := h.query.queries.Get(r.Context(), domain.JobReference{
+			ProjectID: projectID, Location: request.JobReference.Location, JobID: request.JobReference.JobID,
+		}); err == nil {
 			writeLoadError(w, fmt.Errorf("%w: job ID already identifies a query job", loadDomain.ErrConflict))
 			return
 		} else if !errors.Is(err, domain.ErrNotFound) {
@@ -171,7 +173,7 @@ func (h *combinedJobHandlers) getJob(w http.ResponseWriter, r *http.Request) {
 
 func (h *combinedJobHandlers) listJobs(w http.ResponseWriter, r *http.Request) {
 	projectID, location := r.PathValue("projectId"), r.URL.Query().Get("location")
-	queryJobs, err := h.query.queries.List(r.Context(), projectID)
+	queryJobs, err := h.query.queries.List(r.Context(), projectID, location)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -190,24 +192,25 @@ func (h *combinedJobHandlers) listJobs(w http.ResponseWriter, r *http.Request) {
 	for _, job := range loadJobs {
 		resources = append(resources, loadJobFromDomain(job))
 	}
-	sort.SliceStable(resources, func(i, j int) bool { return jobResourceID(resources[i]) < jobResourceID(resources[j]) })
-	maxResults, _ := strconv.Atoi(r.URL.Query().Get("maxResults"))
-	if maxResults > 0 && maxResults < len(resources) {
-		resources = resources[:maxResults]
+	// jobs.list returns the most recently created jobs first. The full
+	// location/type-qualified identity is the deterministic tie-break because
+	// query and load repositories are currently independent.
+	// https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list
+	sort.SliceStable(resources, func(i, j int) bool { return combinedJobLess(resources[i], resources[j]) })
+	resources, nextPageToken, err := paginateCombinedJobs(r, resources, projectID, location)
+	if err != nil {
+		writeError(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"kind": "bigquery#jobList", "jobs": resources})
+	response := map[string]any{"kind": "bigquery#jobList", "jobs": resources}
+	if nextPageToken != "" {
+		response["nextPageToken"] = nextPageToken
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func readJobPayload(r *http.Request) ([]byte, error) {
-	defer r.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(r.Body, maximumJSONBodyBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("%w: read JSON body: %v", domain.ErrInvalid, err)
-	}
-	if len(payload) > maximumJSONBodyBytes {
-		return nil, fmt.Errorf("%w: JSON body exceeds %d bytes", domain.ErrInvalid, maximumJSONBodyBytes)
-	}
-	return payload, nil
+	return readJSONBody(r)
 }
 
 func rawPresent(value json.RawMessage) bool {
@@ -258,13 +261,37 @@ func writeLoadError(w http.ResponseWriter, err error) {
 	})
 }
 
-func jobResourceID(resource any) string {
+func combinedJobIdentity(resource any) string {
 	switch typed := resource.(type) {
 	case jobResource:
-		return typed.JobReference.JobID
+		return typed.JobReference.JobID + "\x00" + strings.ToUpper(typed.JobReference.Location) + "\x00QUERY"
 	case loadJobResource:
-		return typed.JobReference.JobID
+		return typed.JobReference.JobID + "\x00" + strings.ToUpper(typed.JobReference.Location) + "\x00LOAD"
 	default:
 		return ""
 	}
+}
+
+func combinedJobCreationMillis(resource any) int64 {
+	var raw string
+	switch typed := resource.(type) {
+	case jobResource:
+		raw = typed.Statistics.CreationTime
+	case loadJobResource:
+		raw = typed.Statistics.CreationTime
+	}
+	value, _ := strconv.ParseInt(raw, 10, 64)
+	return value
+}
+
+func combinedJobLess(left, right any) bool {
+	leftCreated, rightCreated := combinedJobCreationMillis(left), combinedJobCreationMillis(right)
+	if leftCreated != rightCreated {
+		return leftCreated > rightCreated
+	}
+	return combinedJobIdentity(left) < combinedJobIdentity(right)
+}
+
+func combinedJobCursor(resource any) string {
+	return strconv.FormatInt(combinedJobCreationMillis(resource), 10) + "\x00" + combinedJobIdentity(resource)
 }

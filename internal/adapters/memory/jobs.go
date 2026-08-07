@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -26,7 +27,12 @@ func NewJobRepository() *JobRepository {
 	return &JobRepository{jobs: make(map[string]*domain.Job)}
 }
 
-func jobKey(projectID, jobID string) string { return projectID + "/" + jobID }
+func jobKey(reference domain.JobReference) (string, error) {
+	if err := reference.Validate(); err != nil {
+		return "", err
+	}
+	return reference.ProjectID + "\x00" + strings.ToUpper(reference.Location) + "\x00" + reference.JobID, nil
+}
 
 func cloneJob(job *domain.Job) *domain.Job {
 	clone := *job
@@ -49,6 +55,17 @@ func cloneJob(job *domain.Job) *domain.Job {
 			}
 		}
 		clone.Result = &result
+	}
+	clone.Configuration = job.Configuration
+	if job.Configuration.Labels != nil {
+		clone.Configuration.Labels = make(map[string]string, len(job.Configuration.Labels))
+		for key, value := range job.Configuration.Labels {
+			clone.Configuration.Labels[key] = value
+		}
+	}
+	if job.Configuration.Destination != nil {
+		destination := *job.Configuration.Destination
+		clone.Configuration.Destination = &destination
 	}
 	if job.Error != nil {
 		jobError := *job.Error
@@ -78,21 +95,33 @@ func cloneJobValue(value any) any {
 	}
 }
 
-func (r *JobRepository) Create(_ context.Context, job *domain.Job) error {
+func (r *JobRepository) CreateOrGet(_ context.Context, job *domain.Job) (*domain.Job, bool, error) {
+	if job == nil {
+		return nil, false, fmt.Errorf("%w: query job is required", domain.ErrInvalid)
+	}
+	key, err := jobKey(job.Reference)
+	if err != nil {
+		return nil, false, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := jobKey(job.Reference.ProjectID, job.Reference.JobID)
-	if _, ok := r.jobs[key]; ok {
-		return fmt.Errorf("%w: job %s", domain.ErrConflict, key)
+	if existing, ok := r.jobs[key]; ok {
+		return cloneJob(existing), false, nil
 	}
 	r.jobs[key] = cloneJob(job)
-	return nil
+	return cloneJob(job), true, nil
 }
 
 func (r *JobRepository) Update(_ context.Context, job *domain.Job) error {
+	if job == nil {
+		return fmt.Errorf("%w: query job is required", domain.ErrInvalid)
+	}
+	key, err := jobKey(job.Reference)
+	if err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := jobKey(job.Reference.ProjectID, job.Reference.JobID)
 	if _, ok := r.jobs[key]; !ok {
 		return fmt.Errorf("%w: job %s", domain.ErrNotFound, key)
 	}
@@ -100,27 +129,37 @@ func (r *JobRepository) Update(_ context.Context, job *domain.Job) error {
 	return nil
 }
 
-func (r *JobRepository) Get(_ context.Context, projectID, jobID string) (*domain.Job, error) {
+func (r *JobRepository) Get(_ context.Context, reference domain.JobReference) (*domain.Job, error) {
+	key, err := jobKey(reference)
+	if err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	job, ok := r.jobs[jobKey(projectID, jobID)]
+	job, ok := r.jobs[key]
 	if !ok {
-		return nil, fmt.Errorf("%w: job %s/%s", domain.ErrNotFound, projectID, jobID)
+		return nil, fmt.Errorf("%w: query job %s", domain.ErrNotFound, reference.JobID)
 	}
 	return cloneJob(job), nil
 }
 
-func (r *JobRepository) List(_ context.Context, projectID string) ([]*domain.Job, error) {
+func (r *JobRepository) List(_ context.Context, projectID, location string) ([]*domain.Job, error) {
+	if err := domain.ValidateJobListScope(projectID, location); err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	jobs := make([]*domain.Job, 0)
 	for _, job := range r.jobs {
-		if job.Reference.ProjectID == projectID {
+		if job.Reference.ProjectID == projectID && (location == "" || strings.EqualFold(job.Reference.Location, location)) {
 			jobs = append(jobs, cloneJob(job))
 		}
 	}
 	sort.Slice(jobs, func(i, j int) bool {
 		if jobs[i].CreatedAt.Equal(jobs[j].CreatedAt) {
+			if jobs[i].Reference.JobID == jobs[j].Reference.JobID {
+				return strings.ToUpper(jobs[i].Reference.Location) < strings.ToUpper(jobs[j].Reference.Location)
+			}
 			return jobs[i].Reference.JobID < jobs[j].Reference.JobID
 		}
 		return jobs[i].CreatedAt.After(jobs[j].CreatedAt)
