@@ -5,6 +5,7 @@ package rest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -14,12 +15,13 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	tabledatabudget "github.com/leeyh0216/go-bemu/internal/tabledata"
 )
 
 const gapTableDataProjectionV1 = "tabledata.selected-fields-v1"
 
 type TableDataUseCases interface {
-	ListTableData(context.Context, string, string, string, int64, int) (ports.TableDataPage, error)
+	ListTableData(context.Context, string, string, string, int64, ports.TableDataMaxResults) (ports.TableDataPage, error)
 }
 
 // WithTableDataAPI explicitly composes the optional REST data browser. Metadata
@@ -50,39 +52,48 @@ func listTableData(w http.ResponseWriter, r *http.Request, useCases TableDataUse
 		writeError(w, err)
 		return
 	}
-	limit, err := tableDataMaximum(r.URL.Query().Get("maxResults"))
+	query := r.URL.Query()
+	maximum, err := tableDataMaximum(query.Get("maxResults"), query.Has("maxResults"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	page, err := useCases.ListTableData(r.Context(), reference.ProjectID, reference.DatasetID, reference.TableID, offset, limit)
+	page, err := useCases.ListTableData(r.Context(), reference.ProjectID, reference.DatasetID, reference.TableID, offset, maximum)
 	if err != nil {
-		writeError(w, err)
+		writeTableDataError(w, err)
 		return
 	}
-	rows, err := tableDataRows(page.Rows, page.Schema, format)
+	encoded, err := encodeTableDataListResponse(page, format, tableDataPageScope(reference), offset)
 	if err != nil {
+		writeTableDataError(w, err)
+		return
+	}
+	if err := checkIfMatch(r, encoded.etag); err != nil {
 		writeError(w, err)
 		return
 	}
-	response := tableDataListResponse{
-		Kind: "bigquery#tableDataList", TotalRows: strconv.FormatInt(page.TotalRows, 10), Rows: rows,
-	}
-	response.ETag = metadataETag(struct {
-		Scope     string
-		Offset    int64
-		TotalRows int64
-		Rows      []tableRow
-	}{Scope: tableDataPageScope(reference), Offset: offset, TotalRows: page.TotalRows, Rows: rows})
-	if err := checkIfMatch(r, response.ETag); err != nil {
-		writeError(w, err)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.FormatInt(encoded.size, 10))
+	w.WriteHeader(http.StatusOK)
+	_, _ = encoded.WriteTo(w)
+}
+
+func writeTableDataError(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeError(w, &httpProtocolError{
+			status: http.StatusServiceUnavailable, reason: "backendError",
+			message: "table data operation exceeded the configured deadline", err: err,
+		})
 		return
 	}
-	nextOffset := offset + int64(len(page.Rows))
-	if len(page.Rows) > 0 && nextOffset < page.TotalRows {
-		response.PageToken = encodeQueryPageToken("tabledata-list", tableDataPageScope(reference), strconv.FormatInt(nextOffset, 10))
+	if errors.Is(err, tabledatabudget.ErrRowTooLarge) || errors.Is(err, tabledatabudget.ErrResponseTooLarge) {
+		writeError(w, &httpProtocolError{
+			status: http.StatusForbidden, reason: "responseTooLarge",
+			message: "table data response exceeds the configured byte limit", err: err,
+		})
+		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeError(w, err)
 }
 
 type tableDataFormatOptions struct {
@@ -130,15 +141,15 @@ func tableDataOffset(r *http.Request, reference domain.TableReference) (int64, e
 	return int64(value), nil
 }
 
-func tableDataMaximum(raw string) (int, error) {
-	if raw == "" {
-		return 0, nil
+func tableDataMaximum(raw string, present bool) (ports.TableDataMaxResults, error) {
+	if !present {
+		return ports.TableDataMaxResults{}, nil
 	}
 	value, err := strconv.ParseUint(raw, 10, 32)
 	if err != nil || value > uint64(math.MaxInt) {
-		return 0, fmt.Errorf("%w: maxResults must be a uint32", domain.ErrInvalid)
+		return ports.TableDataMaxResults{}, fmt.Errorf("%w: maxResults must be a uint32", domain.ErrInvalid)
 	}
-	return int(value), nil
+	return ports.TableDataMaxResults{Value: int(value), Present: true}, nil
 }
 
 func tableDataPageScope(reference domain.TableReference) string {

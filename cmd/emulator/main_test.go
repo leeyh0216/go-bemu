@@ -87,6 +87,75 @@ func TestPrepareDirectoryCreatesConfiguredPath(t *testing.T) {
 	}
 }
 
+type tableDataCompositionWarehouse struct {
+	request ports.TableDataReadRequest
+}
+
+func (*tableDataCompositionWarehouse) CreateDataset(context.Context, string, string) error {
+	return nil
+}
+func (*tableDataCompositionWarehouse) DropDataset(context.Context, string, string) error {
+	return nil
+}
+func (*tableDataCompositionWarehouse) CreateTable(context.Context, domain.Table) error {
+	return nil
+}
+func (*tableDataCompositionWarehouse) ApplySchemaAdditions(context.Context, domain.Table, []domain.SchemaAddition) error {
+	return nil
+}
+func (*tableDataCompositionWarehouse) DropTable(context.Context, string, string, string) error {
+	return nil
+}
+func (warehouse *tableDataCompositionWarehouse) ListTableData(_ context.Context, request ports.TableDataReadRequest) (ports.TableDataPage, error) {
+	warehouse.request = request
+	return ports.TableDataPage{Rows: [][]any{{int64(1)}}, TotalRows: 1}, nil
+}
+
+func TestComposeCatalogServiceAppliesFileTableDataByteLimits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bqemu.yaml")
+	contents := `
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+tableData:
+  operationTimeout: "2s"
+  maxPageRows: 7
+  maxResponseBytes: 1234
+  maxRowBytes: 5678
+`
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(contents)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load([]string{"--config", path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	warehouse := &tableDataCompositionWarehouse{}
+	service := composeCatalogService(loaded.Config, memory.NewCatalogRepository(), warehouse, shutdownClock{})
+	ctx := t.Context()
+	if _, err := service.CreateProject(ctx, domain.Project{ID: "test-project"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateDataset(ctx, domain.Dataset{ProjectID: "test-project", ID: "analytics"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateTable(ctx, domain.Table{
+		ProjectID: "test-project", DatasetID: "analytics", ID: "events",
+		Schema: []domain.Field{{Name: "id", Type: "INT64"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := service.ListTableData(ctx, "test-project", "analytics", "events", 0, ports.TableDataMaxResults{Value: 99, Present: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warehouse.request.Limit != 7 || warehouse.request.MaxResponseBytes != 1234 || warehouse.request.MaxRowBytes != 5678 {
+		t.Fatalf("runtime table data request policy = %#v", warehouse.request)
+	}
+	if page.MaxResponseBytes != 1234 || page.MaxRowBytes != 5678 {
+		t.Fatalf("runtime table data response policy = %#v", page)
+	}
+}
+
 type shutdownQueryEngine struct {
 	started  chan struct{}
 	canceled chan struct{}

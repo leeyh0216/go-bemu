@@ -131,10 +131,22 @@ and [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/r
 field sets.
 REST table browsing crosses a separate `TableDataReader` outbound port. The
 application resolves live canonical metadata and lazy expiration under the
-catalog mutation boundary, applies file-configured row and time limits, and
-then asks the DuckDB adapter for an exact count plus an ordinal page in one
-transaction. The REST adapter alone owns the schema-driven nested `f/v` JSON
-representation and resource-scoped opaque tokens. This follows the official
+catalog mutation boundary. Its file-configured operation deadline starts before
+context-aware admission, then covers TTL resolution and the DuckDB transaction.
+Within that transaction DuckDB obtains the exact count, streams no more than the
+configured row count, and incrementally trims canonical values. Backend JSON
+size is deliberately not a gate because DuckDB includes field names that the
+public schema-ordered `f/v` row does not. The application verifies the
+replaceable adapter's non-negative total, effective row limit, page range, and
+canonical byte budget before returning it. REST
+alone owns the schema-driven nested `f/v` JSON representation and applies the
+exact uncompressed response limit, including envelope and token. Accepted row
+fragments stream without a second full payload copy. A normal 10,000,000-byte
+page stops before a subsequent row; only its first row may cross that boundary,
+up to the 100,000,000-byte hard response ceiling. These deterministic local
+counts are stricter than Cloud's approximate internal representation described
+by the official [pagination limits](https://cloud.google.com/bigquery/docs/paging-results#api-limits).
+Resource-scoped opaque tokens advance by the exact emitted row count. This follows the official
 [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
 boundary without exposing DuckDB values to transport code.
 The execution ceiling follows the same bounded-job intent as official

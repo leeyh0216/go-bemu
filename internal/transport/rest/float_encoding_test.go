@@ -35,7 +35,7 @@ func (specialFloatQueryEngine) Query(context.Context, ports.QueryRequest) (domai
 
 type specialFloatTableData struct{}
 
-func (specialFloatTableData) ListTableData(context.Context, string, string, string, int64, int) (ports.TableDataPage, error) {
+func (specialFloatTableData) ListTableData(context.Context, string, string, string, int64, ports.TableDataMaxResults) (ports.TableDataPage, error) {
 	return ports.TableDataPage{
 		Schema: []domain.Field{
 			{Name: "finite", Type: "FLOAT64"},

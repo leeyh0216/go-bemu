@@ -49,6 +49,15 @@ type TableDataReader interface {
 	ListTableData(context.Context, TableDataReadRequest) (TableDataPage, error)
 }
 
+// TableDataMaxResults preserves the optional REST field's presence. The
+// protocol defines maxResults as an optional uint32, so an explicit zero is a
+// valid zero-row request and must not be collapsed into the omitted default.
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
+type TableDataMaxResults struct {
+	Value   int
+	Present bool
+}
+
 // TableDataReadRequest is deliberately extensible: selected-field projection
 // and snapshot/version preconditions can be added without changing the port's
 // method signature when those REST capabilities are implemented.
@@ -57,6 +66,11 @@ type TableDataReadRequest struct {
 	Schema    []domain.Field
 	Offset    int64
 	Limit     int
+	// These local budgets are measured over the canonical adapter values. The
+	// response budget trims a normal page, while the row budget is the hard
+	// single-row exception ceiling. REST also checks exact f/v JSON bytes.
+	MaxResponseBytes int64
+	MaxRowBytes      int64
 }
 
 type TableDataPage struct {
@@ -65,6 +79,10 @@ type TableDataPage struct {
 	// Schema is populated by the application from canonical catalog metadata,
 	// not inferred by the physical row adapter.
 	Schema []domain.Field
+	// The application publishes its effective policy with the page so optional
+	// transports cannot accidentally serialize it without the same hard bounds.
+	MaxResponseBytes int64
+	MaxRowBytes      int64
 }
 
 // QueryEngine executes GoogleSQL-shaped requests against a replaceable backend.

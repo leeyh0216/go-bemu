@@ -20,6 +20,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	tabledatabudget "github.com/leeyh0216/go-bemu/internal/tabledata"
 )
 
 // CatalogService intentionally has no expiration goroutine or Close method.
@@ -35,6 +36,8 @@ type CatalogService struct {
 	compensationTimeout       time.Duration
 	tableDataOperationTimeout time.Duration
 	maxTableDataPageRows      int
+	maxTableDataResponseBytes int64
+	maxTableDataRowBytes      int64
 	// The repository port intentionally stays backend-agnostic and has no
 	// compare-and-create primitive. These locks make the two physical/metadata
 	// transactions single-writer within one emulator process.
@@ -45,10 +48,12 @@ type CatalogService struct {
 	// was concurrently removed. It also orders tables.patch expiration changes
 	// with lazy expiration cleanup.
 	// https://cloud.google.com/bigquery/docs/managing-tables#update-table-expiration
-	resourceMutationMu sync.Mutex
+	resourceMutationMu contextMutex
 }
 
 type CatalogOption func(*CatalogService)
+
+var ErrTableDataAdapterContract = errors.New("table data reader violated table data adapter contract")
 
 // WithDefaultLocation applies the configured project location when a dataset
 // insert omits location. BigQuery locations and their case-sensitive values are
@@ -80,8 +85,9 @@ func WithTableDataReader(reader ports.TableDataReader) CatalogOption {
 	}
 }
 
-// WithTableDataOperationTimeout bounds the physical count-and-page operation.
-// The timeout derives from the request context so upstream cancellation and an
+// WithTableDataOperationTimeout bounds admission to the global catalog boundary,
+// metadata/TTL resolution, and the physical count-and-page operation. The
+// timeout derives from the request context so upstream cancellation and an
 // earlier request deadline remain authoritative.
 func WithTableDataOperationTimeout(timeout time.Duration) CatalogOption {
 	return func(service *CatalogService) {
@@ -101,11 +107,32 @@ func WithMaxTableDataPageRows(maximum int) CatalogOption {
 	}
 }
 
+// WithMaxTableDataResponseBytes sets the normal canonical and exact REST page
+// boundary. BigQuery normally paginates tabledata.list near 10 MB; one row may
+// cross it only up to the separately configured hard row ceiling.
+// https://cloud.google.com/bigquery/docs/paging-results#api-limits
+func WithMaxTableDataResponseBytes(maximum int64) CatalogOption {
+	return func(service *CatalogService) {
+		if maximum > 0 {
+			service.maxTableDataResponseBytes = maximum
+		}
+	}
+}
+
+func WithMaxTableDataRowBytes(maximum int64) CatalogOption {
+	return func(service *CatalogService) {
+		if maximum > 0 {
+			service.maxTableDataRowBytes = maximum
+		}
+	}
+}
+
 func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.WarehouseAdmin, clock ports.Clock, options ...CatalogOption) *CatalogService {
 	service := &CatalogService{
 		catalog: catalog, warehouse: warehouse, clock: clock,
 		defaultLocation: "US", compensationTimeout: 30 * time.Second,
 		tableDataOperationTimeout: 30 * time.Second, maxTableDataPageRows: 10_000,
+		maxTableDataResponseBytes: 10_000_000, maxTableDataRowBytes: 100_000_000,
 	}
 	for _, option := range options {
 		option(service)
@@ -332,37 +359,94 @@ func (s *CatalogService) GetTable(ctx context.Context, projectID, datasetID, tab
 // startIndex may be beyond TotalRows, in which case tabledata.list returns an
 // empty page rather than an error.
 // https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
-func (s *CatalogService) ListTableData(ctx context.Context, projectID, datasetID, tableID string, offset int64, limit int) (ports.TableDataPage, error) {
+func (s *CatalogService) ListTableData(ctx context.Context, projectID, datasetID, tableID string, offset int64, maximum ports.TableDataMaxResults) (ports.TableDataPage, error) {
 	if offset < 0 {
 		return ports.TableDataPage{}, fmt.Errorf("%w: table data offset must be non-negative", domain.ErrInvalid)
 	}
-	if limit < 0 {
+	if maximum.Value < 0 {
 		return ports.TableDataPage{}, fmt.Errorf("%w: table data limit must be non-negative", domain.ErrInvalid)
 	}
-	if limit == 0 || limit > s.maxTableDataPageRows {
+	limit := maximum.Value
+	// maxResults is an optional uint32. Only absence selects the configured
+	// default; an explicit zero still resolves metadata/TotalRows but asks the
+	// physical adapter for no rows.
+	// https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
+	if !maximum.Present {
+		limit = s.maxTableDataPageRows
+	} else if limit > s.maxTableDataPageRows {
 		limit = s.maxTableDataPageRows
 	}
 	if s.tableDataReader == nil {
 		return ports.TableDataPage{}, fmt.Errorf("table data reader is not configured")
 	}
 
-	s.resourceMutationMu.Lock()
+	operationCtx, cancelOperation := context.WithTimeout(ctx, s.tableDataOperationTimeout)
+	defer cancelOperation()
+	referenceDigest := observability.Digest([]byte(strings.Join([]string{projectID, datasetID, tableID}, "\x00")))
+	admissionStarted := observability.LogSideEffectStart(operationCtx, "catalog", "table_data_admission",
+		"stage", "resource_mutation_gate", "table_reference_digest", referenceDigest,
+		"model_version", "tabledata-catalog-admission-v1")
+	admissionErr := s.resourceMutationMu.LockContext(operationCtx)
+	observability.LogSideEffectEnd(operationCtx, "catalog", "table_data_admission", admissionStarted, admissionErr,
+		"stage", "resource_mutation_gate", "table_reference_digest", referenceDigest,
+		"model_version", "tabledata-catalog-admission-v1")
+	if admissionErr != nil {
+		return ports.TableDataPage{}, admissionErr
+	}
 	defer s.resourceMutationMu.Unlock()
-	table, err := s.getTableLocked(ctx, projectID, datasetID, tableID)
+	table, err := s.getTableLocked(operationCtx, projectID, datasetID, tableID)
 	if err != nil {
 		return ports.TableDataPage{}, err
 	}
-	readCtx, cancelRead := context.WithTimeout(ctx, s.tableDataOperationTimeout)
-	defer cancelRead()
-	page, err := s.tableDataReader.ListTableData(readCtx, ports.TableDataReadRequest{
+	page, err := s.tableDataReader.ListTableData(operationCtx, ports.TableDataReadRequest{
 		Reference: domain.TableReference{ProjectID: projectID, DatasetID: datasetID, TableID: tableID},
 		Schema:    copyFields(table.Schema), Offset: offset, Limit: limit,
+		MaxResponseBytes: s.maxTableDataResponseBytes, MaxRowBytes: s.maxTableDataRowBytes,
 	})
 	if err != nil {
 		return ports.TableDataPage{}, err
 	}
+	if err := validateTableDataPage(page, offset, limit); err != nil {
+		return ports.TableDataPage{}, err
+	}
+	// Treat the port as an untrusted boundary. Replaceable adapters must honor
+	// the same canonical row/page limits before a transport can serialize data.
+	budget := tabledatabudget.NewAccumulator(s.maxTableDataResponseBytes)
+	for _, row := range page.Rows {
+		included, budgetErr := budget.Add(row, s.maxTableDataRowBytes)
+		if budgetErr != nil {
+			return ports.TableDataPage{}, fmt.Errorf("%w: canonical row budget", ErrTableDataAdapterContract)
+		}
+		if !included {
+			return ports.TableDataPage{}, fmt.Errorf("%w: canonical page budget", ErrTableDataAdapterContract)
+		}
+	}
 	page.Schema = copyFields(table.Schema)
+	page.MaxResponseBytes = s.maxTableDataResponseBytes
+	page.MaxRowBytes = s.maxTableDataRowBytes
 	return page, nil
+}
+
+func validateTableDataPage(page ports.TableDataPage, offset int64, limit int) error {
+	if page.TotalRows < 0 {
+		return fmt.Errorf("%w: table data adapter returned a negative total row count", ErrTableDataAdapterContract)
+	}
+	if len(page.Rows) > limit {
+		return fmt.Errorf("%w: table data adapter returned %d rows for effective limit %d", ErrTableDataAdapterContract, len(page.Rows), limit)
+	}
+	remaining := page.TotalRows
+	if offset < remaining {
+		remaining -= offset
+	} else {
+		// tabledata.list permits a startIndex beyond TotalRows and represents it
+		// as an empty page. No adapter may return rows from that position.
+		// https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
+		remaining = 0
+	}
+	if int64(len(page.Rows)) > remaining {
+		return fmt.Errorf("%w: table data adapter page exceeds the reported total row count", ErrTableDataAdapterContract)
+	}
+	return nil
 }
 
 func (s *CatalogService) getTableLocked(ctx context.Context, projectID, datasetID, tableID string) (domain.Table, error) {

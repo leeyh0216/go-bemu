@@ -33,7 +33,7 @@ service](https://cloud.google.com/bigquery/docs/introduction)와 동등하다는
 | table insert/get/delete | Verified basic | standard table과 canonical schema metadata |
 | table list | Verified basic | paging, view/storage statistics 없음 |
 | table patch/update | Verified narrow | metadata, additive schema, ETag precondition |
-| `tabledata.list` | Partial | scalar/nested/repeated `f/v` row, 정확한 non-finite FLOAT64 token, `startIndex`, 제한된 `maxResults`, resource-scoped opaque token, ETag precondition, 정확한 `totalRows`, `useInt64Timestamp`; selected field, ISO-8601 picosecond output, byte 기반 page trimming은 gap |
+| `tabledata.list` | Partial | scalar/nested/repeated `f/v` row, 정확한 non-finite FLOAT64 token, `startIndex`, row/exact-byte 제한 page, resource-scoped opaque token, ETag precondition, 정확한 `totalRows`, `useInt64Timestamp`; selected field, ISO-8601 picosecond output, mutation-aware page invalidation은 gap |
 | `tabledata.insertAll` | Unsupported | route 없음 |
 
 Request/response shape는 공식
@@ -45,16 +45,21 @@ decode일 뿐 해당 field 구현이 아니다.
 [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
 adapter는 `tables.get`과 Storage Read가 사용하는 동일한 catalog TTL 확인 뒤, 하나의
 DuckDB transaction에서 count와 ordinal page 선택을 수행한다. File-first
-`tableData.maxPageRows` cap은 요청보다 적은 row를 반환할 수 있고
-`tableData.operationTimeout`은 physical operation을 제한한다. BigQuery는 대략 10 MB
-response 기준으로도 page를 자른다. Byte 기반 trimming, mutation-aware page 무효화,
-`selectedFields`, `timestampOutputFormat`은 명시적 gap이다.
+`tableData.maxPageRows` cap은 요청보다 적은 row를 반환할 수 있다.
+`tableData.operationTimeout`은 catalog admission, TTL 해석, physical operation을
+포함한다. DuckDB는 설정된 row 수까지만 stream하고 canonical page를 증분 trim한다.
+Column name을 포함하지만 `f/v` row에는 없는 backend JSON 표현은 protocol byte gate로
+사용하지 않는다. REST는 수락한 fragment를 stream하면서 exact JSON `maxResponseBytes` 일반 cap과 `maxRowBytes`
+single-row hard cap을 적용한다. 이 deterministic local 10,000,000/100,000,000-byte
+규칙은 Cloud의 근사 [pagination limit](https://cloud.google.com/bigquery/docs/paging-results#api-limits)을
+재현한다. Mutation-aware page 무효화, `selectedFields`, `timestampOutputFormat`은 명시적 gap이다.
 `formatOptions.useInt64Timestamp=true`는 고정 Python client가 요구하는 epoch
-microsecond 문자열을 반환한다. 해당 E2E 계약은 epoch 이후 microsecond 값과 부호가
+microsecond 문자열을 반환한다. 해당 E2E 계약은 명시적 `maxResults=0`이 정확한
+`totalRows`, 빈 단일 page, continuation 없음으로 처리되는 것도 고정하며, epoch 이후 microsecond 값과 부호가
 있는 epoch 이전 값을 모두 UTC datetime으로 decode한다. FLOAT64 cell은 finite 값일 때
 JSON number를 사용하고 그 외에는 공식
 [`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType)
-계약의 정확한 `NaN`, `Infinity`, `-Infinity` 표기를 사용한다. 공식 [pagination criteria](https://cloud.google.com/bigquery/docs/paging-results#page_through_results_using_the_api)를 참고한다.
+계약의 정확한 `NaN`, `Infinity`, `-Infinity` 표기를 사용한다.
 
 `CAP-REST-METADATA-PATCH-V1`과 `CAP-SCHEMA-ADDITIVE-V1`은 실제 process를
 대상으로 공식 [Python client

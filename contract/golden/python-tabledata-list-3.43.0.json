@@ -5,8 +5,9 @@
   "consumerVersion": "3.43.0",
   "fixtureKind": "source-derived",
   "sourceRefs": [
-    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/client.py#L4118-L4237",
-    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/table.py#L1838-L1995",
+    "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/client.py#L4118-L4237",
+    "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/table.py#L1838-L1995",
+    "https://github.com/googleapis/google-cloud-python/blob/google-api-core-v2.34.0/packages/google-api-core/google/api_core/page_iterator.py#L397-L420",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2/FormatOptions"
   ],
@@ -53,6 +54,23 @@
         "response.totalRows": "exact-decimal-string",
         "response.rows": "one-nested-repeated-timestamp-row-shape",
         "client.rows[].TIMESTAMP": "UTC-datetime-from-signed-pre-epoch-microseconds"
+      }
+    },
+    {
+      "stage": "get_tabledata_explicit_zero",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
+      "fields": {
+        "request.maxResults": 0,
+        "request.formatOptions.useInt64Timestamp": true,
+        "response.kind": "bigquery#tableDataList",
+        "response.totalRows": "exact-decimal-string",
+        "response.rows": "empty",
+        "response.pageToken": "absent",
+        "client.pages": "one-empty-page",
+        "client.totalRows": "exact-integer",
+        "client.nextPageToken": "none"
       }
     }
   ]

@@ -127,11 +127,21 @@ parameter 값, label, SQL, row는 포함하지 않는다. 이 경계는 공식
 [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)
 field 집합을 따른다.
 REST table browsing은 별도 `TableDataReader` outbound port를 지난다. Application은
-catalog mutation boundary에서 live canonical metadata와 lazy expiration을 확인하고
-파일로 설정한 row 및 time limit을 적용한 뒤, DuckDB adapter에 하나의 transaction으로
-정확한 count와 ordinal page를 요청한다. REST adapter만 schema-driven nested `f/v`
-JSON 표현과 resource-scoped opaque token을 소유한다. 이는 DuckDB value를 transport
-code에 노출하지 않으면서 공식
+catalog mutation boundary에서 live canonical metadata와 lazy expiration을 확인한다.
+파일로 설정한 operation deadline은 context-aware admission 전에 시작해 TTL 해석과
+DuckDB transaction까지 포함한다. DuckDB는 같은 transaction에서 정확한 count를 얻고
+설정된 row 수까지만 stream하면서 canonical value를 증분 trim한다. DuckDB backend
+JSON은 public schema-ordered `f/v` row에 없는 field name까지 포함하므로 byte gate로
+사용하지 않는다. Application은 replaceable adapter의 non-negative total, effective row
+limit, page 범위, canonical byte budget을 응답 전에 다시 검증한다.
+REST만 schema-driven nested `f/v` JSON 표현을 소유하며 envelope와 token을 포함한 exact
+uncompressed response limit을 적용한다. 수락한 row fragment는 두 번째 full payload
+copy 없이 stream한다. 일반 10,000,000-byte page는 다음 row 직전에 멈추고 첫 row만
+100,000,000-byte hard response ceiling까지 넘을 수 있다. 이 deterministic local 계산은
+Cloud의 근사 internal representation을 설명하는 공식
+[pagination limit](https://cloud.google.com/bigquery/docs/paging-results#api-limits)보다 엄격하다.
+Resource-scoped opaque token은 실제 내보낸 row 수만큼 진행한다. 이는 DuckDB value를
+transport code에 노출하지 않으면서 공식
 [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
 경계를 따른다.
 실행 상한은 공식

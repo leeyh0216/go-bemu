@@ -18,6 +18,9 @@ defaults:
 server:
   http:
     address: ":19050"
+tableData:
+  maxResponseBytes: 7654321
+  maxRowBytes: 87654321
 logging:
   level: warn
 `)
@@ -35,6 +38,9 @@ logging:
 	}
 	if result.Config.Server.HTTP.Address != ":19050" {
 		t.Fatalf("HTTP address = %q", result.Config.Server.HTTP.Address)
+	}
+	if result.Config.TableData.MaxResponseBytes != 7_654_321 || result.Config.TableData.MaxRowBytes != 87_654_321 {
+		t.Fatalf("file table data byte policy = %#v", result.Config.TableData)
 	}
 	if result.Config.Logging.Level != "error" {
 		t.Fatalf("level = %q", result.Config.Logging.Level)
@@ -119,6 +125,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
 		"query.operationTimeout=45s", "query.compensationTimeout=10s", "query.anonymousResultTtl=12h",
 		"tableData.operationTimeout=11s", "tableData.maxPageRows=1234",
+		"tableData.maxResponseBytes=1048576", "tableData.maxRowBytes=2097152",
 		"storage.read.enabled=true", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
 		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSchemaBytes=1048576",
 		"storage.read.maxSessions=8",
@@ -174,19 +181,27 @@ func TestQueryPolicyLoadsFromEnvironmentAndRejectsNonPositiveValues(t *testing.T
 
 func TestTableDataPolicyLoadsFromEnvironmentAndRejectsInvalidValues(t *testing.T) {
 	result, err := load(nil, lookup(map[string]string{
-		"BQEMU_TABLE_DATA_OPERATION_TIMEOUT": "11s",
-		"BQEMU_TABLE_DATA_MAX_PAGE_ROWS":     "1234",
+		"BQEMU_TABLE_DATA_OPERATION_TIMEOUT":  "11s",
+		"BQEMU_TABLE_DATA_MAX_PAGE_ROWS":      "1234",
+		"BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES": "1048576",
+		"BQEMU_TABLE_DATA_MAX_ROW_BYTES":      "2097152",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Config.TableData.OperationTimeout.Value() != 11*time.Second || result.Config.TableData.MaxPageRows != 1234 {
+	if result.Config.TableData.OperationTimeout.Value() != 11*time.Second || result.Config.TableData.MaxPageRows != 1234 ||
+		result.Config.TableData.MaxResponseBytes != 1_048_576 || result.Config.TableData.MaxRowBytes != 2_097_152 {
 		t.Fatalf("table data policy = %#v", result.Config.TableData)
 	}
 	for _, override := range []string{
 		"tableData.operationTimeout=0s",
 		"tableData.maxPageRows=0",
 		"tableData.maxPageRows=100001",
+		"tableData.maxResponseBytes=0",
+		"tableData.maxResponseBytes=1023",
+		"tableData.maxResponseBytes=10000001",
+		"tableData.maxRowBytes=9999999",
+		"tableData.maxRowBytes=100000001",
 	} {
 		if _, err := load([]string{"--set", override}, lookup(nil)); err == nil {
 			t.Fatalf("expected table data validation failure for %s", override)

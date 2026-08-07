@@ -163,16 +163,19 @@ type QueryConfig struct {
 }
 
 // TableDataConfig bounds the REST tabledata.list adapter independently from
-// the HTTP connection. BigQuery may return fewer rows than maxResults, and its
-// public quota caps one response at 100,000 rows, so BQEMU applies the smaller
-// of the request and this local page ceiling.
+// the HTTP connection. BigQuery may return fewer rows than maxResults and caps
+// one response at 100,000 rows. It normally paginates around 10 MB but can
+// return one row up to 100 MB, so BQEMU exposes exact local JSON limits.
 //
 // Sources:
 //   - https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
-//   - https://cloud.google.com/bigquery/quotas#tabledata_list_requests
+//   - https://cloud.google.com/bigquery/docs/paging-results#api-limits
+//   - https://cloud.google.com/bigquery/quotas#api-limits
 type TableDataConfig struct {
 	OperationTimeout Duration `yaml:"operationTimeout" json:"operationTimeout"`
 	MaxPageRows      int      `yaml:"maxPageRows" json:"maxPageRows"`
+	MaxResponseBytes int64    `yaml:"maxResponseBytes" json:"maxResponseBytes"`
+	MaxRowBytes      int64    `yaml:"maxRowBytes" json:"maxRowBytes"`
 }
 
 type StorageConfig struct {
@@ -336,7 +339,10 @@ func Defaults() Config {
 			OperationTimeout: Duration(2 * time.Minute), CompensationTimeout: Duration(30 * time.Second),
 			AnonymousResultTTL: Duration(24 * time.Hour),
 		},
-		TableData: TableDataConfig{OperationTimeout: Duration(30 * time.Second), MaxPageRows: 10_000},
+		TableData: TableDataConfig{
+			OperationTimeout: Duration(30 * time.Second), MaxPageRows: 10_000,
+			MaxResponseBytes: 10_000_000, MaxRowBytes: 100_000_000,
+		},
 		Storage: StorageConfig{
 			Read: StorageReadConfig{
 				Enabled: true, MaxStreams: 64, DefaultStreamCount: 4,
@@ -493,6 +499,8 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_QUERY_ANONYMOUS_RESULT_TTL", "query.anonymousResultTtl"},
 	{"BQEMU_TABLE_DATA_OPERATION_TIMEOUT", "tableData.operationTimeout"},
 	{"BQEMU_TABLE_DATA_MAX_PAGE_ROWS", "tableData.maxPageRows"},
+	{"BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES", "tableData.maxResponseBytes"},
+	{"BQEMU_TABLE_DATA_MAX_ROW_BYTES", "tableData.maxRowBytes"},
 	{"BQEMU_LOAD_ENABLED", "load.enabled"}, {"BQEMU_LOAD_GCS_ENDPOINT", "load.gcsEndpoint"},
 	{"BQEMU_LOAD_ALLOW_FILE_SOURCES", "load.allowFileSources"},
 	{"BQEMU_LOAD_OPERATION_TIMEOUT", "load.operationTimeout"}, {"BQEMU_LOAD_MAX_OBJECTS", "load.maxObjects"},
@@ -628,6 +636,10 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setDuration(&cfg.TableData.OperationTimeout)
 	case "tableData.maxPageRows":
 		return setInt(&cfg.TableData.MaxPageRows)
+	case "tableData.maxResponseBytes":
+		return setInt64(&cfg.TableData.MaxResponseBytes)
+	case "tableData.maxRowBytes":
+		return setInt64(&cfg.TableData.MaxRowBytes)
 	case "storage.read.enabled":
 		return setBool(&cfg.Storage.Read.Enabled)
 	case "storage.read.maxStreams":
@@ -789,6 +801,12 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.TableData.MaxPageRows < 1 || cfg.TableData.MaxPageRows > 100_000 {
 		return errors.New("tableData.maxPageRows must be between 1 and the BigQuery tabledata.list limit of 100000")
+	}
+	if cfg.TableData.MaxResponseBytes < 1_024 || cfg.TableData.MaxResponseBytes > 10_000_000 {
+		return errors.New("tableData.maxResponseBytes must be between the local minimum envelope budget of 1024 and the BigQuery tabledata.list pagination threshold of 10000000")
+	}
+	if cfg.TableData.MaxRowBytes < cfg.TableData.MaxResponseBytes || cfg.TableData.MaxRowBytes > 100_000_000 {
+		return errors.New("tableData.maxRowBytes must be at least maxResponseBytes and at most the BigQuery tabledata.list single-row limit of 100000000")
 	}
 	if cfg.Runtime.ServerDrainTimeout.Value()+cfg.Runtime.StorageCloseTimeout.Value() > cfg.Runtime.ShutdownTimeout.Value() {
 		return errors.New("runtime serverDrainTimeout plus storageCloseTimeout must not exceed shutdownTimeout")

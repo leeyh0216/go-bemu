@@ -2,7 +2,7 @@ package contract
 
 // Public client lifecycle contract sources:
 //   - Python 3.43.0 query helper:
-//     https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/_job_helpers.py#L420-L641
+//     https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/_job_helpers.py#L420-L641
 //   - Query configuration:
 //     https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 //   - Query result pagination:
@@ -10,7 +10,10 @@ package contract
 //   - Job list pagination:
 //     https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPythonClientProfilePinsQueryLifecycleAndRequestControlGap(t *testing.T) {
 	profile, ok := DefaultRegistry().ForClientVersion("google-cloud-bigquery-python", "3.43.0")
@@ -47,7 +50,61 @@ func TestPythonClientProfilePinsQueryLifecycleAndRequestControlGap(t *testing.T)
 		"get_tabledata_first_page",
 		"get_tabledata_next_page",
 		"get_tabledata_start_index",
+		"get_tabledata_explicit_zero",
 	})
+}
+
+func TestPythonTableDataProvenancePinsMonorepoReleaseTags(t *testing.T) {
+	want := []string{
+		"https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/client.py#L4118-L4237",
+		"https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/table.py#L1838-L1995",
+		"https://github.com/googleapis/google-cloud-python/blob/google-api-core-v2.34.0/packages/google-api-core/google/api_core/page_iterator.py#L397-L420",
+	}
+	profile, ok := DefaultRegistry().ForClientVersion("google-cloud-bigquery-python", "3.43.0")
+	if !ok {
+		t.Fatal("google-cloud-bigquery-python 3.43.0 profile is missing")
+	}
+	traces, err := GoldenTraces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sources []string
+	for _, trace := range traces {
+		if trace.Flow == "python-tabledata-list" {
+			sources = trace.SourceRefs
+			break
+		}
+	}
+	if len(sources) == 0 {
+		t.Fatal("python-tabledata-list golden provenance is missing")
+	}
+	for _, source := range want {
+		if !containsString(profile.Sources, source) {
+			t.Fatalf("Python profile lacks immutable tabledata source %q", source)
+		}
+		if !containsString(sources, source) {
+			t.Fatalf("Python tabledata golden lacks immutable source %q", source)
+		}
+	}
+	for _, source := range profile.Sources {
+		if strings.Contains(source, "github.com/googleapis/python-bigquery/") || strings.Contains(source, "github.com/googleapis/python-api-core/") {
+			t.Fatalf("Python profile retains unreachable legacy source %q", source)
+		}
+	}
+	for _, source := range sources {
+		if strings.Contains(source, "github.com/googleapis/python-bigquery/") || strings.Contains(source, "github.com/googleapis/python-api-core/") {
+			t.Fatalf("Python tabledata golden retains unreachable legacy source %q", source)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBQCLIProfilePinsMetadataAndQueryLifecycle(t *testing.T) {

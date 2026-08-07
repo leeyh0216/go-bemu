@@ -52,10 +52,14 @@ query:
   anonymousResultTtl: "24h"
 
 tableData:
-  # Bounds one count-and-page DuckDB operation independently from HTTP timeouts.
+  # Bounds catalog admission, TTL resolution, and one count-and-page transaction.
   operationTimeout: "30s"
   # The server may return fewer rows than maxResults and never exceeds this cap.
   maxPageRows: 10000
+  # Exact JSON page cap; BigQuery normally paginates at approximately 10 MB.
+  maxResponseBytes: 10000000
+  # Exact one-row exception cap; BigQuery documents up to approximately 100 MB.
+  maxRowBytes: 100000000
 
 storage:
   read:

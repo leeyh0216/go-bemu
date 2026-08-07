@@ -3,6 +3,7 @@ package duckdb
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	tabledatabudget "github.com/leeyh0216/go-bemu/internal/tabledata"
 )
 
 func TestListTableDataPagesRealDuckDBRowsAndReportsExactTotal(t *testing.T) {
@@ -19,7 +21,10 @@ func TestListTableDataPagesRealDuckDBRowsAndReportsExactTotal(t *testing.T) {
 	warehouse, reference := newDuckDBTableDataFixture(t, ctx)
 
 	schema := []domain.Field{{Name: "id", Type: "INT64"}, {Name: "payload", Type: "STRING"}, {Name: "active", Type: "BOOL"}}
-	page, err := warehouse.ListTableData(ctx, ports.TableDataReadRequest{Reference: reference, Schema: schema, Offset: 1, Limit: 2})
+	page, err := warehouse.ListTableData(ctx, ports.TableDataReadRequest{
+		Reference: reference, Schema: schema, Offset: 1, Limit: 2,
+		MaxResponseBytes: 10_000_000, MaxRowBytes: 100_000_000,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,12 +40,56 @@ func TestListTableDataPagesRealDuckDBRowsAndReportsExactTotal(t *testing.T) {
 		}
 	}
 
-	beyond, err := warehouse.ListTableData(ctx, ports.TableDataReadRequest{Reference: reference, Schema: schema, Offset: 99, Limit: 2})
+	beyond, err := warehouse.ListTableData(ctx, ports.TableDataReadRequest{
+		Reference: reference, Schema: schema, Offset: 99, Limit: 2,
+		MaxResponseBytes: 10_000_000, MaxRowBytes: 100_000_000,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if beyond.TotalRows != 3 || len(beyond.Rows) != 0 {
 		t.Fatalf("beyond-total page = %#v, want empty page with exact total", beyond)
+	}
+}
+
+func TestListTableDataTrimsCanonicalPageAndRejectsOversizedRow(t *testing.T) {
+	ctx, cancel := duckDBTableDataTestContext(t)
+	defer cancel()
+	warehouse, reference := newDuckDBTableDataFixture(t, ctx)
+	schema := []domain.Field{{Name: "id", Type: "INT64"}, {Name: "payload", Type: "STRING"}, {Name: "active", Type: "BOOL"}}
+
+	probe, err := warehouse.ListTableData(ctx, ports.TableDataReadRequest{
+		Reference: reference, Schema: schema, Limit: 1,
+		MaxResponseBytes: 10_000, MaxRowBytes: 10_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := tabledatabudget.NewAccumulator(0)
+	if included, err := budget.Add(probe.Rows[0], 10_000); err != nil || !included {
+		t.Fatalf("measure probe row = included %v, error %v", included, err)
+	}
+	oneRowBytes := budget.Metrics().Bytes
+	trimmed, err := warehouse.ListTableData(ctx, ports.TableDataReadRequest{
+		Reference: reference, Schema: schema, Limit: 3,
+		MaxResponseBytes: oneRowBytes, MaxRowBytes: 10_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trimmed.Rows) != 1 || trimmed.TotalRows != 3 {
+		t.Fatalf("trimmed page = %#v, want one of three rows", trimmed)
+	}
+
+	_, err = warehouse.ListTableData(ctx, ports.TableDataReadRequest{
+		Reference: reference, Schema: schema, Limit: 1,
+		MaxResponseBytes: 10_000, MaxRowBytes: 8,
+	})
+	if !errors.Is(err, tabledatabudget.ErrRowTooLarge) {
+		t.Fatalf("oversized row error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "limit_bytes=8") || strings.Contains(err.Error(), "backend_bytes=") {
+		t.Fatalf("oversized row was not rejected by the canonical byte gate: %v", err)
 	}
 }
 

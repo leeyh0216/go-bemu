@@ -119,7 +119,10 @@ func TestHTTPBoundaryLogNeverIncludesHeaderQueryOrBodyValues(t *testing.T) {
 			t.Fatalf("secret %q leaked in HTTP log: %s", secret, output)
 		}
 	}
-	for _, expected := range []string{"boundary.enter", "boundary.exit", "request-one", "authorization=[REDACTED]", "access_token=[REDACTED]"} {
+	for _, expected := range []string{
+		"boundary.enter", "boundary.exit", "request-one", "authorization=[REDACTED]", "access_token=[REDACTED]",
+		`"response_bytes":19`, `"response_digest":"sha256:3d9fd8a2374dc5bb0d47be58937fe93c743ee67c756fdf590ad21f6f6856ef10"`,
+	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("missing %q in HTTP log: %s", expected, output)
 		}

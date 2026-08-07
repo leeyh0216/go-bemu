@@ -1,8 +1,9 @@
 """Official google-cloud-bigquery 3.43.0 tabledata.list contract.
 
 Pinned client and protocol sources:
-https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/client.py#L4118-L4237
-https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/table.py#L1838-L1995
+https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/client.py#L4118-L4237
+https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/table.py#L1838-L1995
+https://github.com/googleapis/google-cloud-python/blob/google-api-core-v2.34.0/packages/google-api-core/google/api_core/page_iterator.py#L397-L420
 https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
 https://cloud.google.com/bigquery/docs/reference/rest/v2/FormatOptions
 
@@ -125,6 +126,18 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
                     timeout=test_timeout,
                 )
             )
+            # google-api-core preserves max_results=0 as maxResults=0 on the
+            # first request. The service must return the exact table count but
+            # neither rows nor a continuation token for that zero-row budget.
+            # https://github.com/googleapis/google-cloud-python/blob/google-api-core-v2.34.0/packages/google-api-core/google/api_core/page_iterator.py#L397-L420
+            zero_iterator = bq_client.list_rows(
+                table,
+                max_results=0,
+                page_size=1,
+                retry=None,
+                timeout=test_timeout,
+            )
+            zero_pages = list(zero_iterator.pages)
         finally:
             bq_client._call_api = original_call_api
 
@@ -152,9 +165,14 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
             and start_rows[0]["ordinal"] == 2
             and start_rows[0]["event_time"] == rows[1]["event_time"]
         )
+        assert len(zero_pages) == 1 and zero_pages[0].num_items == 0, _diagnostic(
+            "explicit-zero-single-empty-page", "preserve-max-results-presence"
+        )
+        assert zero_iterator.total_rows == 3
+        assert zero_iterator.next_page_token is None
 
-        assert len(calls) == 3, _diagnostic(
-            "three-tabledata-requests", "compare-client-pagination"
+        assert len(calls) == 4, _diagnostic(
+            "four-tabledata-requests", "compare-client-pagination"
         )
         common_keys = {"formatOptions.useInt64Timestamp", "maxResults"}
         assert all(
@@ -176,6 +194,12 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
         assert set(calls[2]["query_keys"]) == common_keys | {"startIndex"}
         assert calls[2]["start_index"] == 1
         assert calls[2]["response_row_count"] == 1
+        assert set(calls[3]["query_keys"]) == common_keys
+        assert calls[3]["max_results"] == 0
+        assert calls[3]["response_kind"] == "bigquery#tableDataList"
+        assert calls[3]["response_total_rows"] == "3"
+        assert calls[3]["response_row_count"] == 0
+        assert calls[3]["response_has_page_token"] is False
         assert all(call["timestamp_option"] is True for call in calls)
     finally:
         bq_client.delete_dataset(

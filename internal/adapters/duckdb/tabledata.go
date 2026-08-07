@@ -16,25 +16,27 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	tabledatabudget "github.com/leeyh0216/go-bemu/internal/tabledata"
 )
 
-const tableDataModelVersion = "duckdb-tabledata-ordinal-v1"
+const tableDataModelVersion = "duckdb-tabledata-canonical-page-v3"
 
 var _ ports.TableDataReader = (*Warehouse)(nil)
 
 func (w *Warehouse) ListTableData(ctx context.Context, request ports.TableDataReadRequest) (page ports.TableDataPage, err error) {
 	reference, offset, limit := request.Reference, request.Offset, request.Limit
+	budget := tabledatabudget.NewAccumulator(request.MaxResponseBytes)
 	referenceSummary := reference.ProjectID + "\x00" + reference.DatasetID + "\x00" + reference.TableID
 	started := observability.LogSideEffectStart(ctx, "duckdb", "list_table_data",
 		"table_reference_digest", observability.Digest([]byte(referenceSummary)),
 		"offset", offset, "limit", limit, "transaction_mode", "explicit",
 		"model_version", tableDataModelVersion)
 	defer func() {
-		rowSummary := fmt.Sprintf("%v", page.Rows)
+		metrics := budget.Metrics()
 		observability.LogSideEffectEnd(ctx, "duckdb", "list_table_data", started, err,
 			"table_reference_digest", observability.Digest([]byte(referenceSummary)),
 			"offset", offset, "limit", limit, "row_count", len(page.Rows), "total_rows", page.TotalRows,
-			"result_bytes", len(rowSummary), "result_digest", observability.Digest([]byte(rowSummary)),
+			"result_bytes", metrics.Bytes, "result_digest", metrics.Digest,
 			"transaction_mode", "explicit", "model_version", tableDataModelVersion)
 	}()
 
@@ -52,6 +54,13 @@ func (w *Warehouse) ListTableData(ctx context.Context, request ports.TableDataRe
 	if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+tableName).Scan(&page.TotalRows); err != nil {
 		return ports.TableDataPage{}, fmt.Errorf("count table data rows: %w", err)
 	}
+	// Backend JSON is not a protocol byte representation: to_json(row) includes
+	// column names, while tabledata.list rows contain only schema-ordered f/v
+	// cells. It must therefore never reject or trim a valid public response.
+	// The configured row count bounds this query; canonical values and the REST
+	// f/v encoder below the port remain the only authoritative byte gates.
+	// https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow
+	// https://cloud.google.com/bigquery/docs/paging-results#api-limits
 	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+tableName+" ORDER BY rowid LIMIT ? OFFSET ?", limit, offset)
 	if err != nil {
 		return ports.TableDataPage{}, fmt.Errorf("read table data page: %w", err)
@@ -76,7 +85,16 @@ func (w *Warehouse) ListTableData(ctx context.Context, request ports.TableDataRe
 			_ = rows.Close()
 			return ports.TableDataPage{}, fmt.Errorf("normalize table data row: %w", normalizeErr)
 		}
-		page.Rows = append(page.Rows, tableDataCanonicalRow(request.Schema, normalized))
+		canonical := tableDataCanonicalRow(request.Schema, normalized)
+		included, budgetErr := budget.Add(canonical, request.MaxRowBytes)
+		if budgetErr != nil {
+			_ = rows.Close()
+			return ports.TableDataPage{}, budgetErr
+		}
+		if !included {
+			break
+		}
+		page.Rows = append(page.Rows, canonical)
 	}
 	if err = rows.Err(); err != nil {
 		_ = rows.Close()

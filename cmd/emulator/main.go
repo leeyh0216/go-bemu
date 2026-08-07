@@ -33,6 +33,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/config"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
+	"github.com/leeyh0216/go-bemu/internal/ports"
 	grpcserver "github.com/leeyh0216/go-bemu/internal/transport/grpc"
 	"github.com/leeyh0216/go-bemu/internal/transport/rest"
 )
@@ -100,13 +101,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	catalogRepository := memory.NewCatalogRepository()
 	jobRepository := memory.NewJobRepository()
 	clock := system.Clock{}
-	catalogService := application.NewCatalogService(
-		catalogRepository, warehouse, clock, application.WithDefaultLocation(cfg.Defaults.Location),
-		application.WithCatalogCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
-		application.WithTableDataReader(warehouse),
-		application.WithTableDataOperationTimeout(cfg.TableData.OperationTimeout.Value()),
-		application.WithMaxTableDataPageRows(cfg.TableData.MaxPageRows),
-	)
+	catalogService := composeCatalogService(cfg, catalogRepository, warehouse, clock)
 	if _, err := catalogService.CreateProject(ctx, domain.Project{
 		ID: cfg.Defaults.ProjectID, FriendlyName: "BQEMU default project",
 	}); err != nil {
@@ -296,6 +291,23 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.Join(servingFailure, shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
 	}
 	return errors.Join(shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
+}
+
+type catalogWarehouse interface {
+	ports.WarehouseAdmin
+	ports.TableDataReader
+}
+
+func composeCatalogService(cfg config.Config, repository ports.CatalogRepository, warehouse catalogWarehouse, clock ports.Clock) *application.CatalogService {
+	return application.NewCatalogService(
+		repository, warehouse, clock, application.WithDefaultLocation(cfg.Defaults.Location),
+		application.WithCatalogCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
+		application.WithTableDataReader(warehouse),
+		application.WithTableDataOperationTimeout(cfg.TableData.OperationTimeout.Value()),
+		application.WithMaxTableDataPageRows(cfg.TableData.MaxPageRows),
+		application.WithMaxTableDataResponseBytes(cfg.TableData.MaxResponseBytes),
+		application.WithMaxTableDataRowBytes(cfg.TableData.MaxRowBytes),
+	)
 }
 
 type runtimeCloser interface {

@@ -43,12 +43,25 @@ hard ceiling이다. `query.anonymousResultTtl`(default `24h`, 환경 변수
 `BQEMU_QUERY_COMPENSATION_TIMEOUT`)은 metadata publication 실패 뒤 physical cleanup을
 별도로 제한한다. 취소된 request와는 분리하지만 deadline 없이 실행하지 않는다.
 `tableData.operationTimeout`(default `30s`, 환경 변수
-`BQEMU_TABLE_DATA_OPERATION_TIMEOUT`)은
+`BQEMU_TABLE_DATA_OPERATION_TIMEOUT`)은 global catalog mutation 경계 admission
+전에 시작하며, 그 대기와 live metadata/TTL 해석 및
 [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
-뒤의 DuckDB count-and-page transaction을 제한한다. `tableData.maxPageRows`(default
+뒤의 DuckDB count-and-page transaction 전체를 제한한다. `tableData.maxPageRows`(default
 `10000`, 환경 변수 `BQEMU_TABLE_DATA_MAX_PAGE_ROWS`)는 caller가 더 많은 row를 요청해도
-한 response를 제한하며 1과 BigQuery의 100,000-row response quota 사이여야 한다. 두
-값 모두 file-first이며 typed `--set` override를 제공한다.
+한 response를 제한하며 1과 BigQuery의 100,000-row response quota 사이여야 한다.
+`tableData.maxResponseBytes`(default `10000000`, 환경 변수
+`BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES`)는 serialized JSON page의 exact byte
+budget이며 empty metadata envelope도 수용하도록 최소 1024 byte여야 한다. DuckDB
+adapter는 row 수가 제한된 query를 stream하고 canonical value를 증분 trim한다. Schema
+name을 포함하는 backend JSON 크기는 public semantics를 결정하지 않으며 REST가 exact
+uncompressed wire limit을 적용한다. Continuation token은 내보내지 않은 첫 row를 가리킨다.
+`tableData.maxRowBytes`(default `100000000`, 환경 변수
+`BQEMU_TABLE_DATA_MAX_ROW_BYTES`)는 BigQuery가 문서화한 single-row exception의 exact
+hard ceiling이다. Cloud의 [10 MB page와 100 MB single-row 제한](https://cloud.google.com/bigquery/docs/paging-results#api-limits)은
+내부 표현을 기준으로 한 근사치이므로 local 계산은 의도적으로 deterministic하게 정의한다.
+네 값 모두 file-first이며 typed `--set` override를 제공한다. 수락한 wire fragment는
+두 번째 whole-page copy 없이 stream한다. Log에는 raw row 대신 row count, canonical byte count, 증분 framed digest,
+HTTP boundary에서 실제 쓴 byte의 digest만 남긴다.
 Memory snapshot은 encoded row byte를,
 spill file은 각 row의 8-byte frame prefix까지 계산한다.
 `storage.write.maxInFlightBytes*`는 serialized DuckDB coordinator를 기다리는 decoded

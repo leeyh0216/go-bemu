@@ -33,7 +33,7 @@ service](https://cloud.google.com/bigquery/docs/introduction).
 | table insert/get/delete | Verified basic | standard table and canonical schema metadata |
 | table list | Verified basic | paging; no view/storage statistics |
 | table patch/update | Verified narrow | metadata plus additive schema and ETag precondition |
-| `tabledata.list` | Partial | scalar/nested/repeated `f/v` rows, exact non-finite FLOAT64 tokens, `startIndex`, capped `maxResults`, scoped opaque tokens, ETag precondition, exact `totalRows`, and `useInt64Timestamp`; selected fields, ISO-8601 picosecond output, and byte-based page trimming remain gaps |
+| `tabledata.list` | Partial | scalar/nested/repeated `f/v` rows, exact non-finite FLOAT64 tokens, `startIndex`, row/exact-byte bounded pages, scoped opaque tokens, ETag precondition, exact `totalRows`, and `useInt64Timestamp`; selected fields, ISO-8601 picosecond output, and mutation-aware page invalidation remain gaps |
 | `tabledata.insertAll` | Unsupported | no route |
 
 Request/response shapes are compared with official
@@ -45,18 +45,24 @@ implementation of that field.
 The [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
 adapter performs count and ordinal page selection in one DuckDB transaction,
 after the same catalog TTL check used by `tables.get` and Storage Read. The
-file-first `tableData.maxPageRows` cap can return fewer rows than requested, and
-`tableData.operationTimeout` bounds the physical operation. BigQuery also trims
-pages around an approximate 10 MB response; byte-based trimming, mutation-aware
+file-first `tableData.maxPageRows` cap can return fewer rows than requested.
+`tableData.operationTimeout` covers catalog admission, TTL resolution, and the
+physical operation. DuckDB streams at most the configured row count and
+incrementally trims its canonical page; its backend JSON representation is never
+used as a protocol byte gate because it includes column names that `f/v` rows omit.
+REST then applies an exact JSON `maxResponseBytes` normal cap and `maxRowBytes`
+single-row hard cap while streaming accepted fragments. These deterministic local
+10,000,000/100,000,000-byte rules emulate Cloud's approximate [pagination
+limits](https://cloud.google.com/bigquery/docs/paging-results#api-limits). Mutation-aware
 page invalidation, `selectedFields`, and `timestampOutputFormat` remain explicit
 gaps. `formatOptions.useInt64Timestamp=true` returns epoch-microsecond strings as
-required by the pinned Python client; its E2E contract decodes both a post-epoch
+required by the pinned Python client; its E2E contract also pins explicit
+`maxResults=0` as one empty page with exact `totalRows` and no continuation, and decodes both a post-epoch
 microsecond value and a signed pre-epoch value as UTC datetimes. FLOAT64 cells
 use JSON numbers when finite and the exact `NaN`, `Infinity`, and `-Infinity`
 spellings otherwise, following the
 official [`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType)
-contract. See the official [pagination
-criteria](https://cloud.google.com/bigquery/docs/paging-results#page_through_results_using_the_api).
+contract.
 
 `CAP-REST-METADATA-PATCH-V1` and `CAP-SCHEMA-ADDITIVE-V1` are also exercised by
 the official [Python client

@@ -45,12 +45,28 @@ and [anonymous cached-result lifetime](https://cloud.google.com/bigquery/docs/ca
 metadata publication failure; it is detached from the cancelled request but is
 never deadline-free.
 `tableData.operationTimeout` (default `30s`, environment
-`BQEMU_TABLE_DATA_OPERATION_TIMEOUT`) bounds the DuckDB count-and-page transaction
-behind [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list).
+`BQEMU_TABLE_DATA_OPERATION_TIMEOUT`) starts before admission to the global
+catalog mutation boundary and bounds that wait, live metadata/TTL resolution,
+and the DuckDB count-and-page transaction behind
+[`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list).
 `tableData.maxPageRows` (default `10000`, environment
 `BQEMU_TABLE_DATA_MAX_PAGE_ROWS`) caps one response even when a caller asks for
 more rows; it must stay between 1 and BigQuery's 100,000-row response quota.
-Both values are file-first and have typed `--set` overrides.
+`tableData.maxResponseBytes` (default `10000000`, environment
+`BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES`) is an exact serialized JSON page budget.
+It must be at least 1024 bytes so even an empty metadata envelope fits. The
+DuckDB adapter streams a row-count-bounded query and incrementally trims
+canonical values; backend JSON sizes never decide public semantics because they
+include schema names. REST applies the exact uncompressed wire limit. A continuation token points
+at the first row not emitted. `tableData.maxRowBytes` (default `100000000`, environment
+`BQEMU_TABLE_DATA_MAX_ROW_BYTES`) is the exact hard ceiling for BigQuery's
+documented one-row exception. This local accounting is deliberately deterministic;
+Cloud describes its [10 MB page and 100 MB single-row limits](https://cloud.google.com/bigquery/docs/paging-results#api-limits)
+as approximate internal sizes. All four values are file-first and have typed
+`--set` overrides. Accepted wire fragments stream without a second whole-page
+copy. Logs
+retain only row count, canonical byte count, incremental framed digest, and the
+digest of bytes actually written at the HTTP boundary, never raw rows.
 In-memory snapshots charge encoded row bytes, while spill files also charge the
 eight-byte frame prefix for every row. `storage.write.maxInFlightBytes*` bounds
 decoded requests waiting for the serialized DuckDB coordinator, and
