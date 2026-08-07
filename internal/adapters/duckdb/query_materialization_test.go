@@ -108,6 +108,33 @@ func TestQueryDestinationCreateIfNeededUsesOneCTASTransaction(t *testing.T) {
 	}
 }
 
+func TestQueryDestinationNormalizesAnonymousAggregateColumn(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, _ := newQueryMaterializationFixture(t, ctx)
+	request := queryMaterializationRequest(
+		"SELECT COUNT(*) FROM `test-project.analytics.source`",
+		domain.WriteEmpty, false, nil,
+	)
+	request.Destination.TableID = "count_result"
+	result, err := warehouse.MaterializeQuery(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.QueryResult.Columns) != 1 || result.QueryResult.Columns[0].Name != "f0_" {
+		t.Fatalf("normalized aggregate schema = %#v", result.QueryResult.Columns)
+	}
+	stored, err := warehouse.Query(ctx, ports.QueryRequest{
+		SQL: "SELECT f0_ FROM `test-project.analytics.count_result`",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Rows) != 1 || stored.Rows[0][0] != int64(3) {
+		t.Fatalf("normalized aggregate destination rows = %#v", stored.Rows)
+	}
+}
+
 func TestQueryMaterializationLogsShapeAndDigestWithoutRawSQLOrRows(t *testing.T) {
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()

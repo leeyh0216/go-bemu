@@ -132,7 +132,11 @@ func jobFromDomain(job *domain.Job) jobResource {
 		Priority: string(query.Priority),
 	}
 	if query.DefaultDataset != "" {
-		wireQuery.DefaultDataset = &datasetReference{ProjectID: job.Reference.ProjectID, DatasetID: query.DefaultDataset}
+		projectID := query.DefaultProjectID
+		if projectID == "" {
+			projectID = job.Reference.ProjectID
+		}
+		wireQuery.DefaultDataset = &datasetReference{ProjectID: projectID, DatasetID: query.DefaultDataset}
 	}
 	if query.Destination != nil {
 		wireQuery.DestinationTable = &tableReference{

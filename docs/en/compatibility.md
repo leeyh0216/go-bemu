@@ -33,13 +33,25 @@ service](https://cloud.google.com/bigquery/docs/introduction).
 | table insert/get/delete | Verified basic | standard table and canonical schema metadata |
 | table list | Verified basic | paging; no view/storage statistics |
 | table patch/update | Verified narrow | metadata plus additive schema and ETag precondition |
-| `tabledata.list` / `insertAll` | Unsupported | no route |
+| `tabledata.list` | Partial | scalar/nested/repeated `f/v` rows, `startIndex`, capped `maxResults`, scoped opaque tokens, ETag precondition, exact `totalRows`, and `useInt64Timestamp`; selected fields, ISO-8601 picosecond output, and byte-based page trimming remain gaps |
+| `tabledata.insertAll` | Unsupported | no route |
 
 Request/response shapes are compared with official
 [`datasets`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets) and
 [`tables`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables)
 resources. Ignoring an unknown JSON field is forward-tolerant decoding, not
 implementation of that field.
+
+The [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
+adapter performs count and ordinal page selection in one DuckDB transaction,
+after the same catalog TTL check used by `tables.get` and Storage Read. The
+file-first `tableData.maxPageRows` cap can return fewer rows than requested, and
+`tableData.operationTimeout` bounds the physical operation. BigQuery also trims
+pages around an approximate 10 MB response; byte-based trimming, mutation-aware
+page invalidation, `selectedFields`, and `timestampOutputFormat` remain explicit
+gaps. `formatOptions.useInt64Timestamp=true` returns epoch-microsecond strings as
+required by the pinned Python client. See the official [pagination
+criteria](https://cloud.google.com/bigquery/docs/paging-results#page_through_results_using_the_api).
 
 `CAP-REST-METADATA-PATCH-V1` and `CAP-SCHEMA-ADDITIVE-V1` are also exercised by
 the official [Python client
@@ -60,20 +72,22 @@ not implied.
 | `jobs.getQueryResults` | Partial | location-aware lookup, `startIndex`, `maxResults`, and job/result-bound opaque page tokens |
 | explicit destination table | Partial | scalar exact-schema `WRITE_EMPTY`/`WRITE_APPEND`/`WRITE_TRUNCATE`; capability `query.destination.exact-schema-v1` |
 | connector query metadata | Verified basic | `INTERACTIVE`/`BATCH` priority and validated labels, including an explicitly empty label map, are fingerprinted and round-tripped |
-| anonymous destination table | Unsupported | gap `query.destination.anonymous-v1` |
+| anonymous destination table | Partial | row-producing query jobs publish a generated hidden-dataset destination with 24-hour lazy expiration; capability `query.destination.anonymous-v1` |
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset only; gap `query.destination.truncate-schema-replacement-v1` |
+| SQL DDL | Unsupported | `CREATE`/`ALTER`/`DROP`/`TRUNCATE` fail before job or engine side effects until physical and canonical catalog changes share one application contract; gap `query.ddl.catalog-sync-v1` |
 | cancellation | Unsupported | no route/state |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, existing destination table, process-local state |
 | copy/extract | Unsupported | configuration rejected |
 | durable job/result state | Unsupported | in-memory repository |
 | bounded query result retention | Unsupported | all result rows remain in Go memory; gap `query.results.unbounded-memory-v1` |
-| bounded async query execution | Unsupported | no queue/execution deadline; gap `query.execution.unbounded-v1` |
+| complex query-result schema | Strict gap | ARRAY/STRUCT results fail before metadata publication rather than flattening mode/children; gap `query.results.complex-schema-v1` |
+| bounded async query execution | Partial | file-configured `query.operationTimeout` bounds sync/async backend execution; queue admission and exact request `timeoutMs` remain gaps; capability `query.execution.bounded-v1` |
 | same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness; every reuse returns `409 duplicate`, fingerprint retained for diagnostics |
 | exact-request replay extension | Unsupported | future opt-in only; gap `query.jobs.exact-replay-extension-v1` |
 | query/load cross-type identity | Unsupported | separate repositories have a check/create race; gap `query.jobs.cross-repository-identity-v1` |
 | synchronous request controls | Partial | validates the 36-byte ASCII `requestId` and accepts non-negative `timeoutMs`; bounded unfinished responses, mutating-query deduplication, and `jobTimeoutMs` remain gap `query.sync.request-controls-v1` |
 | unsupported query options | Strict gap | parameters, `dryRun`, cache/billing controls, and `jobTimeoutMs` are explicitly rejected with `400`; gap `query.options.unsupported-v1` |
-| omitted-location dataset inference | Unsupported | configured default wins; gap `query.location.dataset-inference-v1` |
+| omitted-location dataset inference | Partial | structurally referenced tables, cross-project `defaultDataset.projectId`, and explicit destination datasets are checked before insertion; capability `query.location.dataset-inference-v1` |
 | terminal persistence recovery | Unsupported | a failed terminal repository update can leave `RUNNING`; gap `query.terminal-persistence-v1` |
 
 Canonical job state and error fields come from the official
@@ -92,6 +106,37 @@ BigQuery rejects every reused job ID with `409 duplicate` and recommends
 `jobs.get` recovery; BQEMU follows that default and retains a configuration
 fingerprint only for safe drift diagnostics. See the official
 [retry guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions).
+
+For a row-producing query without `destinationTable`, BQEMU generates the
+destination before `JobRepository.CreateOrGet`, returns it in
+`configuration.query.destinationTable`, and materializes the result with
+`WRITE_EMPTY`/`CREATE_IF_NEEDED`. This is the contract used by connector
+`0.44.2`'s
+[`TempTableBuilder`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L1150-L1240).
+The generated dataset starts with `_`, is omitted from `datasets.list` unless
+[`all=true`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/list),
+and its tables expose an expiration 24 hours after publication, matching the
+connector's default
+[`MaterializationConfiguration`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/MaterializationConfiguration.java)
+and BigQuery's approximate [anonymous-table
+lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored).
+Cleanup is lazy at `tables.get`, `tables.list`, and Storage Read resolution; the
+hidden dataset is retained for later results. There is no cleanup goroutine or
+`Close` ordering: each request completes its cleanup synchronously. A known
+hidden dataset follows normal delete rules: live tables require
+`deleteContents=true`; after lazy expiration empties it, a normal dataset delete
+succeeds. There is no cache-hit reuse, background sweeper, or restart-durable TTL ledger.
+
+Before a job is inserted, the structural analyzer resolves all supported
+backtick table paths plus cross-project `defaultDataset.projectId` and explicit
+destination dataset. Omitted location uses their common location; an explicit
+or inferred cross-location mismatch fails before repository or engine side
+effects, following BigQuery's [location
+rules](https://cloud.google.com/bigquery/docs/locations#specify_locations).
+Unquoted relation paths outside the current lexical adapter, connections,
+remote functions, and dynamic SQL do
+not yet participate in inference. When no supported candidate exists, the
+configured default remains the fallback.
 
 <!-- section: sql -->
 ## SQL and MERGE
@@ -231,19 +276,24 @@ The exact [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/b
 from [Google Cloud SDK `566.0.0`](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28)
 runs in its own CI layer with UI disabled. It verifies project listing, dataset
 and table lifecycle, additive nullable schema update, query polling, job/table
-listing, cleanup, and the not-found exit contract. Four official [Python client
-`3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E tests verify
-dataset administration, table metadata/schema administration, synchronous
+listing, cleanup, and the not-found exit contract. Six passing official [Python
+client `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E tests verify
+dataset administration, table metadata/schema administration, `tabledata.list`
+pagination with nested/repeated decoding, synchronous
 [`jobs.query`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query),
 and asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert)
 through [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults).
 The corresponding [`python-query-sync`](../../contract/golden/python-query-sync-3.43.0.json)
-and [`python-query-async`](../../contract/golden/python-query-async-3.43.0.json)
-goldens pin those shapes. Load/copy/extract, `insertAll`, and `tabledata.list`
-remain five strict expected-gap xfails. The connector `0.44.2` profile records
-public Storage Read, Storage Write, and indirect load as Partial; it does not
-claim complete Spark E2E compatibility. Every capability promotion needs a
-public-edge test and a negative/boundary test.
+[`python-query-async`](../../contract/golden/python-query-async-3.43.0.json), and
+[`python-tabledata-list`](../../contract/golden/python-tabledata-list-3.43.0.json)
+goldens pin those shapes. Load/copy/extract and `insertAll` remain four strict
+unsupported xfails; lost-response `requestId` replay is one separate strict
+partial-contract xfail. The exact connector `0.44.2` matrix now records 20 of 75
+entries as verified, including Arrow/Avro multi-stream table and query reads,
+projection/filter pushdown, explicit materialization, optimized count, exact
+PENDING append, and default-stream append. It still does not claim complete
+Spark compatibility. Every promotion requires public-edge evidence and a
+negative or boundary test.
 
 The [`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
 [`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),

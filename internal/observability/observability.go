@@ -7,16 +7,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -28,18 +24,22 @@ const (
 	traceIDKey   contextKey = "trace_id"
 )
 
-var unsafePayloads atomic.Bool
-
-var sensitiveText = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(bearer|basic)\s+[^\s,;]+`),
-	regexp.MustCompile(`(?is)-----BEGIN (RSA |EC )?PRIVATE KEY-----.*?-----END (RSA |EC )?PRIVATE KEY-----`),
-	regexp.MustCompile(`(?i)(["']?(authorization|proxy[_-]?authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|password|private[_-]?key|credential|client[_-]?secret|api[_-]?key|cookie)["']?\s*[:=]\s*["']?)[^\s,;&}"']+`),
-}
-
-func Configure(allowUnsafePayloads bool) {
-	unsafePayloads.Store(allowUnsafePayloads)
-	if allowUnsafePayloads {
-		slog.Warn("unsafe payload logging enabled; data values may be written to logs, credentials remain redacted")
+// Configure retains source and runtime-configuration compatibility with the
+// former unsafe-payload switch. The argument is deliberately ignored: regex
+// redaction cannot prove that SQL literals, rows, protobuf fields, HTTP bodies,
+// or credentials have been removed, so BQEMU now applies one fail-closed log
+// contract in every mode.
+//
+// Security basis:
+//   - https://cloud.google.com/logging/docs/audit/best-practices
+//   - https://cloud.google.com/sensitive-data-protection/docs/deidentify-sensitive-data
+func Configure(legacyAllowUnsafePayloads bool) {
+	if legacyAllowUnsafePayloads {
+		slog.Warn("deprecated logging setting ignored",
+			"event", "runtime.configuration.deprecated",
+			"field", "logging.unsafePayloads",
+			"effective_behavior", "payload_metadata_only",
+		)
 	}
 }
 
@@ -89,11 +89,11 @@ func Digest(payload []byte) string {
 }
 
 func PayloadAttrs(name string, payload []byte) []any {
-	attrs := []any{name + "_bytes", len(payload), name + "_digest", Digest(payload)}
-	if unsafePayloads.Load() {
-		attrs = append(attrs, name, RedactText(string(payload)))
+	return []any{
+		name + "_shape", "opaque_bytes",
+		name + "_bytes", len(payload),
+		name + "_digest", Digest(payload),
 	}
-	return attrs
 }
 
 func ErrorAttrs(err error) []any {
@@ -101,72 +101,19 @@ func ErrorAttrs(err error) []any {
 		return nil
 	}
 	message := err.Error()
-	attrs := []any{"error_type", fmt.Sprintf("%T", err), "error_digest", Digest([]byte(message))}
-	if unsafePayloads.Load() {
-		attrs = append(attrs, "error", RedactText(message))
+	return []any{
+		"error_type", fmt.Sprintf("%T", err),
+		"error_bytes", len([]byte(message)),
+		"error_digest", Digest([]byte(message)),
 	}
-	return attrs
 }
 
+// RedactText is retained for callers compiled against the original helper. It
+// intentionally returns only an opaque summary; partial text redaction is not a
+// safe logging boundary because unknown credential and payload shapes remain.
 func RedactText(value string) string {
-	var document any
-	if json.Unmarshal([]byte(value), &document) == nil {
-		if encoded, err := json.Marshal(redactJSON(document)); err == nil {
-			value = string(encoded)
-		}
-	}
-	redacted := value
-	for _, pattern := range sensitiveText {
-		redacted = pattern.ReplaceAllStringFunc(redacted, func(match string) string {
-			lower := strings.ToLower(match)
-			if strings.HasPrefix(lower, "bearer ") {
-				return "Bearer [REDACTED]"
-			}
-			if strings.HasPrefix(lower, "basic ") {
-				return "Basic [REDACTED]"
-			}
-			if strings.Contains(lower, "private key-----") {
-				return "[REDACTED PRIVATE KEY]"
-			}
-			separator := strings.IndexAny(match, ":=")
-			if separator < 0 {
-				return "[REDACTED]"
-			}
-			return match[:separator+1] + "[REDACTED]"
-		})
-	}
-	return redacted
-}
-
-func redactJSON(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, child := range typed {
-			if isSensitiveName(strings.ToLower(key)) {
-				typed[key] = "[REDACTED]"
-				continue
-			}
-			typed[key] = redactJSON(child)
-		}
-		return typed
-	case []any:
-		for index, child := range typed {
-			typed[index] = redactJSON(child)
-		}
-		return typed
-	case string:
-		return redactNonJSONText(typed)
-	default:
-		return value
-	}
-}
-
-func redactNonJSONText(value string) string {
-	redacted := value
-	for _, pattern := range sensitiveText {
-		redacted = pattern.ReplaceAllString(redacted, "[REDACTED]")
-	}
-	return redacted
+	payload := []byte(value)
+	return fmt.Sprintf("[OMITTED bytes=%d digest=%s]", len(payload), Digest(payload))
 }
 
 func MetadataKeys(values map[string][]string) []string {
@@ -212,11 +159,6 @@ func ProtoAttrs(message any) []any {
 		"wire_bytes", len(wire), "payload_digest", Digest(wire),
 	}
 	attrs = append(attrs, reflectedMetrics(protobuf.ProtoReflect(), 0)...)
-	if unsafePayloads.Load() {
-		if payload, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(protobuf); err == nil {
-			attrs = append(attrs, "payload", RedactText(string(payload)))
-		}
-	}
 	return attrs
 }
 
@@ -227,8 +169,13 @@ func reflectedMetrics(message protoreflect.Message, depth int) []any {
 	attrs := make([]any, 0)
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 		name := string(field.Name())
+		if field.IsMap() {
+			attrs = append(attrs, name+"_count", value.Map().Len())
+			return true
+		}
 		if field.IsList() {
 			list := value.List()
+			attrs = append(attrs, name+"_count", list.Len())
 			if name == "serialized_rows" {
 				bytes := 0
 				for i := 0; i < list.Len(); i++ {
@@ -250,6 +197,9 @@ func reflectedMetrics(message protoreflect.Message, depth int) []any {
 		case protoreflect.StringKind:
 			if name == "write_stream" || name == "read_stream" || name == "parent" || (depth == 0 && name == "name") {
 				attrs = append(attrs, name, value.String())
+			} else {
+				payload := []byte(value.String())
+				attrs = append(attrs, name+"_bytes", len(payload), name+"_digest", Digest(payload))
 			}
 		case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 			if name == "offset" || name == "row_count" {
@@ -261,8 +211,8 @@ func reflectedMetrics(message protoreflect.Message, depth int) []any {
 			}
 		case protoreflect.BytesKind:
 			if strings.Contains(name, "schema") {
-				attrs = append(attrs, "schema_fingerprint", Digest(value.Bytes()))
-			} else if strings.Contains(name, "serialized") {
+				attrs = append(attrs, "schema_fingerprint", Digest(value.Bytes()), "schema_bytes", len(value.Bytes()))
+			} else {
 				attrs = append(attrs, name+"_bytes", len(value.Bytes()), name+"_digest", Digest(value.Bytes()))
 			}
 		}

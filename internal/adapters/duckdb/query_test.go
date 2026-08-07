@@ -13,6 +13,7 @@ import (
 
 func TestTranslateSQLDistinguishesRelationsFromQuotedIdentifiers(t *testing.T) {
 	physical := quoteIdentifier(physicalSchema("p", "d")) + `."t"`
+	crossProjectPhysical := quoteIdentifier(physicalSchema("data-project", "d")) + `."t"`
 	tests := []struct {
 		name    string
 		request ports.QueryRequest
@@ -43,6 +44,13 @@ func TestTranslateSQLDistinguishesRelationsFromQuotedIdentifiers(t *testing.T) {
 				ProjectID: "p", DefaultDataset: "d", SQL: "SELECT * FROM `t`",
 			},
 			want: "SELECT * FROM " + physical,
+		},
+		{
+			name: "cross-project default dataset relation",
+			request: ports.QueryRequest{
+				ProjectID: "p", DefaultProjectID: "data-project", DefaultDataset: "d", SQL: "SELECT * FROM `t`",
+			},
+			want: "SELECT * FROM " + crossProjectPhysical,
 		},
 		{
 			name: "quoted CTE is not a physical table",

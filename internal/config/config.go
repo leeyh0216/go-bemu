@@ -73,6 +73,8 @@ type Config struct {
 	Server     ServerConfig    `yaml:"server" json:"server"`
 	Database   DatabaseConfig  `yaml:"database" json:"database"`
 	Runtime    RuntimeConfig   `yaml:"runtime" json:"runtime"`
+	Query      QueryConfig     `yaml:"query" json:"query"`
+	TableData  TableDataConfig `yaml:"tableData" json:"tableData"`
 	Storage    StorageConfig   `yaml:"storage" json:"storage"`
 	Load       LoadConfig      `yaml:"load" json:"load"`
 	Auth       AuthConfig      `yaml:"auth" json:"auth"`
@@ -143,6 +145,34 @@ type RuntimeConfig struct {
 	JobPollInterval     Duration `yaml:"jobPollInterval" json:"jobPollInterval"`
 	ReadSessionTTL      Duration `yaml:"readSessionTtl" json:"readSessionTtl"`
 	CleanupInterval     Duration `yaml:"cleanupInterval" json:"cleanupInterval"`
+}
+
+// QueryConfig bounds server-owned query execution independently from an HTTP
+// client's lifetime and controls the documented lifetime of anonymous result
+// tables. QueryRequest.timeoutMs/jobTimeoutMs remain wire-level compatibility
+// contracts layered on top of this local hard ceiling.
+//
+// Sources:
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#body.request_body.FIELDS.timeout_ms
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms
+//   - https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored
+type QueryConfig struct {
+	OperationTimeout    Duration `yaml:"operationTimeout" json:"operationTimeout"`
+	CompensationTimeout Duration `yaml:"compensationTimeout" json:"compensationTimeout"`
+	AnonymousResultTTL  Duration `yaml:"anonymousResultTtl" json:"anonymousResultTtl"`
+}
+
+// TableDataConfig bounds the REST tabledata.list adapter independently from
+// the HTTP connection. BigQuery may return fewer rows than maxResults, and its
+// public quota caps one response at 100,000 rows, so BQEMU applies the smaller
+// of the request and this local page ceiling.
+//
+// Sources:
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
+//   - https://cloud.google.com/bigquery/quotas#tabledata_list_requests
+type TableDataConfig struct {
+	OperationTimeout Duration `yaml:"operationTimeout" json:"operationTimeout"`
+	MaxPageRows      int      `yaml:"maxPageRows" json:"maxPageRows"`
 }
 
 type StorageConfig struct {
@@ -227,9 +257,14 @@ type AuthConfig struct {
 }
 
 type LoggingConfig struct {
-	Level          string `yaml:"level" json:"level"`
-	Format         string `yaml:"format" json:"format"`
-	UnsafePayloads bool   `yaml:"unsafePayloads" json:"unsafePayloads"`
+	Level  string `yaml:"level" json:"level"`
+	Format string `yaml:"format" json:"format"`
+	// UnsafePayloads is a deprecated, parse-compatible no-op. It remains in the
+	// v1alpha1 file/environment/CLI model so existing deployments keep loading,
+	// but observability never emits raw SQL, rows, protobuf, HTTP bodies, error
+	// text, or credentials. See the Cloud Logging security guidance:
+	// https://cloud.google.com/logging/docs/audit/best-practices
+	UnsafePayloads bool `yaml:"unsafePayloads" json:"unsafePayloads"`
 }
 
 type AdminConfig struct {
@@ -297,6 +332,11 @@ func Defaults() Config {
 			StorageCloseTimeout: Duration(4 * time.Second), JobPollInterval: Duration(100 * time.Millisecond),
 			ReadSessionTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
 		},
+		Query: QueryConfig{
+			OperationTimeout: Duration(2 * time.Minute), CompensationTimeout: Duration(30 * time.Second),
+			AnonymousResultTTL: Duration(24 * time.Hour),
+		},
+		TableData: TableDataConfig{OperationTimeout: Duration(30 * time.Second), MaxPageRows: 10_000},
 		Storage: StorageConfig{
 			Read: StorageReadConfig{
 				Enabled: true, MaxStreams: 64, DefaultStreamCount: 4,
@@ -448,6 +488,11 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_GRPC_ADDRESS", "server.grpc.address"}, {"BQEMU_TLS_CERT_FILE", "server.tls.certFile"},
 	{"BQEMU_TLS_KEY_FILE", "server.tls.keyFile"}, {"BQEMU_DATABASE_ADAPTER", "database.adapter"},
 	{"BQEMU_DATABASE_DSN", "database.dsn"}, {"BQEMU_TEMP_DIRECTORY", "database.tempDirectory"},
+	{"BQEMU_QUERY_OPERATION_TIMEOUT", "query.operationTimeout"},
+	{"BQEMU_QUERY_COMPENSATION_TIMEOUT", "query.compensationTimeout"},
+	{"BQEMU_QUERY_ANONYMOUS_RESULT_TTL", "query.anonymousResultTtl"},
+	{"BQEMU_TABLE_DATA_OPERATION_TIMEOUT", "tableData.operationTimeout"},
+	{"BQEMU_TABLE_DATA_MAX_PAGE_ROWS", "tableData.maxPageRows"},
 	{"BQEMU_LOAD_ENABLED", "load.enabled"}, {"BQEMU_LOAD_GCS_ENDPOINT", "load.gcsEndpoint"},
 	{"BQEMU_LOAD_ALLOW_FILE_SOURCES", "load.allowFileSources"},
 	{"BQEMU_LOAD_OPERATION_TIMEOUT", "load.operationTimeout"}, {"BQEMU_LOAD_MAX_OBJECTS", "load.maxObjects"},
@@ -573,6 +618,16 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setDuration(&cfg.Runtime.ReadSessionTTL)
 	case "runtime.cleanupInterval":
 		return setDuration(&cfg.Runtime.CleanupInterval)
+	case "query.operationTimeout":
+		return setDuration(&cfg.Query.OperationTimeout)
+	case "query.compensationTimeout":
+		return setDuration(&cfg.Query.CompensationTimeout)
+	case "query.anonymousResultTtl":
+		return setDuration(&cfg.Query.AnonymousResultTTL)
+	case "tableData.operationTimeout":
+		return setDuration(&cfg.TableData.OperationTimeout)
+	case "tableData.maxPageRows":
+		return setInt(&cfg.TableData.MaxPageRows)
 	case "storage.read.enabled":
 		return setBool(&cfg.Storage.Read.Enabled)
 	case "storage.read.maxStreams":
@@ -720,6 +775,10 @@ func (cfg Config) Validate() error {
 		"runtime.jobPollInterval":       cfg.Runtime.JobPollInterval,
 		"runtime.readSessionTtl":        cfg.Runtime.ReadSessionTTL,
 		"runtime.cleanupInterval":       cfg.Runtime.CleanupInterval,
+		"query.operationTimeout":        cfg.Query.OperationTimeout,
+		"query.compensationTimeout":     cfg.Query.CompensationTimeout,
+		"query.anonymousResultTtl":      cfg.Query.AnonymousResultTTL,
+		"tableData.operationTimeout":    cfg.TableData.OperationTimeout,
 		"load.operationTimeout":         cfg.Load.OperationTimeout,
 		"storage.write.orphanTtl":       cfg.Storage.Write.OrphanTTL,
 		"storage.write.cleanupInterval": cfg.Storage.Write.CleanupInterval,
@@ -727,6 +786,9 @@ func (cfg Config) Validate() error {
 		if value.Value() <= 0 {
 			return fmt.Errorf("%s must be positive", name)
 		}
+	}
+	if cfg.TableData.MaxPageRows < 1 || cfg.TableData.MaxPageRows > 100_000 {
+		return errors.New("tableData.maxPageRows must be between 1 and the BigQuery tabledata.list limit of 100000")
 	}
 	if cfg.Runtime.ServerDrainTimeout.Value()+cfg.Runtime.StorageCloseTimeout.Value() > cfg.Runtime.ShutdownTimeout.Value() {
 		return errors.New("runtime serverDrainTimeout plus storageCloseTimeout must not exceed shutdownTimeout")

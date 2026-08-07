@@ -41,6 +41,22 @@ runtime:
   readSessionTtl: "6h"
   cleanupInterval: "1m"
 
+query:
+  # Server-side hard ceiling. REST timeoutMs/jobTimeoutMs compatibility is a
+  # separate, narrower request contract.
+  operationTimeout: "2m"
+  # Bounds physical cleanup after metadata publication failures, even when the
+  # originating request has already been cancelled.
+  compensationTimeout: "30s"
+  # BigQuery documents anonymous cached result tables as approximately 24h.
+  anonymousResultTtl: "24h"
+
+tableData:
+  # Bounds one count-and-page DuckDB operation independently from HTTP timeouts.
+  operationTimeout: "30s"
+  # The server may return fewer rows than maxResults and never exceeds this cap.
+  maxPageRows: 10000
+
 storage:
   read:
     enabled: true
@@ -94,6 +110,9 @@ auth:
 logging:
   level: info
   format: json
+  # Deprecated compatibility-only key: true is accepted but never enables raw
+  # SQL, row, protobuf, HTTP body, error-text, or credential logging.
+  # https://cloud.google.com/logging/docs/audit/best-practices
   unsafePayloads: false
 
 admin:

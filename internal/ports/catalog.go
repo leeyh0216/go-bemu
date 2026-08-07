@@ -41,9 +41,44 @@ type WarehouseAdmin interface {
 	DropTable(context.Context, string, string, string) error
 }
 
+// TableDataReader pages physical table rows without exposing backend query
+// concepts to the application layer. Offset is a zero-based row ordinal and
+// TotalRows describes the complete table, not only the returned page.
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
+type TableDataReader interface {
+	ListTableData(context.Context, TableDataReadRequest) (TableDataPage, error)
+}
+
+// TableDataReadRequest is deliberately extensible: selected-field projection
+// and snapshot/version preconditions can be added without changing the port's
+// method signature when those REST capabilities are implemented.
+type TableDataReadRequest struct {
+	Reference domain.TableReference
+	Schema    []domain.Field
+	Offset    int64
+	Limit     int
+}
+
+type TableDataPage struct {
+	Rows      [][]any
+	TotalRows int64
+	// Schema is populated by the application from canonical catalog metadata,
+	// not inferred by the physical row adapter.
+	Schema []domain.Field
+}
+
 // QueryEngine executes GoogleSQL-shaped requests against a replaceable backend.
 type QueryEngine interface {
 	Query(context.Context, QueryRequest) (domain.QueryResult, error)
+}
+
+// QueryAnalyzer exposes backend-specific structural query analysis without
+// leaking DuckDB parsing into the application layer. Location routing uses the
+// referenced datasets and anonymous destinations are created only for
+// row-producing statements.
+// https://cloud.google.com/bigquery/docs/locations#specify_locations
+type QueryAnalyzer interface {
+	AnalyzeQuery(context.Context, QueryRequest) (QueryAnalysis, error)
 }
 
 // QueryMaterializer owns the atomic physical side of a query destination. The
@@ -61,6 +96,7 @@ type QueryMaterializer interface {
 type QueryDestinationCatalog interface {
 	GetDataset(context.Context, string, string) (domain.Dataset, error)
 	GetTable(context.Context, string, string, string) (domain.Table, error)
+	EnsureAnonymousDataset(context.Context, string, string, string) (domain.Dataset, error)
 	PublishMaterializedTable(context.Context, domain.Table) error
 }
 
@@ -73,9 +109,17 @@ type Warehouse interface {
 }
 
 type QueryRequest struct {
-	ProjectID      string
-	DefaultDataset string
-	SQL            string
+	ProjectID        string
+	DefaultProjectID string
+	DefaultDataset   string
+	SQL              string
+}
+
+type QueryAnalysis struct {
+	ReferencedTables        []domain.TableReference
+	MutationTargets         []domain.TableReference
+	ProducesRows            bool
+	RequiresCatalogMutation bool
 }
 
 type QueryMaterializationRequest struct {

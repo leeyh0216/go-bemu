@@ -30,16 +30,18 @@ const (
 // bilingual compatibility contract. Renaming one is a contract change.
 const (
 	CapabilityQueryDestinationExactSchemaV1 = "query.destination.exact-schema-v1"
+	CapabilityQueryAnonymousDestinationV1   = "query.destination.anonymous-v1"
+	CapabilityQueryDatasetLocationV1        = "query.location.dataset-inference-v1"
+	CapabilityQueryBoundedExecutionV1       = "query.execution.bounded-v1"
 	GapQueryResultsUnboundedMemoryV1        = "query.results.unbounded-memory-v1"
-	GapQueryExecutionUnboundedV1            = "query.execution.unbounded-v1"
-	GapQueryAnonymousDestinationV1          = "query.destination.anonymous-v1"
+	GapQueryComplexResultSchemaV1           = "query.results.complex-schema-v1"
 	GapQueryTruncateSchemaReplacementV1     = "query.destination.truncate-schema-replacement-v1"
 	GapQueryCrossRepositoryIdentityV1       = "query.jobs.cross-repository-identity-v1"
 	GapQuerySyncRequestControlsV1           = "query.sync.request-controls-v1"
-	GapQueryDatasetLocationInferenceV1      = "query.location.dataset-inference-v1"
 	GapQueryTerminalPersistenceV1           = "query.terminal-persistence-v1"
 	GapQueryExactReplayExtensionV1          = "query.jobs.exact-replay-extension-v1"
 	GapQueryUnsupportedOptionsV1            = "query.options.unsupported-v1"
+	GapQueryDDLCatalogSyncV1                = "query.ddl.catalog-sync-v1"
 )
 
 type JobReference struct {
@@ -113,12 +115,18 @@ type TableReference struct {
 // https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 type QueryConfiguration struct {
 	SQL               string
+	DefaultProjectID  string
 	DefaultDataset    string
 	Destination       *TableReference
 	WriteDisposition  WriteDisposition
 	CreateDisposition CreateDisposition
 	Priority          QueryPriority
 	Labels            map[string]string
+	// AnonymousDestination is application-generated output metadata. It is not
+	// accepted from the REST request, but causes the completed job to expose the
+	// generated destinationTable as BigQuery does for cached query results.
+	// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
+	AnonymousDestination bool
 }
 
 type JobError struct {
@@ -220,7 +228,21 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 	if err := validateQueryLabels(configuration.Labels); err != nil {
 		return err
 	}
+	if configuration.DefaultDataset == "" && configuration.DefaultProjectID != "" {
+		return fmt.Errorf("%w: defaultDataset.projectId requires defaultDataset.datasetId", ErrInvalid)
+	}
+	if configuration.DefaultDataset != "" {
+		if !resourceIDPattern.MatchString(configuration.DefaultDataset) {
+			return fmt.Errorf("%w: invalid defaultDataset.datasetId", ErrInvalid)
+		}
+		if configuration.DefaultProjectID != "" && !projectIDPattern.MatchString(configuration.DefaultProjectID) {
+			return fmt.Errorf("%w: invalid defaultDataset.projectId", ErrInvalid)
+		}
+	}
 	if configuration.Destination == nil {
+		if configuration.AnonymousDestination {
+			return fmt.Errorf("%w: anonymous query destination metadata requires destinationTable", ErrInvalid)
+		}
 		if configuration.WriteDisposition != "" || configuration.CreateDisposition != "" {
 			return fmt.Errorf("%w: writeDisposition and createDisposition require destinationTable", ErrInvalid)
 		}
@@ -244,6 +266,10 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 	case CreateIfNeeded, CreateNever:
 	default:
 		return fmt.Errorf("%w: unknown createDisposition %q", ErrInvalid, configuration.CreateDisposition)
+	}
+	if configuration.AnonymousDestination &&
+		(configuration.WriteDisposition != WriteEmpty || configuration.CreateDisposition != CreateIfNeeded) {
+		return fmt.Errorf("%w: anonymous query destinations require WRITE_EMPTY and CREATE_IF_NEEDED", ErrInvalid)
 	}
 	return nil
 }

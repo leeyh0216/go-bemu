@@ -81,11 +81,7 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 }
 
 func queryStatementType(statement string) string {
-	fields := strings.Fields(strings.ToUpper(strings.TrimSpace(statement)))
-	if len(fields) == 0 {
-		return "UNKNOWN"
-	}
-	return fields[0]
+	return leadingStatementKeyword(statement)
 }
 
 func translateSQL(request ports.QueryRequest) (string, error) {
@@ -238,7 +234,11 @@ func translateRelationIdentifier(request ports.QueryRequest, reference string, c
 		if request.ProjectID == "" || request.DefaultDataset == "" {
 			return "", fmt.Errorf("%w: default dataset is required for table reference %q", domain.ErrInvalid, reference)
 		}
-		return quoteIdentifier(physicalSchema(request.ProjectID, request.DefaultDataset)) + "." + quoteIdentifier(parts[0]), nil
+		defaultProjectID := request.DefaultProjectID
+		if defaultProjectID == "" {
+			defaultProjectID = request.ProjectID
+		}
+		return quoteIdentifier(physicalSchema(defaultProjectID, request.DefaultDataset)) + "." + quoteIdentifier(parts[0]), nil
 	default:
 		return "", fmt.Errorf("%w: malformed table reference %q", domain.ErrInvalid, reference)
 	}
@@ -313,18 +313,54 @@ func isRelationModifier(word string) bool {
 }
 
 func returnsRows(statement string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(statement))
-	for _, prefix := range []string{"SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA"} {
-		if strings.HasPrefix(upper, prefix) {
-			return true
+	switch leadingStatementKeyword(statement) {
+	case "SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA":
+		return true
+	default:
+		return false
+	}
+}
+
+// leadingStatementKeyword skips GoogleSQL whitespace and comments before
+// classifying whether a statement produces rows. Connector-generated queries
+// can carry leading comments, and treating them as DML would discard the result
+// and omit the anonymous destinationTable.
+// https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#comments
+func leadingStatementKeyword(statement string) string {
+	for index := 0; index < len(statement); {
+		switch {
+		case statement[index] == ' ' || statement[index] == '\t' || statement[index] == '\r' || statement[index] == '\n':
+			index++
+		case statement[index] == '#' || statement[index] == '-' && index+1 < len(statement) && statement[index+1] == '-':
+			index = scanLineComment(statement, index)
+		case statement[index] == '/' && index+1 < len(statement) && statement[index+1] == '*':
+			end, err := scanBlockComment(statement, index)
+			if err != nil {
+				return "UNKNOWN"
+			}
+			index = end
+		case isIdentifierStart(statement[index]):
+			end := index + 1
+			for end < len(statement) && isIdentifierPart(statement[end]) {
+				end++
+			}
+			return strings.ToUpper(statement[index:end])
+		default:
+			return "UNKNOWN"
 		}
 	}
-	return false
+	return "UNKNOWN"
 }
 
 func bigQueryType(databaseType string) string {
 	upper := strings.ToUpper(databaseType)
 	switch {
+	case strings.HasSuffix(upper, "[]"), strings.HasPrefix(upper, "LIST("):
+		// ARRAY is an internal strict-gap marker. Publishing it as a scalar type
+		// would make REST metadata disagree with the physical DuckDB list. The
+		// recursive query-result schema mapper will replace this marker when the
+		// nested/repeated type slice is implemented.
+		return "ARRAY"
 	case strings.Contains(upper, "BOOL"):
 		return "BOOLEAN"
 	case strings.Contains(upper, "INT"):

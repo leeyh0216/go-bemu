@@ -83,6 +83,19 @@ physical deletion before metadata deletion. A crash between steps can create
 drift. Durable metadata and one transaction boundary are required before restart
 or atomic catalog claims.
 
+Anonymous query results reuse one emulator-owned hidden dataset per
+project/location and one collision-resistant table identity per job. Metadata
+publication attaches the file-configured expiration (24 hours by default).
+`CatalogService` serializes physical/metadata resource mutations in one process,
+rechecks expiration under that boundary, drops physical storage first, and deletes metadata second
+when `tables.get`, `tables.list`, or Storage Read resolves the table. This models
+BigQuery's [anonymous result
+storage](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)
+without claiming a durable background expiration service. `CatalogService` has
+no cleanup goroutine and no `Close` phase; each boundary completes lazy cleanup
+synchronously. Hidden datasets use ordinary delete-content checks when addressed
+directly, while `datasets.list` hides them unless `all=true`.
+
 <!-- section: query-jobs -->
 ## Query Job Lifecycle
 
@@ -100,10 +113,11 @@ fingerprint. Every reused ID returns `409 duplicate`; the fingerprint only makes
 same-versus-different configuration drift visible without logging SQL. This
 follows BigQuery's documented retry behavior; see the official
 [reliability guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions).
-`jobs.insert` still executes on an unbounded background goroutine and every
-query result row remains in Go memory. Worker admission, execution deadlines,
-durable terminal state, and cancellation remain gaps
-`query.execution.unbounded-v1` and `query.results.unbounded-memory-v1`. Cross-type
+`jobs.insert` executes in a detached background goroutine with the file-configured
+`query.operationTimeout` hard ceiling. Every query result row still remains in
+Go memory. Worker admission, durable terminal state, result retention, and a
+public cancellation route remain gaps under
+`query.results.unbounded-memory-v1`. Cross-type
 query/load uniqueness and terminal-update recovery remain
 `query.jobs.cross-repository-identity-v1` and `query.terminal-persistence-v1`.
 REST DTOs preserve the presence of known unsupported query controls and reject
@@ -112,11 +126,47 @@ field names, never parameter values, labels, SQL, or rows. This boundary follows
 the official [`QueryRequest`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest)
 and [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)
 field sets.
+REST table browsing crosses a separate `TableDataReader` outbound port. The
+application resolves live canonical metadata and lazy expiration under the
+catalog mutation boundary, applies file-configured row and time limits, and
+then asks the DuckDB adapter for an exact count plus an ordinal page in one
+transaction. The REST adapter alone owns the schema-driven nested `f/v` JSON
+representation and resource-scoped opaque tokens. This follows the official
+[`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
+boundary without exposing DuckDB values to transport code.
+The execution ceiling follows the same bounded-job intent as official
+[`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms),
+while exact request-level `timeoutMs` behavior remains a separate compatibility
+gap.
 Connector-required `configuration.query.priority` and `configuration.labels`
 are domain data rather than scheduler policy: priority is enum-validated, labels
 are validated and round-tripped (including an empty map), and both participate
 in the configuration fingerprint. Logs expose only priority, label count, and a
 sorted label-key fingerprint, never label values.
+
+For the supported query subset, creation is preceded by an explicit
+`QueryAnalyzer` port:
+
+```text
+GoogleSQL request
+  -> structural relation analysis
+  -> source/default/destination dataset location validation
+  -> generated anonymous destination (row-producing, destination omitted)
+  -> JobRepository.CreateOrGet
+  -> DuckDB materialization
+  -> catalog publication
+```
+
+The application never imports DuckDB parsing. The DuckDB adapter returns only
+referenced table identities and `producesRows`; logs retain SQL length/digest,
+statement type, model version, and counts, not SQL. This follows BigQuery's
+[location inference](https://cloud.google.com/bigquery/docs/locations#specify_locations)
+and `JobConfigurationQuery` [generated destination
+contract](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery).
+The exact connector consumer is `0.44.2`
+[`TempTableBuilder`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L1150-L1240),
+which reads the completed job's `destinationTable` when no materialization
+dataset is configured.
 
 <!-- section: transactions -->
 ## Transactions and Visibility
@@ -128,8 +178,10 @@ query destination evaluates once into a DuckDB staging table and applies
 transaction, following
 [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery).
 New-table metadata is published after CTAS commit and a publication failure
-triggers a compensating physical drop. Anonymous destinations and schema-replacing
-truncate remain explicit gaps. A Parquet
+triggers a compensating physical drop. Anonymous destinations use the same CTAS
+and compensation path after their hidden dataset has been created with
+physical-first metadata publication. Cache reuse, durable TTL cleanup, and
+schema-replacing truncate remain explicit gaps. A Parquet
 load validates a temporary staging table and applies its destination disposition
 inside one DuckDB transaction. Storage Write validates all named PENDING streams
 before its serialized coordinator applies one DuckDB transaction, following the
@@ -141,14 +193,19 @@ restart-durable, and object download is deliberately outside the load commit.
 <!-- section: sql-boundary -->
 ## SQL Dialect Boundary
 
-Backtick reference rewriting is a temporary adapter concern. Regex replacement
-cannot distinguish a table identifier from a quoted column, string, comment,
-script, table decorator, or function argument. General compatibility requires a
-structural GoogleSQL parser/semantic adapter. The authoritative syntax is the
+Backtick reference rewriting is a temporary adapter concern. The current lexical
+scanner distinguishes relation positions from quoted columns, strings, and
+comments, but is not a complete parser for scripts, table decorators, function
+arguments, or every unquoted path. General compatibility requires a structural
+GoogleSQL parser/semantic adapter. The authoritative syntax is the
 [GoogleSQL lexical structure](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)
 and [query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax).
 Unknown or unsupported forms must fail explicitly rather than be approximately
 rewritten.
+The analyzer marks catalog-mutating DDL and the application rejects `CREATE`,
+`ALTER`, `DROP`, and `TRUNCATE` before job creation or engine execution under
+`query.ddl.catalog-sync-v1`. Implementing DDL requires an atomic canonical
+catalog reconciliation port, not direct DuckDB execution.
 
 One Static Partial exception is intentionally structural and versioned. A token
 parser recognizes the source-derived connector `0.44.2` shape from
@@ -174,8 +231,14 @@ authentication](https://cloud.google.com/docs/authentication).
 ## Capabilities and Observability
 
 Boundary logs include operation, status, identifiers, counts, latency, and
-digests. Authorization, credentials, tokens, raw SQL, and row payloads are
-excluded unless an explicit unsafe local-only switch permits payload logging.
+digests. Authorization, credentials, tokens, raw SQL, row payloads, protobuf
+JSON, HTTP bodies, and error text are excluded in every format, level, and
+configuration mode. The deprecated `logging.unsafePayloads` input remains
+parse-compatible but is an explicit no-op. Opaque values cross into logging only
+as shape, byte/item count, and whole-value SHA-256 through the observability
+adapter. This fail-closed boundary follows [Cloud Logging audit
+guidance](https://cloud.google.com/logging/docs/audit/best-practices); regex
+redaction is not considered proof that an unknown protocol value is safe.
 Capability profiles are versioned observations, not feature negotiation or proof
 that every flow succeeds.
 
@@ -194,6 +257,8 @@ that every flow succeeds.
 5. Extend the load port with missing-table create, schema-update options,
    non-Parquet formats, and multipart/resumable transfer while retaining bounded
    staging.
+6. Persist anonymous-result ownership/expiration and add a bounded background
+   sweeper while preserving physical-first cleanup and retryable metadata.
 
 These changes preserve the dependency rule; DuckDB remains replaceable rather
 than becoming the application API.

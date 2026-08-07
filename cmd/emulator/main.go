@@ -52,7 +52,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
-		slog.Error("BQEMU stopped", "event", "runtime.exit", "error", err)
+		attrs := []any{"event", "runtime.exit"}
+		attrs = append(attrs, observability.ErrorAttrs(err)...)
+		slog.Error("BQEMU stopped", attrs...)
 		os.Exit(1)
 	}
 }
@@ -95,6 +97,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	clock := system.Clock{}
 	catalogService := application.NewCatalogService(
 		catalogRepository, warehouse, clock, application.WithDefaultLocation(cfg.Defaults.Location),
+		application.WithCatalogCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
+		application.WithTableDataReader(warehouse),
+		application.WithTableDataOperationTimeout(cfg.TableData.OperationTimeout.Value()),
+		application.WithMaxTableDataPageRows(cfg.TableData.MaxPageRows),
 	)
 	if _, err := catalogService.CreateProject(ctx, domain.Project{
 		ID: cfg.Defaults.ProjectID, FriendlyName: "BQEMU default project",
@@ -104,14 +110,18 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	queryService := application.NewQueryService(
 		jobRepository, warehouse, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
+		application.WithQueryAnalyzer(warehouse),
 		application.WithQueryMaterializer(warehouse),
 		application.WithQueryDestinationCatalog(catalogService),
+		application.WithQueryOperationTimeout(cfg.Query.OperationTimeout.Value()),
+		application.WithQueryCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
+		application.WithAnonymousQueryTTL(cfg.Query.AnonymousResultTTL.Value()),
 	)
 	loadService, err := composeLoadJobs(cfg, catalogService, warehouse, clock, system.IDGenerator{})
 	if err != nil {
 		return err
 	}
-	readRuntime, err := composeStorageRead(cfg, warehouse, catalogRepository, clock, system.IDGenerator{}, logger)
+	readRuntime, err := composeStorageRead(cfg, warehouse, catalogService, clock, system.IDGenerator{}, logger)
 	if err != nil {
 		return fmt.Errorf("configure Storage Read: %w", err)
 	}
@@ -134,10 +144,11 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}()
 
-	restOptions := make([]rest.Option, 0, 2)
+	restOptions := make([]rest.Option, 0, 3)
 	restOptions = append(restOptions, rest.WithRequestBodyLimits(
 		cfg.Server.HTTP.MaxCompressedRequestBytes, cfg.Server.HTTP.MaxUncompressedRequestBytes,
 	))
+	restOptions = append(restOptions, rest.WithTableDataAPI(catalogService))
 	if cfg.UI.Enabled {
 		restOptions = append(restOptions, rest.WithConsoleDirectory(cfg.UI.Directory))
 	}

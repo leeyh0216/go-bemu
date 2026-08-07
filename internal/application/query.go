@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
@@ -29,6 +30,7 @@ type QueryInput struct {
 	ProjectID         string
 	JobID             string
 	Location          string
+	DefaultProjectID  string
 	DefaultDataset    string
 	SQL               string
 	Destination       *domain.TableReference
@@ -39,13 +41,17 @@ type QueryInput struct {
 }
 
 type QueryService struct {
-	jobs            ports.JobRepository
-	warehouse       ports.QueryEngine
-	materializer    ports.QueryMaterializer
-	destinations    ports.QueryDestinationCatalog
-	clock           ports.Clock
-	ids             ports.IDGenerator
-	defaultLocation string
+	jobs                ports.JobRepository
+	warehouse           ports.QueryEngine
+	analyzer            ports.QueryAnalyzer
+	materializer        ports.QueryMaterializer
+	destinations        ports.QueryDestinationCatalog
+	clock               ports.Clock
+	ids                 ports.IDGenerator
+	defaultLocation     string
+	anonymousTTL        time.Duration
+	operationTimeout    time.Duration
+	compensationTimeout time.Duration
 }
 
 type QueryOption func(*QueryService)
@@ -76,8 +82,54 @@ func WithQueryMaterializer(materializer ports.QueryMaterializer) QueryOption {
 	return func(service *QueryService) { service.materializer = materializer }
 }
 
+// WithQueryAnalyzer enables structural source-dataset routing and anonymous
+// result materialization. The port is explicit so a future parser/backend can
+// replace DuckDB without an implicit adapter type assertion.
+// https://cloud.google.com/bigquery/docs/locations#specify_locations
+func WithQueryAnalyzer(analyzer ports.QueryAnalyzer) QueryOption {
+	return func(service *QueryService) { service.analyzer = analyzer }
+}
+
+// WithAnonymousQueryTTL overrides the documented approximately 24-hour
+// lifetime of anonymous query-result tables. Composition keeps the official
+// default; tests can inject a shorter deterministic policy.
+// https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored
+func WithAnonymousQueryTTL(ttl time.Duration) QueryOption {
+	return func(service *QueryService) {
+		if ttl > 0 {
+			service.anonymousTTL = ttl
+		}
+	}
+}
+
+// WithQueryOperationTimeout sets the emulator-owned hard ceiling for one query
+// execution. This is independent from request-scoped timeoutMs/jobTimeoutMs and
+// ensures asynchronous jobs cannot retain the single DuckDB connection forever.
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms
+func WithQueryOperationTimeout(timeout time.Duration) QueryOption {
+	return func(service *QueryService) {
+		if timeout > 0 {
+			service.operationTimeout = timeout
+		}
+	}
+}
+
+// WithQueryCompensationTimeout bounds cleanup of a physical CTAS destination
+// when metadata publication fails after the caller context has ended.
+func WithQueryCompensationTimeout(timeout time.Duration) QueryOption {
+	return func(service *QueryService) {
+		if timeout > 0 {
+			service.compensationTimeout = timeout
+		}
+	}
+}
+
 func NewQueryService(jobs ports.JobRepository, warehouse ports.QueryEngine, clock ports.Clock, ids ports.IDGenerator, options ...QueryOption) *QueryService {
-	service := &QueryService{jobs: jobs, warehouse: warehouse, clock: clock, ids: ids, defaultLocation: "US"}
+	service := &QueryService{
+		jobs: jobs, warehouse: warehouse, clock: clock, ids: ids,
+		defaultLocation: "US", anonymousTTL: 24 * time.Hour,
+		operationTimeout: 2 * time.Minute, compensationTimeout: 30 * time.Second,
+	}
 	for _, option := range options {
 		option(service)
 	}
@@ -92,8 +144,12 @@ func (s *QueryService) RunSync(ctx context.Context, input QueryInput) (*domain.J
 	if !created {
 		return nil, fmt.Errorf("%w: query job ID %q already exists", domain.ErrConflict, job.Reference.JobID)
 	}
-	s.execute(ctx, job)
-	return s.jobs.Get(ctx, job.Reference)
+	executionCtx, cancelExecution := context.WithTimeout(ctx, s.operationTimeout)
+	s.execute(executionCtx, job)
+	cancelExecution()
+	readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), s.operationTimeout)
+	defer cancelRead()
+	return s.jobs.Get(readCtx, job.Reference)
 }
 
 func (s *QueryService) Submit(ctx context.Context, input QueryInput) (*domain.Job, error) {
@@ -105,7 +161,11 @@ func (s *QueryService) Submit(ctx context.Context, input QueryInput) (*domain.Jo
 		return nil, fmt.Errorf("%w: query job ID %q already exists", domain.ErrConflict, job.Reference.JobID)
 	}
 	executionJob := *job
-	go s.execute(context.WithoutCancel(ctx), &executionJob)
+	go func() {
+		executionCtx, cancelExecution := context.WithTimeout(context.WithoutCancel(ctx), s.operationTimeout)
+		defer cancelExecution()
+		s.execute(executionCtx, &executionJob)
+	}()
 	return job, nil
 }
 
@@ -124,22 +184,51 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 	if input.JobID == "" {
 		input.JobID = "job_" + s.ids.NewID()
 	}
-	if input.Location == "" {
-		input.Location = s.defaultLocation
-	}
 	if input.Destination != nil && input.Destination.ProjectID == "" {
 		destination := *input.Destination
 		destination.ProjectID = input.ProjectID
 		input.Destination = &destination
+	}
+	analysis := ports.QueryAnalysis{}
+	if s.analyzer != nil {
+		var err error
+		analysis, err = s.analyzer.AnalyzeQuery(ctx, ports.QueryRequest{
+			ProjectID: input.ProjectID, DefaultProjectID: input.DefaultProjectID,
+			DefaultDataset: input.DefaultDataset, SQL: input.SQL,
+		})
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if analysis.RequiresCatalogMutation {
+		return nil, false, fmt.Errorf("%w: query DDL requires atomic physical and canonical catalog synchronization; capability=%s",
+			domain.ErrUnsupported, domain.GapQueryDDLCatalogSyncV1)
+	}
+	location, err := s.resolveQueryLocation(ctx, input, analysis)
+	if err != nil {
+		return nil, false, err
+	}
+	input.Location = location
+	anonymousDestination := false
+	if s.analyzer != nil && analysis.ProducesRows && input.Destination == nil {
+		if s.materializer == nil || s.destinations == nil {
+			return nil, false, fmt.Errorf("%w: anonymous query results require analyzer, materializer, and destination catalog ports", domain.ErrPrecondition)
+		}
+		destination := anonymousQueryDestination(input.ProjectID, input.Location, input.JobID)
+		input.Destination = &destination
+		input.WriteDisposition = domain.WriteEmpty
+		input.CreateDisposition = domain.CreateIfNeeded
+		anonymousDestination = true
 	}
 	job, err := domain.NewConfiguredQueryJob(domain.JobReference{
 		ProjectID: input.ProjectID,
 		JobID:     input.JobID,
 		Location:  input.Location,
 	}, domain.QueryConfiguration{
-		SQL: input.SQL, DefaultDataset: input.DefaultDataset, Destination: input.Destination,
+		SQL: input.SQL, DefaultProjectID: input.DefaultProjectID,
+		DefaultDataset: input.DefaultDataset, Destination: input.Destination,
 		WriteDisposition: input.WriteDisposition, CreateDisposition: input.CreateDisposition,
-		Priority: input.Priority, Labels: input.Labels,
+		Priority: input.Priority, Labels: input.Labels, AnonymousDestination: anonymousDestination,
 	}, s.clock.Now())
 	if err != nil {
 		return nil, false, err
@@ -210,7 +299,9 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job) {
 	} else {
 		_ = job.Complete(result, s.clock.Now())
 	}
-	persistErr := s.jobs.Update(context.WithoutCancel(ctx), job)
+	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), s.operationTimeout)
+	persistErr := s.jobs.Update(persistCtx, job)
+	cancelPersist()
 	columnsSummary := fmt.Sprintf("%v", result.Columns)
 	exitAttrs := append(observability.ContextAttrs(ctx),
 		"event", "boundary.exit", "boundary", "application.query",
@@ -232,17 +323,24 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job) {
 func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domain.QueryResult, error) {
 	configuration := job.Configuration
 	request := ports.QueryRequest{
-		ProjectID: job.Reference.ProjectID, DefaultDataset: configuration.DefaultDataset, SQL: configuration.SQL,
+		ProjectID: job.Reference.ProjectID, DefaultProjectID: configuration.DefaultProjectID,
+		DefaultDataset: configuration.DefaultDataset, SQL: configuration.SQL,
 	}
 	if configuration.Destination == nil {
 		return s.warehouse.Query(ctx, request)
 	}
 	if s.materializer == nil || s.destinations == nil {
-		return domain.QueryResult{}, fmt.Errorf("%w: explicit destination requires query materializer and destination catalog ports; fix_hint=compose WithQueryDestinationCatalog", domain.ErrPrecondition)
+		return domain.QueryResult{}, fmt.Errorf("%w: query destination requires query materializer and destination catalog ports; fix_hint=compose WithQueryDestinationCatalog", domain.ErrPrecondition)
 	}
 
 	destination := *configuration.Destination
-	dataset, err := s.destinations.GetDataset(ctx, destination.ProjectID, destination.DatasetID)
+	var dataset domain.Dataset
+	var err error
+	if configuration.AnonymousDestination {
+		dataset, err = s.destinations.EnsureAnonymousDataset(ctx, destination.ProjectID, destination.DatasetID, job.Reference.Location)
+	} else {
+		dataset, err = s.destinations.GetDataset(ctx, destination.ProjectID, destination.DatasetID)
+	}
 	if err != nil {
 		return domain.QueryResult{}, err
 	}
@@ -278,20 +376,41 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domai
 
 	fields := make([]domain.Field, len(materialized.QueryResult.Columns))
 	for index, column := range materialized.QueryResult.Columns {
+		if column.Type == "ARRAY" || column.Type == "RECORD" {
+			resultErr := fmt.Errorf("%w: complex query-result schemas require recursive mode/field metadata; capability=%s",
+				domain.ErrPrecondition, domain.GapQueryComplexResultSchemaV1)
+			if cleanupErr := s.compensateMaterializedDestination(ctx, destination); cleanupErr != nil {
+				return domain.QueryResult{}, errors.Join(resultErr, cleanupErr)
+			}
+			return domain.QueryResult{}, resultErr
+		}
 		fields[index] = domain.Field{Name: column.Name, Type: column.Type, Mode: "NULLABLE"}
 	}
 	table := domain.Table{
 		ProjectID: destination.ProjectID, DatasetID: destination.DatasetID, ID: destination.TableID,
 		Type: "TABLE", Schema: fields, Location: dataset.Location,
 	}
+	if configuration.AnonymousDestination {
+		expires := s.clock.Now().Add(s.anonymousTTL)
+		table.ExpirationTime = &expires
+	}
 	if publishErr := s.destinations.PublishMaterializedTable(ctx, table); publishErr != nil {
-		cleanupErr := s.materializer.DropMaterializedDestination(context.WithoutCancel(ctx), destination)
+		cleanupErr := s.compensateMaterializedDestination(ctx, destination)
 		if cleanupErr != nil {
-			return domain.QueryResult{}, errors.Join(publishErr, fmt.Errorf("compensate unpublished destination: %w", cleanupErr))
+			return domain.QueryResult{}, errors.Join(publishErr, cleanupErr)
 		}
 		return domain.QueryResult{}, publishErr
 	}
 	return materialized.QueryResult, nil
+}
+
+func (s *QueryService) compensateMaterializedDestination(ctx context.Context, destination domain.TableReference) error {
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), s.compensationTimeout)
+	defer cancelCleanup()
+	if err := s.materializer.DropMaterializedDestination(cleanupCtx, destination); err != nil {
+		return fmt.Errorf("compensate unpublished destination: %w", err)
+	}
+	return nil
 }
 
 func queryTerminalReason(err error) string {

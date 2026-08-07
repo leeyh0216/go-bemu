@@ -32,6 +32,25 @@ paths, shutdown budgets, logging, admin, UI, both Storage services, and opt-in
 load fields. `storage.read.maxSnapshotBytes` is reserved before each
 materialization and settled to the adapter's retained bytes; the sum of live
 sessions and in-flight reservations cannot exceed `maxTotalSnapshotBytes`.
+`query.operationTimeout` (default `2m`, environment
+`BQEMU_QUERY_OPERATION_TIMEOUT`) is the server hard ceiling for both synchronous
+and detached asynchronous query execution. `query.anonymousResultTtl` (default
+`24h`, environment `BQEMU_QUERY_ANONYMOUS_RESULT_TTL`) controls generated result
+table expiration. Both values must be positive and can be overridden in the
+configuration file or with `--set`. Their protocol basis is official
+[`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms)
+and [anonymous cached-result lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored).
+`query.compensationTimeout` (default `30s`, environment
+`BQEMU_QUERY_COMPENSATION_TIMEOUT`) separately bounds physical cleanup after a
+metadata publication failure; it is detached from the cancelled request but is
+never deadline-free.
+`tableData.operationTimeout` (default `30s`, environment
+`BQEMU_TABLE_DATA_OPERATION_TIMEOUT`) bounds the DuckDB count-and-page transaction
+behind [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list).
+`tableData.maxPageRows` (default `10000`, environment
+`BQEMU_TABLE_DATA_MAX_PAGE_ROWS`) caps one response even when a caller asks for
+more rows; it must stay between 1 and BigQuery's 100,000-row response quota.
+Both values are file-first and have typed `--set` overrides.
 In-memory snapshots charge encoded row bytes, while spill files also charge the
 eight-byte frame prefix for every row. `storage.write.maxInFlightBytes*` bounds
 decoded requests waiting for the serialized DuckDB coordinator, and
@@ -104,6 +123,35 @@ configuration can contain those reference paths but never reads or prints file
 contents. Treat the output as operational metadata. TLS only secures transport;
 it does not implement [Google Cloud
 authentication](https://cloud.google.com/docs/authentication).
+
+<!-- section: logging-safety -->
+## Payload-Safe Logging Contract
+
+`logging.unsafePayloads` and `BQEMU_LOG_UNSAFE_PAYLOADS` are deprecated
+compatibility inputs in `config.bqemu.dev/v1alpha1`. Existing files,
+environments, and `--set logging.unsafePayloads=true` continue to load, but the
+value is a no-op and emits a structured deprecation event. It cannot enable raw
+payload logging. Removing the key requires a future configuration API version;
+changing its behavior does not.
+
+The invariant applies to JSON and text output, every log level, and both values
+of the legacy setting. It follows the official [Cloud Logging structured-log
+model](https://cloud.google.com/logging/docs/structured-logging) and [audit-log
+security guidance](https://cloud.google.com/logging/docs/audit/best-practices):
+
+| Boundary | Recorded shape | Never recorded |
+| --- | --- | --- |
+| REST | method/path, query and header **names**, encoding, body bytes read and SHA-256, status, duration | header/query values, request or response body |
+| Storage gRPC | RPC and protobuf full name, resource identifiers, offsets, item/row counts, wire/schema byte counts and SHA-256 | protobuf JSON, serialized rows, filter/SQL text, credential metadata values |
+| errors | Go error type, message byte count, whole-message SHA-256 | `error`/`err.Error()` text, embedded SQL, values, paths, or credentials |
+| side effects | component, operation, pre/post state, success, duration, safe identifiers/counts/digests | raw request/response or backend payload |
+
+`PayloadAttrs`, `ProtoAttrs`, and `ErrorAttrs` are the only conversion boundary
+for opaque data. Even the retained `RedactText` helper returns only an omitted
+marker, byte count, and digest; pattern-based partial redaction is not treated as
+a security boundary. SHA-256 fingerprints support same/different diagnostics,
+not payload recovery. The Storage message shapes come from the official
+[`google.cloud.bigquery.storage.v1` RPC model](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1).
 
 <!-- section: local-run -->
 ## Local Runbook

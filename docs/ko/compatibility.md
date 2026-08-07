@@ -33,13 +33,24 @@ service](https://cloud.google.com/bigquery/docs/introduction)와 동등하다는
 | table insert/get/delete | Verified basic | standard table과 canonical schema metadata |
 | table list | Verified basic | paging, view/storage statistics 없음 |
 | table patch/update | Verified narrow | metadata, additive schema, ETag precondition |
-| `tabledata.list` / `insertAll` | Unsupported | route 없음 |
+| `tabledata.list` | Partial | scalar/nested/repeated `f/v` row, `startIndex`, 제한된 `maxResults`, resource-scoped opaque token, ETag precondition, 정확한 `totalRows`, `useInt64Timestamp`; selected field, ISO-8601 picosecond output, byte 기반 page trimming은 gap |
+| `tabledata.insertAll` | Unsupported | route 없음 |
 
 Request/response shape는 공식
 [`datasets`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets)와
 [`tables`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables)
 resource와 비교한다. 알 수 없는 JSON field를 무시하는 것은 forward-tolerant
 decode일 뿐 해당 field 구현이 아니다.
+
+[`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
+adapter는 `tables.get`과 Storage Read가 사용하는 동일한 catalog TTL 확인 뒤, 하나의
+DuckDB transaction에서 count와 ordinal page 선택을 수행한다. File-first
+`tableData.maxPageRows` cap은 요청보다 적은 row를 반환할 수 있고
+`tableData.operationTimeout`은 physical operation을 제한한다. BigQuery는 대략 10 MB
+response 기준으로도 page를 자른다. Byte 기반 trimming, mutation-aware page 무효화,
+`selectedFields`, `timestampOutputFormat`은 명시적 gap이다.
+`formatOptions.useInt64Timestamp=true`는 고정 Python client가 요구하는 epoch
+microsecond 문자열을 반환한다. 공식 [pagination criteria](https://cloud.google.com/bigquery/docs/paging-results#page_through_results_using_the_api)를 참고한다.
 
 `CAP-REST-METADATA-PATCH-V1`과 `CAP-SCHEMA-ADDITIVE-V1`은 실제 process를
 대상으로 공식 [Python client
@@ -60,20 +71,22 @@ Schema support는 nested/repeated record를 포함한 append-only
 | `jobs.getQueryResults` | Partial | location-aware lookup, `startIndex`, `maxResults`, job/result-bound opaque page token |
 | explicit destination table | Partial | scalar exact-schema `WRITE_EMPTY`/`WRITE_APPEND`/`WRITE_TRUNCATE`, capability `query.destination.exact-schema-v1` |
 | connector query metadata | Verified basic | `INTERACTIVE`/`BATCH` priority와 검증된 label을 fingerprint/round-trip하며 명시적 empty label map도 보존 |
-| anonymous destination table | Unsupported | gap `query.destination.anonymous-v1` |
+| anonymous destination table | Partial | row-producing query job은 24시간 lazy expiration을 가진 hidden-dataset destination을 생성·공개, capability `query.destination.anonymous-v1` |
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset만 지원, gap `query.destination.truncate-schema-replacement-v1` |
+| SQL DDL | Unsupported | physical/canonical catalog 변경이 하나의 application 계약을 공유할 때까지 `CREATE`/`ALTER`/`DROP`/`TRUNCATE`는 job/engine side effect 전에 실패, gap `query.ddl.catalog-sync-v1` |
 | cancellation | Unsupported | route/state 없음 |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, 기존 destination table, process-local state |
 | copy/extract | Unsupported | configuration 거부 |
 | durable job/result state | Unsupported | in-memory repository |
 | bounded query result retention | Unsupported | 모든 result row가 Go memory에 남음, gap `query.results.unbounded-memory-v1` |
-| bounded async query execution | Unsupported | queue/execution deadline 없음, gap `query.execution.unbounded-v1` |
+| complex query-result schema | Strict gap | ARRAY/STRUCT result는 mode/child를 평탄화하지 않고 metadata publication 전에 실패, gap `query.results.complex-schema-v1` |
+| bounded async query execution | Partial | 파일 설정 `query.operationTimeout`으로 sync/async backend 실행을 제한하며 queue admission과 정확한 request `timeoutMs`는 gap, capability `query.execution.bounded-v1` |
 | same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness, 모든 재사용은 `409 duplicate`, fingerprint는 진단용으로 유지 |
 | exact-request replay extension | Unsupported | 향후 opt-in 전용, gap `query.jobs.exact-replay-extension-v1` |
 | query/load cross-type identity | Unsupported | 분리된 repository의 check/create race, gap `query.jobs.cross-repository-identity-v1` |
 | synchronous request controls | Partial | 36바이트 ASCII `requestId`를 검증하고 음수가 아닌 `timeoutMs`를 수용함, 미완료 응답의 대기 제한·변경 쿼리 중복 제거·`jobTimeoutMs`는 gap `query.sync.request-controls-v1` |
 | unsupported query option | Strict gap | parameter, `dryRun`, cache/billing control, `jobTimeoutMs`는 명시적으로 `400` 거부, gap `query.options.unsupported-v1` |
-| omitted-location dataset inference | Unsupported | configured default가 우선함, gap `query.location.dataset-inference-v1` |
+| omitted-location dataset inference | Partial | 구조적으로 참조한 table, cross-project `defaultDataset.projectId`, explicit destination dataset을 insert 전에 검증, capability `query.location.dataset-inference-v1` |
 | terminal persistence recovery | Unsupported | terminal repository update 실패 시 `RUNNING` 잔류 가능, gap `query.terminal-persistence-v1` |
 
 Canonical job state와 error field는 공식
@@ -93,6 +106,35 @@ BigQuery는 재사용한 모든 job ID를 `409 duplicate`로 거부하고 `jobs.
 안전한 drift 진단에만 사용한다. 공식
 [retry guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions)를
 참고한다.
+
+`destinationTable` 없는 row-producing query에서 BQEMU는
+`JobRepository.CreateOrGet` 전에 destination을 생성하고
+`configuration.query.destinationTable`로 반환한 뒤
+`WRITE_EMPTY`/`CREATE_IF_NEEDED`로 result를 materialize한다. 이는 connector
+`0.44.2`의
+[`TempTableBuilder`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L1150-L1240)가
+사용하는 계약이다. 생성 dataset은 `_`로 시작하고
+[`all=true`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/list)가
+아니면 `datasets.list`에서 숨겨진다. Table은 connector 기본
+[`MaterializationConfiguration`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/MaterializationConfiguration.java)과
+BigQuery의 대략적인 [anonymous table
+수명](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)에
+맞춰 publication 24시간 뒤 expiration을 노출한다. 정리는 `tables.get`,
+`tables.list`, Storage Read resolve 시점에 lazy하게 수행하며 hidden dataset은 다음
+result를 위해 유지한다. Cache-hit 재사용, background sweeper, restart-durable TTL
+ledger는 아직 없다. Cleanup goroutine이나 `Close` ordering은 없고 각 request가
+cleanup을 동기적으로 끝낸다. ID를 아는 hidden dataset은 일반 delete 규칙을 따른다.
+Live table이 있으면 `deleteContents=true`가 필요하고 lazy expiration으로 비워진 뒤에는
+일반 dataset delete가 성공한다.
+
+Job insert 전에 structural analyzer는 지원하는 backtick table path, 같은 project의
+cross-project `defaultDataset.projectId`, explicit destination dataset을 모두 해석한다. Location을 생략하면
+공통 location을 사용하고 explicit/inferred cross-location mismatch는 repository나
+engine side effect 전에 실패한다. 이는 BigQuery [location
+규칙](https://cloud.google.com/bigquery/docs/locations#specify_locations)을 따른다.
+현재 lexical adapter 밖의 unquoted relation path, connection, remote function,
+dynamic SQL은 아직 inference
+후보가 아니다. 지원 후보가 없을 때만 configured default를 사용한다.
 
 <!-- section: sql -->
 ## SQL과 MERGE
@@ -230,18 +272,23 @@ group commit은 각각 destination transaction을 사용한다. 이 atomicity는
 정확한 [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)은
 UI를 끈 독립 CI 계층에서 실행된다. Project 목록, dataset/table lifecycle,
 nullable additive schema update, query polling, job/table 목록, cleanup,
-not-found exit 계약을 검증한다. 공식 [Python
-client `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E 네 개는
-dataset administration, table metadata/schema administration, synchronous
+not-found exit 계약을 검증한다. 공식 [Python client
+`3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E 여섯 개는
+dataset administration, table metadata/schema administration, nested/repeated
+decode를 포함한 `tabledata.list` pagination, synchronous
 [`jobs.query`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query),
 asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert)에서
 [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults)까지
 검증한다. 해당 shape는 [`python-query-sync`](../../contract/golden/python-query-sync-3.43.0.json)와
-[`python-query-async`](../../contract/golden/python-query-async-3.43.0.json) golden에
-고정한다. Load/copy/extract, `insertAll`, `tabledata.list`는 strict expected-gap xfail
-다섯 개로 남는다. Connector `0.44.2` profile은 public Storage Read, Storage Write,
-indirect load를 Partial로 기록하지만 완전한 Spark E2E compatibility를 주장하지 않는다.
-Capability 승격에는 public-edge test와 negative/boundary test가 필요하다.
+[`python-query-async`](../../contract/golden/python-query-async-3.43.0.json),
+[`python-tabledata-list`](../../contract/golden/python-tabledata-list-3.43.0.json)
+golden에 고정한다. Load/copy/extract와 `insertAll`은 strict unsupported xfail 네 개로,
+response-loss `requestId` replay는 별도 strict partial-contract xfail 하나로 남는다.
+정확한 connector `0.44.2` matrix는 75개 중 20개를 verified로 기록한다. 여기에는
+Arrow/Avro multi-stream table/query read, projection/filter pushdown, explicit
+materialization, optimized count, exact PENDING append, default-stream append가
+포함된다. 완전한 Spark compatibility를 주장하지 않으며 capability 승격에는
+public-edge evidence와 negative 또는 boundary test가 필요하다.
 
 [`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
 [`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),

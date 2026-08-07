@@ -11,6 +11,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -40,6 +41,9 @@ type TablePatch struct {
 }
 
 func (s *CatalogService) UpdateDataset(ctx context.Context, projectID, datasetID string, patch DatasetPatch) (domain.Dataset, error) {
+	s.resourceMutationMu.Lock()
+	defer s.resourceMutationMu.Unlock()
+
 	dataset, err := s.catalog.GetDataset(ctx, projectID, datasetID)
 	if err != nil {
 		return domain.Dataset{}, err
@@ -70,9 +74,18 @@ func (s *CatalogService) UpdateDataset(ctx context.Context, projectID, datasetID
 }
 
 func (s *CatalogService) UpdateTable(ctx context.Context, projectID, datasetID, tableID string, patch TablePatch) (domain.Table, error) {
+	s.resourceMutationMu.Lock()
+	defer s.resourceMutationMu.Unlock()
+
 	table, err := s.catalog.GetTable(ctx, projectID, datasetID, tableID)
 	if err != nil {
 		return domain.Table{}, err
+	}
+	if tableExpired(table, s.clock.Now()) {
+		if _, cleanupErr := s.removeExpiredTableLocked(ctx, projectID, datasetID, tableID); cleanupErr != nil {
+			return domain.Table{}, cleanupErr
+		}
+		return domain.Table{}, fmt.Errorf("%w: table %s/%s/%s expired", domain.ErrNotFound, projectID, datasetID, tableID)
 	}
 	if patch.FriendlyName.Set {
 		table.FriendlyName = patch.FriendlyName.Value

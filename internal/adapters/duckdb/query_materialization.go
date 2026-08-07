@@ -78,6 +78,9 @@ func (w *Warehouse) MaterializeQuery(ctx context.Context, request ports.QueryMat
 	if err != nil {
 		return result, err
 	}
+	if err := normalizeMaterializedColumnNames(ctx, tx, staging, &queryResult); err != nil {
+		return result, err
+	}
 	result.QueryResult = queryResult
 	if request.DestinationExists {
 		if err := validateExistingQueryDestinationShape(queryResult.Columns, request.DestinationSchema, request.WriteDisposition); err != nil {
@@ -105,6 +108,53 @@ func (w *Warehouse) MaterializeQuery(ctx context.Context, request ports.QueryMat
 	committed = true
 	result.DestinationCreated = !request.DestinationExists
 	return result, nil
+}
+
+// BigQuery assigns stable f0_, f1_, ... names to anonymous output columns,
+// while DuckDB exposes expression text such as count_star(). Rename the staging
+// columns inside the same transaction so REST metadata and Storage Read select
+// the identical physical names.
+// https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax#select_list
+func normalizeMaterializedColumnNames(ctx context.Context, tx *sql.Tx, staging string, result *domain.QueryResult) error {
+	used := make(map[string]struct{}, len(result.Columns))
+	for _, column := range result.Columns {
+		if portableQueryFieldName(column.Name) {
+			used[strings.ToLower(column.Name)] = struct{}{}
+		}
+	}
+	for index := range result.Columns {
+		original := result.Columns[index].Name
+		if portableQueryFieldName(original) {
+			continue
+		}
+		candidate := fmt.Sprintf("f%d_", index)
+		for suffix := 1; ; suffix++ {
+			if _, exists := used[strings.ToLower(candidate)]; !exists {
+				break
+			}
+			candidate = fmt.Sprintf("f%d_%d", index, suffix)
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE "+quoteIdentifier(staging)+" RENAME COLUMN "+quoteIdentifier(original)+" TO "+quoteIdentifier(candidate)); err != nil {
+			return fmt.Errorf("normalize anonymous query result column: %w", err)
+		}
+		used[strings.ToLower(candidate)] = struct{}{}
+		result.Columns[index].Name = candidate
+	}
+	return nil
+}
+
+func portableQueryFieldName(name string) bool {
+	if name == "" || len(name) > 1024 || !(name[0] == '_' || name[0] >= 'A' && name[0] <= 'Z' || name[0] >= 'a' && name[0] <= 'z') {
+		return false
+	}
+	for index := 1; index < len(name); index++ {
+		value := name[index]
+		if value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z' || value >= '0' && value <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func applyExistingQueryDestination(ctx context.Context, tx *sql.Tx, destination, staging string, disposition domain.WriteDisposition) error {

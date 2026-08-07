@@ -31,7 +31,25 @@ Composition root는 default, HTTP/gRPC/TLS limit, database/temp path, shutdown
 budget, logging, admin, UI, 두 Storage service, opt-in load field를 사용한다.
 `storage.read.maxSnapshotBytes`는 각 materialization 전에 예약하고 adapter의 실제
 retained byte로 정산한다. Live session과 in-flight reservation 합계는
-`maxTotalSnapshotBytes`를 넘을 수 없다. Memory snapshot은 encoded row byte를,
+`maxTotalSnapshotBytes`를 넘을 수 없다.
+`query.operationTimeout`(default `2m`, 환경 변수
+`BQEMU_QUERY_OPERATION_TIMEOUT`)은 동기 query와 분리된 비동기 query 실행 모두의 server
+hard ceiling이다. `query.anonymousResultTtl`(default `24h`, 환경 변수
+`BQEMU_QUERY_ANONYMOUS_RESULT_TTL`)은 생성된 result table 만료를 제어한다. 두 값은
+양수여야 하고 configuration file 또는 `--set`으로 바꿀 수 있다. Protocol 근거는 공식
+[`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms)와
+[anonymous cached-result lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)이다.
+`query.compensationTimeout`(default `30s`, 환경 변수
+`BQEMU_QUERY_COMPENSATION_TIMEOUT`)은 metadata publication 실패 뒤 physical cleanup을
+별도로 제한한다. 취소된 request와는 분리하지만 deadline 없이 실행하지 않는다.
+`tableData.operationTimeout`(default `30s`, 환경 변수
+`BQEMU_TABLE_DATA_OPERATION_TIMEOUT`)은
+[`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
+뒤의 DuckDB count-and-page transaction을 제한한다. `tableData.maxPageRows`(default
+`10000`, 환경 변수 `BQEMU_TABLE_DATA_MAX_PAGE_ROWS`)는 caller가 더 많은 row를 요청해도
+한 response를 제한하며 1과 BigQuery의 100,000-row response quota 사이여야 한다. 두
+값 모두 file-first이며 typed `--set` override를 제공한다.
+Memory snapshot은 encoded row byte를,
 spill file은 각 row의 8-byte frame prefix까지 계산한다.
 `storage.write.maxInFlightBytes*`는 serialized DuckDB coordinator를 기다리는 decoded
 request를 제한하고, `maxStagedBytes*`는 숨김 DuckDB PENDING table에 보관된
@@ -98,6 +116,34 @@ token, remote admin token은 mounted file path로 참조한다. Effective config
 이 reference path를 포함할 수 있지만 file content를 읽거나 출력하지 않는다.
 Output은 operational metadata로 다룬다. TLS는 전송만 보호하며 [Google Cloud
 인증](https://cloud.google.com/docs/authentication)을 구현하지 않는다.
+
+<!-- section: logging-safety -->
+## Payload-safe Logging 계약
+
+`logging.unsafePayloads`와 `BQEMU_LOG_UNSAFE_PAYLOADS`는
+`config.bqemu.dev/v1alpha1`의 deprecated compatibility input이다. 기존 file,
+environment, `--set logging.unsafePayloads=true`는 계속 load되지만 값은 no-op이며
+structured deprecation event를 남긴다. Raw payload logging을 활성화할 수 없다. Key
+제거에는 향후 configuration API version이 필요하지만 동작 변경에는 필요하지 않다.
+
+이 invariant는 JSON/text output, 모든 log level, legacy setting의 두 값에 모두
+적용된다. 공식 [Cloud Logging structured-log
+model](https://cloud.google.com/logging/docs/structured-logging)과 [audit-log security
+guidance](https://cloud.google.com/logging/docs/audit/best-practices)를 따른다.
+
+| Boundary | 기록하는 shape | 절대 기록하지 않는 값 |
+| --- | --- | --- |
+| REST | method/path, query/header **이름**, encoding, 읽은 body byte count와 SHA-256, status, duration | header/query 값, request/response body |
+| Storage gRPC | RPC/protobuf full name, resource identifier, offset, item/row count, wire/schema byte count와 SHA-256 | protobuf JSON, serialized row, filter/SQL text, credential metadata 값 |
+| error | Go error type, message byte count, 전체 message SHA-256 | `error`/`err.Error()` text, 그 안의 SQL, 값, path, credential |
+| side effect | component, operation, pre/post state, success, duration, 안전한 identifier/count/digest | raw request/response 또는 backend payload |
+
+`PayloadAttrs`, `ProtoAttrs`, `ErrorAttrs`가 opaque data의 유일한 변환 경계다.
+호환성을 위해 남긴 `RedactText` helper도 omitted marker, byte count, digest만
+반환하며 pattern 기반 부분 redaction을 security boundary로 취급하지 않는다.
+SHA-256 fingerprint는 same/different 진단용이지 payload 복원용이 아니다. Storage
+message shape의 근거는 공식
+[`google.cloud.bigquery.storage.v1` RPC model](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1)이다.
 
 <!-- section: local-run -->
 ## 로컬 실행 Runbook

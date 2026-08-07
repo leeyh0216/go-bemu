@@ -79,6 +79,63 @@ func (engine *countingQueryEngine) Query(context.Context, ports.QueryRequest) (d
 	return domain.QueryResult{Columns: []domain.Column{{Name: "value", Type: "INTEGER"}}, Rows: [][]any{{int64(1)}}}, nil
 }
 
+type deadlineAwareQueryEngine struct {
+	deadlines chan time.Time
+}
+
+func (engine *deadlineAwareQueryEngine) Query(ctx context.Context, _ ports.QueryRequest) (domain.QueryResult, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return domain.QueryResult{}, errors.New("query execution context has no deadline")
+	}
+	engine.deadlines <- deadline
+	<-ctx.Done()
+	return domain.QueryResult{}, ctx.Err()
+}
+
+func TestQueryOperationTimeoutBoundsSyncAndAsyncExecution(t *testing.T) {
+	ctx, cancel := queryApplicationTestContext(t)
+	defer cancel()
+	for _, asynchronous := range []bool{false, true} {
+		name := "sync"
+		if asynchronous {
+			name = "async"
+		}
+		t.Run(name, func(t *testing.T) {
+			engine := &deadlineAwareQueryEngine{deadlines: make(chan time.Time, 1)}
+			service := NewQueryService(
+				memory.NewJobRepository(), engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID(name),
+				WithQueryOperationTimeout(20*time.Millisecond),
+			)
+			input := QueryInput{ProjectID: "test-project", JobID: name, SQL: "SELECT 1"}
+			var job *domain.Job
+			var err error
+			if asynchronous {
+				job, err = service.Submit(ctx, input)
+			} else {
+				job, err = service.RunSync(ctx, input)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case deadline := <-engine.deadlines:
+				if deadline.IsZero() {
+					t.Fatal("query execution deadline is zero")
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if asynchronous {
+				job = waitForQueryJobDone(t, ctx, service, job.Reference)
+			}
+			if job.State != domain.JobDone || job.Error == nil {
+				t.Fatalf("timed-out query job = %#v", job)
+			}
+		})
+	}
+}
+
 func TestQueryJobIdentityIncludesLocationAndConfigurationFingerprint(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
@@ -148,6 +205,9 @@ func (failedPublicationCatalog) GetDataset(context.Context, string, string) (dom
 func (failedPublicationCatalog) GetTable(context.Context, string, string, string) (domain.Table, error) {
 	return domain.Table{}, fmt.Errorf("%w: destination", domain.ErrNotFound)
 }
+func (failedPublicationCatalog) EnsureAnonymousDataset(context.Context, string, string, string) (domain.Dataset, error) {
+	return domain.Dataset{ProjectID: "test-project", ID: "_bqemu_anonymous", Location: "US", Hidden: true}, nil
+}
 func (failedPublicationCatalog) PublishMaterializedTable(context.Context, domain.Table) error {
 	return fmt.Errorf("%w: injected metadata publication failure", domain.ErrConflict)
 }
@@ -159,6 +219,36 @@ func (*compensatingMaterializer) MaterializeQuery(context.Context, ports.QueryMa
 		QueryResult:        domain.QueryResult{Columns: []domain.Column{{Name: "id", Type: "INTEGER"}}, Rows: [][]any{{int64(1)}}},
 		DestinationCreated: true,
 	}, nil
+}
+
+type deadlineCompensatingMaterializer struct {
+	compensatingMaterializer
+	deadlineSeen atomic.Bool
+}
+
+type complexResultMaterializer struct{ drops atomic.Int64 }
+
+func (*complexResultMaterializer) MaterializeQuery(context.Context, ports.QueryMaterializationRequest) (ports.QueryMaterializationResult, error) {
+	return ports.QueryMaterializationResult{
+		QueryResult: domain.QueryResult{
+			Columns: []domain.Column{{Name: "values", Type: "ARRAY"}}, Rows: [][]any{{[]any{int64(1)}}},
+		},
+		DestinationCreated: true,
+	}, nil
+}
+
+func (materializer *complexResultMaterializer) DropMaterializedDestination(context.Context, domain.TableReference) error {
+	materializer.drops.Add(1)
+	return nil
+}
+
+func (materializer *deadlineCompensatingMaterializer) DropMaterializedDestination(ctx context.Context, _ domain.TableReference) error {
+	if _, ok := ctx.Deadline(); ok {
+		materializer.deadlineSeen.Store(true)
+	}
+	materializer.drops.Add(1)
+	<-ctx.Done()
+	return ctx.Err()
 }
 func (materializer *compensatingMaterializer) DropMaterializedDestination(context.Context, domain.TableReference) error {
 	materializer.drops.Add(1)
@@ -185,6 +275,48 @@ func TestMaterializedTablePublicationFailureIsCompensated(t *testing.T) {
 	}
 	if got := materializer.drops.Load(); got != 1 {
 		t.Fatalf("compensating drops = %d, want 1", got)
+	}
+}
+
+func TestMaterializedTableCompensationHasDetachedDeadline(t *testing.T) {
+	ctx, cancel := queryApplicationTestContext(t)
+	defer cancel()
+	materializer := &deadlineCompensatingMaterializer{}
+	service := NewQueryService(
+		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("bounded-cleanup"),
+		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
+		WithQueryCompensationTimeout(20*time.Millisecond),
+	)
+	job, err := service.RunSync(ctx, QueryInput{
+		ProjectID: "test-project", Location: "US", JobID: "bounded-cleanup", SQL: "SELECT 1 AS id",
+		Destination: &domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "materialized"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != domain.JobDone || job.Error == nil || !materializer.deadlineSeen.Load() || materializer.drops.Load() != 1 {
+		t.Fatalf("bounded compensation job=%#v deadline_seen=%v drops=%d", job, materializer.deadlineSeen.Load(), materializer.drops.Load())
+	}
+}
+
+func TestComplexAnonymousResultFailsWithStableGapAndCompensates(t *testing.T) {
+	ctx, cancel := queryApplicationTestContext(t)
+	defer cancel()
+	materializer := &complexResultMaterializer{}
+	service := NewQueryService(
+		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("complex-result"),
+		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
+		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
+	)
+	job, err := service.RunSync(ctx, QueryInput{ProjectID: "test-project", JobID: "complex-result", SQL: "SELECT [1] AS values"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != domain.JobDone || job.Error == nil || !strings.Contains(job.Error.Message, domain.GapQueryComplexResultSchemaV1) {
+		t.Fatalf("complex result job = %#v", job)
+	}
+	if materializer.drops.Load() != 1 {
+		t.Fatalf("complex result compensating drops = %d, want one", materializer.drops.Load())
 	}
 }
 

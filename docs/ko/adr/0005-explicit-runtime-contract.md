@@ -36,8 +36,12 @@ Service 목록은 [Storage RPC
    rootfs, explicit writable data volume, bounded temporary storage,
    health/readiness probe, forced fallback이 있는 하나의 graceful-stop deadline을
    사용한다.
-5. 어떤 endpoint/log도 default로 credential, token, private key, raw SQL, row
-   payload를 노출하지 않는다.
+5. 어떤 endpoint/log도 어느 mode에서든 credential, token, private key, raw SQL,
+   row payload, HTTP body, protobuf JSON, error text를 노출하지 않는다. Opaque
+   value는 shape/count/length/SHA-256 summary를 사용한다. 부분 redaction은 안전한
+   경계를 증명할 수 없으므로 legacy `unsafePayloads` input은 deprecated no-op으로
+   유지한다. [Cloud Logging audit
+   guidance](https://cloud.google.com/logging/docs/audit/best-practices)를 따른다.
 
 <!-- section: consequences -->
 ## 결과
@@ -46,7 +50,10 @@ Strict versioned loader, typed generic override, validation, effective
 configuration, source/effective fingerprint, 보호되고 bounded한 diagnostics,
 hardened Compose profile, file-configured composition은 구현되어 있다. Runtime은
 configured HTTP/gRPC limit와 shared TLS를 적용하고 enabled일 때만 admin을 시작하며
-shared shutdown deadline 만료 시 gRPC를 강제 중지한다. Readiness drain,
+shared shutdown deadline 만료 시 gRPC를 강제 중지한다.
+`logging.unsafePayloads`를 설정한 legacy configuration은 계속 parse되고 같은 effective
+model을 생성하지만 true 값은 deprecation event만 남기며 payload-safe logging을
+바꾸지 않는다. Readiness drain,
 outstanding-operation reporting, 두 번째 signal 전용 path, phase별 split test
 timeout은 아직 불완전하다. Configuration failure는
 `model_version/operation/shape/fingerprint/fix_hint`를 사용하고 protocol drift는

@@ -188,6 +188,20 @@ func (s *Server) listDatasets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	all, err := optionalBoolQuery(r, "all")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !all {
+		visible := datasets[:0]
+		for _, dataset := range datasets {
+			if !dataset.Hidden {
+				visible = append(visible, dataset)
+			}
+		}
+		datasets = visible
+	}
 	start, end, nextPageToken, err := pageBounds(r, len(datasets))
 	if err != nil {
 		writeError(w, err)

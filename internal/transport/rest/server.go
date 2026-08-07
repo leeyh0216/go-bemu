@@ -9,6 +9,7 @@ package rest
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -84,7 +85,24 @@ func (s *Server) Handler() http.Handler {
 	for _, register := range s.routeExtensions {
 		register(mux)
 	}
-	return observability.HTTPMiddleware(recoverMiddleware(requestBodyMiddleware(s.requestBodyLimits, mux)))
+	return observability.HTTPMiddleware(methodOverrideMiddleware(recoverMiddleware(requestBodyMiddleware(s.requestBodyLimits, mux))))
+}
+
+// google-api-java-client may tunnel PATCH through POST with
+// X-HTTP-Method-Override. Accept only the one method used by BigQuery Tables.Patch;
+// all other override values remain ordinary POST requests and fail routing.
+// https://cloud.google.com/apis/docs/system-parameters#http_method_override
+func methodOverrideMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-HTTP-Method-Override")), http.MethodPatch) {
+			slog.InfoContext(r.Context(), "HTTP method override",
+				"event", "transport.http.method_override", "original_method", http.MethodPost,
+				"effective_method", http.MethodPatch, "path_bytes", len(r.URL.Path),
+				"path_digest", observability.Digest([]byte(r.URL.Path)))
+			r.Method = http.MethodPatch
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) registerCatalogRoutes(mux *http.ServeMux) {

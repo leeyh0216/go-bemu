@@ -67,6 +67,60 @@ func TestRESTGzipChunkedTablesInsertUsesDecodedJSON(t *testing.T) {
 	}
 }
 
+func TestRESTGzipMethodOverrideReachesTablesPatch(t *testing.T) {
+	ctx, cancel := requestBodyTestContext(t)
+	defer cancel()
+	warehouse := &catalogTestWarehouse{}
+	clock := catalogTestClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
+	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
+	if _, err := catalog.CreateProject(ctx, domain.Project{ID: "test-project"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.CreateDataset(ctx, domain.Dataset{ProjectID: "test-project", ID: "temporary", Location: "US"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.CreateTable(ctx, domain.Table{
+		ProjectID: "test-project", DatasetID: "temporary", ID: "connector_temporary",
+		Schema: []domain.Field{{Name: "id", Type: "INT64"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(NewCatalogServer(
+		catalog, warehouse, "", WithRequestBodyLimits(1<<20, 1<<20),
+	).Handler())
+	t.Cleanup(server.Close)
+
+	body := gzipPayload(t, []byte(`{"expirationTime":"1800000000000"}`))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		server.URL+"/bigquery/v2/projects/test-project/datasets/temporary/tables/connector_temporary",
+		io.NopCloser(bytes.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Encoding", "gzip")
+	request.Header.Set("X-HTTP-Method-Override", http.MethodPatch)
+	request.ContentLength = -1
+	request.TransferEncoding = []string{"chunked"}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(response.Body)
+		t.Fatalf("method-override tables.patch status = %d, want 200: %s", response.StatusCode, payload)
+	}
+	var patched tableResource
+	if err := json.NewDecoder(response.Body).Decode(&patched); err != nil {
+		t.Fatal(err)
+	}
+	if patched.ExpirationTime != "1800000000000" {
+		t.Fatalf("patched expirationTime = %q, want 1800000000000", patched.ExpirationTime)
+	}
+}
+
 func TestRESTRequestBodyLimitsRejectWireAndDecodedOverflow(t *testing.T) {
 	for _, testCase := range []struct {
 		name            string

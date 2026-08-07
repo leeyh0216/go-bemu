@@ -199,6 +199,7 @@ func queryInputFromWire(projectID, jobID, location, sql string, defaultDataset *
 		}
 	}
 	if defaultDataset != nil {
+		input.DefaultProjectID = defaultDataset.ProjectID
 		input.DefaultDataset = defaultDataset.DatasetID
 	}
 	if destination != nil {

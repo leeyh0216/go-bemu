@@ -117,6 +117,8 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
 		"runtime.shutdownTimeout=9s", "runtime.serverDrainTimeout=4s", "runtime.storageCloseTimeout=4s",
 		"runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
+		"query.operationTimeout=45s", "query.compensationTimeout=10s", "query.anonymousResultTtl=12h",
+		"tableData.operationTimeout=11s", "tableData.maxPageRows=1234",
 		"storage.read.enabled=true", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
 		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSchemaBytes=1048576",
 		"storage.read.maxSessions=8",
@@ -146,6 +148,49 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 	}
 	if _, err := load(args, lookup(nil)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQueryPolicyLoadsFromEnvironmentAndRejectsNonPositiveValues(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_QUERY_OPERATION_TIMEOUT":    "45s",
+		"BQEMU_QUERY_COMPENSATION_TIMEOUT": "10s",
+		"BQEMU_QUERY_ANONYMOUS_RESULT_TTL": "12h",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.Query.OperationTimeout.Value() != 45*time.Second ||
+		result.Config.Query.CompensationTimeout.Value() != 10*time.Second ||
+		result.Config.Query.AnonymousResultTTL.Value() != 12*time.Hour {
+		t.Fatalf("query policy = %#v", result.Config.Query)
+	}
+	for _, path := range []string{"query.operationTimeout", "query.compensationTimeout", "query.anonymousResultTtl"} {
+		if _, err := load([]string{"--set", path + "=0s"}, lookup(nil)); err == nil {
+			t.Fatalf("expected positive-duration validation for %s", path)
+		}
+	}
+}
+
+func TestTableDataPolicyLoadsFromEnvironmentAndRejectsInvalidValues(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_TABLE_DATA_OPERATION_TIMEOUT": "11s",
+		"BQEMU_TABLE_DATA_MAX_PAGE_ROWS":     "1234",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.TableData.OperationTimeout.Value() != 11*time.Second || result.Config.TableData.MaxPageRows != 1234 {
+		t.Fatalf("table data policy = %#v", result.Config.TableData)
+	}
+	for _, override := range []string{
+		"tableData.operationTimeout=0s",
+		"tableData.maxPageRows=0",
+		"tableData.maxPageRows=100001",
+	} {
+		if _, err := load([]string{"--set", override}, lookup(nil)); err == nil {
+			t.Fatalf("expected table data validation failure for %s", override)
+		}
 	}
 }
 

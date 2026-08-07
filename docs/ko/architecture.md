@@ -82,6 +82,18 @@ metadata를 삭제한다. 두 단계 사이에서 crash가 발생하면 drift가
 재시작 또는 atomic catalog를 주장하려면 durable metadata와 하나의 transaction
 경계가 필요하다.
 
+Anonymous query result는 project/location별 emulator-owned hidden dataset 하나와
+job별 collision-resistant table identity를 사용한다. Metadata publication 시 24시간
+기본값의 file-configured expiration을 붙인다. `CatalogService`는 한 process 안의
+physical/metadata resource mutation을 직렬화하고 그 경계에서 expiration을 다시 확인하며
+`tables.get`, `tables.list`, Storage Read resolve 시 physical storage를 먼저 drop한 뒤
+metadata를 삭제한다. 이는 durable background expiration service를 주장하지 않으면서
+BigQuery의 [anonymous result
+storage](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)를
+모델링한다. `CatalogService`에는 cleanup goroutine과 `Close` phase가 없고 각 경계가
+lazy cleanup을 동기적으로 완료한다. Hidden dataset을 ID로 직접 지정하면 일반
+delete-content 검사를 사용하며 `datasets.list`에서는 `all=true`일 때만 보인다.
+
 <!-- section: query-jobs -->
 ## Query Job 수명 주기
 
@@ -99,10 +111,10 @@ canonical configuration fingerprint다. 모든 재사용 ID는 동일 configurat
 SQL을 기록하지 않고 same/different configuration drift를 구분하는 진단 값이다. 이는
 BigQuery의 공식 retry 동작을 따른다. 공식
 [reliability guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions)를
-참고한다. `jobs.insert`는 여전히 제한 없는 background goroutine에서 실행되고 모든
-query result row는 Go memory에 남는다. Worker admission, execution deadline,
-durable terminal state, cancellation은 `query.execution.unbounded-v1`과
-`query.results.unbounded-memory-v1` gap이다. Cross-type query/load uniqueness와
+참고한다. `jobs.insert`는 분리된 background goroutine에서 실행하되 파일로 설정한
+`query.operationTimeout` hard ceiling을 적용한다. 모든 query result row는 여전히 Go
+memory에 남는다. Worker admission, durable terminal state, result retention, public
+cancellation route는 `query.results.unbounded-memory-v1` gap으로 남는다. Cross-type query/load uniqueness와
 terminal-update recovery는 `query.jobs.cross-repository-identity-v1`과
 `query.terminal-persistence-v1` gap이다.
 REST DTO는 알려진 미지원 query control의 presence를 보존하고
@@ -111,10 +123,44 @@ parameter 값, label, SQL, row는 포함하지 않는다. 이 경계는 공식
 [`QueryRequest`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest)와
 [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)
 field 집합을 따른다.
+REST table browsing은 별도 `TableDataReader` outbound port를 지난다. Application은
+catalog mutation boundary에서 live canonical metadata와 lazy expiration을 확인하고
+파일로 설정한 row 및 time limit을 적용한 뒤, DuckDB adapter에 하나의 transaction으로
+정확한 count와 ordinal page를 요청한다. REST adapter만 schema-driven nested `f/v`
+JSON 표현과 resource-scoped opaque token을 소유한다. 이는 DuckDB value를 transport
+code에 노출하지 않으면서 공식
+[`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
+경계를 따른다.
+실행 상한은 공식
+[`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms)와
+같은 bounded-job 의도를 따르며, request 단위 `timeoutMs`의 정확한 동작은 별도
+compatibility gap이다.
 Connector 필수 `configuration.query.priority`와 `configuration.labels`는 scheduler
 policy가 아닌 domain data다. Priority는 enum을 검증하고 label은 empty map을 포함해
 검증하고 round-trip하며 둘 다 configuration fingerprint에 포함한다. 로그에는
 priority, label 수, 정렬한 label-key fingerprint만 남기며 label 값은 남기지 않는다.
+
+지원 query subset에서 job 생성 앞에는 명시적 `QueryAnalyzer` port가 있다.
+
+```text
+GoogleSQL request
+  -> structural relation analysis
+  -> source/default/destination dataset location validation
+  -> generated anonymous destination (row-producing, destination omitted)
+  -> JobRepository.CreateOrGet
+  -> DuckDB materialization
+  -> catalog publication
+```
+
+Application은 DuckDB parsing을 import하지 않는다. DuckDB adapter는 referenced table
+identity와 `producesRows`만 반환하고 log에는 SQL length/digest, statement type,
+model version, count만 남기며 SQL은 남기지 않는다. 이는 BigQuery [location
+inference](https://cloud.google.com/bigquery/docs/locations#specify_locations)와
+`JobConfigurationQuery`의 [generated destination
+계약](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)을
+따른다. 정확한 connector consumer는 materialization dataset을 설정하지 않았을 때
+완료 job의 `destinationTable`을 읽는 `0.44.2`
+[`TempTableBuilder`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L1150-L1240)다.
 
 <!-- section: transactions -->
 ## Transaction과 Visibility
@@ -126,7 +172,9 @@ query destination은 DuckDB staging table에 한 번 평가되고
 적용한다. 기준은
 [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)다.
 New-table metadata는 CTAS commit 이후 공개하며 publication 실패 시 physical drop으로
-보상한다. Anonymous destination과 schema-replacing truncate는 명시적 gap이다. Parquet
+보상한다. Anonymous destination은 hidden dataset을 physical-first metadata publication으로
+만든 뒤 같은 CTAS/compensation 경로를 사용한다. Cache reuse, durable TTL cleanup,
+schema-replacing truncate는 명시적 gap이다. Parquet
 load는 temporary staging table을 검증하고 destination disposition을 DuckDB
 transaction 하나에서 적용한다. Storage Write는 명명한 모든 PENDING stream을 먼저
 검증한 뒤 serialized coordinator의 DuckDB transaction 하나로 적용하며, 이는
@@ -138,13 +186,17 @@ load commit 밖에 있다.
 <!-- section: sql-boundary -->
 ## SQL Dialect 경계
 
-Backtick reference 변환은 임시 adapter 책임이다. Regex replacement는 table
-identifier와 quote된 column, string, comment, script, table decorator, function
-argument를 구분하지 못한다. 일반 호환성에는 구조적인 GoogleSQL parser/semantic
-adapter가 필요하다. 권위 있는 syntax는 [GoogleSQL lexical
+Backtick reference 변환은 임시 adapter 책임이다. 현재 lexical scanner는 relation
+위치와 quote된 column, string, comment를 구분하지만 script, table decorator,
+function argument, 모든 unquoted path를 처리하는 완전한 parser는 아니다. 일반
+호환성에는 구조적인 GoogleSQL parser/semantic adapter가 필요하다. 권위 있는 syntax는 [GoogleSQL lexical
 structure](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)와
 [query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax)다.
 알 수 없거나 지원하지 않는 형식은 근사 변환하지 말고 명시적으로 실패해야 한다.
+Analyzer는 catalog-mutating DDL을 표시하고 application은
+`query.ddl.catalog-sync-v1`에 따라 `CREATE`, `ALTER`, `DROP`, `TRUNCATE`를 job
+생성이나 engine 실행 전에 거부한다. DDL 구현에는 DuckDB 직접 실행이 아니라 atomic
+canonical catalog reconciliation port가 필요하다.
 
 한 가지 Static Partial 예외는 의도적으로 structural하고 versioned되어 있다. Token
 parser가
@@ -170,8 +222,14 @@ TLS를 활성화할 수 있다. 현재 인증은 permissive다. 전송 보안과
 ## Capability와 관측성
 
 경계 log에는 operation, status, identifier, count, latency, digest가 포함된다.
-Authorization, credential, token, raw SQL, row payload는 명시적인 unsafe local-only
-switch가 payload logging을 허용하지 않는 한 제외한다. Capability profile은 버전별
+Authorization, credential, token, raw SQL, row payload, protobuf JSON, HTTP body,
+error text는 format, level, configuration mode와 관계없이 제외한다. Deprecated
+`logging.unsafePayloads` input은 parse compatibility를 유지하지만 명시적인 no-op이다.
+Opaque value는 observability adapter에서 shape, byte/item count, 전체 값 SHA-256으로만
+log 경계를 통과한다. 이 fail-closed 경계는 [Cloud Logging audit
+guidance](https://cloud.google.com/logging/docs/audit/best-practices)를 따르며 regex
+redaction은 알 수 없는 protocol value가 안전하다는 증거로 취급하지 않는다.
+Capability profile은 버전별
 관찰값이지 feature negotiation이나 모든 flow 성공의 증거가 아니다.
 
 <!-- section: replacement-roadmap -->
@@ -187,6 +245,8 @@ switch가 payload logging을 허용하지 않는 한 제외한다. Capability pr
    expression, CDC, durable pending recovery를 추가한다.
 5. bounded staging을 유지하며 load port에 missing-table create, schema-update
    option, Parquet 이외 format, multipart/resumable transfer를 추가한다.
+6. physical-first cleanup과 재시도 가능한 metadata를 유지하면서 anonymous-result
+   ownership/expiration을 영속화하고 bounded background sweeper를 추가한다.
 
 이 변경들은 dependency rule을 보존한다. DuckDB는 application API가 되지 않고
 교체 가능한 상태로 남는다.

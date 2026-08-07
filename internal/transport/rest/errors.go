@@ -129,6 +129,8 @@ func writeError(w http.ResponseWriter, err error) {
 		status, reason = http.StatusConflict, "duplicate"
 	case errors.Is(err, domain.ErrPrecondition):
 		status, reason = http.StatusPreconditionFailed, "conditionNotMet"
+	case errors.Is(err, domain.ErrUnsupported):
+		status, reason = http.StatusNotImplemented, "notImplemented"
 	}
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{

@@ -36,8 +36,12 @@ reference](https://docs.docker.com/reference/compose-file/services/).
 4. The release container runs non-root. Its operational profile uses read-only
    rootfs, explicit writable data volumes, bounded temporary storage, health and
    readiness probes, and one graceful-stop deadline with forced fallback.
-5. No endpoint or log exposes credentials, tokens, private keys, raw SQL, or row
-   payloads by default.
+5. No endpoint or log exposes credentials, tokens, private keys, raw SQL, row
+   payloads, HTTP bodies, protobuf JSON, or error text in any mode. Opaque values
+   use shape/count/length/SHA-256 summaries. The legacy `unsafePayloads` input is
+   retained as a deprecated no-op, because partial redaction cannot establish a
+   safe boundary. This follows [Cloud Logging audit
+   guidance](https://cloud.google.com/logging/docs/audit/best-practices).
 
 <!-- section: consequences -->
 ## Consequences
@@ -47,6 +51,9 @@ configuration, source/effective fingerprints, protected bounded diagnostics,
 hardened Compose profile, and file-configured composition are implemented. The
 runtime applies configured HTTP/gRPC limits and shared TLS, starts admin only
 when enabled, and forces gRPC stop when its shared shutdown deadline expires.
+Legacy configurations that set `logging.unsafePayloads` still parse and produce
+the same effective model, but a true value emits only a deprecation event and
+does not change payload-safe logging.
 Readiness drain, outstanding-operation reporting, a dedicated second-signal path,
 and split per-phase test timeouts remain incomplete. Configuration failures use
 `model_version/operation/shape/fingerprint/fix_hint`; protocol drift uses

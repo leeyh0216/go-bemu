@@ -126,7 +126,11 @@ func (w *Warehouse) CreateTable(ctx context.Context, table domain.Table) error {
 func (w *Warehouse) DropTable(ctx context.Context, projectID, datasetID, tableID string) error {
 	started := observability.LogSideEffectStart(ctx, "duckdb", "drop_table",
 		"project_id", projectID, "dataset_id", datasetID, "table_id", tableID, "transaction_mode", "autocommit")
-	statement := fmt.Sprintf("DROP TABLE %s.%s",
+	// IF EXISTS makes physical-first catalog compensation retryable after a
+	// metadata deletion failure. The application still verifies the canonical
+	// resource before user-initiated deletes.
+	// https://duckdb.org/docs/stable/sql/statements/drop#examples
+	statement := fmt.Sprintf("DROP TABLE IF EXISTS %s.%s",
 		quoteIdentifier(physicalSchema(projectID, datasetID)), quoteIdentifier(tableID))
 	_, err := w.db.ExecContext(ctx, statement)
 	if err != nil {
