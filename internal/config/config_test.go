@@ -115,7 +115,10 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"server.tls.certFile=cert.pem", "server.tls.keyFile=key.pem",
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
 		"runtime.shutdownTimeout=5s", "runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
-		"storage.read.maxStreams=16", "storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576",
+		"storage.read.enabled=true", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
+		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSessions=8",
+		"storage.read.spillThresholdBytes=524288", "storage.read.maxRowBytes=524288",
+		"storage.read.tempFilePattern=read-*", "storage.read.protocolModelVersion=test-read-v1",
 		"storage.write.enabled=true", "storage.write.maxStreams=16", "storage.write.maxAppendRequestBytes=1048576",
 		"storage.write.queueCapacity=8", "storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
 		"storage.write.protocolModelVersion=test-storage-v1",
@@ -150,6 +153,26 @@ func TestLoadConfigurationRequiresExplicitEndpointAndPositiveBounds(t *testing.T
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(overrides, lookup(nil)); err == nil {
 				t.Fatal("expected load configuration validation error")
+			}
+		})
+	}
+}
+
+func TestStorageReadConfigurationRejectsUnsafeOrInconsistentLimits(t *testing.T) {
+	for name, overrides := range map[string][]string{
+		"default-over-max": {
+			"--set", "storage.read.maxStreams=2", "--set", "storage.read.defaultStreamCount=4",
+		},
+		"row-over-response": {
+			"--set", "storage.read.maxResponseBytes=1048576", "--set", "storage.read.maxRowBytes=1048577",
+		},
+		"negative-spill": {"--set", "storage.read.spillThresholdBytes=-1"},
+		"path-pattern":   {"--set", "storage.read.tempFilePattern=outside/read-*"},
+		"missing-model":  {"--set", "storage.read.protocolModelVersion="},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := load(overrides, lookup(nil)); err == nil {
+				t.Fatal("expected Storage Read configuration validation error")
 			}
 		})
 	}

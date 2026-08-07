@@ -37,9 +37,16 @@ runtime:
 
 storage:
   read:
+    enabled: true
     maxStreams: 64
+    defaultStreamCount: 4
     rowsPerResponse: 10000
     maxResponseBytes: 16777216
+    maxSessions: 128
+    spillThresholdBytes: 67108864
+    maxRowBytes: 8388608
+    tempFilePattern: bqemu-storage-read-*
+    protocolModelVersion: google.storage.v1+spark-bigquery-connector-0.44.2
   write:
     enabled: true
     maxStreams: 1024

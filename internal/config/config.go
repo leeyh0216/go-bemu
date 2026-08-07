@@ -112,10 +112,26 @@ type StorageConfig struct {
 	Write StorageWriteConfig `yaml:"write" json:"write"`
 }
 
+// StorageReadConfig bounds session negotiation, materialization, spill files,
+// and each encoded response. The server may return fewer streams than the
+// request's maximum; defaultStreamCount is used when the client supplies no
+// useful preference, while maxStreams is the local admission ceiling.
+//
+// Official contracts:
+//   - stream negotiation: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#createreadsessionrequest
+//   - session lifetime: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession
+//   - response size behavior: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readrows
 type StorageReadConfig struct {
-	MaxStreams       int `yaml:"maxStreams" json:"maxStreams"`
-	RowsPerResponse  int `yaml:"rowsPerResponse" json:"rowsPerResponse"`
-	MaxResponseBytes int `yaml:"maxResponseBytes" json:"maxResponseBytes"`
+	Enabled              bool   `yaml:"enabled" json:"enabled"`
+	MaxStreams           int    `yaml:"maxStreams" json:"maxStreams"`
+	DefaultStreamCount   int    `yaml:"defaultStreamCount" json:"defaultStreamCount"`
+	RowsPerResponse      int    `yaml:"rowsPerResponse" json:"rowsPerResponse"`
+	MaxResponseBytes     int    `yaml:"maxResponseBytes" json:"maxResponseBytes"`
+	MaxSessions          int    `yaml:"maxSessions" json:"maxSessions"`
+	SpillThresholdBytes  int64  `yaml:"spillThresholdBytes" json:"spillThresholdBytes"`
+	MaxRowBytes          int64  `yaml:"maxRowBytes" json:"maxRowBytes"`
+	TempFilePattern      string `yaml:"tempFilePattern" json:"tempFilePattern"`
+	ProtocolModelVersion string `yaml:"protocolModelVersion" json:"protocolModelVersion"`
 }
 
 type StorageWriteConfig struct {
@@ -223,7 +239,13 @@ func Defaults() Config {
 			ReadSessionTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
 		},
 		Storage: StorageConfig{
-			Read: StorageReadConfig{MaxStreams: 64, RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20},
+			Read: StorageReadConfig{
+				Enabled: true, MaxStreams: 64, DefaultStreamCount: 4,
+				RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20, MaxSessions: 128,
+				SpillThresholdBytes: 64 << 20, MaxRowBytes: 8 << 20,
+				TempFilePattern:      "bqemu-storage-read-*",
+				ProtocolModelVersion: "google.storage.v1+spark-bigquery-connector-0.44.2",
+			},
 			Write: StorageWriteConfig{
 				Enabled: true, MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, QueueCapacity: 256,
 				OrphanTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
@@ -365,6 +387,16 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_LOAD_OPERATION_TIMEOUT", "load.operationTimeout"}, {"BQEMU_LOAD_MAX_OBJECTS", "load.maxObjects"},
 	{"BQEMU_LOAD_MAX_OBJECT_BYTES", "load.maxObjectBytes"}, {"BQEMU_LOAD_MAX_TOTAL_BYTES", "load.maxTotalBytes"},
 	{"BQEMU_LOAD_MAX_METADATA_BYTES", "load.maxMetadataBytes"}, {"BQEMU_LOAD_MAX_LISTED_OBJECTS", "load.maxListedObjects"},
+	{"BQEMU_STORAGE_READ_ENABLED", "storage.read.enabled"},
+	{"BQEMU_STORAGE_READ_MAX_STREAMS", "storage.read.maxStreams"},
+	{"BQEMU_STORAGE_READ_DEFAULT_STREAM_COUNT", "storage.read.defaultStreamCount"},
+	{"BQEMU_STORAGE_READ_ROWS_PER_RESPONSE", "storage.read.rowsPerResponse"},
+	{"BQEMU_STORAGE_READ_MAX_RESPONSE_BYTES", "storage.read.maxResponseBytes"},
+	{"BQEMU_STORAGE_READ_MAX_SESSIONS", "storage.read.maxSessions"},
+	{"BQEMU_STORAGE_READ_SPILL_THRESHOLD_BYTES", "storage.read.spillThresholdBytes"},
+	{"BQEMU_STORAGE_READ_MAX_ROW_BYTES", "storage.read.maxRowBytes"},
+	{"BQEMU_STORAGE_READ_TEMP_FILE_PATTERN", "storage.read.tempFilePattern"},
+	{"BQEMU_STORAGE_READ_PROTOCOL_MODEL_VERSION", "storage.read.protocolModelVersion"},
 	{"BQEMU_STORAGE_WRITE_MAX_STREAMS", "storage.write.maxStreams"},
 	{"BQEMU_STORAGE_WRITE_ENABLED", "storage.write.enabled"},
 	{"BQEMU_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES", "storage.write.maxAppendRequestBytes"},
@@ -455,12 +487,26 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setDuration(&cfg.Runtime.ReadSessionTTL)
 	case "runtime.cleanupInterval":
 		return setDuration(&cfg.Runtime.CleanupInterval)
+	case "storage.read.enabled":
+		return setBool(&cfg.Storage.Read.Enabled)
 	case "storage.read.maxStreams":
 		return setInt(&cfg.Storage.Read.MaxStreams)
+	case "storage.read.defaultStreamCount":
+		return setInt(&cfg.Storage.Read.DefaultStreamCount)
 	case "storage.read.rowsPerResponse":
 		return setInt(&cfg.Storage.Read.RowsPerResponse)
 	case "storage.read.maxResponseBytes":
 		return setInt(&cfg.Storage.Read.MaxResponseBytes)
+	case "storage.read.maxSessions":
+		return setInt(&cfg.Storage.Read.MaxSessions)
+	case "storage.read.spillThresholdBytes":
+		return setInt64(&cfg.Storage.Read.SpillThresholdBytes)
+	case "storage.read.maxRowBytes":
+		return setInt64(&cfg.Storage.Read.MaxRowBytes)
+	case "storage.read.tempFilePattern":
+		return setString(&cfg.Storage.Read.TempFilePattern)
+	case "storage.read.protocolModelVersion":
+		return setString(&cfg.Storage.Read.ProtocolModelVersion)
 	case "storage.write.maxStreams":
 		return setInt(&cfg.Storage.Write.MaxStreams)
 	case "storage.write.enabled":
@@ -579,8 +625,22 @@ func (cfg Config) Validate() error {
 	if strings.TrimSpace(cfg.Database.TempDirectory) == "" {
 		return errors.New("database.tempDirectory is required")
 	}
-	if cfg.Storage.Read.MaxStreams < 1 || cfg.Storage.Read.RowsPerResponse < 1 || cfg.Storage.Read.MaxResponseBytes < 1<<20 {
-		return errors.New("storage.read limits must be positive and maxResponseBytes at least 1 MiB")
+	if cfg.Storage.Read.MaxStreams < 1 || int64(cfg.Storage.Read.MaxStreams) > int64(^uint32(0)>>1) ||
+		cfg.Storage.Read.DefaultStreamCount < 1 || cfg.Storage.Read.DefaultStreamCount > cfg.Storage.Read.MaxStreams {
+		return errors.New("storage.read stream counts must be positive, defaultStreamCount must not exceed maxStreams, and maxStreams must fit int32")
+	}
+	if cfg.Storage.Read.RowsPerResponse < 1 || cfg.Storage.Read.MaxResponseBytes < 1<<20 ||
+		cfg.Storage.Read.MaxSessions < 1 || cfg.Storage.Read.SpillThresholdBytes < 0 || cfg.Storage.Read.MaxRowBytes < 1 {
+		return errors.New("storage.read row/session limits must be positive, spillThresholdBytes non-negative, and maxResponseBytes at least 1 MiB")
+	}
+	if cfg.Storage.Read.MaxRowBytes > int64(cfg.Storage.Read.MaxResponseBytes) {
+		return errors.New("storage.read.maxRowBytes must not exceed maxResponseBytes")
+	}
+	if pattern := strings.TrimSpace(cfg.Storage.Read.TempFilePattern); pattern == "" || filepath.Base(pattern) != pattern || pattern == "." {
+		return errors.New("storage.read.tempFilePattern must be a non-empty filename pattern without directory separators")
+	}
+	if strings.TrimSpace(cfg.Storage.Read.ProtocolModelVersion) == "" {
+		return errors.New("storage.read.protocolModelVersion is required")
 	}
 	if cfg.Storage.Write.MaxStreams < 1 || cfg.Storage.Write.QueueCapacity < 1 ||
 		cfg.Storage.Write.MaxAppendRequestBytes < 1<<20 || cfg.Storage.Write.MaxAppendRequestBytes > 20<<20 {
