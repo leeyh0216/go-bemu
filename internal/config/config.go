@@ -83,13 +83,23 @@ type ServerConfig struct {
 }
 
 type HTTPConfig struct {
-	Address           string   `yaml:"address" json:"address"`
-	PublicURL         string   `yaml:"publicUrl" json:"publicUrl"`
-	ReadHeaderTimeout Duration `yaml:"readHeaderTimeout" json:"readHeaderTimeout"`
-	ReadTimeout       Duration `yaml:"readTimeout" json:"readTimeout"`
-	WriteTimeout      Duration `yaml:"writeTimeout" json:"writeTimeout"`
-	IdleTimeout       Duration `yaml:"idleTimeout" json:"idleTimeout"`
+	Address                     string   `yaml:"address" json:"address"`
+	PublicURL                   string   `yaml:"publicUrl" json:"publicUrl"`
+	ReadHeaderTimeout           Duration `yaml:"readHeaderTimeout" json:"readHeaderTimeout"`
+	ReadTimeout                 Duration `yaml:"readTimeout" json:"readTimeout"`
+	WriteTimeout                Duration `yaml:"writeTimeout" json:"writeTimeout"`
+	IdleTimeout                 Duration `yaml:"idleTimeout" json:"idleTimeout"`
+	MaxCompressedRequestBytes   int64    `yaml:"maxCompressedRequestBytes" json:"maxCompressedRequestBytes"`
+	MaxUncompressedRequestBytes int64    `yaml:"maxUncompressedRequestBytes" json:"maxUncompressedRequestBytes"`
 }
+
+// Request byte budgets are independent because Content-Encoding is decoded at
+// the public edge. In particular, chunked requests have no trustworthy
+// ContentLength and must be bounded while they are read.
+//
+// Sources:
+//   - Request body and ContentLength: https://pkg.go.dev/net/http#Request
+//   - bounded server request bodies: https://pkg.go.dev/net/http#MaxBytesReader
 
 type GRPCConfig struct {
 	Address                string `yaml:"address" json:"address"`
@@ -262,6 +272,7 @@ func Defaults() Config {
 				Address: ":9050", PublicURL: "http://localhost:9050",
 				ReadHeaderTimeout: Duration(5 * time.Second), ReadTimeout: Duration(30 * time.Second),
 				WriteTimeout: Duration(30 * time.Second), IdleTimeout: Duration(2 * time.Minute),
+				MaxCompressedRequestBytes: 2 << 20, MaxUncompressedRequestBytes: 2 << 20,
 			},
 			GRPC: GRPCConfig{Address: ":9060", MaxReceiveMessageBytes: 32 << 20, MaxSendMessageBytes: 32 << 20},
 		},
@@ -415,6 +426,8 @@ type environmentOverride struct {
 var environmentOverrides = []environmentOverride{
 	{"BQEMU_PROJECT", "defaults.projectId"}, {"BQEMU_LOCATION", "defaults.location"},
 	{"BQEMU_HTTP_ADDRESS", "server.http.address"}, {"BQEMU_PUBLIC_URL", "server.http.publicUrl"},
+	{"BQEMU_HTTP_MAX_COMPRESSED_REQUEST_BYTES", "server.http.maxCompressedRequestBytes"},
+	{"BQEMU_HTTP_MAX_UNCOMPRESSED_REQUEST_BYTES", "server.http.maxUncompressedRequestBytes"},
 	{"BQEMU_GRPC_ADDRESS", "server.grpc.address"}, {"BQEMU_TLS_CERT_FILE", "server.tls.certFile"},
 	{"BQEMU_TLS_KEY_FILE", "server.tls.keyFile"}, {"BQEMU_DATABASE_ADAPTER", "database.adapter"},
 	{"BQEMU_DATABASE_DSN", "database.dsn"}, {"BQEMU_TEMP_DIRECTORY", "database.tempDirectory"},
@@ -507,6 +520,10 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setDuration(&cfg.Server.HTTP.WriteTimeout)
 	case "server.http.idleTimeout":
 		return setDuration(&cfg.Server.HTTP.IdleTimeout)
+	case "server.http.maxCompressedRequestBytes":
+		return setInt64(&cfg.Server.HTTP.MaxCompressedRequestBytes)
+	case "server.http.maxUncompressedRequestBytes":
+		return setInt64(&cfg.Server.HTTP.MaxUncompressedRequestBytes)
 	case "server.grpc.address":
 		return setString(&cfg.Server.GRPC.Address)
 	case "server.grpc.maxReceiveMessageBytes":
@@ -659,6 +676,9 @@ func (cfg Config) Validate() error {
 	}
 	if (cfg.Server.TLS.CertFile == "") != (cfg.Server.TLS.KeyFile == "") {
 		return errors.New("server.tls.certFile and server.tls.keyFile must be configured together")
+	}
+	if cfg.Server.HTTP.MaxCompressedRequestBytes < 1 || cfg.Server.HTTP.MaxUncompressedRequestBytes < 1 {
+		return errors.New("server.http request byte limits must be positive")
 	}
 	for name, value := range map[string]Duration{
 		"server.http.readHeaderTimeout": cfg.Server.HTTP.ReadHeaderTimeout,

@@ -44,6 +44,7 @@ type Server struct {
 	catalog             CatalogUseCases
 	readiness           ports.HealthChecker
 	baseURL             string
+	requestBodyLimits   requestBodyLimits
 	routeExtensions     []routeRegistration
 	discoveryExtensions []discoveryExtension
 }
@@ -63,7 +64,10 @@ func withDiscovery(extension discoveryExtension) Option {
 }
 
 func NewCatalogServer(catalog CatalogUseCases, readiness ports.HealthChecker, baseURL string, options ...Option) *Server {
-	server := &Server{catalog: catalog, readiness: readiness, baseURL: strings.TrimRight(baseURL, "/")}
+	server := &Server{
+		catalog: catalog, readiness: readiness, baseURL: strings.TrimRight(baseURL, "/"),
+		requestBodyLimits: normalizedRequestBodyLimits(0, 0),
+	}
 	for _, option := range options {
 		option(server)
 	}
@@ -80,7 +84,7 @@ func (s *Server) Handler() http.Handler {
 	for _, register := range s.routeExtensions {
 		register(mux)
 	}
-	return observability.HTTPMiddleware(recoverMiddleware(mux))
+	return observability.HTTPMiddleware(recoverMiddleware(requestBodyMiddleware(s.requestBodyLimits, mux)))
 }
 
 func (s *Server) registerCatalogRoutes(mux *http.ServeMux) {

@@ -44,6 +44,24 @@ and object/list/download limits are enforced. Authentication and runtime
 contract-profile negotiation remain uncomposed. A valid setting is not a claim
 beyond each Partial capability.
 
+The HTTP edge accepts `identity` and `gzip` request bodies.
+`server.http.maxCompressedRequestBytes` bounds bytes read from the wire before
+gzip decoding, while `server.http.maxUncompressedRequestBytes` independently
+bounds decoded bytes; both default to 2 MiB. They map to
+`BQEMU_HTTP_MAX_COMPRESSED_REQUEST_BYTES` and
+`BQEMU_HTTP_MAX_UNCOMPRESSED_REQUEST_BYTES` and remain available through typed
+`--set`. Enforcement reads the stream and therefore also covers chunked
+requests whose `ContentLength` is unknown. An unsupported encoding returns
+`415`, a malformed or multiple encoding returns `400`, and either byte budget
+returns `413`. Boundary logs retain only encoding, accepted/rejected outcome,
+byte counts, SHA-256 digests, status, and reason, never the raw body or
+credentials. This follows Go's [`Request` body
+contract](https://pkg.go.dev/net/http#Request),
+[`MaxBytesReader`](https://pkg.go.dev/net/http#MaxBytesReader), and
+[`gzip.NewReader`](https://pkg.go.dev/compress/gzip#NewReader), the official
+[`tables.insert` method](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert),
+and the pinned connector's [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java).
+
 Unknown YAML fields, multiple documents, ambiguous numeric durations, unknown
 override paths, and invalid cross-field combinations fail before listeners
 start. Errors include `stage`, `operation`, `model_version`, `field`, `shape`,
@@ -164,6 +182,7 @@ their units and scope:
 | `BQEMU_GO_TEST_TIMEOUT` | Go duration, `10m` | `make test`, race tests, and CI package budget |
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go duration, `5s` | one Storage Read application-test context |
 | `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go duration, `5s` | Storage Write application, adapter, and public gRPC test contexts |
+| `BQEMU_REST_TEST_TIMEOUT` | Go duration, `5s` | REST request, gzip boundary, pagination, and overwrite test contexts |
 | `BQEMU_PYTEST_TIMEOUT_SECONDS` | positive seconds, suite default `90`; direnv default `300` | official Python-client build, readiness, request, and shutdown budget |
 | `BQEMU_BQCLI_TIMEOUT_SECONDS` | positive seconds, `300` | each bq CLI subprocess plus emulator readiness budget |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | positive seconds, `120` | `docker compose --wait` startup budget |

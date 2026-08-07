@@ -132,7 +132,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}()
 
-	restOptions := make([]rest.Option, 0, 1)
+	restOptions := make([]rest.Option, 0, 2)
+	restOptions = append(restOptions, rest.WithRequestBodyLimits(
+		cfg.Server.HTTP.MaxCompressedRequestBytes, cfg.Server.HTTP.MaxUncompressedRequestBytes,
+	))
 	if cfg.UI.Enabled {
 		restOptions = append(restOptions, rest.WithConsoleDirectory(cfg.UI.Directory))
 	}

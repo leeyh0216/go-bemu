@@ -16,6 +16,10 @@ server:
     readTimeout: "30s"
     writeTimeout: "30s"
     idleTimeout: "2m"
+    # Applied while reading the wire body, including chunked requests.
+    maxCompressedRequestBytes: 2097152
+    # Applied after gzip decoding to prevent compression amplification.
+    maxUncompressedRequestBytes: 2097152
   grpc:
     address: ":9060"
     maxReceiveMessageBytes: 33554432

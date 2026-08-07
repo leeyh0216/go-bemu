@@ -43,6 +43,23 @@ limit 이하이고, stream별 limit은 global limit 이하여야 한다. Staged-
 Authentication과 runtime contract-profile negotiation은 아직 composition되지 않는다.
 유효한 setting은 각 Partial capability를 넘어서는 주장이 아니다.
 
+HTTP edge는 `identity`와 `gzip` request body를 허용한다.
+`server.http.maxCompressedRequestBytes`는 gzip decode 전 wire에서 읽는 byte를
+제한하고, `server.http.maxUncompressedRequestBytes`는 decoded byte를 독립적으로
+제한한다. 두 값의 default는 2 MiB다. 각각
+`BQEMU_HTTP_MAX_COMPRESSED_REQUEST_BYTES`,
+`BQEMU_HTTP_MAX_UNCOMPRESSED_REQUEST_BYTES`에 mapping되며 typed `--set`으로도
+설정할 수 있다. Enforcement는 stream을 직접 읽으므로 `ContentLength`를 알 수 없는
+chunked request에도 적용된다. Unsupported encoding은 `415`, malformed 또는
+multiple encoding은 `400`, 두 byte budget 초과는 `413`을 반환한다. Boundary
+log에는 encoding, accepted/rejected outcome, byte count, SHA-256 digest, status,
+reason만 남기고 raw body와 credential은 남기지 않는다. 구현 근거는 Go의
+[`Request` body 계약](https://pkg.go.dev/net/http#Request),
+[`MaxBytesReader`](https://pkg.go.dev/net/http#MaxBytesReader),
+[`gzip.NewReader`](https://pkg.go.dev/compress/gzip#NewReader), 공식
+[`tables.insert` method](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert),
+고정된 connector의 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)다.
+
 Unknown YAML field, multiple document, ambiguous numeric duration, unknown
 override path, invalid cross-field 조합은 listener 시작 전에 실패한다. Error에는
 `stage`, `operation`, `model_version`, `field`, `shape`, `fingerprint`, `fix_hint`가
@@ -157,6 +174,7 @@ shutdown이 commit 성공을 만들어내면 안 된다.
 | `BQEMU_GO_TEST_TIMEOUT` | Go duration, `10m` | `make test`, race test, CI package budget |
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go duration, `5s` | Storage Read application test context 하나 |
 | `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go duration, `5s` | Storage Write application, adapter, public gRPC test context |
+| `BQEMU_REST_TEST_TIMEOUT` | Go duration, `5s` | REST request, gzip boundary, pagination, overwrite test context |
 | `BQEMU_PYTEST_TIMEOUT_SECONDS` | 양의 초, suite default `90`; direnv default `300` | 공식 Python-client build, readiness, request, shutdown budget |
 | `BQEMU_BQCLI_TIMEOUT_SECONDS` | 양의 초, `300` | 각 bq CLI subprocess와 emulator readiness budget |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | 양의 초, `120` | `docker compose --wait` startup budget |

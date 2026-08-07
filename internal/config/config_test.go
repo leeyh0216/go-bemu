@@ -111,6 +111,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"defaults.projectId=p", "defaults.location=EU",
 		"server.http.address=127.0.0.1:19050", "server.http.publicUrl=https://localhost:19050",
 		"server.http.readHeaderTimeout=1s", "server.http.readTimeout=2s", "server.http.writeTimeout=3s", "server.http.idleTimeout=4s",
+		"server.http.maxCompressedRequestBytes=1048576", "server.http.maxUncompressedRequestBytes=2097152",
 		"server.grpc.address=127.0.0.1:19060", "server.grpc.maxReceiveMessageBytes=1048576", "server.grpc.maxSendMessageBytes=3145728",
 		"server.tls.certFile=cert.pem", "server.tls.keyFile=key.pem",
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
@@ -153,6 +154,52 @@ func TestShutdownPhasesMustFitConfiguredTotal(t *testing.T) {
 	}, lookup(nil))
 	if err == nil || !strings.Contains(err.Error(), "must not exceed") {
 		t.Fatalf("shutdown phase validation error = %v", err)
+	}
+}
+
+func TestHTTPRequestByteLimitsLoadFromEnvironment(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_HTTP_MAX_COMPRESSED_REQUEST_BYTES":   "1048576",
+		"BQEMU_HTTP_MAX_UNCOMPRESSED_REQUEST_BYTES": "4194304",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.Server.HTTP.MaxCompressedRequestBytes != 1<<20 ||
+		result.Config.Server.HTTP.MaxUncompressedRequestBytes != 4<<20 {
+		t.Fatalf("unexpected HTTP request byte limits: %#v", result.Config.Server.HTTP)
+	}
+}
+
+func TestHTTPRequestByteLimitsLoadFromYAMLThenCLI(t *testing.T) {
+	path := writeConfig(t, `
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+server:
+  http:
+    maxCompressedRequestBytes: 1048576
+    maxUncompressedRequestBytes: 2097152
+`)
+	result, err := load([]string{
+		"--config", path,
+		"--set", "server.http.maxUncompressedRequestBytes=4194304",
+	}, lookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.Server.HTTP.MaxCompressedRequestBytes != 1<<20 ||
+		result.Config.Server.HTTP.MaxUncompressedRequestBytes != 4<<20 {
+		t.Fatalf("unexpected file/CLI HTTP request byte limits: %#v", result.Config.Server.HTTP)
+	}
+}
+
+func TestHTTPRequestByteLimitsMustBePositive(t *testing.T) {
+	for _, path := range []string{"server.http.maxCompressedRequestBytes", "server.http.maxUncompressedRequestBytes"} {
+		t.Run(path, func(t *testing.T) {
+			if _, err := load([]string{"--set", path + "=0"}, lookup(nil)); err == nil {
+				t.Fatal("expected HTTP request byte limit validation error")
+			}
+		})
 	}
 }
 

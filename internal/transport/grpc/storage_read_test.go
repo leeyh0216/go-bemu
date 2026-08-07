@@ -132,6 +132,49 @@ func TestStorageReadRejectsUnsupportedCompressionExplicitly(t *testing.T) {
 	}
 }
 
+func TestStorageReadAvroAcceptsPresentDefaultArrowOptions(t *testing.T) {
+	ctx, cancel := grpcTestContext(t)
+	defer cancel()
+	materializer := newWireMaterializer(t, domain.FormatAvro, 1)
+	client, _ := startReadServer(t, newWireReadService(t, materializer))
+
+	request := wireCreateSessionRequest(storagepb.DataFormat_AVRO)
+	request.ReadSession.ReadOptions = &storagepb.ReadSession_TableReadOptions{
+		OutputFormatSerializationOptions: &storagepb.ReadSession_TableReadOptions_ArrowSerializationOptions{
+			ArrowSerializationOptions: &storagepb.ArrowSerializationOptions{},
+		},
+	}
+	if _, err := client.CreateReadSession(ctx, request); err != nil {
+		t.Fatalf("present default Arrow options with AVRO status = %s, want OK: %v", status.Code(err), err)
+	}
+	if materializer.calls != 1 {
+		t.Fatalf("materializer calls = %d, want 1", materializer.calls)
+	}
+}
+
+func TestStorageReadAvroRejectsNonDefaultArrowOptions(t *testing.T) {
+	ctx, cancel := grpcTestContext(t)
+	defer cancel()
+	materializer := newWireMaterializer(t, domain.FormatAvro, 1)
+	client, _ := startReadServer(t, newWireReadService(t, materializer))
+
+	request := wireCreateSessionRequest(storagepb.DataFormat_AVRO)
+	request.ReadSession.ReadOptions = &storagepb.ReadSession_TableReadOptions{
+		OutputFormatSerializationOptions: &storagepb.ReadSession_TableReadOptions_ArrowSerializationOptions{
+			ArrowSerializationOptions: &storagepb.ArrowSerializationOptions{
+				BufferCompression: storagepb.ArrowSerializationOptions_LZ4_FRAME,
+			},
+		},
+	}
+	_, err := client.CreateReadSession(ctx, request)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("non-default Arrow options with AVRO status = %s, want INVALID_ARGUMENT: %v", status.Code(err), err)
+	}
+	if materializer.calls != 0 {
+		t.Fatalf("materializer called for incompatible request")
+	}
+}
+
 func TestStorageReadGeneratedClientReceivesClassifiedMaterializerStatus(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
