@@ -109,6 +109,17 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	readRuntime, err := composeStorageRead(cfg, warehouse, catalogRepository, clock, system.IDGenerator{}, logger)
+	if err != nil {
+		return fmt.Errorf("configure Storage Read: %w", err)
+	}
+	defer func() {
+		if readRuntime != nil {
+			closeContext, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())
+			defer cancel()
+			_ = readRuntime.Close(closeContext)
+		}
+	}()
 	writeRuntime, err := composeStorageWrite(cfg, warehouse, clock, system.IDGenerator{}, logger)
 	if err != nil {
 		return fmt.Errorf("configure Storage Write: %w", err)
@@ -156,7 +167,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	// Storage adapters are registered independently. A nil application service
 	// retains the generated RPC surface but reports NOT_SERVING and returns
 	// UNIMPLEMENTED rather than advertising a false capability.
-	grpcService := grpcserver.NewWithServices(grpcserver.Services{Write: writeRuntime.Service}, grpcOptions...)
+	grpcService := grpcserver.NewWithServices(grpcserver.Services{
+		Read: readRuntime.Service, Write: writeRuntime.Service,
+	}, grpcOptions...)
 
 	endpoints := make([]servingEndpoint, 0, 3)
 	publicListener, err := net.Listen("tcp", cfg.Server.HTTP.Address)
@@ -243,12 +256,14 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())
 	defer cancel()
 	shutdownErr := shutdownServers(shutdownCtx, publicHTTP, adminHTTP, grpcService)
+	readCloseErr := readRuntime.Close(shutdownCtx)
+	readRuntime = nil
 	writeCloseErr := writeRuntime.Close(shutdownCtx)
 	writeRuntime = nil
 	if servingFailure != nil {
-		return errors.Join(servingFailure, shutdownErr, writeCloseErr)
+		return errors.Join(servingFailure, shutdownErr, readCloseErr, writeCloseErr)
 	}
-	return errors.Join(shutdownErr, writeCloseErr)
+	return errors.Join(shutdownErr, readCloseErr, writeCloseErr)
 }
 
 func configureLogger(cfg config.LoggingConfig, output io.Writer) (*slog.Logger, error) {

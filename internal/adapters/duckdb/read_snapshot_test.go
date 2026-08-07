@@ -446,7 +446,11 @@ func TestDuckDBReadSnapshotBoundsEncodedResponsePayloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = snapshot.Close(context.Background()) })
+	t.Cleanup(func() {
+		closeContext, closeCancel := duckDBReadTestContext(t)
+		defer closeCancel()
+		_ = snapshot.Close(closeContext)
+	})
 	iterator, err := snapshot.OpenRange(ctx, 0, 4, 4)
 	if err != nil {
 		t.Fatal(err)
@@ -479,7 +483,11 @@ func TestDuckDBReadSnapshotBoundsEncodedResponsePayloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = snapshot.Close(context.Background()) })
+	t.Cleanup(func() {
+		closeContext, closeCancel := duckDBReadTestContext(t)
+		defer closeCancel()
+		_ = snapshot.Close(closeContext)
+	})
 	iterator, err = snapshot.OpenRange(ctx, 0, 1, 1)
 	if err != nil {
 		t.Fatal(err)
