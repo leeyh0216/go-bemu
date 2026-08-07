@@ -32,7 +32,11 @@ func extendQueryDiscovery(document map[string]any) {
 		"list": discoveryMethod("bigquery.jobs.list", "GET", "projects/{projectId}/jobs", "", "JobList", map[string]any{
 			"projectId": discoveryPathParameter("projectId"), "maxResults": discoveryQueryParameter("integer"),
 			"pageToken": discoveryQueryParameter("string"), "allUsers": discoveryQueryParameter("boolean"),
-			"stateFilter": map[string]any{"type": "string", "location": "query", "repeated": true},
+			"stateFilter":     map[string]any{"type": "string", "location": "query", "repeated": true},
+			"projection":      discoveryQueryParameter("string"),
+			"minCreationTime": discoveryQueryParameter("string"),
+			"maxCreationTime": discoveryQueryParameter("string"),
+			"parentJobId":     discoveryQueryParameter("string"),
 		}, "projectId"),
 		"getQueryResults": discoveryMethod("bigquery.jobs.getQueryResults", "GET", "projects/{projectId}/queries/{jobId}", "", "GetQueryResultsResponse", map[string]any{
 			"projectId": discoveryPathParameter("projectId"), "jobId": discoveryPathParameter("jobId"),

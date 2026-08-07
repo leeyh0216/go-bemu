@@ -1,0 +1,137 @@
+{
+  "schemaVersion": "1",
+  "id": "bq-cli-2.1.31",
+  "consumers": [
+    {
+      "kind": "client",
+      "name": "bq-cli",
+      "versions": ["2.1.31"]
+    }
+  ],
+  "description": "Source-derived REST profile for bq CLI 2.1.31 from Google Cloud SDK 566.0.0.",
+  "sources": [
+    "https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28",
+    "https://cloud.google.com/bigquery/docs/bq-command-line-tool",
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference",
+    "https://bigquery.googleapis.com/$discovery/rest?version=v2"
+  ],
+  "capabilities": {
+    "rest.discovery.bq-cli": "verified",
+    "rest.projects.list": "verified",
+    "rest.datasets.crud": "verified",
+    "rest.tables.crud": "verified",
+    "CAP-SCHEMA-ADDITIVE-V1": "verified",
+    "rest.query_jobs": "verified",
+    "rest.jobs.list": "verified",
+    "rest.errors.not-found": "verified",
+    "jobs.load": "planned",
+    "jobs.copy": "planned",
+    "jobs.extract": "planned"
+  },
+  "flows": {
+    "bq-project-dataset-admin": [
+      {
+        "stage": "list_projects",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects",
+        "requiredFields": ["response.projects"]
+      },
+      {
+        "stage": "insert_dataset",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/datasets",
+        "requiredFields": ["request.datasetReference.datasetId", "request.location", "response.etag"]
+      },
+      {
+        "stage": "get_dataset",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+        "requiredFields": ["response.datasetReference", "response.location", "response.etag"]
+      },
+      {
+        "stage": "delete_dataset",
+        "protocol": "REST",
+        "method": "DELETE",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}"
+      }
+    ],
+    "bq-table-schema-admin": [
+      {
+        "stage": "insert_table",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables",
+        "requiredFields": ["request.tableReference.tableId", "request.schema.fields", "response.etag"]
+      },
+      {
+        "stage": "patch_table_schema",
+        "protocol": "REST",
+        "method": "PATCH",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+        "requiredFields": ["request.autodetect_schema", "request.schema.fields", "response.schema.fields", "response.etag"]
+      },
+      {
+        "stage": "get_table",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+        "requiredFields": ["response.schema.fields", "response.etag"]
+      },
+      {
+        "stage": "list_tables",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables",
+        "requiredFields": ["response.tables"]
+      },
+      {
+        "stage": "delete_table",
+        "protocol": "REST",
+        "method": "DELETE",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}"
+      }
+    ],
+    "bq-query-job": [
+      {
+        "stage": "insert_query_job",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.configuration.query.query", "request.configuration.query.useLegacySql", "response.status.state"]
+      },
+      {
+        "stage": "get_query_job",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["request.location", "response.status.state"]
+      },
+      {
+        "stage": "get_query_results",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/queries/{job}",
+        "requiredFields": ["request.location", "response.jobComplete", "response.rows"]
+      },
+      {
+        "stage": "list_jobs",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.projection", "response.jobs"]
+      }
+    ],
+    "bq-not-found-error": [
+      {
+        "stage": "get_missing_dataset",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+        "requiredFields": ["response.error.code", "response.error.errors.reason"]
+      }
+    ]
+  }
+}

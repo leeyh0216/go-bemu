@@ -37,6 +37,24 @@ func TestRegistryResolvesPinnedPythonClientVersion(t *testing.T) {
 	}
 }
 
+func TestRegistryResolvesPinnedBQCLIClientVersion(t *testing.T) {
+	registry := DefaultRegistry()
+	profile, ok := registry.ForClientVersion("bq-cli", "2.1.31")
+	if !ok || profile.ID != "bq-cli-2.1.31" {
+		t.Fatalf("version resolved to %#v, %t", profile, ok)
+	}
+	for _, capability := range []string{"rest.discovery.bq-cli", "rest.jobs.list", "CAP-SCHEMA-ADDITIVE-V1"} {
+		if profile.Capabilities[capability] != CapabilityVerified {
+			t.Fatalf("capability %s is not verified: %#v", capability, profile.Capabilities)
+		}
+	}
+	for _, unknown := range []string{"2.1.30", "2.1.32", "3.0.0"} {
+		if _, ok := registry.ForClientVersion("bq-cli", unknown); ok {
+			t.Fatalf("unknown bq CLI version %s must not silently select a profile", unknown)
+		}
+	}
+}
+
 func TestRegistryReturnsDefensiveProfileCopies(t *testing.T) {
 	registry := DefaultRegistry()
 	profile, _ := registry.ForConnectorVersion("0.44.2")

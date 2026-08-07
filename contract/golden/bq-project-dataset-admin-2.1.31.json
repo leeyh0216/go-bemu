@@ -1,0 +1,50 @@
+{
+  "profileId": "bq-cli-2.1.31",
+  "consumerKind": "client",
+  "consumerName": "bq-cli",
+  "consumerVersion": "2.1.31",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_ls",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/projects/list",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets"
+  ],
+  "flow": "bq-project-dataset-admin",
+  "events": [
+    {
+      "stage": "list_projects",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects",
+      "fields": {"response.projects": "project_page"}
+    },
+    {
+      "stage": "insert_dataset",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/datasets",
+      "fields": {
+        "request.datasetReference.datasetId": "generated_dataset",
+        "request.location": "configured_location",
+        "response.etag": "opaque_revision"
+      }
+    },
+    {
+      "stage": "get_dataset",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+      "fields": {
+        "response.datasetReference": "present",
+        "response.location": "configured_location",
+        "response.etag": "opaque_revision"
+      }
+    },
+    {
+      "stage": "delete_dataset",
+      "protocol": "REST",
+      "method": "DELETE",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}"
+    }
+  ]
+}

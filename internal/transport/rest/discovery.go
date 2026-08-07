@@ -68,6 +68,14 @@ func catalogDiscoveryResources() map[string]any {
 		"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
 		"tableId": discoveryPathParameter("tableId"),
 	}
+	datasetMutation := map[string]any{
+		"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
+		"accessPolicyVersion": discoveryQueryParameter("integer"), "updateMode": discoveryQueryParameter("string"),
+	}
+	tableMutation := map[string]any{
+		"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
+		"tableId": discoveryPathParameter("tableId"), "autodetect_schema": discoveryQueryParameter("boolean"),
+	}
 	return map[string]any{
 		"projects": map[string]any{"methods": map[string]any{
 			"list": discoveryMethod("bigquery.projects.list", "GET", "projects", "", "ProjectList", map[string]any{
@@ -82,8 +90,8 @@ func catalogDiscoveryResources() map[string]any {
 				"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
 				"accessPolicyVersion": discoveryQueryParameter("integer"), "datasetView": discoveryQueryParameter("string"),
 			}, "projectId", "datasetId"),
-			"patch":  discoveryMethod("bigquery.datasets.patch", "PATCH", "projects/{projectId}/datasets/{datasetId}", "Dataset", "Dataset", projectDataset, "projectId", "datasetId"),
-			"update": discoveryMethod("bigquery.datasets.update", "PUT", "projects/{projectId}/datasets/{datasetId}", "Dataset", "Dataset", projectDataset, "projectId", "datasetId"),
+			"patch":  discoveryMethod("bigquery.datasets.patch", "PATCH", "projects/{projectId}/datasets/{datasetId}", "Dataset", "Dataset", datasetMutation, "projectId", "datasetId"),
+			"update": discoveryMethod("bigquery.datasets.update", "PUT", "projects/{projectId}/datasets/{datasetId}", "Dataset", "Dataset", datasetMutation, "projectId", "datasetId"),
 			"list": discoveryMethod("bigquery.datasets.list", "GET", "projects/{projectId}/datasets", "", "DatasetList", map[string]any{
 				"projectId": discoveryPathParameter("projectId"), "maxResults": discoveryQueryParameter("integer"),
 				"pageToken": discoveryQueryParameter("string"), "all": discoveryQueryParameter("boolean"),
@@ -97,8 +105,8 @@ func catalogDiscoveryResources() map[string]any {
 		"tables": map[string]any{"methods": map[string]any{
 			"insert": discoveryMethod("bigquery.tables.insert", "POST", "projects/{projectId}/datasets/{datasetId}/tables", "Table", "Table", projectDataset, "projectId", "datasetId"),
 			"get":    discoveryMethod("bigquery.tables.get", "GET", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "", "Table", projectDatasetTable, "projectId", "datasetId", "tableId"),
-			"patch":  discoveryMethod("bigquery.tables.patch", "PATCH", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "Table", "Table", projectDatasetTable, "projectId", "datasetId", "tableId"),
-			"update": discoveryMethod("bigquery.tables.update", "PUT", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "Table", "Table", projectDatasetTable, "projectId", "datasetId", "tableId"),
+			"patch":  discoveryMethod("bigquery.tables.patch", "PATCH", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "Table", "Table", tableMutation, "projectId", "datasetId", "tableId"),
+			"update": discoveryMethod("bigquery.tables.update", "PUT", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "Table", "Table", tableMutation, "projectId", "datasetId", "tableId"),
 			"list": discoveryMethod("bigquery.tables.list", "GET", "projects/{projectId}/datasets/{datasetId}/tables", "", "TableList", map[string]any{
 				"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
 				"maxResults": discoveryQueryParameter("integer"), "pageToken": discoveryQueryParameter("string"),
@@ -119,6 +127,13 @@ func discoveryQueryParameter(valueType string) map[string]any {
 }
 
 func discoveryMethod(id, httpMethod, path, requestRef, responseRef string, parameters map[string]any, order ...string) map[string]any {
+	// Discovery clients such as bq 2.1.31 iterate parameterOrder without a
+	// nil check. The official discovery schema defines this as an array, so a
+	// method with no required path parameters must encode [] rather than null.
+	// https://developers.google.com/discovery/v1/reference/apis/getRest
+	if order == nil {
+		order = []string{}
+	}
 	value := map[string]any{
 		"id": id, "httpMethod": httpMethod, "path": path,
 		"parameters": parameters, "parameterOrder": order,

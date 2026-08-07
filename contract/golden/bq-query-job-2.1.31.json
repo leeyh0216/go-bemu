@@ -1,0 +1,47 @@
+{
+  "profileId": "bq-cli-2.1.31",
+  "consumerKind": "client",
+  "consumerName": "bq-cli",
+  "consumerVersion": "2.1.31",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_query",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults"
+  ],
+  "flow": "bq-query-job",
+  "events": [
+    {
+      "stage": "insert_query_job",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.configuration.query.query": "sha256_only",
+        "request.configuration.query.useLegacySql": false,
+        "response.status.state": "PENDING_or_DONE"
+      }
+    },
+    {
+      "stage": "get_query_job",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+      "fields": {"request.location": "US", "response.status.state": "DONE"}
+    },
+    {
+      "stage": "get_query_results",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/queries/{job}",
+      "fields": {"request.location": "US", "response.jobComplete": true, "response.rows": "one_row"}
+    },
+    {
+      "stage": "list_jobs",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {"request.projection": "full", "response.jobs": "job_page"}
+    }
+  ]
+}

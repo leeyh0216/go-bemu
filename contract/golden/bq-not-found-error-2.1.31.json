@@ -1,0 +1,21 @@
+{
+  "profileId": "bq-cli-2.1.31",
+  "consumerKind": "client",
+  "consumerName": "bq-cli",
+  "consumerVersion": "2.1.31",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/ErrorProto",
+    "https://cloud.google.com/bigquery/docs/error-messages"
+  ],
+  "flow": "bq-not-found-error",
+  "events": [
+    {
+      "stage": "get_missing_dataset",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+      "fields": {"response.error.code": 404, "response.error.errors.reason": "notFound"}
+    }
+  ]
+}

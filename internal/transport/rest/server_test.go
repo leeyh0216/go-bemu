@@ -73,6 +73,14 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 	if discovery["id"] != "bigquery:v2" || discovery["baseUrl"] != server.URL+"/bigquery/v2/" {
 		t.Fatalf("unexpected discovery document: %#v", discovery)
 	}
+	resources := discovery["resources"].(map[string]any)
+	jobMethods := resources["jobs"].(map[string]any)["methods"].(map[string]any)
+	jobListParameters := jobMethods["list"].(map[string]any)["parameters"].(map[string]any)
+	for _, parameter := range []string{"projection", "minCreationTime", "maxCreationTime", "parentJobId"} {
+		if jobListParameters[parameter] == nil {
+			t.Fatalf("jobs.list discovery is missing bq CLI parameter %q", parameter)
+		}
+	}
 
 	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"test-project"}`, http.StatusOK)
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets", `{"datasetReference":{"datasetId":"analytics"},"location":"US"}`, http.StatusOK)

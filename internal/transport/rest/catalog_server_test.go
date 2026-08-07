@@ -114,6 +114,20 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	if discovery["id"] != "bigquery:v2" || resources["datasets"] == nil || resources["tables"] == nil || resources["jobs"] != nil {
 		t.Fatalf("catalog discovery advertised the wrong surface: %#v", discovery)
 	}
+	projects := resources["projects"].(map[string]any)
+	projectMethods := projects["methods"].(map[string]any)
+	projectListMethod := projectMethods["list"].(map[string]any)
+	if order, ok := projectListMethod["parameterOrder"].([]any); !ok || order == nil || len(order) != 0 {
+		t.Fatalf("projects.list parameterOrder must be an empty array, got %#v", projectListMethod["parameterOrder"])
+	}
+	tableMethods := resources["tables"].(map[string]any)["methods"].(map[string]any)
+	tablePatchParameters := tableMethods["patch"].(map[string]any)["parameters"].(map[string]any)
+	if tablePatchParameters["autodetect_schema"] == nil {
+		t.Fatal("tables.patch discovery is missing the bq CLI autodetect_schema parameter")
+	}
+	if tableMethods["get"].(map[string]any)["parameters"].(map[string]any)["autodetect_schema"] != nil {
+		t.Fatal("tables.get must not advertise the mutation-only autodetect_schema parameter")
+	}
 
 	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"test-project","futureProjectField":"ignored"}`, http.StatusOK)
 	projectList := request(http.MethodGet, "/bigquery/v2/projects?maxResults=1", "", http.StatusOK)

@@ -1,0 +1,58 @@
+{
+  "profileId": "bq-cli-2.1.31",
+  "consumerKind": "client",
+  "consumerName": "bq-cli",
+  "consumerVersion": "2.1.31",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_mk-table",
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_update",
+    "https://cloud.google.com/bigquery/docs/managing-table-schemas#add-columns"
+  ],
+  "flow": "bq-table-schema-admin",
+  "events": [
+    {
+      "stage": "insert_table",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables",
+      "fields": {
+        "request.tableReference.tableId": "events",
+        "request.schema.fields": "initial_schema",
+        "response.etag": "opaque_revision"
+      }
+    },
+    {
+      "stage": "patch_table_schema",
+      "protocol": "REST",
+      "method": "PATCH",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+      "fields": {
+        "request.autodetect_schema": false,
+        "request.schema.fields": "existing_plus_nullable_field",
+        "response.schema.fields": "existing_plus_nullable_field",
+        "response.etag": "new_revision"
+      }
+    },
+    {
+      "stage": "get_table",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+      "fields": {"response.schema.fields": "three_fields", "response.etag": "new_revision"}
+    },
+    {
+      "stage": "list_tables",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables",
+      "fields": {"response.tables": "one_table"}
+    },
+    {
+      "stage": "delete_table",
+      "protocol": "REST",
+      "method": "DELETE",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}"
+    }
+  ]
+}
