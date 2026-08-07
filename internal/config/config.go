@@ -119,8 +119,12 @@ type StorageReadConfig struct {
 }
 
 type StorageWriteConfig struct {
-	MaxStreams            int `yaml:"maxStreams" json:"maxStreams"`
-	MaxAppendRequestBytes int `yaml:"maxAppendRequestBytes" json:"maxAppendRequestBytes"`
+	MaxStreams            int      `yaml:"maxStreams" json:"maxStreams"`
+	MaxAppendRequestBytes int      `yaml:"maxAppendRequestBytes" json:"maxAppendRequestBytes"`
+	QueueCapacity         int      `yaml:"queueCapacity" json:"queueCapacity"`
+	OrphanTTL             Duration `yaml:"orphanTtl" json:"orphanTtl"`
+	CleanupInterval       Duration `yaml:"cleanupInterval" json:"cleanupInterval"`
+	ProtocolModelVersion  string   `yaml:"protocolModelVersion" json:"protocolModelVersion"`
 }
 
 // LoadConfig bounds every network and filesystem side effect of a load job.
@@ -218,8 +222,12 @@ func Defaults() Config {
 			ReadSessionTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
 		},
 		Storage: StorageConfig{
-			Read:  StorageReadConfig{MaxStreams: 64, RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20},
-			Write: StorageWriteConfig{MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20},
+			Read: StorageReadConfig{MaxStreams: 64, RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20},
+			Write: StorageWriteConfig{
+				MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, QueueCapacity: 256,
+				OrphanTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
+				ProtocolModelVersion: "google.storage.v1+spark-bigquery-connector-0.44.2",
+			},
 		},
 		Load: LoadConfig{
 			OperationTimeout: Duration(2 * time.Minute), MaxObjects: 1_000,
@@ -356,6 +364,12 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_LOAD_OPERATION_TIMEOUT", "load.operationTimeout"}, {"BQEMU_LOAD_MAX_OBJECTS", "load.maxObjects"},
 	{"BQEMU_LOAD_MAX_OBJECT_BYTES", "load.maxObjectBytes"}, {"BQEMU_LOAD_MAX_TOTAL_BYTES", "load.maxTotalBytes"},
 	{"BQEMU_LOAD_MAX_METADATA_BYTES", "load.maxMetadataBytes"}, {"BQEMU_LOAD_MAX_LISTED_OBJECTS", "load.maxListedObjects"},
+	{"BQEMU_STORAGE_WRITE_MAX_STREAMS", "storage.write.maxStreams"},
+	{"BQEMU_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES", "storage.write.maxAppendRequestBytes"},
+	{"BQEMU_STORAGE_WRITE_QUEUE_CAPACITY", "storage.write.queueCapacity"},
+	{"BQEMU_STORAGE_WRITE_ORPHAN_TTL", "storage.write.orphanTtl"},
+	{"BQEMU_STORAGE_WRITE_CLEANUP_INTERVAL", "storage.write.cleanupInterval"},
+	{"BQEMU_STORAGE_WRITE_PROTOCOL_MODEL_VERSION", "storage.write.protocolModelVersion"},
 	{"BQEMU_AUTH_MODE", "auth.mode"}, {"BQEMU_AUTH_STATIC_TOKENS_FILE", "auth.staticTokensFile"},
 	{"BQEMU_LOG_LEVEL", "logging.level"}, {"BQEMU_LOG_FORMAT", "logging.format"},
 	{"BQEMU_LOG_UNSAFE_PAYLOADS", "logging.unsafePayloads"}, {"BQEMU_ADMIN_ENABLED", "admin.enabled"},
@@ -449,6 +463,14 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt(&cfg.Storage.Write.MaxStreams)
 	case "storage.write.maxAppendRequestBytes":
 		return setInt(&cfg.Storage.Write.MaxAppendRequestBytes)
+	case "storage.write.queueCapacity":
+		return setInt(&cfg.Storage.Write.QueueCapacity)
+	case "storage.write.orphanTtl":
+		return setDuration(&cfg.Storage.Write.OrphanTTL)
+	case "storage.write.cleanupInterval":
+		return setDuration(&cfg.Storage.Write.CleanupInterval)
+	case "storage.write.protocolModelVersion":
+		return setString(&cfg.Storage.Write.ProtocolModelVersion)
 	case "load.enabled":
 		return setBool(&cfg.Load.Enabled)
 	case "load.gcsEndpoint":
@@ -534,6 +556,8 @@ func (cfg Config) Validate() error {
 		"runtime.readSessionTtl":        cfg.Runtime.ReadSessionTTL,
 		"runtime.cleanupInterval":       cfg.Runtime.CleanupInterval,
 		"load.operationTimeout":         cfg.Load.OperationTimeout,
+		"storage.write.orphanTtl":       cfg.Storage.Write.OrphanTTL,
+		"storage.write.cleanupInterval": cfg.Storage.Write.CleanupInterval,
 	} {
 		if value.Value() <= 0 {
 			return fmt.Errorf("%s must be positive", name)
@@ -554,8 +578,12 @@ func (cfg Config) Validate() error {
 	if cfg.Storage.Read.MaxStreams < 1 || cfg.Storage.Read.RowsPerResponse < 1 || cfg.Storage.Read.MaxResponseBytes < 1<<20 {
 		return errors.New("storage.read limits must be positive and maxResponseBytes at least 1 MiB")
 	}
-	if cfg.Storage.Write.MaxStreams < 1 || cfg.Storage.Write.MaxAppendRequestBytes < 1<<20 || cfg.Storage.Write.MaxAppendRequestBytes > 20<<20 {
-		return errors.New("storage.write limits must be positive and maxAppendRequestBytes between 1 MiB and 20 MiB")
+	if cfg.Storage.Write.MaxStreams < 1 || cfg.Storage.Write.QueueCapacity < 1 ||
+		cfg.Storage.Write.MaxAppendRequestBytes < 1<<20 || cfg.Storage.Write.MaxAppendRequestBytes > 20<<20 {
+		return errors.New("storage.write stream/queue limits must be positive and maxAppendRequestBytes between 1 MiB and 20 MiB")
+	}
+	if strings.TrimSpace(cfg.Storage.Write.ProtocolModelVersion) == "" {
+		return errors.New("storage.write.protocolModelVersion is required")
 	}
 	if cfg.Load.MaxObjects < 1 || cfg.Load.MaxObjectBytes < 1 || cfg.Load.MaxTotalBytes < 1 ||
 		cfg.Load.MaxMetadataBytes < 1 || cfg.Load.MaxListedObjects < 1 {
