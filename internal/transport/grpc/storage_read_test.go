@@ -209,7 +209,7 @@ func newWireReadService(t *testing.T, materializer ports.SnapshotMaterializer) *
 	service, err := readapp.New(readapp.Config{
 		Location:             "test-location",
 		ProtocolModelVersion: "google.cloud.bigquery.storage.v1@cloud-bigquery-go-v1.79.0",
-		AllowedStreamCounts:  []int32{1, 2, 4, 16},
+		MaxStreams:           16,
 		DefaultStreamCount:   4,
 		SessionTTL:           30 * time.Minute,
 		CleanupInterval:      time.Minute,

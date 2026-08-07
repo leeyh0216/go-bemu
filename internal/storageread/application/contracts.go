@@ -28,26 +28,19 @@ func (s *Service) negotiateStreamCount(maximum, preferred int32) (int32, error) 
 	if maximum > 0 && preferred > maximum {
 		return 0, errors.New("preferred minimum stream count exceeds maximum")
 	}
-	upper := maximum
-	if upper == 0 {
-		upper = s.config.DefaultStreamCount
-		if preferred > upper {
-			for _, allowed := range s.config.AllowedStreamCounts {
-				if allowed >= preferred {
-					upper = allowed
-					break
-				}
-			}
-		}
+	upper := s.config.MaxStreams
+	if maximum > 0 && maximum < upper {
+		upper = maximum
 	}
-	chosen := int32(0)
-	for _, allowed := range s.config.AllowedStreamCounts {
-		if allowed <= upper {
-			chosen = allowed
-		}
+	chosen := upper
+	if maximum == 0 {
+		chosen = s.config.DefaultStreamCount
 	}
-	if chosen == 0 {
-		return 0, fmt.Errorf("no configured stream count is at or below %d", upper)
+	if preferred > 0 {
+		chosen = max(preferred, s.config.DefaultStreamCount)
+	}
+	if chosen > upper {
+		chosen = upper
 	}
 	return chosen, nil
 }

@@ -112,6 +112,32 @@ func TestPreferredStreamCountCanRaiseUnboundedDefault(t *testing.T) {
 	}
 }
 
+func TestStreamNegotiationUsesClientPreferenceAndConfiguredCeiling(t *testing.T) {
+	service := newTestService(t, &fakeMaterializer{snapshot: newFakeSnapshot(domain.FormatArrow, 32)}, newFakeClock())
+	for _, testCase := range []struct {
+		name      string
+		maximum   int32
+		preferred int32
+		want      int32
+	}{
+		{name: "explicit maximum", maximum: 3, want: 3},
+		{name: "unbounded default", want: 4},
+		{name: "preferred", maximum: 100, preferred: 10, want: 10},
+		{name: "preferred over ceiling", maximum: 100, preferred: 100, want: 16},
+		{name: "default exceeds small preference", maximum: 100, preferred: 2, want: 4},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := service.negotiateStreamCount(testCase.maximum, testCase.preferred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != testCase.want {
+				t.Fatalf("stream count = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestReadRowsRejectsSnapshotGapInsteadOfReturningSilentDataLoss(t *testing.T) {
 	ctx, cancel := testContext(t)
 	defer cancel()
@@ -233,7 +259,7 @@ func newTestServiceWithLogger(t *testing.T, materializer ports.SnapshotMateriali
 	service, err := New(Config{
 		Location:             "test-location",
 		ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
-		AllowedStreamCounts:  []int32{1, 2, 4, 16},
+		MaxStreams:           16,
 		DefaultStreamCount:   4,
 		SessionTTL:           30 * time.Minute,
 		CleanupInterval:      time.Minute,

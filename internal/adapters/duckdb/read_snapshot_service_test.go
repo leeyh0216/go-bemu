@@ -372,7 +372,7 @@ func newReadAdapterService(t *testing.T, materializer *DuckDBReadSnapshotMateria
 	service, err := readapp.New(readapp.Config{
 		Location:             "test-location",
 		ProtocolModelVersion: readSnapshotTestModelVersion,
-		AllowedStreamCounts:  []int32{1, 2, 4, 16},
+		MaxStreams:           16,
 		DefaultStreamCount:   4,
 		SessionTTL:           ttl,
 		CleanupInterval:      time.Minute,

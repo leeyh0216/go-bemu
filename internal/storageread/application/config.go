@@ -6,8 +6,6 @@ package application
 
 import (
 	"fmt"
-	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -15,12 +13,16 @@ import (
 type Config struct {
 	Location             string
 	ProtocolModelVersion string
-	AllowedStreamCounts  []int32
-	DefaultStreamCount   int32
-	SessionTTL           time.Duration
-	CleanupInterval      time.Duration
-	MaxRowsPerResponse   int64
-	MaxSessions          int
+	// MaxStreams is the local ceiling applied to max_stream_count and
+	// preferred_min_stream_count. Both request fields are advisory, so the
+	// service may choose a smaller count.
+	// Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#createreadsessionrequest
+	MaxStreams         int32
+	DefaultStreamCount int32
+	SessionTTL         time.Duration
+	CleanupInterval    time.Duration
+	MaxRowsPerResponse int64
+	MaxSessions        int
 }
 
 func validateConfig(config *Config) error {
@@ -30,23 +32,8 @@ func validateConfig(config *Config) error {
 	if strings.TrimSpace(config.ProtocolModelVersion) == "" {
 		return fmt.Errorf("protocol model version is required")
 	}
-	if len(config.AllowedStreamCounts) == 0 {
-		return fmt.Errorf("at least one allowed stream count is required")
-	}
-	config.AllowedStreamCounts = slices.Clone(config.AllowedStreamCounts)
-	sort.Slice(config.AllowedStreamCounts, func(i, j int) bool {
-		return config.AllowedStreamCounts[i] < config.AllowedStreamCounts[j]
-	})
-	for index, count := range config.AllowedStreamCounts {
-		if count <= 0 {
-			return fmt.Errorf("allowed stream counts must be positive")
-		}
-		if index > 0 && count == config.AllowedStreamCounts[index-1] {
-			return fmt.Errorf("allowed stream counts must be unique")
-		}
-	}
-	if !slices.Contains(config.AllowedStreamCounts, config.DefaultStreamCount) {
-		return fmt.Errorf("default stream count must be allowed")
+	if config.MaxStreams <= 0 || config.DefaultStreamCount <= 0 || config.DefaultStreamCount > config.MaxStreams {
+		return fmt.Errorf("stream limit and default must be positive, and default must not exceed the limit")
 	}
 	if config.SessionTTL <= 0 || config.CleanupInterval <= 0 {
 		return fmt.Errorf("session TTL and cleanup interval must be positive")
