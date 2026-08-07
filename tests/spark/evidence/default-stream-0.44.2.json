@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1",
+  "capabilityIds": [
+    "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1"
+  ],
+  "observedOn": "2026-08-08",
+  "consumer": {
+    "connector": "spark-bigquery-connector-0.44.2",
+    "spark": "3.5.8",
+    "scalaBinaryVersion": "2.12",
+    "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92"
+  },
+  "artifacts": {
+    "lockFingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf",
+    "connectorJarFingerprint": "sha256:516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+  },
+  "edge": {
+    "rest": "HTTPS random loopback port with localhost SAN",
+    "storage": "TLS gRPC random loopback port with JVM PKCS12 truststore",
+    "credential": "static access token; bytes omitted"
+  },
+  "trace": [
+    {"stage": "temp_table", "operation": "tables.insert", "shape": "gzip-content-encoding:decoded payload:omitted", "status": "200"},
+    {"stage": "default_append", "operation": "GetWriteStream+AppendRows", "shape": "spark-partitions:1 default-streams:1 appended-rows:2", "status": "OK"},
+    {"stage": "copy_query", "operation": "jobs.insert+jobs.get+getQueryResults", "shape": "labels-keys:0 priority:INTERACTIVE write-disposition:WRITE_APPEND copied-rows:2", "status": "DONE"},
+    {"stage": "spark_assertion", "operation": "query-count", "shape": "expected-count:2", "status": "passed"}
+  ],
+  "redaction": {
+    "rawRows": false,
+    "rawSQL": false,
+    "rawToken": false,
+    "certificatePrivateKey": false,
+    "writeStreamResourceNames": false
+  }
+}

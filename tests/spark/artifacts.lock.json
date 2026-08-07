@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1",
+  "connectorVersion": "0.44.2",
+  "sparkVersion": "3.5.8",
+  "scalaBinaryVersion": "2.12",
+  "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92",
+  "artifacts": [
+    {
+      "id": "spark-bigquery-connector",
+      "kind": "maven-jar",
+      "url": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar",
+      "output": "spark-bigquery-with-dependencies_2.12-0.44.2.jar",
+      "size": 42160396,
+      "sha256": "516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+    }
+  ],
+  "pythonArtifacts": [
+    {
+      "id": "pyspark",
+      "version": "3.5.8",
+      "url": "https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz",
+      "size": 317817299,
+      "sha256": "54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c"
+    },
+    {
+      "id": "py4j",
+      "version": "0.10.9.7",
+      "url": "https://files.pythonhosted.org/packages/10/30/a58b32568f1623aaad7db22aa9eafc4c6c194b429ff35bdc55ca2726da47/py4j-0.10.9.7-py2.py3-none-any.whl",
+      "size": 200481,
+      "sha256": "85defdfd2b2376eb3abf5ca6474b51ab7e0de341c75a02f46dc9b5976f5a5c1b"
+    }
+  ]
+}

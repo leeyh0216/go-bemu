@@ -1,0 +1,1784 @@
+{
+  "schemaVersion": "1",
+  "id": "spark-bigquery-connector-0.44.2-spark-3.5.8",
+  "connector": {
+    "kind": "connector",
+    "name": "spark-bigquery-connector",
+    "versions": [
+      "0.44.2"
+    ]
+  },
+  "sparkVersion": "3.5.8",
+  "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92",
+  "sourceCatalog": {
+    "connector-readme": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/README.md"
+    },
+    "spark-config": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/SparkBigQueryConfig.java"
+    },
+    "read-session": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java"
+    },
+    "direct-writer": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataSourceWriterContext.java"
+    },
+    "direct-partition-writer": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataWriterContext.java"
+    },
+    "indirect-writer": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/BigQueryIndirectDataSourceWriterContext.java"
+    },
+    "streaming-sink": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/BigQueryStreamingSink.java"
+    },
+    "schema-converters": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/SchemaConverters.java"
+    },
+    "credentials-supplier": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryCredentialsSupplier.java"
+    },
+    "scala-2.12-maven-jar": {
+      "kind": "artifact",
+      "url": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar",
+      "fingerprint": "sha256:516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+    }
+  },
+  "issueCatalog": {
+    "read": {
+      "url": "https://github.com/leeyh0216/go-bemu/issues/6",
+      "languages": [
+        "en",
+        "ko"
+      ]
+    },
+    "write": {
+      "url": "https://github.com/leeyh0216/go-bemu/issues/7",
+      "languages": [
+        "en",
+        "ko"
+      ]
+    },
+    "overwrite": {
+      "url": "https://github.com/leeyh0216/go-bemu/issues/8",
+      "languages": [
+        "en",
+        "ko"
+      ]
+    },
+    "types": {
+      "url": "https://github.com/leeyh0216/go-bemu/issues/9",
+      "languages": [
+        "en",
+        "ko"
+      ]
+    },
+    "auth": {
+      "url": "https://github.com/leeyh0216/go-bemu/issues/10",
+      "languages": [
+        "en",
+        "ko"
+      ]
+    },
+    "matrix": {
+      "url": "https://github.com/leeyh0216/go-bemu/issues/11",
+      "languages": [
+        "en",
+        "ko"
+      ]
+    }
+  },
+  "entries": [
+    {
+      "id": "SBQ-READ-ARROW-TABLE-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-4",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/arrow-read-0.44.2.json",
+          "fingerprint": "sha256:a3753e290a645fd8e725fdf39b209d8ec8ced37b6179345a0bf9bb2b07f73b97"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-TABLE-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-4",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/avro-read-0.44.2.json",
+          "fingerprint": "sha256:eae59433ba35888264e8ef43f50d1fcd1876d60f401b6cc60628a65e34bc1448"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-PROJECTION-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "projection",
+        "typeFamily": "string-bytes",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "read-session"
+      ],
+      "issueRef": "read",
+      "limitation": "Top-level selected fields are implemented; nested-field projection remains deliberately unverified."
+    },
+    {
+      "id": "SBQ-READ-ARROW-FILTER-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "filter",
+        "typeFamily": "numeric-bignumeric",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "read-session"
+      ],
+      "issueRef": "read",
+      "limitation": "A bounded comparison and boolean-expression subset is implemented; arbitrary Storage API row restrictions are not."
+    },
+    {
+      "id": "SBQ-READ-ARROW-COUNT-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "count",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config"
+      ],
+      "issueRef": "read",
+      "limitation": "The connector optimized empty projection and filtered COUNT metadata/query paths lack a real-process contract."
+    },
+    {
+      "id": "SBQ-READ-ARROW-QUERY-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "query",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session"
+      ],
+      "issueRef": "read",
+      "limitation": "Connector query materialization lifecycle is not emulated end to end."
+    },
+    {
+      "id": "SBQ-READ-ARROW-VIEW-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "view",
+        "typeFamily": "struct-array",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session"
+      ],
+      "issueRef": "read",
+      "limitation": "View metadata and connector materialization lifecycle are not implemented."
+    },
+    {
+      "id": "SBQ-READ-STREAM-ONE-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "string-bytes",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-1",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "read-session"
+      ],
+      "issueRef": "read",
+      "limitation": "One logical stream is supported; the released Spark process assertion is not yet a required passing gate."
+    },
+    {
+      "id": "SBQ-READ-STREAM-TWO-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-2",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "read-session"
+      ],
+      "issueRef": "read",
+      "limitation": "Two logical streams are negotiated, but Spark partition scheduling has not been promoted to verified."
+    },
+    {
+      "id": "SBQ-READ-STREAM-FOUR-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "struct-array",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-4",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "read-session"
+      ],
+      "issueRef": "read",
+      "limitation": "Four logical streams are negotiated, but Spark partition scheduling has not been promoted to verified."
+    },
+    {
+      "id": "SBQ-READ-STREAM-NEGOTIATED-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "geography",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "read-session"
+      ],
+      "issueRef": "read",
+      "limitation": "The server may return fewer streams than requested; connector behavior across high stream counts remains unverified."
+    },
+    {
+      "id": "SBQ-READ-TIME-PARTITION-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "filter",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "time"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "read-session"
+      ],
+      "issueRef": "types",
+      "limitation": "Time partition metadata and pseudo-column pruning are not implemented."
+    },
+    {
+      "id": "SBQ-READ-INGESTION-PARTITION-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "filter",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "ingestion-time"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "read-session"
+      ],
+      "issueRef": "types",
+      "limitation": "Ingestion-time pseudo columns and partition pruning are not implemented."
+    },
+    {
+      "id": "SBQ-READ-RANGE-PARTITION-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "filter",
+        "typeFamily": "numeric-bignumeric",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "integer-range"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "read-session"
+      ],
+      "issueRef": "types",
+      "limitation": "Integer-range partition metadata and pruning are not implemented."
+    },
+    {
+      "id": "SBQ-READ-DECIMAL-TYPES-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "projection",
+        "typeFamily": "numeric-bignumeric",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters"
+      ],
+      "issueRef": "types",
+      "limitation": "Decimal conversion is bounded by Spark precision; parameterized and oversized BIGNUMERIC cases remain unverified."
+    },
+    {
+      "id": "SBQ-READ-JSON-TYPE-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "projection",
+        "typeFamily": "json",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters"
+      ],
+      "issueRef": "types",
+      "limitation": "BQ JSON-to-Spark String metadata semantics are not pinned at the public edge."
+    },
+    {
+      "id": "SBQ-READ-MAP-TYPE-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "projection",
+        "typeFamily": "map",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters"
+      ],
+      "issueRef": "types",
+      "limitation": "ARRAY<STRUCT<key,value>> to Spark Map conversion restrictions lack an emulator contract."
+    },
+    {
+      "id": "SBQ-READ-GEOGRAPHY-TYPE-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "projection",
+        "typeFamily": "geography",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters"
+      ],
+      "issueRef": "types",
+      "limitation": "GEOGRAPHY wire and Spark string conversion is not verified."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-1",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer",
+        "direct-partition-writer"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/direct-pending-0.44.2.json",
+          "fingerprint": "sha256:d0f1c1938d8a690df662b153bb0497db545aa9e953796404453abf16b1321c3e"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "string-bytes",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-2",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "direct-writer",
+        "direct-partition-writer"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/direct-pending-0.44.2.json",
+          "fingerprint": "sha256:d0f1c1938d8a690df662b153bb0497db545aa9e953796404453abf16b1321c3e"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-4",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "direct-writer",
+        "direct-partition-writer"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/direct-pending-0.44.2.json",
+          "fingerprint": "sha256:d0f1c1938d8a690df662b153bb0497db545aa9e953796404453abf16b1321c3e"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+      "flow": "write-direct-default",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "at-least-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-1",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-partition-writer"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/default-stream-0.44.2.json",
+          "fingerprint": "sha256:5e0bcd0e3ad035eadc4f79b8bc3fa3269c1a8e315f120139676e690d1ab5364e"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
+      "flow": "write-direct-default",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "at-least-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "string-bytes",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-2",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "direct-partition-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "The two-partition default-stream append is blocked after successful Storage Write by the same copy-query job labels and priority contract; this partition count remains unexecuted."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+      "flow": "write-direct-default",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "at-least-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "struct-array",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-4",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "direct-partition-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "The four-partition default-stream append is blocked after successful Storage Write by the same copy-query job labels and priority contract; this partition count remains unexecuted."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1",
+      "flow": "write-direct-overwrite",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "The pinned connector static-overwrite query shape is adapted; full Spark temporary-table lifecycle is not verified."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+      "flow": "write-direct-overwrite",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "dynamic-overwrite"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "Dynamic partition overwrite MERGE shape is not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-ALO-OVERWRITE-V1",
+      "flow": "write-direct-default",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "at-least-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config"
+      ],
+      "issueRef": "write",
+      "limitation": "Connector 0.44.2 rejects writeAtLeastOnce with overwrite; the gap is intentional and must remain explicit."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-IGNORE-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "ignore",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "direct-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "SaveMode.Ignore table-existence behavior lacks a released Spark public-edge test."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-ERROR-EXISTS-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "error-if-exists",
+        "readShape": "not-applicable",
+        "typeFamily": "string-bytes",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "direct-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "SaveMode.ErrorIfExists table-existence behavior lacks a released Spark public-edge test."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-TIME-APPEND-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "time"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Writes to an existing time-partitioned table lack partition metadata semantics."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-TIME-OVERWRITE-V1",
+      "flow": "write-direct-overwrite",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "time"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "Time-partition overwrite behavior and target selection are not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-INGESTION-APPEND-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "ingestion-time"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Ingestion-time partition assignment is not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-INGESTION-OVERWRITE-V1",
+      "flow": "write-direct-overwrite",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "ingestion-time"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "Connector 0.44.2 does not support direct overwrite of ingestion-time partitions."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-RANGE-APPEND-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "numeric-bignumeric",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "integer-range"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Writes to an existing range-partitioned table lack partition metadata semantics."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-RANGE-OVERWRITE-V1",
+      "flow": "write-direct-overwrite",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "numeric-bignumeric",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "integer-range"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-writer"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "Range-partition overwrite behavior and target selection are not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-DECIMAL-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "numeric-bignumeric",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters",
+        "direct-partition-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Basic decimal encoding exists; parameterized NUMERIC and Spark precision boundaries are not exhaustive."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-NESTED-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "struct-array",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "schema-converters",
+        "direct-partition-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Nested and repeated ProtoRows are implemented for a bounded subset; schema edge cases remain unverified."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-MAP-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "map",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters"
+      ],
+      "issueRef": "types",
+      "limitation": "Spark Map to repeated key/value record restrictions are not implemented at the public edge."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-JSON-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "json",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters"
+      ],
+      "issueRef": "types",
+      "limitation": "Connector 0.44.2 documents JSON writes only through indirect Avro with metadata."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-GEOGRAPHY-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "geography",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters"
+      ],
+      "issueRef": "types",
+      "limitation": "GEOGRAPHY schema metadata and value validation are not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-PARQUET-APPEND-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "indirect-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "Parquet load exists behind an explicit object-store endpoint; Spark GCS staging and cleanup are not verified."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-AVRO-APPEND-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "indirect-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "Avro load parsing is not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-ORC-APPEND-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "ORC",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "indirect-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "ORC load parsing is not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-PARQUET-OVERWRITE-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "string-bytes",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "indirect-writer"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "WRITE_TRUNCATE load behavior exists, but released Spark schema-preservation semantics are not verified."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-AVRO-OVERWRITE-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "indirect-writer"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "Avro load parsing and overwrite schema preservation are not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-ORC-OVERWRITE-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "ORC",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "struct-array",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "indirect-writer"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "ORC load parsing and overwrite schema preservation are not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-PARQUET-IGNORE-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "ignore",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "indirect-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "SaveMode.Ignore object staging suppression and cleanup are not verified."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-PARQUET-ERROR-EXISTS-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "error-if-exists",
+        "readShape": "not-applicable",
+        "typeFamily": "string-bytes",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "indirect-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "SaveMode.ErrorIfExists behavior before object staging is not verified."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-TIME-PARTITION-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "time"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "indirect-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Time partition creation and destination decorators are not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-INGESTION-PARTITION-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "ingestion-time"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "indirect-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Ingestion-time partition creation and decorators are not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-RANGE-PARTITION-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "numeric-bignumeric",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "integer-range"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "indirect-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Integer-range partition creation metadata is not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-AVRO-JSON-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "json",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters",
+        "indirect-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Avro JSON logical metadata handling is not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-AVRO-MAP-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "map",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters",
+        "indirect-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Avro repeated key/value map conversion is not implemented."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-ORC-ML-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "ORC",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "ml-vector-matrix",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters",
+        "indirect-writer"
+      ],
+      "issueRef": "types",
+      "limitation": "Spark ML vector/matrix record conversion and ORC load are not implemented."
+    },
+    {
+      "id": "SBQ-STREAM-DIRECT-ALO-APPEND-V1",
+      "flow": "write-structured-streaming",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "structured-streaming",
+        "format": "PROTO_ROWS",
+        "delivery": "at-least-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "streaming-sink",
+        "direct-partition-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "Structured Streaming micro-batch checkpoint, epoch, and retry behavior are not tested against BQEMU."
+    },
+    {
+      "id": "SBQ-STREAM-DIRECT-EXACT-APPEND-V1",
+      "flow": "write-structured-streaming",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "structured-streaming",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "string-bytes",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "streaming-sink",
+        "direct-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "Structured Streaming exact PENDING commit behavior is not tested against BQEMU."
+    },
+    {
+      "id": "SBQ-STREAM-INDIRECT-PARQUET-V1",
+      "flow": "write-structured-streaming",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "structured-streaming",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "streaming-sink",
+        "indirect-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "Per-micro-batch Parquet staging, load jobs, cleanup, and checkpoint recovery are not implemented end to end."
+    },
+    {
+      "id": "SBQ-STREAM-INDIRECT-AVRO-V1",
+      "flow": "write-structured-streaming",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "structured-streaming",
+        "format": "AVRO",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "streaming-sink",
+        "indirect-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "Per-micro-batch Avro staging and load are not implemented end to end."
+    },
+    {
+      "id": "SBQ-STREAM-INDIRECT-ORC-V1",
+      "flow": "write-structured-streaming",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "structured-streaming",
+        "format": "ORC",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "struct-array",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "gap",
+      "officialSourceRefs": [
+        "connector-readme",
+        "streaming-sink",
+        "indirect-writer"
+      ],
+      "issueRef": "write",
+      "limitation": "Per-micro-batch ORC staging and load are not implemented end to end."
+    },
+    {
+      "id": "SBQ-AUTH-STATIC-TOKEN-V1",
+      "flow": "authentication",
+      "axes": {
+        "operation": "auth",
+        "transport": "credential-provider",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "static-access-token",
+        "parallelism": "not-applicable",
+        "tablePartitioning": "not-applicable"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "credentials-supplier"
+      ],
+      "issueRef": "auth",
+      "limitation": "The connector can send a fixed access token; BQEMU does not emulate IAM identity or token acquisition."
+    },
+    {
+      "id": "SBQ-AUTH-SERVICE-ACCOUNT-FILE-V1",
+      "flow": "authentication",
+      "axes": {
+        "operation": "auth",
+        "transport": "credential-provider",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "service-account-file",
+        "parallelism": "not-applicable",
+        "tablePartitioning": "not-applicable"
+      },
+      "state": "cloud-only",
+      "officialSourceRefs": [
+        "connector-readme",
+        "credentials-supplier"
+      ],
+      "issueRef": "auth",
+      "limitation": "Service-account assertion exchange and IAM validation are delegated to Google Cloud."
+    },
+    {
+      "id": "SBQ-AUTH-SERVICE-ACCOUNT-BASE64-V1",
+      "flow": "authentication",
+      "axes": {
+        "operation": "auth",
+        "transport": "credential-provider",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "service-account-base64",
+        "parallelism": "not-applicable",
+        "tablePartitioning": "not-applicable"
+      },
+      "state": "cloud-only",
+      "officialSourceRefs": [
+        "connector-readme",
+        "credentials-supplier"
+      ],
+      "issueRef": "auth",
+      "limitation": "Inline service-account assertion exchange and IAM validation are delegated to Google Cloud."
+    },
+    {
+      "id": "SBQ-AUTH-ADC-SERVICE-ACCOUNT-V1",
+      "flow": "authentication",
+      "axes": {
+        "operation": "auth",
+        "transport": "credential-provider",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "adc-service-account",
+        "parallelism": "not-applicable",
+        "tablePartitioning": "not-applicable"
+      },
+      "state": "cloud-only",
+      "officialSourceRefs": [
+        "connector-readme",
+        "credentials-supplier"
+      ],
+      "issueRef": "auth",
+      "limitation": "ADC service-account token acquisition is not emulated."
+    },
+    {
+      "id": "SBQ-AUTH-ADC-USER-V1",
+      "flow": "authentication",
+      "axes": {
+        "operation": "auth",
+        "transport": "credential-provider",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "adc-user",
+        "parallelism": "not-applicable",
+        "tablePartitioning": "not-applicable"
+      },
+      "state": "cloud-only",
+      "officialSourceRefs": [
+        "connector-readme",
+        "credentials-supplier"
+      ],
+      "issueRef": "auth",
+      "limitation": "Authorized-user ADC refresh and quota-project semantics are not emulated."
+    },
+    {
+      "id": "SBQ-AUTH-WIF-V1",
+      "flow": "authentication",
+      "axes": {
+        "operation": "auth",
+        "transport": "credential-provider",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "wif-external-account",
+        "parallelism": "not-applicable",
+        "tablePartitioning": "not-applicable"
+      },
+      "state": "cloud-only",
+      "officialSourceRefs": [
+        "connector-readme",
+        "credentials-supplier"
+      ],
+      "issueRef": "auth",
+      "limitation": "STS token exchange, external-account subject tokens, and workforce/workload pool validation are not emulated."
+    },
+    {
+      "id": "SBQ-AUTH-IMPERSONATION-V1",
+      "flow": "authentication",
+      "axes": {
+        "operation": "auth",
+        "transport": "credential-provider",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "impersonation",
+        "parallelism": "not-applicable",
+        "tablePartitioning": "not-applicable"
+      },
+      "state": "cloud-only",
+      "officialSourceRefs": [
+        "connector-readme",
+        "credentials-supplier"
+      ],
+      "issueRef": "auth",
+      "limitation": "IAM Credentials generateAccessToken and user/group precedence are not emulated."
+    },
+    {
+      "id": "SBQ-AUTH-CUSTOM-TOKEN-PROVIDER-V1",
+      "flow": "authentication",
+      "axes": {
+        "operation": "auth",
+        "transport": "credential-provider",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "custom-token-provider",
+        "parallelism": "not-applicable",
+        "tablePartitioning": "not-applicable"
+      },
+      "state": "cloud-only",
+      "officialSourceRefs": [
+        "connector-readme",
+        "credentials-supplier"
+      ],
+      "issueRef": "auth",
+      "limitation": "The JVM provider lifecycle is connector-owned; only the resulting bearer-token boundary can be tested locally."
+    }
+  ]
+}

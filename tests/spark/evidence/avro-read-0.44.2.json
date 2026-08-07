@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1",
+  "capabilityId": "SBQ-READ-AVRO-TABLE-V1",
+  "observedOn": "2026-08-08",
+  "consumer": {
+    "connector": "spark-bigquery-connector-0.44.2",
+    "spark": "3.5.8",
+    "scalaBinaryVersion": "2.12",
+    "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92"
+  },
+  "artifacts": {
+    "lockFingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf",
+    "connectorJarFingerprint": "sha256:516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+  },
+  "edge": {
+    "rest": "HTTPS random loopback port with localhost SAN",
+    "storage": "TLS gRPC random loopback port with JVM PKCS12 truststore",
+    "credential": "static access token; bytes omitted"
+  },
+  "trace": [
+    {"stage": "table_metadata", "operation": "tables.get", "shape": "REST:GET", "status": "200"},
+    {"stage": "create_read_session", "operation": "CreateReadSession", "shape": "AVRO requested-streams:4 returned-streams:4", "status": "OK"},
+    {"stage": "read_rows", "operation": "ReadRows", "shape": "distinct-streams:4 all-observed-calls:OK", "status": "OK"},
+    {"stage": "spark_assertion", "operation": "collect", "shape": "rows:4 partitions:4 row-fingerprint:sha256:720881de201b576d10ff90727ee6f974764eddcf6035258d004e52a013f3c8e1", "status": "passed"}
+  ],
+  "redaction": {
+    "rawRows": false,
+    "rawToken": false,
+    "certificatePrivateKey": false,
+    "readStreamResourceNames": false
+  }
+}

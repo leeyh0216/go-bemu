@@ -11,12 +11,17 @@ BQEMU_BQCLI_BIN ?= bq
 BQEMU_BQCLI_TIMEOUT_SECONDS ?= 300
 BQEMU_BQCLI_VERSION ?= 2.1.31
 BQEMU_DOCKER_START_TIMEOUT_SECONDS ?= 120
+BQEMU_SPARK_TEST_TIMEOUT_SECONDS ?= 600
+BQEMU_SPARK_RPC_TIMEOUT_SECONDS ?= 30
+BQEMU_ARTIFACT_TIMEOUT_SECONDS ?= 180
+BQEMU_SPARK_VENV ?= $(CURDIR)/.artifacts/spark/venv
+BQEMU_SPARK_PYTHON ?= $(BQEMU_SPARK_VENV)/bin/python
 GO_TEST_FLAGS ?=
 IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test bq-test vet check config-check docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test bq-test spark-contract vet check config-check docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -28,6 +33,7 @@ help:
 	  'make check        Run formatting, bounded race tests, and vet' \
 	  'make python-test  Run the official Python client real-process contract' \
 	  'make bq-test      Run the exact-version official bq CLI contract' \
+	  'make spark-contract Install exact Spark locks and run the released connector contract' \
 	  'make docker-build Build the standalone non-root image' \
 	  'make docker-up    Start the read-only Compose service and wait for readiness' \
 	  'make docker-down  Stop the Compose service and remove transient resources'
@@ -80,6 +86,24 @@ bq-test:
 	BQEMU_BQCLI_TIMEOUT_SECONDS="$(BQEMU_BQCLI_TIMEOUT_SECONDS)" \
 	BQEMU_BQCLI_ARTIFACT_DIR="$(CURDIR)/.artifacts/bqcli" \
 	"$(PYTHON3)" tests/bqcli/run_contract.py
+
+spark-contract:
+	mkdir -p "$(CURDIR)/.artifacts/spark/diagnostics"
+	@if test -x "$(BQEMU_SPARK_PYTHON)"; then \
+	  "$(BQEMU_SPARK_PYTHON)" -c 'import sys; assert sys.version_info[:2] == (3, 11), "Spark contract requires Python 3.11"'; \
+	else \
+	  uv venv --python 3.11 "$(BQEMU_SPARK_VENV)"; \
+	fi
+	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
+	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
+	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py
+	BQEMU_SPARK_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
+	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
+	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
+	PYTHONPYCACHEPREFIX="$(CURDIR)/.artifacts/spark/pycache" \
+	"$(BQEMU_SPARK_PYTHON)" -m pytest -c tests/spark/pytest.ini tests/spark \
+	  --basetemp="$(CURDIR)/.artifacts/spark/pytest" \
+	  --junitxml="$(CURDIR)/.artifacts/spark/diagnostics/junit.xml"
 
 vet:
 	CGO_ENABLED=1 go vet ./...

@@ -1,5 +1,6 @@
 /bin/
 /data/
+/.artifacts/
 *.duckdb
 *.duckdb.wal
 coverage.out

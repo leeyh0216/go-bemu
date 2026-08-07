@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1",
+  "capabilityIds": [
+    "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+    "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+    "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1"
+  ],
+  "observedOn": "2026-08-08",
+  "consumer": {
+    "connector": "spark-bigquery-connector-0.44.2",
+    "spark": "3.5.8",
+    "scalaBinaryVersion": "2.12",
+    "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92"
+  },
+  "artifacts": {
+    "lockFingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf",
+    "connectorJarFingerprint": "sha256:516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+  },
+  "edge": {
+    "rest": "HTTPS random loopback port with localhost SAN",
+    "storage": "TLS gRPC random loopback port with JVM PKCS12 truststore",
+    "credential": "static access token; bytes omitted"
+  },
+  "trace": [
+    {"stage": "write_1", "operation": "CreateWriteStream+AppendRows+FinalizeWriteStream+BatchCommitWriteStreams", "shape": "spark-partitions:1 pending-streams:1 committed-rows:8", "status": "OK"},
+    {"stage": "write_2", "operation": "CreateWriteStream+AppendRows+FinalizeWriteStream+BatchCommitWriteStreams", "shape": "spark-partitions:2 pending-streams:2 committed-rows:8", "status": "OK"},
+    {"stage": "write_4", "operation": "CreateWriteStream+AppendRows+FinalizeWriteStream+BatchCommitWriteStreams", "shape": "spark-partitions:4 pending-streams:4 committed-rows:8", "status": "OK"},
+    {"stage": "spark_assertion", "operation": "query-count", "shape": "cases:3 expected-count-per-case:8 shape-fingerprint:sha256:046d56a495ac3015267240475cabc47b53540edb1dccbfec8fc4d141a4373ebd", "status": "passed"}
+  ],
+  "redaction": {
+    "rawRows": false,
+    "rawToken": false,
+    "certificatePrivateKey": false,
+    "writeStreamResourceNames": false
+  }
+}
