@@ -114,7 +114,8 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"storage.read.maxStreams=16", "storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576",
 		"storage.write.maxStreams=16", "storage.write.maxAppendRequestBytes=1048576",
 		"auth.mode=static", "auth.staticTokensFile=tokens.txt", "logging.level=debug", "logging.format=text", "logging.unsafePayloads=true",
-		"admin.enabled=true", "admin.address=0.0.0.0:19051", "admin.tokenFile=admin-token", "ui.enabled=true", "ui.directory=web/dist",
+		"admin.enabled=true", "admin.address=0.0.0.0:19051", "admin.tokenFile=admin-token", "admin.readHeaderTimeout=2s", "admin.maxStackBytes=65536",
+		"ui.enabled=true", "ui.directory=web/dist",
 		"contracts.profileDirectory=contract/profiles",
 	}
 	args := make([]string, 0, len(overrides)*2)

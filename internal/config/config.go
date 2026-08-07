@@ -134,9 +134,11 @@ type LoggingConfig struct {
 }
 
 type AdminConfig struct {
-	Enabled   bool   `yaml:"enabled" json:"enabled"`
-	Address   string `yaml:"address" json:"address"`
-	TokenFile string `yaml:"tokenFile" json:"tokenFile"`
+	Enabled           bool     `yaml:"enabled" json:"enabled"`
+	Address           string   `yaml:"address" json:"address"`
+	TokenFile         string   `yaml:"tokenFile" json:"tokenFile"`
+	ReadHeaderTimeout Duration `yaml:"readHeaderTimeout" json:"readHeaderTimeout"`
+	MaxStackBytes     int      `yaml:"maxStackBytes" json:"maxStackBytes"`
 }
 
 type UIConfig struct {
@@ -198,9 +200,11 @@ func Defaults() Config {
 			Read:  StorageReadConfig{MaxStreams: 64, RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20},
 			Write: StorageWriteConfig{MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20},
 		},
-		Auth:      AuthConfig{Mode: "disabled"},
-		Logging:   LoggingConfig{Level: "info", Format: "json"},
-		Admin:     AdminConfig{Address: "127.0.0.1:9051"},
+		Auth:    AuthConfig{Mode: "disabled"},
+		Logging: LoggingConfig{Level: "info", Format: "json"},
+		Admin: AdminConfig{
+			Address: "127.0.0.1:9051", ReadHeaderTimeout: Duration(5 * time.Second), MaxStackBytes: 4 << 20,
+		},
 		Contracts: ContractsConfig{ProfileDirectory: "contract/profiles"},
 	}
 }
@@ -422,6 +426,10 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setString(&cfg.Admin.Address)
 	case "admin.tokenFile":
 		return setString(&cfg.Admin.TokenFile)
+	case "admin.readHeaderTimeout":
+		return setDuration(&cfg.Admin.ReadHeaderTimeout)
+	case "admin.maxStackBytes":
+		return setInt(&cfg.Admin.MaxStackBytes)
 	case "ui.enabled":
 		return setBool(&cfg.UI.Enabled)
 	case "ui.directory":
@@ -510,6 +518,12 @@ func (cfg Config) Validate() error {
 		host, _, _ := net.SplitHostPort(cfg.Admin.Address)
 		if !isLoopbackHost(host) && cfg.Admin.TokenFile == "" {
 			return errors.New("admin.tokenFile is required when admin.address is not loopback-only")
+		}
+		if cfg.Admin.ReadHeaderTimeout.Value() <= 0 {
+			return errors.New("admin.readHeaderTimeout must be positive")
+		}
+		if cfg.Admin.MaxStackBytes < 64<<10 || cfg.Admin.MaxStackBytes > 64<<20 {
+			return errors.New("admin.maxStackBytes must be between 64 KiB and 64 MiB")
 		}
 	}
 	if cfg.UI.Enabled && strings.TrimSpace(cfg.UI.Directory) == "" {
