@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  BQEMU_GO_TEST_TIMEOUT: 10m
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -17,6 +20,7 @@ jobs:
   go-contract:
     name: Go contract, race, and vet
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -26,6 +30,6 @@ jobs:
       - name: Check formatting
         run: test -z "$(gofmt -l contract internal)"
       - name: Test with race detector
-        run: go test -race ./...
+        run: go test -race -timeout "$BQEMU_GO_TEST_TIMEOUT" ./...
       - name: Vet
         run: go vet ./...
