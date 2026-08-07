@@ -137,13 +137,16 @@ cardinality에도 의존한다. 권위 있는 규칙은 [GoogleSQL DML `MERGE`
 rule은 정확한 connector template 하나를 인식하고 알 수 없는 SQL은 그대로
 전달하거나 unsupported로 보고해야 한다.
 
-현재 Static Partial adapter는 이 좁은 작업만 수행한다. Token parser가 source-derived
+현재 static adapter는 이 좁은 작업만 수행한다. Token parser가 source-derived
 connector `0.44.2` constant-false shape를 수락하고 source/destination table을 해석한
 뒤 하나의 atomic [DuckDB `MERGE
 INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 실행한다.
 [`direct-overwrite-static`](../../contract/golden/direct-overwrite-static-0.44.2.json)
-golden은 `jobs.insert`, polling, temporary-table delete를 다룬다. Dynamic time/range
-partition overwrite와 일반 BigQuery `MERGE` parity는 gap으로 남는다.
+golden은 `jobs.insert`, polling, temporary-table delete를 다룬다. Released Spark
+`3.5.8` [public-edge evidence](../../tests/spark/evidence/direct-static-overwrite-0.44.2.json)는
+PENDING stream 4개, atomic group commit 1회, replacement visibility, cleanup도
+검증한다. Dynamic time/range partition overwrite와 일반 BigQuery `MERGE` parity는
+gap으로 남는다.
 
 <!-- section: indirect-write -->
 ## Indirect Write와 Load Job
@@ -228,7 +231,7 @@ authorization은 서로 다른 capability 주장으로 유지해야 한다.
 | CreateReadSession/ReadRows | snapshot/session ledger와 Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical stream, stable offset, Split/compression/historical snapshot/nested projection gap |
 | AppendRows/finalize/commit | stream별 ledger와 transaction coordinator | public Partial: PENDING/default ProtoRows, offset, finalize, atomic commit, advanced stream kind와 durability gap |
 | indirect load | object store, staging, load disposition | opt-in public Partial: fake-GCS JSON과 기존 table 대상 Parquet, 다른 format/create/evolution/download gap |
-| direct overwrite MERGE | 구조적인 connector-template adapter | source-derived connector `0.44.2` Static Partial, dynamic time/range와 일반 parity gap |
+| direct overwrite MERGE | 구조적인 connector-template adapter | static unpartitioned connector `0.44.2` public-edge verified, dynamic time/range와 일반 parity gap |
 | ADC/WIF | 선택적 token stub과 auth middleware | 계획 |
 
 Capability 변경에는 공개 경계 테스트와 두 문서 언어의 호환성 갱신이 필요하다.

@@ -217,14 +217,16 @@ support requires statement-by-statement semantic analysis, variables, control
 flow, temporary objects, and job-level transaction semantics; passing an opaque
 script to DuckDB is never an acceptable fallback.
 
-One Static Partial exception is intentionally structural and versioned. A token
-parser recognizes the source-derived connector `0.44.2` shape from
+The verified static unpartitioned overwrite path is intentionally structural and
+versioned. Its released connector `0.44.2` public-edge E2E uses a token parser
+that recognizes the source-derived shape from
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java),
 applies the constant-false [BigQuery `MERGE`
 contract](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),
 and executes one atomic [DuckDB `MERGE
 INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). It does not
-generalize to dynamic time/range partition overwrite or arbitrary `MERGE`.
+generalize to dynamic time/range partition overwrite or arbitrary `MERGE`; those
+remain explicit gaps.
 
 <!-- section: runtime-security -->
 ## Runtime, TLS, and Identity

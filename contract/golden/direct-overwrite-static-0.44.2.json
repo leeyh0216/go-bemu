@@ -7,7 +7,9 @@
   "sourceRefs": [
     "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java",
     "https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement",
-    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert"
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/get"
   ],
   "flow": "direct-overwrite-static",
   "events": [
@@ -25,7 +27,17 @@
       }
     },
     {
-      "stage": "poll_static_overwrite_job",
+      "stage": "poll_static_overwrite_query_results",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/queries/{job}",
+      "fields": {
+        "response.jobComplete": "false_until_terminal_then_true",
+        "response.errors": "absent_on_success"
+      }
+    },
+    {
+      "stage": "reload_static_overwrite_job",
       "protocol": "REST",
       "method": "GET",
       "target": "/bigquery/v2/projects/{project}/jobs/{job}",

@@ -1118,16 +1118,26 @@
         "readShape": "not-applicable",
         "typeFamily": "boolean-integer-float",
         "auth": "static-access-token",
-        "parallelism": "spark-partition-negotiated",
+        "parallelism": "spark-partition-4",
         "tablePartitioning": "unpartitioned"
       },
-      "state": "partial",
+      "state": "verified",
       "officialSourceRefs": [
-        "connector-readme",
+        "query-materialization",
         "direct-writer"
       ],
-      "issueRef": "overwrite",
-      "limitation": "The pinned connector static-overwrite query shape is adapted; full Spark temporary-table lifecycle is not verified."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/direct-static-overwrite-0.44.2.json",
+          "fingerprint": "sha256:b7402d719f2970a05a931d403795700457b0ae17b449e6c9e07a8f3615ae7071"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",

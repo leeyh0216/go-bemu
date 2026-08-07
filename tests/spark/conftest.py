@@ -242,16 +242,17 @@ def _redact_diagnostic_text(text: str) -> str:
             rf"\1<redacted-resource-name>",
             text,
         )
+    sql_statement = r"(?:SELECT|WITH|MERGE|DECLARE|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)"
     text = re.sub(
-        r'(?im)((?:"(?:query|sql)"|(?:query|sql))\s*(?::|=|->)\s*"?)'
-        r'(?:SELECT|WITH)\b[^\r\n]*',
+        rf'(?im)((?:"(?:query|sql)"|(?:query|sql))\s*(?::|=|->)\s*"?)'
+        rf'{sql_statement}\b[^\r\n]*',
         r"\1<redacted-sql>",
         text,
     )
     # Connector INFO messages embed the complete query after free-form text
     # such as `running query [` or `created from "`. Keep retained diagnostics
     # useful without depending on every upstream log prefix.
-    text = re.sub(r"(?im)\b(?:SELECT|WITH)\b[^\r\n]*", "<redacted-sql>", text)
+    text = re.sub(rf"(?im)\b{sql_statement}\b[^\r\n]*", "<redacted-sql>", text)
     text = re.sub(r"(?i)(VALUES\s*)\([^\n]+", r"\1<redacted-row-values>", text)
     return text
 
@@ -326,6 +327,211 @@ def observe_default_append_offsets(
             )
         expected_offset += row_count
     return len(observations), expected_offset
+
+
+def observe_direct_overwrite_flow(
+    edge: PublicEdge, *, since: int
+) -> dict[str, object]:
+    """Return a resource-free direct-overwrite lifecycle observation.
+
+    Spark connector 0.44.2 writes a temporary table with PENDING streams,
+    commits those streams, submits its constant-false MERGE as a query job, and
+    deletes the temporary table. Dynamic resource names and query text are
+    deliberately discarded.
+
+    Exact connector producer:
+    https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L394-L422
+    """
+
+    with edge.log_path.open("rb") as stream:
+        stream.seek(since)
+        encoded_lines = stream.read().splitlines()
+
+    sequence: list[str] = []
+    static_adapter_matches = 0
+    pending_stream_fingerprints: set[str] = set()
+    appended_stream_fingerprints: set[str] = set()
+    finalized_stream_fingerprints: set[str] = set()
+    pending_stream_types: list[str] = []
+    append_batch_count = 0
+    append_row_count = 0
+    commit_stream_count = 0
+    commit_row_count = 0
+    commit_succeeded = False
+    created_tables: set[str] = set()
+    deleted_tables: set[str] = set()
+    storage_write_tables: set[str] = set()
+    for encoded in encoded_lines:
+        try:
+            event = json.loads(encoded)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+
+        if event.get("event") == "boundary.enter" and event.get("boundary") == "http":
+            method, path = event.get("method"), event.get("path")
+            if not isinstance(path, str):
+                continue
+            if method == "POST" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables", path
+            ):
+                sequence.append("tables.insert")
+            elif method == "DELETE" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/]+", path
+            ):
+                sequence.append("tables.delete")
+            elif method == "POST" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/jobs", path
+            ):
+                sequence.append("jobs.insert")
+            elif method == "GET" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/jobs/[^/]+", path
+            ):
+                sequence.append("jobs.get")
+            elif method == "GET" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/queries/[^/]+", path
+            ):
+                sequence.append("jobs.getQueryResults")
+            continue
+
+        if event.get("event") == "boundary.enter" and event.get("boundary") in {
+            "grpc.unary",
+            "grpc.stream",
+        }:
+            rpc = event.get("rpc")
+            if isinstance(rpc, str):
+                for operation in (
+                    "GetWriteStream",
+                    "CreateWriteStream",
+                    "AppendRows",
+                    "FinalizeWriteStream",
+                    "BatchCommitWriteStreams",
+                ):
+                    if rpc.endswith("/" + operation):
+                        sequence.append(operation)
+                        if operation == "FinalizeWriteStream":
+                            name = event.get("name")
+                            if not isinstance(name, str):
+                                raise AssertionError(
+                                    "finalize observation omitted its resource shape"
+                                )
+                            finalized_stream_fingerprints.add(
+                                "sha256:"
+                                + hashlib.sha256(name.encode("utf-8")).hexdigest()
+                            )
+                        break
+            continue
+
+        if (
+            event.get("event") == "domain.transition"
+            and event.get("operation") == "storage_write.create_stream"
+        ):
+            stream_type = event.get("stream_type")
+            fingerprint = event.get("stream_fingerprint")
+            table = event.get("table")
+            if (
+                not isinstance(stream_type, str)
+                or not isinstance(fingerprint, str)
+                or not isinstance(table, str)
+            ):
+                raise AssertionError("write-stream observation omitted its safe shape")
+            pending_stream_types.append(stream_type)
+            pending_stream_fingerprints.add(fingerprint)
+            storage_write_tables.add(table)
+            continue
+
+        if (
+            event.get("event") == "side_effect.after"
+            and event.get("side_effect") == "coordinator.stage_pending"
+            and event.get("operation") == "storage_write.append"
+            and event.get("success") is True
+        ):
+            fingerprint = event.get("stream_fingerprint")
+            row_count = event.get("row_count")
+            table = event.get("table")
+            if (
+                not isinstance(fingerprint, str)
+                or not isinstance(row_count, int)
+                or row_count <= 0
+                or not isinstance(table, str)
+            ):
+                raise AssertionError("append observation omitted its safe shape")
+            append_batch_count += 1
+            append_row_count += row_count
+            appended_stream_fingerprints.add(fingerprint)
+            storage_write_tables.add(table)
+            continue
+
+        if (
+            event.get("event") == "side_effect.after"
+            and event.get("side_effect") == "coordinator.commit_pending"
+            and event.get("operation") == "storage_write.batch_commit"
+        ):
+            stream_count = event.get("stream_count")
+            row_count = event.get("row_count")
+            table = event.get("table")
+            if (
+                event.get("success") is not True
+                or event.get("tx_state") != "committed"
+                or not isinstance(stream_count, int)
+                or not isinstance(row_count, int)
+                or not isinstance(table, str)
+            ):
+                raise AssertionError("batch-commit observation omitted its safe shape")
+            commit_stream_count = stream_count
+            commit_row_count = row_count
+            commit_succeeded = True
+            storage_write_tables.add(table)
+            continue
+
+        if (
+            event.get("event") == "side_effect.post"
+            and event.get("component") == "duckdb"
+            and event.get("operation") in {"create_table", "drop_table"}
+            and event.get("success") is True
+        ):
+            project = event.get("project_id")
+            dataset = event.get("dataset_id")
+            table = event.get("table_id")
+            if not all(isinstance(value, str) for value in (project, dataset, table)):
+                raise AssertionError("table side effect omitted its resource shape")
+            reference = f"projects/{project}/datasets/{dataset}/tables/{table}"
+            if event.get("operation") == "create_table":
+                created_tables.add(reference)
+            else:
+                deleted_tables.add(reference)
+            continue
+
+        if (
+            event.get("event") == "side_effect.pre"
+            and event.get("component") == "duckdb"
+            and event.get("operation") == "query"
+            and event.get("model_version")
+            == "spark-bigquery-connector-0.44.2/static-overwrite"
+        ):
+            static_adapter_matches += 1
+
+    return {
+        "sequence": tuple(sequence),
+        "counts": {operation: sequence.count(operation) for operation in set(sequence)},
+        "static_adapter_matches": static_adapter_matches,
+        "pending_stream_count": len(pending_stream_fingerprints),
+        "pending_stream_types_valid": bool(pending_stream_types)
+        and set(pending_stream_types) == {"PENDING"},
+        "append_batch_count": append_batch_count,
+        "append_row_count": append_row_count,
+        "commit_stream_count": commit_stream_count,
+        "commit_row_count": commit_row_count,
+        "commit_succeeded": commit_succeeded,
+        "stream_lifecycle_correlated": (
+            pending_stream_fingerprints
+            == appended_stream_fingerprints
+            == finalized_stream_fingerprints
+        ),
+        "temporary_table_correlated": (
+            len(created_tables) == 1
+            and created_tables == deleted_tables == storage_write_tables
+        ),
+    }
 
 
 def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object]:

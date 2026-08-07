@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "1",
+  "capabilityIds": [
+    "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+  ],
+  "observedOn": "2026-08-08",
+  "consumer": {
+    "connector": "spark-bigquery-connector-0.44.2",
+    "spark": "3.5.8",
+    "scalaBinaryVersion": "2.12",
+    "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92"
+  },
+  "artifacts": {
+    "lockFingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf",
+    "connectorJarFingerprint": "sha256:516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+  },
+  "edge": {
+    "rest": "HTTPS random loopback port with localhost SAN",
+    "storage": "TLS gRPC random loopback port with JVM PKCS12 truststore",
+    "credential": "static access token; bytes omitted"
+  },
+  "trace": [
+    {
+      "stage": "temporary_table_create",
+      "operation": "tables.insert",
+      "shape": "requests:1 schema-fields:3 resource-name:omitted",
+      "status": "OK"
+    },
+    {
+      "stage": "temporary_table_write",
+      "operation": "CreateWriteStream+AppendRows+FinalizeWriteStream+BatchCommitWriteStreams",
+      "shape": "spark-partitions:4 nonempty-partitions:4 pending-streams:4 append-batches:4 finalized-streams:4 committed-streams:4 committed-rows:8 get-write-stream-calls:0 stream-lifecycle-correlated:true",
+      "status": "OK"
+    },
+    {
+      "stage": "atomic_replace",
+      "operation": "jobs.insert+jobs.getQueryResults+jobs.get",
+      "shape": "merge-jobs:1 query-result-polls:min-1 job-reloads:1 adapter-model:spark-bigquery-connector-0.44.2/static-overwrite sql:omitted",
+      "status": "OK"
+    },
+    {
+      "stage": "temporary_table_cleanup",
+      "operation": "tables.delete",
+      "shape": "requests-before-writer-return:1 temporary-resource-correlated:true resource-name:omitted",
+      "status": "OK"
+    },
+    {
+      "stage": "spark_assertion",
+      "operation": "replacement-row-check",
+      "shape": "type-family:boolean-integer-float old-rows:0 replacement-rows:8 row-fingerprint:sha256:768497fa8a4b8e56666c73e8c5d19f397c8ab1bd0c5a411048ae8c7843f380e1",
+      "status": "passed"
+    }
+  ],
+  "redaction": {
+    "rawRows": false,
+    "rawQuery": false,
+    "rawToken": false,
+    "certificatePrivateKey": false,
+    "tableResourceNames": false,
+    "writeStreamResourceNames": false
+  }
+}

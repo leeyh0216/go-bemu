@@ -60,8 +60,9 @@ source](https://github.com/goccy/bigquery-emulator/tree/v0.8.1)에 고정한다.
 중요한 제한은 다음과 같다.
 
 - 영속 metadata, row insert/preview, copy/extract job, 전체 GoogleSQL은 구현하지 않았다.
-- Static overwrite는 Partial이다. Dynamic time/range partition overwrite와 일반
-  BigQuery `MERGE` parity는 gap이다.
+- Unpartitioned direct static overwrite는 Spark `3.5.8`과 connector `0.44.2`로
+  검증했다. Dynamic time/range partition overwrite와 일반 BigQuery `MERGE`
+  parity는 gap이다.
 - Storage Read는 partial이다. `SplitReadStream`, response compression, historical
   `snapshot_time`, restart-durable session, nested-field projection은 gap이다.
 - Storage Write는 partial이다. CDC, Arrow row, BUFFERED 및 명시적으로 생성하는

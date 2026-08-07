@@ -63,8 +63,9 @@ Important limits:
 
 - durable metadata, row insert/preview, copy/extract jobs, and full GoogleSQL are
   not implemented;
-- static overwrite is Partial; dynamic time/range partition overwrite and
-  general BigQuery `MERGE` parity are gaps;
+- unpartitioned direct static overwrite is verified with Spark `3.5.8` and
+  connector `0.44.2`; dynamic time/range partition overwrite and general
+  BigQuery `MERGE` parity are gaps;
 - Storage Read remains partial: `SplitReadStream`, response compression,
   historical `snapshot_time`, restart-durable sessions, and nested-field
   projection are gaps;

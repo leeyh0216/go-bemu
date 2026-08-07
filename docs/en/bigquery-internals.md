@@ -143,13 +143,16 @@ Regex text substitution cannot implement general `MERGE`; a compatibility rule
 must recognize one exact connector template and pass unknown SQL unchanged or
 report it unsupported.
 
-The current Static Partial adapter does exactly that narrow job: a token parser
+The current static adapter does exactly that narrow job: a token parser
 accepts the source-derived connector `0.44.2` constant-false shape, resolves its
 source and destination tables, and runs one atomic [DuckDB `MERGE
 INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). The
 [`direct-overwrite-static`](../../contract/golden/direct-overwrite-static-0.44.2.json)
-golden covers `jobs.insert`, polling, and temporary-table deletion. Dynamic
-time/range partition overwrite and general BigQuery `MERGE` parity remain gaps.
+golden covers `jobs.insert`, polling, and temporary-table deletion. The released
+Spark `3.5.8` [public-edge evidence](../../tests/spark/evidence/direct-static-overwrite-0.44.2.json)
+also verifies four PENDING streams, one atomic group commit, replacement
+visibility, and cleanup. Dynamic time/range partition overwrite and general
+BigQuery `MERGE` parity remain gaps.
 
 <!-- section: indirect-write -->
 ## Indirect Write and Load Jobs
@@ -236,7 +239,7 @@ authorization must remain separate capability claims.
 | CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical streams, stable offsets; Split/compression/historical snapshot/nested projection gaps |
 | AppendRows/finalize/commit | per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit; advanced stream kinds and durability gaps |
 | indirect load | object store, staging, load dispositions | opt-in public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
-| direct overwrite MERGE | structural connector-template adapter | Static Partial for source-derived connector `0.44.2`; dynamic time/range and general parity gaps |
+| direct overwrite MERGE | structural connector-template adapter | static unpartitioned connector `0.44.2` public-edge verified; dynamic time/range and general parity gaps |
 | ADC/WIF | optional token stub plus auth middleware | planned |
 
 Capability changes require public-boundary tests and a compatibility update in

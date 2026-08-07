@@ -109,12 +109,13 @@ func TestSparkStaticOverwriteProfilePinsAtomicReplaceShape(t *testing.T) {
 		t.Fatalf("static overwrite capability = %s, want partial", profile.Capabilities["sql.connector_overwrite"])
 	}
 	flow := profile.Flows["direct-overwrite-static"]
-	if len(flow) != 3 {
-		t.Fatalf("static overwrite flow has %d calls, want jobs.insert, jobs.get, tables.delete", len(flow))
+	if len(flow) != 4 {
+		t.Fatalf("static overwrite flow has %d calls, want jobs.insert, queries.get, jobs.get, tables.delete", len(flow))
 	}
 	if flow[0].Target != "/bigquery/v2/projects/{project}/jobs" ||
-		flow[1].Target != "/bigquery/v2/projects/{project}/jobs/{job}" ||
-		flow[2].Method != "DELETE" {
+		flow[1].Target != "/bigquery/v2/projects/{project}/queries/{job}" ||
+		flow[2].Target != "/bigquery/v2/projects/{project}/jobs/{job}" ||
+		flow[3].Method != "DELETE" {
 		t.Fatalf("unexpected static overwrite flow: %#v", flow)
 	}
 }

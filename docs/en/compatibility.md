@@ -156,7 +156,7 @@ configured default remains the fallback.
 | `SELECT`/`INSERT` | Partial | DuckDB syntax and functions |
 | `UPDATE`/`DELETE` | Partial | DuckDB statement behavior |
 | basic `MERGE` | Partial | one tested DuckDB-compatible form |
-| connector `0.44.2` static overwrite | Partial | source-derived token shape; atomic DuckDB `MERGE` |
+| connector `0.44.2` static overwrite | Verified narrow | released Spark temporary-table write, atomic DuckDB `MERGE`, polling, and cleanup |
 | dynamic partition overwrite | Unsupported | scripts/arrays/partition semantics absent |
 | parameters/scripts/views/UDFs | Unsupported | no semantic adapter |
 
@@ -169,11 +169,13 @@ the [official DML
 rules](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),
 including source cardinality and atomic visibility.
 
-The Static Partial adapter recognizes only the source-derived connector shape
+The narrow static adapter recognizes only the source-derived connector shape
 orchestrated by
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java),
 parses its identifiers and clauses as tokens, and executes one atomic [DuckDB
-`MERGE INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). Dynamic
+`MERGE INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). Exact
+Spark `3.5.8` process evidence covers four PENDING streams, one group commit,
+one MERGE job, replacement visibility, and temporary-table cleanup. Dynamic
 time/range partition overwrite and general BigQuery `MERGE` parity remain gaps.
 
 <!-- section: types -->
@@ -297,12 +299,12 @@ The corresponding [`python-query-sync`](../../contract/golden/python-query-sync-
 [`python-tabledata-list`](../../contract/golden/python-tabledata-list-3.43.0.json)
 goldens pin those shapes. Load/copy/extract and `insertAll` remain four strict
 unsupported xfails; lost-response `requestId` replay is one separate strict
-partial-contract xfail. The exact connector `0.44.2` matrix now records 20 of 75
+partial-contract xfail. The exact connector `0.44.2` matrix now records 21 of 75
 entries as verified, including Arrow/Avro multi-stream table and query reads,
 projection/filter pushdown, explicit materialization, optimized count, exact
-PENDING append, and default-stream append. It still does not claim complete
-Spark compatibility. Every promotion requires public-edge evidence and a
-negative or boundary test.
+PENDING append, default-stream append, and unpartitioned direct static
+overwrite. It still does not claim complete Spark compatibility. Every
+promotion requires public-edge evidence and a negative or boundary test.
 
 The [`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
 [`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),

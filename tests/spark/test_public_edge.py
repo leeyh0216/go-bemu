@@ -23,6 +23,7 @@ from conftest import (
     create_table,
     load_connector_source,
     observe_default_append_offsets,
+    observe_direct_overwrite_flow,
     observe_query_read_flow,
     public_edge_log_position,
     query,
@@ -96,6 +97,50 @@ def _assert_operation_counts(
         raise AssertionError(
             "query operation count mismatch shape=" + ",".join(sorted(mismatches))
         )
+
+
+def _assert_direct_overwrite_phase_order(observation: dict[str, object]) -> None:
+    """Pin the serial phase boundaries while allowing parallel task interleaving."""
+
+    sequence = observation["sequence"]
+    if not isinstance(sequence, tuple):
+        raise AssertionError("overwrite operation sequence has an invalid shape")
+
+    def positions(operation: str) -> list[int]:
+        return [index for index, observed in enumerate(sequence) if observed == operation]
+
+    table_create = positions("tables.insert")
+    stream_create = positions("CreateWriteStream")
+    appends = positions("AppendRows")
+    finalizes = positions("FinalizeWriteStream")
+    batch_commit = positions("BatchCommitWriteStreams")
+    job_insert = positions("jobs.insert")
+    query_polls = positions("jobs.getQueryResults")
+    job_reload = positions("jobs.get")
+    table_delete = positions("tables.delete")
+    groups = (
+        table_create,
+        stream_create,
+        appends,
+        finalizes,
+        batch_commit,
+        job_insert,
+        query_polls,
+        job_reload,
+        table_delete,
+    )
+    if any(not group for group in groups):
+        raise AssertionError("overwrite phase observation omitted an operation group")
+    if not (
+        table_create[0] < min(stream_create)
+        and max(appends) < batch_commit[0]
+        and max(finalizes) < batch_commit[0]
+        and batch_commit[0] < job_insert[0]
+        and job_insert[0] < min(query_polls)
+        and max(query_polls) < job_reload[0]
+        and job_reload[0] < table_delete[0]
+    ):
+        raise AssertionError("overwrite operation phase order mismatch")
 
 
 def _assert_anonymous_query_counts(
@@ -636,6 +681,139 @@ def test_direct_pending_exact_append(
     record_capability(
         f"SBQ-WRITE-DIRECT-EXACT-APPEND-{partition_name}-V1",
         f"pending-streams:{logical_partitions}",
+    )
+
+
+@pytest.mark.capability("SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1")
+def test_direct_pending_exact_static_overwrite(
+    spark_session,
+    public_edge: PublicEdge,
+    test_timeout: float,
+) -> None:
+    """Exercise the connector-owned temporary-table and MERGE lifecycle."""
+
+    table_id = f"overwrite_{uuid.uuid4().hex[:8]}"
+    destination = f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}"
+    create_table(
+        public_edge,
+        test_timeout,
+        table_id,
+        [
+            {"name": "id", "type": "INTEGER", "mode": "REQUIRED"},
+            {"name": "active", "type": "BOOLEAN", "mode": "NULLABLE"},
+            {"name": "score", "type": "FLOAT", "mode": "NULLABLE"},
+        ],
+    )
+    query(
+        public_edge,
+        test_timeout,
+        f"INSERT INTO `{destination}` VALUES (-2, false, -1.5), (-1, true, -0.5)",
+    )
+
+    replacement = (
+        spark_session.range(0, 8, numPartitions=4)
+        .selectExpr(
+            "id",
+            "(id % 2 = 0) AS active",
+            "CAST(id AS DOUBLE) + 0.5 AS score",
+        )
+        .cache()
+    )
+    try:
+        partition_sizes = replacement.rdd.mapPartitions(
+            lambda rows: [sum(1 for _ in rows)]
+        ).collect()
+        if len(partition_sizes) != 4 or any(size <= 0 for size in partition_sizes):
+            pytest.fail("overwrite source partition mismatch shape=nonempty:4")
+        writer = replacement.write.format("bigquery")
+        for key, value in connector_options(public_edge).items():
+            writer = writer.option(key, value)
+
+        log_position = public_edge_log_position(public_edge)
+        (
+            writer.option("writeMethod", "direct")
+            .option("writeAtLeastOnce", "false")
+            .mode("overwrite")
+            .save(destination)
+        )
+    finally:
+        replacement.unpersist()
+
+    observation = observe_direct_overwrite_flow(public_edge, since=log_position)
+    assert_ordered_operations(
+        observation,
+        (
+            "tables.insert",
+            "CreateWriteStream",
+            "AppendRows",
+            "FinalizeWriteStream",
+            "BatchCommitWriteStreams",
+            "jobs.insert",
+            "jobs.getQueryResults",
+            "jobs.get",
+            "tables.delete",
+        ),
+    )
+    _assert_direct_overwrite_phase_order(observation)
+    _assert_operation_counts(
+        observation,
+        exact={
+            "tables.insert": 1,
+            "CreateWriteStream": 4,
+            "AppendRows": 4,
+            "FinalizeWriteStream": 4,
+            "BatchCommitWriteStreams": 1,
+            "GetWriteStream": 0,
+            "jobs.insert": 1,
+            "jobs.get": 1,
+            "tables.delete": 1,
+        },
+        minimum={"jobs.getQueryResults": 1},
+    )
+    if observation["static_adapter_matches"] != 1:
+        pytest.fail("static overwrite adapter match mismatch shape=expected:1")
+    expected_observation = {
+        "pending_stream_count": 4,
+        "pending_stream_types_valid": True,
+        "append_batch_count": 4,
+        "append_row_count": 8,
+        "commit_stream_count": 4,
+        "commit_row_count": 8,
+        "commit_succeeded": True,
+        "stream_lifecycle_correlated": True,
+        "temporary_table_correlated": True,
+    }
+    for field, expected_value in expected_observation.items():
+        if observation.get(field) != expected_value:
+            pytest.fail(
+                "static overwrite observation mismatch "
+                f"shape={field}:expected:{expected_value}"
+            )
+
+    result = query(
+        public_edge,
+        test_timeout,
+        f"SELECT id, active, score FROM `{destination}` ORDER BY id",
+    )
+    rows = result.get("rows", [])
+    actual = [
+        (
+            int(row["f"][0]["v"]),
+            str(row["f"][1]["v"]).lower() == "true",
+            float(row["f"][2]["v"]),
+        )
+        for row in rows
+    ]
+    expected = [(index, index % 2 == 0, index + 0.5) for index in range(8)]
+    _assert_rows(actual, expected)
+    record_capability(
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1",
+        (
+            "spark-partitions:4 nonempty-partitions:4 pending-streams:4 "
+            "committed-rows:8 merge-jobs:1 "
+            "temporary-table-create-delete:1 atomic-replacement-rows:8 "
+            f"row-fingerprint:sha256:{_row_fingerprint(actual)}"
+        ),
     )
 
 

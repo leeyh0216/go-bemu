@@ -208,14 +208,15 @@ query](https://cloud.google.com/bigquery/docs/multi-statement-queries)를
 job 단위 transaction 의미가 필요하며 opaque script를 DuckDB에 그대로 넘기는 방식은
 fallback으로 허용하지 않는다.
 
-한 가지 Static Partial 예외는 의도적으로 structural하고 versioned되어 있다. Token
-parser가
+검증된 static unpartitioned overwrite 경로는 의도적으로 structural하고 versioned되어
+있다. Released connector `0.44.2` public-edge E2E는 token parser로
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)의
 source-derived connector `0.44.2` shape를 인식하고 constant-false [BigQuery
 `MERGE` 계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
 적용하며 하나의 atomic [DuckDB `MERGE
 INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 실행한다. Dynamic
-time/range partition overwrite나 임의 `MERGE`로 일반화하지 않는다.
+time/range partition overwrite나 임의 `MERGE`로 일반화하지 않으며 두 경로는 명시적
+gap으로 남는다.
 
 <!-- section: runtime-security -->
 ## Runtime, TLS, Identity

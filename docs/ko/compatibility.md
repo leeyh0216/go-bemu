@@ -153,7 +153,7 @@ dynamic SQL은 아직 inference
 | `SELECT`/`INSERT` | Partial | DuckDB syntax와 function |
 | `UPDATE`/`DELETE` | Partial | DuckDB statement 동작 |
 | basic `MERGE` | Partial | DuckDB-compatible 형식 하나 테스트 |
-| connector `0.44.2` static overwrite | Partial | source-derived token shape, atomic DuckDB `MERGE` |
+| connector `0.44.2` static overwrite | Verified narrow | released Spark temporary-table write, atomic DuckDB `MERGE`, polling, cleanup |
 | dynamic partition overwrite | Unsupported | script/array/partition 의미 없음 |
 | parameter/script/view/UDF | Unsupported | semantic adapter 없음 |
 
@@ -166,12 +166,14 @@ quoted column, comment, string을 안전하게 분류하지 못하므로 임의 
 규칙](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
 따라야 한다.
 
-Static Partial adapter는
+좁은 static adapter는
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)가
 조정하는 source-derived connector shape만 인식하고 identifier와 clause를 token으로
 parse한 뒤 하나의 atomic [DuckDB `MERGE
-INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 실행한다. Dynamic
-time/range partition overwrite와 일반 BigQuery `MERGE` parity는 gap으로 남는다.
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 실행한다. 정확한
+Spark `3.5.8` process evidence는 PENDING stream 4개, group commit 1회, MERGE job
+1회, replacement visibility, temporary-table cleanup을 검증한다. Dynamic time/range
+partition overwrite와 일반 BigQuery `MERGE` parity는 gap으로 남는다.
 
 <!-- section: types -->
 ## Type
@@ -292,11 +294,12 @@ asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/re
 [`python-tabledata-list`](../../contract/golden/python-tabledata-list-3.43.0.json)
 golden에 고정한다. Load/copy/extract와 `insertAll`은 strict unsupported xfail 네 개로,
 response-loss `requestId` replay는 별도 strict partial-contract xfail 하나로 남는다.
-정확한 connector `0.44.2` matrix는 75개 중 20개를 verified로 기록한다. 여기에는
+정확한 connector `0.44.2` matrix는 75개 중 21개를 verified로 기록한다. 여기에는
 Arrow/Avro multi-stream table/query read, projection/filter pushdown, explicit
-materialization, optimized count, exact PENDING append, default-stream append가
-포함된다. 완전한 Spark compatibility를 주장하지 않으며 capability 승격에는
-public-edge evidence와 negative 또는 boundary test가 필요하다.
+materialization, optimized count, exact PENDING append, default-stream append,
+unpartitioned direct static overwrite가 포함된다. 완전한 Spark compatibility를
+주장하지 않으며 capability 승격에는 public-edge evidence와 negative 또는 boundary
+test가 필요하다.
 
 [`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
 [`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),

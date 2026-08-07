@@ -125,7 +125,14 @@
         "requiredFields": ["request.jobReference.jobId", "request.configuration.query.query", "request.configuration.query.useLegacySql", "response.jobReference.jobId", "response.status.state"]
       },
       {
-        "stage": "poll_static_overwrite_job",
+        "stage": "poll_static_overwrite_query_results",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/queries/{job}",
+        "requiredFields": ["response.jobComplete", "response.errors"]
+      },
+      {
+        "stage": "reload_static_overwrite_job",
         "protocol": "REST",
         "method": "GET",
         "target": "/bigquery/v2/projects/{project}/jobs/{job}",
