@@ -46,7 +46,7 @@ type Dataset struct {
 	// Hidden marks emulator-owned anonymous result datasets. BigQuery hides
 	// anonymous datasets from datasets.list unless all=true.
 	// https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored
-	Hidden                       bool
+	Hidden bool
 }
 
 func (d Dataset) Validate() error {
