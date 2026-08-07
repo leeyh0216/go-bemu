@@ -65,3 +65,48 @@ jobs:
           path: .artifacts/python
           if-no-files-found: ignore
           retention-days: 7
+
+  container-smoke:
+    name: Non-root container and Compose smoke
+    needs: go-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BQEMU_IMAGE: go-bemu:ci
+      BQEMU_HTTP_PORT: "19050"
+      BQEMU_GRPC_PORT: "19060"
+      BQEMU_ADMIN_PORT: "19051"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build pinned multi-stage image
+        run: docker build --tag "$BQEMU_IMAGE" .
+      - name: Start read-only Compose service
+        run: timeout 180s docker compose up -d --no-build --wait --wait-timeout 120 bqemu
+      - name: Verify readiness, identity, writable paths, and query
+        run: |
+          curl --fail --silent --show-error --max-time 5 http://127.0.0.1:19050/readyz
+          test "$(docker compose exec -T bqemu id -u)" = "65532"
+          docker compose exec -T bqemu sh -c \
+            'test -w /data && test -w /tmp/bqemu && ! test -w /etc/bqemu/bqemu.yaml'
+          curl --fail --silent --show-error --max-time 5 \
+            -X POST http://127.0.0.1:19050/bigquery/v2/projects/local-project/queries \
+            -H 'Content-Type: application/json' \
+            -d '{"query":"SELECT 1 AS answer","useLegacySql":false}' \
+            | grep -q '"answer"'
+      - name: Capture payload-safe container logs
+        if: failure()
+        run: |
+          mkdir -p .artifacts/docker
+          docker compose ps --all >.artifacts/docker/compose-ps.txt || true
+          docker compose logs --no-color >.artifacts/docker/compose.log 2>&1 || true
+      - name: Upload container failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-diagnostics-${{ github.run_id }}
+          path: .artifacts/docker
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Stop Compose service
+        if: always()
+        run: docker compose down --volumes --remove-orphans
