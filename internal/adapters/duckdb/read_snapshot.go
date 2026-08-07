@@ -40,6 +40,7 @@ type ReadSnapshotConfig struct {
 	TempFilePattern      string
 	SpillThresholdBytes  int64
 	MaxRowBytes          int64
+	MaxBatchBytes        int
 	MaxSnapshotRows      int64
 	ProtocolModelVersion string
 }
@@ -59,7 +60,7 @@ func NewReadSnapshotMaterializer(warehouse *Warehouse, resolver ReadTableSchemaR
 	if strings.TrimSpace(config.TempDir) == "" || strings.TrimSpace(config.TempFilePattern) == "" {
 		return nil, fmt.Errorf("read snapshot temp directory and file pattern are required")
 	}
-	if config.SpillThresholdBytes < 0 || config.MaxRowBytes <= 0 || config.MaxSnapshotRows <= 0 {
+	if config.SpillThresholdBytes < 0 || config.MaxRowBytes <= 0 || config.MaxBatchBytes <= 0 || config.MaxSnapshotRows <= 0 {
 		return nil, fmt.Errorf("read snapshot spill threshold must be non-negative and limits must be positive")
 	}
 	if strings.TrimSpace(config.ProtocolModelVersion) == "" {
@@ -188,13 +189,14 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 			RowCount:       int64(storage.rowCount()),
 			EstimatedBytes: storage.encodedBytes,
 		},
-		format:       request.Format,
-		fields:       cloneCatalogFields(fields),
-		arrowSchema:  arrowSchema,
-		memoryRows:   storage.memoryRows,
-		spillPath:    storage.spillPath,
-		spillRows:    storage.spillRows,
-		modelVersion: m.config.ProtocolModelVersion,
+		format:        request.Format,
+		fields:        cloneCatalogFields(fields),
+		arrowSchema:   arrowSchema,
+		memoryRows:    storage.memoryRows,
+		spillPath:     storage.spillPath,
+		spillRows:     storage.spillRows,
+		maxBatchBytes: m.config.MaxBatchBytes,
+		modelVersion:  m.config.ProtocolModelVersion,
 	}
 	return snapshot, nil
 }
@@ -432,14 +434,15 @@ func (s *snapshotStager) abort(ctx context.Context) error {
 }
 
 type duckDBReadSnapshot struct {
-	metadata     readdomain.SnapshotMetadata
-	format       readdomain.Format
-	fields       []catalogdomain.Field
-	arrowSchema  *arrow.Schema
-	memoryRows   [][]byte
-	spillPath    string
-	spillRows    []stagedRowLocation
-	modelVersion string
+	metadata      readdomain.SnapshotMetadata
+	format        readdomain.Format
+	fields        []catalogdomain.Field
+	arrowSchema   *arrow.Schema
+	memoryRows    [][]byte
+	spillPath     string
+	spillRows     []stagedRowLocation
+	maxBatchBytes int
+	modelVersion  string
 
 	mu      sync.Mutex
 	closed  bool
@@ -470,7 +473,7 @@ func (s *duckDBReadSnapshot) OpenRange(ctx context.Context, start, end, maxRows 
 	s.mu.Unlock()
 
 	iterator := &duckDBSnapshotIterator{
-		ctx: ctx, snapshot: s, next: start, end: end, maxRows: maxRows,
+		ctx: ctx, snapshot: s, next: start, end: end, maxRows: maxRows, maxBytes: s.maxBatchBytes,
 	}
 	if s.spillPath != "" {
 		started := observability.LogSideEffectStart(ctx, "duckdb", "open_read_snapshot_spill_reader",
@@ -520,6 +523,7 @@ type duckDBSnapshotIterator struct {
 	next      int64
 	end       int64
 	maxRows   int64
+	maxBytes  int
 	once      sync.Once
 }
 
@@ -550,17 +554,29 @@ func (i *duckDBSnapshotIterator) Next(ctx context.Context) (readdomain.EncodedBa
 		}
 		rows = append(rows, row)
 	}
-	started := observability.LogSideEffectStart(ctx, "duckdb", "encode_read_snapshot_batch",
-		"model_version", i.snapshot.modelVersion, "format", i.snapshot.format.String(),
-		"offset", i.next, "row_count", batchEnd-i.next)
-	serialized, err := encodeReadBatch(i.snapshot.format, i.snapshot.arrowSchema, i.snapshot.fields, rows)
-	observability.LogSideEffectEnd(ctx, "duckdb", "encode_read_snapshot_batch", started, err,
-		"model_version", i.snapshot.modelVersion, "format", i.snapshot.format.String(),
-		"offset", i.next, "row_count", batchEnd-i.next,
-		"payload_bytes", len(serialized), "payload_digest", observability.Digest(serialized))
-	if err != nil {
-		return readdomain.EncodedBatch{}, err
+	var serialized []byte
+	for {
+		started := observability.LogSideEffectStart(ctx, "duckdb", "encode_read_snapshot_batch",
+			"model_version", i.snapshot.modelVersion, "format", i.snapshot.format.String(),
+			"offset", i.next, "row_count", len(rows), "max_payload_bytes", i.maxBytes)
+		var err error
+		serialized, err = encodeReadBatch(i.snapshot.format, i.snapshot.arrowSchema, i.snapshot.fields, rows)
+		observability.LogSideEffectEnd(ctx, "duckdb", "encode_read_snapshot_batch", started, err,
+			"model_version", i.snapshot.modelVersion, "format", i.snapshot.format.String(),
+			"offset", i.next, "row_count", len(rows), "max_payload_bytes", i.maxBytes,
+			"payload_bytes", len(serialized), "payload_digest", observability.Digest(serialized))
+		if err != nil {
+			return readdomain.EncodedBatch{}, err
+		}
+		if len(serialized) <= i.maxBytes {
+			break
+		}
+		if len(rows) == 1 {
+			return readdomain.EncodedBatch{}, fmt.Errorf("encoded read row at offset %d is %d bytes, exceeds configured response payload limit %d", i.next, len(serialized), i.maxBytes)
+		}
+		rows = rows[:max(1, len(rows)/2)]
 	}
+	batchEnd = i.next + int64(len(rows))
 	result := readdomain.EncodedBatch{Offset: i.next, RowCount: batchEnd - i.next, SerializedRows: serialized}
 	i.next = batchEnd
 	return result, nil

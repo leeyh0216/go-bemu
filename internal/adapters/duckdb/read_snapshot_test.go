@@ -252,6 +252,7 @@ func readSnapshotTestConfig(tempDir string, spillThreshold int64) ReadSnapshotCo
 		TempFilePattern:      "bqemu-storage-read-*",
 		SpillThresholdBytes:  spillThreshold,
 		MaxRowBytes:          1 << 20,
+		MaxBatchBytes:        1 << 20,
 		MaxSnapshotRows:      10_000,
 		ProtocolModelVersion: readSnapshotTestModelVersion,
 	}
@@ -401,6 +402,7 @@ func TestReadSnapshotConfigRequiresExplicitPortableSettings(t *testing.T) {
 		{name: "temp pattern", mutate: func(config *ReadSnapshotConfig) { config.TempFilePattern = "" }},
 		{name: "spill threshold", mutate: func(config *ReadSnapshotConfig) { config.SpillThresholdBytes = -1 }},
 		{name: "row limit", mutate: func(config *ReadSnapshotConfig) { config.MaxRowBytes = 0 }},
+		{name: "batch limit", mutate: func(config *ReadSnapshotConfig) { config.MaxBatchBytes = 0 }},
 		{name: "snapshot limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSnapshotRows = 0 }},
 		{name: "model version", mutate: func(config *ReadSnapshotConfig) { config.ProtocolModelVersion = "" }},
 	}
@@ -422,6 +424,69 @@ func TestReadSnapshotConfigRequiresExplicitPortableSettings(t *testing.T) {
 	missingDir.TempDir = filepath.Join(t.TempDir(), "missing")
 	if _, err := NewReadSnapshotMaterializer(warehouse, resolver, missingDir); err == nil {
 		t.Fatal("expected a missing configured temp directory to fail")
+	}
+}
+
+func TestDuckDBReadSnapshotBoundsEncodedResponsePayloads(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "bounded_rows", Type: "TABLE",
+		Schema: []catalogdomain.Field{{Name: "value", Type: "STRING"}},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table,
+		"('aaaaaaaaaaaaaaaaaaaa'), ('bbbbbbbbbbbbbbbbbbbb'), ('cccccccccccccccccccc'), ('dddddddddddddddddddd')")
+	config := readSnapshotTestConfig(t.TempDir(), 1<<20)
+	config.MaxBatchBytes = 45
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, config)
+	snapshot, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatAvro,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = snapshot.Close(context.Background()) })
+	iterator, err := snapshot.OpenRange(ctx, 0, 4, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = iterator.Close() })
+	var rows int64
+	for {
+		batch, err := iterator.Next(ctx)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch.SerializedRows) > config.MaxBatchBytes {
+			t.Fatalf("payload bytes = %d, max = %d", len(batch.SerializedRows), config.MaxBatchBytes)
+		}
+		rows += batch.RowCount
+	}
+	if rows != 4 {
+		t.Fatalf("read rows = %d, want 4", rows)
+	}
+
+	tooSmall := readSnapshotTestConfig(t.TempDir(), 1<<20)
+	tooSmall.MaxBatchBytes = 8
+	materializer = newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, tooSmall)
+	snapshot, err = materializer.Materialize(ctx, readdomain.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatAvro,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = snapshot.Close(context.Background()) })
+	iterator, err = snapshot.OpenRange(ctx, 0, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = iterator.Close() })
+	if _, err := iterator.Next(ctx); err == nil || !strings.Contains(err.Error(), "response payload limit") {
+		t.Fatalf("oversize single-row error = %v", err)
 	}
 }
 
