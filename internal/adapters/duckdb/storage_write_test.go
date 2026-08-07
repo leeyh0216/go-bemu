@@ -4,18 +4,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
+	storagepb "cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	writeapp "github.com/leeyh0216/go-bemu/internal/storagewrite/application"
 	writedomain "github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
+	grpcserver "github.com/leeyh0216/go-bemu/internal/transport/grpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
@@ -116,6 +128,182 @@ func TestStorageWriteCommitFaultRollsBackAllStreams(t *testing.T) {
 	}
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 2 {
 		t.Fatalf("retry exposed %d rows, want 2", got)
+	}
+}
+
+func TestStorageWriteStagePendingReceiptIsIdempotentAndRejectsConflicts(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	_, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "id", Type: "INT64"}})
+	descriptor := storageWriteDescriptor(t, protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL))
+	row := storageWriteRow(t, descriptor, map[string]any{"id": int64(1)})
+	batch := writeports.AppendBatch{
+		StreamName: table.Name() + "/streams/retry", Table: table, Descriptor: descriptor,
+		Rows: [][]byte{row}, SchemaFingerprint: "schema-a", PayloadDigest: "payload-a",
+	}
+	if err := coordinator.StagePending(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.StagePending(ctx, batch); err != nil {
+		t.Fatalf("identical receipt retry: %v", err)
+	}
+	if got := len(coordinator.staged[batch.StreamName]); got != 1 {
+		t.Fatalf("identical receipt created %d staged batches, want 1", got)
+	}
+
+	conflicts := map[string]writeports.AppendBatch{
+		"row count":          batch,
+		"schema fingerprint": batch,
+		"payload digest":     batch,
+	}
+	rowCountConflict := conflicts["row count"]
+	rowCountConflict.Rows = [][]byte{row, row}
+	conflicts["row count"] = rowCountConflict
+	schemaConflict := conflicts["schema fingerprint"]
+	schemaConflict.SchemaFingerprint = "schema-b"
+	conflicts["schema fingerprint"] = schemaConflict
+	payloadConflict := conflicts["payload digest"]
+	payloadConflict.PayloadDigest = "payload-b"
+	conflicts["payload digest"] = payloadConflict
+	for name, conflicting := range conflicts {
+		t.Run(name, func(t *testing.T) {
+			if err := coordinator.StagePending(ctx, conflicting); err == nil {
+				t.Fatal("expected receipt conflict")
+			}
+			if got := len(coordinator.staged[batch.StreamName]); got != 1 {
+				t.Fatalf("receipt conflict changed staged batches to %d", got)
+			}
+		})
+	}
+}
+
+func TestStorageWriteLostStageAcknowledgementRecoversOnNewBidiCall(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "id", Type: "INT64"}})
+	service, err := writeapp.New(writeapp.Config{
+		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		MaxStreams: 2, MaxAppendBytes: 1024 * 1024,
+		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
+	}, coordinator, storageWriteRetryClock{}, storageWriteRetryIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener := bufconn.Listen(4 * 1024 * 1024)
+	server := grpc.NewServer()
+	storagepb.RegisterBigQueryWriteServer(server, grpcserver.NewStorageWriteServer(service))
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	client := newDuckDBStorageWriteClient(t, listener)
+	created, err := client.CreateWriteStream(ctx, &storagepb.CreateWriteStreamRequest{
+		Parent: table.Name(), WriteStream: &storagepb.WriteStream{Type: storagepb.WriteStream_PENDING},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	descriptorBytes := storageWriteDescriptor(t, protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL))
+	descriptor := new(descriptorpb.DescriptorProto)
+	if err := proto.Unmarshal(descriptorBytes, descriptor); err != nil {
+		t.Fatal(err)
+	}
+	row := storageWriteRow(t, descriptorBytes, map[string]any{"id": int64(42)})
+	appendRequest := func() *storagepb.AppendRowsRequest {
+		return &storagepb.AppendRowsRequest{
+			WriteStream: created.GetName(), Offset: wrapperspb.Int64(0),
+			Rows: &storagepb.AppendRowsRequest_ProtoRows{ProtoRows: &storagepb.AppendRowsRequest_ProtoData{
+				WriterSchema: &storagepb.ProtoSchema{ProtoDescriptor: descriptor},
+				Rows:         &storagepb.ProtoRows{SerializedRows: [][]byte{row}},
+			}},
+		}
+	}
+
+	stageApplied := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseWorker) }) }
+	defer release()
+	coordinator.afterStage = func() {
+		close(stageApplied)
+		<-releaseWorker
+	}
+	firstContext, cancelFirst := context.WithCancel(ctx)
+	firstAppend, err := client.AppendRows(firstContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstAppend.Send(appendRequest()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stageApplied:
+	case <-ctx.Done():
+		t.Fatalf("waiting for staged side effect: %v", ctx.Err())
+	}
+	cancelFirst()
+	firstResponse, firstErr := firstAppend.Recv()
+	if firstErr == nil && firstResponse.GetAppendResult() != nil {
+		t.Fatalf("first call unexpectedly acknowledged staged rows: %#v", firstResponse)
+	}
+	if firstErr != nil && grpcstatus.Code(firstErr) != codes.Canceled {
+		t.Fatalf("first call ended with %v, want cancellation or an embedded error", firstErr)
+	}
+	ledgerBeforeRetry, err := service.GetStream(ctx, created.GetName())
+	if err != nil {
+		t.Fatalf("wait for canceled application append: %v", err)
+	}
+	if ledgerBeforeRetry.NextOffset != 0 || ledgerBeforeRetry.RowCount != 0 {
+		t.Fatalf("canceled application ledger advanced to offset=%d rows=%d", ledgerBeforeRetry.NextOffset, ledgerBeforeRetry.RowCount)
+	}
+	release()
+	// This queued operation is a barrier: it proves the worker published the
+	// staging receipt after the canceled caller stopped waiting for its result.
+	if _, err := coordinator.DescribeTable(ctx, table); err != nil {
+		t.Fatalf("wait for coordinator receipt: %v", err)
+	}
+	coordinator.afterStage = nil
+
+	// A new transport connection also creates a fresh bidi inheritance scope.
+	// Repeating the original stream/schema/offset must reconcile the application
+	// ledger with the existing coordinator receipt rather than stage another row.
+	retryClient := newDuckDBStorageWriteClient(t, listener)
+	retryAppend, err := retryClient.AppendRows(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retryAppend.Send(appendRequest()); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := retryAppend.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.GetAppendResult() == nil || retried.GetAppendResult().GetOffset().GetValue() != 0 {
+		t.Fatalf("retry response did not acknowledge offset zero: %#v", retried)
+	}
+	if err := retryAppend.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retryAppend.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("retry append EOF = %v", err)
+	}
+
+	finalized, err := retryClient.FinalizeWriteStream(ctx, &storagepb.FinalizeWriteStreamRequest{Name: created.GetName()})
+	if err != nil || finalized.GetRowCount() != 1 {
+		t.Fatalf("finalize row count: %#v, %v", finalized, err)
+	}
+	committed, err := retryClient.BatchCommitWriteStreams(ctx, &storagepb.BatchCommitWriteStreamsRequest{
+		Parent: table.Name(), WriteStreams: []string{created.GetName()},
+	})
+	if err != nil || committed.GetCommitTime() == nil || len(committed.GetStreamErrors()) != 0 {
+		t.Fatalf("commit after retry: %#v, %v", committed, err)
+	}
+	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 1 {
+		t.Fatalf("committed row count = %d, want exactly 1", got)
 	}
 }
 
@@ -306,6 +494,30 @@ func storageWriteRowCount(t *testing.T, ctx context.Context, warehouse *Warehous
 	}
 	return count
 }
+
+func newDuckDBStorageWriteClient(t *testing.T, listener *bufconn.Listener) storagepb.BigQueryWriteClient {
+	t.Helper()
+	connection, err := grpc.NewClient(
+		"passthrough:///bufnet-duckdb-storage-write",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	return storagepb.NewBigQueryWriteClient(connection)
+}
+
+type storageWriteRetryClock struct{}
+
+func (storageWriteRetryClock) Now() time.Time {
+	return time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+}
+
+type storageWriteRetryIDs struct{}
+
+func (storageWriteRetryIDs) NewID() string { return "retry-stream" }
 
 func duckDBStorageWriteTestContext(t *testing.T) (context.Context, context.CancelFunc) {
 	t.Helper()

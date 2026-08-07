@@ -51,9 +51,11 @@ type StorageWriteCoordinator struct {
 	done      chan struct{}
 	closed    atomic.Bool
 
-	// The worker owns staged. Tests may set beforeCommit before submitting any
-	// operation to inject a fault after INSERTs and verify rollback atomicity.
+	// The worker owns staged. Tests may set afterStage or beforeCommit before
+	// submitting any operation to inject faults at acknowledgement/transaction
+	// boundaries without exposing those seams through the outbound port.
 	staged       map[string][]preparedBatch
+	afterStage   func()
 	beforeCommit func() error
 	closeOnce    sync.Once
 }
@@ -75,6 +77,14 @@ type preparedBatch struct {
 	startOffset       int64
 	columns           []string
 	rows              [][]any
+	schemaFingerprint string
+	payloadDigest     string
+}
+
+type stageReceipt struct {
+	streamName        string
+	startOffset       int64
+	rowCount          int
 	schemaFingerprint string
 	payloadDigest     string
 }
@@ -167,21 +177,51 @@ func (c *StorageWriteCoordinator) StagePending(ctx context.Context, batch writep
 			"payload_digest", batch.PayloadDigest, "transaction_mode", "memory_stage")
 	}()
 	_, err = c.submit(ctx, func(operationContext context.Context) (any, error) {
-		prepared, prepareErr := c.prepareBatch(operationContext, batch)
-		if prepareErr != nil {
-			return nil, prepareErr
-		}
+		requestedReceipt := receiptForAppend(batch)
 		var stagedRows int64
 		for _, existing := range c.staged[batch.StreamName] {
+			if existing.startOffset == batch.StartOffset {
+				// AppendRows callers commonly retry after an acknowledgement is
+				// lost. The public offset ledger cannot advance until it receives
+				// that acknowledgement, so an identical durable staging receipt
+				// must be acknowledged again instead of being appended twice.
+				// A different receipt at the same offset remains a conflict.
+				// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows
+				if existing.receipt() == requestedReceipt && existing.table == batch.Table {
+					return nil, nil
+				}
+				return nil, fmt.Errorf("coordinator receipt conflict at offset %d for stream %s", batch.StartOffset, batch.StreamName)
+			}
 			stagedRows += int64(len(existing.rows))
 		}
 		if batch.StartOffset != stagedRows {
 			return nil, fmt.Errorf("coordinator offset invariant: got %d, want %d", batch.StartOffset, stagedRows)
 		}
+		prepared, prepareErr := c.prepareBatch(operationContext, batch)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
 		c.staged[batch.StreamName] = append(c.staged[batch.StreamName], prepared)
+		if c.afterStage != nil {
+			c.afterStage()
+		}
 		return nil, nil
 	})
 	return err
+}
+
+func receiptForAppend(batch writeports.AppendBatch) stageReceipt {
+	return stageReceipt{
+		streamName: batch.StreamName, startOffset: batch.StartOffset, rowCount: len(batch.Rows),
+		schemaFingerprint: batch.SchemaFingerprint, payloadDigest: batch.PayloadDigest,
+	}
+}
+
+func (b preparedBatch) receipt() stageReceipt {
+	return stageReceipt{
+		streamName: b.streamName, startOffset: b.startOffset, rowCount: len(b.rows),
+		schemaFingerprint: b.schemaFingerprint, payloadDigest: b.payloadDigest,
+	}
 }
 
 func (c *StorageWriteCoordinator) CommitPending(ctx context.Context, request writeports.CommitRequest) (err error) {
