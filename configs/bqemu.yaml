@@ -1,5 +1,6 @@
-# BQEMU runtime configuration. Mount this file at /etc/bqemu/bqemu.yaml in
-# Docker and select it with --config or BQEMU_CONFIG.
+# BQEMU runtime configuration. Docker copies the selected BQEMU_CONFIG_SOURCE
+# into /etc/bqemu/bqemu.yaml at build time by default. A read-only runtime mount
+# may replace it. Select either path with --config or BQEMU_CONFIG.
 apiVersion: config.bqemu.dev/v1alpha1
 kind: BQEMUConfig
 
