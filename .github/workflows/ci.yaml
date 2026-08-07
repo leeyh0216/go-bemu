@@ -11,6 +11,7 @@ permissions:
 
 env:
   BQEMU_GO_TEST_TIMEOUT: 10m
+  BQEMU_PYTEST_TIMEOUT_SECONDS: "300"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -28,8 +29,39 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Check formatting
-        run: test -z "$(gofmt -l contract internal)"
+        run: test -z "$(gofmt -l cmd contract internal)"
       - name: Test with race detector
         run: go test -race -timeout "$BQEMU_GO_TEST_TIMEOUT" ./...
       - name: Vet
         run: go vet ./...
+
+  python-client:
+    name: Official Python client contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+      - name: Install hash-locked dependencies
+        run: uv pip sync --system --require-hashes tests/python/requirements.lock
+      - name: Run real-process client contract
+        run: >-
+          python -m pytest -c tests/python/pytest.ini tests/python
+          --basetemp=.artifacts/python/pytest
+      - name: Upload redacted failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-client-diagnostics-${{ github.run_id }}
+          path: .artifacts/python
+          if-no-files-found: ignore
+          retention-days: 7
