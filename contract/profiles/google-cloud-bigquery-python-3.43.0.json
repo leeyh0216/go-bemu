@@ -20,6 +20,7 @@
     "CAP-SCHEMA-ADDITIVE-V1": "verified",
     "rest.datasets.crud": "verified",
     "rest.tables.crud": "verified",
+    "rest.query_jobs": "verified",
     "rest.pagination": "verified",
     "rest.etag-precondition": "verified",
     "jobs.load": "planned",
@@ -100,6 +101,38 @@
         "protocol": "REST",
         "method": "DELETE",
         "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}"
+      }
+    ],
+    "python-query-sync": [
+      {
+        "stage": "query_request",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/queries",
+        "requiredFields": ["request.query", "request.useLegacySql", "request.location", "response.jobComplete", "response.jobReference"]
+      }
+    ],
+    "python-query-async": [
+      {
+        "stage": "insert_query_job",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.jobReference.jobId", "request.configuration.query.query", "response.status.state"]
+      },
+      {
+        "stage": "get_query_job",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["request.location", "response.status.state"]
+      },
+      {
+        "stage": "poll_query_results",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/queries/{job}",
+        "requiredFields": ["request.location", "response.jobComplete", "response.jobReference"]
       }
     ]
   }

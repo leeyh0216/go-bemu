@@ -1,0 +1,47 @@
+{
+  "profileId": "google-cloud-bigquery-python-3.43.0",
+  "consumerKind": "client",
+  "consumerName": "google-cloud-bigquery-python",
+  "consumerVersion": "3.43.0",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://pypi.org/project/google-cloud-bigquery/3.43.0/",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults"
+  ],
+  "flow": "python-query-async",
+  "events": [
+    {
+      "stage": "insert_query_job",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.jobReference.jobId": "generated_retry_id",
+        "request.configuration.query.query": "google_sql",
+        "response.status.state": "PENDING_or_RUNNING_or_DONE"
+      }
+    },
+    {
+      "stage": "get_query_job",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+      "fields": {
+        "request.location": "job_location",
+        "response.status.state": "PENDING_or_RUNNING_or_DONE"
+      }
+    },
+    {
+      "stage": "poll_query_results",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/queries/{job}",
+      "fields": {
+        "request.location": "job_location",
+        "response.jobComplete": "boolean",
+        "response.jobReference": "same_job_reference"
+      }
+    }
+  ]
+}

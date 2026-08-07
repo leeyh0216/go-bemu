@@ -1,0 +1,27 @@
+{
+  "profileId": "google-cloud-bigquery-python-3.43.0",
+  "consumerKind": "client",
+  "consumerName": "google-cloud-bigquery-python",
+  "consumerVersion": "3.43.0",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://pypi.org/project/google-cloud-bigquery/3.43.0/",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query"
+  ],
+  "flow": "python-query-sync",
+  "events": [
+    {
+      "stage": "query_request",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/queries",
+      "fields": {
+        "request.query": "google_sql",
+        "request.useLegacySql": "false",
+        "request.location": "job_location",
+        "response.jobComplete": "boolean",
+        "response.jobReference": "generated_job_reference"
+      }
+    }
+  ]
+}
