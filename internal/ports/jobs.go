@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"github.com/leeyh0216/go-bigquery-emulator/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/domain"
 )
 
 type JobRepository interface {

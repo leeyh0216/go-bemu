@@ -1,4 +1,4 @@
-module github.com/leeyh0216/go-bigquery-emulator
+module github.com/leeyh0216/go-bemu
 
 go 1.26.0
 
