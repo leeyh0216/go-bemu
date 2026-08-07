@@ -4,14 +4,17 @@ Pinned client and protocol sources:
 https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/client.py#L4118-L4237
 https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/table.py#L1838-L1995
 https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
+https://cloud.google.com/bigquery/docs/reference/rest/v2/FormatOptions
 
-Captured evidence contains only normalized method/path/query-key and response
-shape metadata. Table names and response row values are never retained.
+Captured evidence contains only normalized method/path/query-key and
+response/client-decoding shape metadata. Table names and response row values are
+never retained.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 import uuid
 
@@ -53,15 +56,19 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
                     ],
                 ),
                 bigquery.SchemaField("tags", "STRING", mode="REPEATED"),
+                bigquery.SchemaField("event_time", "TIMESTAMP"),
             ],
         )
         table = bq_client.create_table(table, timeout=test_timeout)
         insert_job = bq_client.query(
             f"""
             INSERT INTO `{table_ref}` VALUES
-            (1, 'first', {{'score': 3, 'name': 'nested-one'}}, ['alpha', 'beta']),
-            (2, NULL, {{'score': NULL, 'name': 'nested-two'}}, []),
-            (3, 'third', {{'score': 9, 'name': 'nested-three'}}, ['omega'])
+            (1, 'first', {{'score': 3, 'name': 'nested-one'}}, ['alpha', 'beta'],
+             TIMESTAMPTZ '2026-08-08 01:02:03.123456+00'),
+            (2, NULL, {{'score': NULL, 'name': 'nested-two'}}, [],
+             TIMESTAMPTZ '1969-12-31 23:59:59.000001+00'),
+            (3, 'third', {{'score': 9, 'name': 'nested-three'}}, ['omega'],
+             TIMESTAMPTZ '2000-01-01 00:00:00+00')
             """,
             location="US",
             retry=None,
@@ -134,7 +141,17 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
         assert rows[1]["payload"]["name"] == "nested-two"
         assert list(rows[0]["tags"]) == ["alpha", "beta"]
         assert list(rows[1]["tags"]) == []
-        assert len(start_rows) == 1 and start_rows[0]["ordinal"] == 2
+        assert rows[0]["event_time"] == datetime(
+            2026, 8, 8, 1, 2, 3, 123456, tzinfo=timezone.utc
+        ), _diagnostic("timestamp-microseconds", "compare-use-int64-timestamp")
+        assert rows[1]["event_time"] == datetime(
+            1969, 12, 31, 23, 59, 59, 1, tzinfo=timezone.utc
+        ), _diagnostic("timestamp-before-epoch", "compare-signed-epoch-microseconds")
+        assert (
+            len(start_rows) == 1
+            and start_rows[0]["ordinal"] == 2
+            and start_rows[0]["event_time"] == rows[1]["event_time"]
+        )
 
         assert len(calls) == 3, _diagnostic(
             "three-tabledata-requests", "compare-client-pagination"

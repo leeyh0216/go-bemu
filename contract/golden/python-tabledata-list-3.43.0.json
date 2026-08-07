@@ -7,7 +7,8 @@
   "sourceRefs": [
     "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/client.py#L4118-L4237",
     "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/table.py#L1838-L1995",
-    "https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list"
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/FormatOptions"
   ],
   "flow": "python-tabledata-list",
   "events": [
@@ -21,8 +22,9 @@
         "request.formatOptions.useInt64Timestamp": true,
         "response.kind": "bigquery#tableDataList",
         "response.totalRows": "exact-decimal-string",
-        "response.rows": "one-nested-repeated-row-shape",
-        "response.pageToken": "opaque-next-offset"
+        "response.rows": "one-nested-repeated-timestamp-row-shape",
+        "response.pageToken": "opaque-next-offset",
+        "client.rows[].TIMESTAMP": "UTC-datetime-from-post-epoch-microseconds"
       }
     },
     {
@@ -35,7 +37,8 @@
         "request.pageToken": "opaque-next-offset",
         "request.formatOptions.useInt64Timestamp": true,
         "response.totalRows": "exact-decimal-string",
-        "response.rows": "one-nested-repeated-row-shape"
+        "response.rows": "one-nested-repeated-timestamp-row-shape",
+        "client.rows[].TIMESTAMP": "UTC-datetime-from-signed-pre-epoch-microseconds"
       }
     },
     {
@@ -48,7 +51,8 @@
         "request.startIndex": "zero-based-ordinal",
         "request.formatOptions.useInt64Timestamp": true,
         "response.totalRows": "exact-decimal-string",
-        "response.rows": "one-nested-repeated-row-shape"
+        "response.rows": "one-nested-repeated-timestamp-row-shape",
+        "client.rows[].TIMESTAMP": "UTC-datetime-from-signed-pre-epoch-microseconds"
       }
     }
   ]

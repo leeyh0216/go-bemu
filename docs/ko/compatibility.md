@@ -33,7 +33,7 @@ service](https://cloud.google.com/bigquery/docs/introduction)와 동등하다는
 | table insert/get/delete | Verified basic | standard table과 canonical schema metadata |
 | table list | Verified basic | paging, view/storage statistics 없음 |
 | table patch/update | Verified narrow | metadata, additive schema, ETag precondition |
-| `tabledata.list` | Partial | scalar/nested/repeated `f/v` row, `startIndex`, 제한된 `maxResults`, resource-scoped opaque token, ETag precondition, 정확한 `totalRows`, `useInt64Timestamp`; selected field, ISO-8601 picosecond output, byte 기반 page trimming은 gap |
+| `tabledata.list` | Partial | scalar/nested/repeated `f/v` row, 정확한 non-finite FLOAT64 token, `startIndex`, 제한된 `maxResults`, resource-scoped opaque token, ETag precondition, 정확한 `totalRows`, `useInt64Timestamp`; selected field, ISO-8601 picosecond output, byte 기반 page trimming은 gap |
 | `tabledata.insertAll` | Unsupported | route 없음 |
 
 Request/response shape는 공식
@@ -50,7 +50,11 @@ DuckDB transaction에서 count와 ordinal page 선택을 수행한다. File-firs
 response 기준으로도 page를 자른다. Byte 기반 trimming, mutation-aware page 무효화,
 `selectedFields`, `timestampOutputFormat`은 명시적 gap이다.
 `formatOptions.useInt64Timestamp=true`는 고정 Python client가 요구하는 epoch
-microsecond 문자열을 반환한다. 공식 [pagination criteria](https://cloud.google.com/bigquery/docs/paging-results#page_through_results_using_the_api)를 참고한다.
+microsecond 문자열을 반환한다. 해당 E2E 계약은 epoch 이후 microsecond 값과 부호가
+있는 epoch 이전 값을 모두 UTC datetime으로 decode한다. FLOAT64 cell은 finite 값일 때
+JSON number를 사용하고 그 외에는 공식
+[`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType)
+계약의 정확한 `NaN`, `Infinity`, `-Infinity` 표기를 사용한다. 공식 [pagination criteria](https://cloud.google.com/bigquery/docs/paging-results#page_through_results_using_the_api)를 참고한다.
 
 `CAP-REST-METADATA-PATCH-V1`과 `CAP-SCHEMA-ADDITIVE-V1`은 실제 process를
 대상으로 공식 [Python client
@@ -94,7 +98,10 @@ Canonical job state와 error field는 공식
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job) resource를
 기준으로 한다. Nested/repeated result cell과 type별 temporal value는 아직 완전한
 [`TableRow`](https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow)
-encoding이 아니다. Explicit destination은
+encoding이 아니다. Scalar query와 `tabledata.list` row는 finite FLOAT64에 JSON
+number를 사용하고 그 외에는 공식
+[`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType)이
+정의한 정확한 non-finite FLOAT64 token을 공유한다. Explicit destination은
 [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)를,
 result token은
 [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults)를
@@ -276,7 +283,7 @@ nullable additive schema update, query polling, job/table 목록, cleanup,
 not-found exit 계약을 검증한다. 공식 [Python client
 `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E 여섯 개는
 dataset administration, table metadata/schema administration, nested/repeated
-decode를 포함한 `tabledata.list` pagination, synchronous
+및 epoch 전후 TIMESTAMP decode를 포함한 `tabledata.list` pagination, synchronous
 [`jobs.query`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query),
 asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert)에서
 [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults)까지

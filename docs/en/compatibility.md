@@ -33,7 +33,7 @@ service](https://cloud.google.com/bigquery/docs/introduction).
 | table insert/get/delete | Verified basic | standard table and canonical schema metadata |
 | table list | Verified basic | paging; no view/storage statistics |
 | table patch/update | Verified narrow | metadata plus additive schema and ETag precondition |
-| `tabledata.list` | Partial | scalar/nested/repeated `f/v` rows, `startIndex`, capped `maxResults`, scoped opaque tokens, ETag precondition, exact `totalRows`, and `useInt64Timestamp`; selected fields, ISO-8601 picosecond output, and byte-based page trimming remain gaps |
+| `tabledata.list` | Partial | scalar/nested/repeated `f/v` rows, exact non-finite FLOAT64 tokens, `startIndex`, capped `maxResults`, scoped opaque tokens, ETag precondition, exact `totalRows`, and `useInt64Timestamp`; selected fields, ISO-8601 picosecond output, and byte-based page trimming remain gaps |
 | `tabledata.insertAll` | Unsupported | no route |
 
 Request/response shapes are compared with official
@@ -50,7 +50,12 @@ file-first `tableData.maxPageRows` cap can return fewer rows than requested, and
 pages around an approximate 10 MB response; byte-based trimming, mutation-aware
 page invalidation, `selectedFields`, and `timestampOutputFormat` remain explicit
 gaps. `formatOptions.useInt64Timestamp=true` returns epoch-microsecond strings as
-required by the pinned Python client. See the official [pagination
+required by the pinned Python client; its E2E contract decodes both a post-epoch
+microsecond value and a signed pre-epoch value as UTC datetimes. FLOAT64 cells
+use JSON numbers when finite and the exact `NaN`, `Infinity`, and `-Infinity`
+spellings otherwise, following the
+official [`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType)
+contract. See the official [pagination
 criteria](https://cloud.google.com/bigquery/docs/paging-results#page_through_results_using_the_api).
 
 `CAP-REST-METADATA-PATCH-V1` and `CAP-SCHEMA-ADDITIVE-V1` are also exercised by
@@ -95,7 +100,10 @@ Canonical job state and error fields come from the official
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job) resource.
 Nested/repeated result cells and type-specific temporal values are not yet full
 [`TableRow`](https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow)
-encodings. Explicit destinations follow
+encodings. Scalar query and `tabledata.list` rows do share JSON-number finite
+FLOAT64 values and the exact non-finite tokens defined by the official
+[`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType).
+Explicit destinations follow
 [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery),
 and result tokens follow
 [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults).
@@ -280,7 +288,7 @@ and table lifecycle, additive nullable schema update, query polling, job/table
 listing, cleanup, and the not-found exit contract. Six passing official [Python
 client `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E tests verify
 dataset administration, table metadata/schema administration, `tabledata.list`
-pagination with nested/repeated decoding, synchronous
+pagination with nested/repeated and post-/pre-epoch TIMESTAMP decoding, synchronous
 [`jobs.query`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query),
 and asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert)
 through [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults).

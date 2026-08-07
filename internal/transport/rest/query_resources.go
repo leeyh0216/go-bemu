@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -263,12 +264,32 @@ func encodeCell(value any) any {
 	case int:
 		return strconv.Itoa(typed)
 	case float64:
-		return strconv.FormatFloat(typed, 'g', -1, 64)
+		return encodeRESTFloat(typed, 64)
 	case float32:
-		return strconv.FormatFloat(float64(typed), 'g', -1, 32)
+		return encodeRESTFloat(float64(typed), 32)
 	case string:
 		return typed
 	default:
 		return fmt.Sprint(typed)
+	}
+}
+
+// BigQuery's REST type contract uses exact, case-sensitive string tokens for
+// non-finite FLOAT64 values. Go's strconv spellings (+Inf and -Inf) are not wire
+// compatible, so every REST row encoder crosses this shared conversion boundary.
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType
+func encodeRESTFloat(value float64, bitSize int) any {
+	switch {
+	case math.IsNaN(value):
+		return "NaN"
+	case math.IsInf(value, 1):
+		return "Infinity"
+	case math.IsInf(value, -1):
+		return "-Infinity"
+	default:
+		if bitSize == 32 {
+			return float32(value)
+		}
+		return value
 	}
 }

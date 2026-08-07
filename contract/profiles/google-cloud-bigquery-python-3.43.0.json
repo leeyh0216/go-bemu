@@ -17,6 +17,7 @@
     "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/table.py#L1838-L1995",
     "https://cloud.google.com/python/docs/reference/bigquery/latest/google.cloud.bigquery.client.Client",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/FormatOptions",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list"
@@ -234,21 +235,21 @@
         "protocol": "REST",
         "method": "GET",
         "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
-        "requiredFields": ["request.maxResults", "request.formatOptions.useInt64Timestamp", "response.kind", "response.totalRows", "response.rows", "response.pageToken"]
+        "requiredFields": ["request.maxResults", "request.formatOptions.useInt64Timestamp", "response.kind", "response.totalRows", "response.rows", "response.pageToken", "client.rows[].TIMESTAMP"]
       },
       {
         "stage": "get_tabledata_next_page",
         "protocol": "REST",
         "method": "GET",
         "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
-        "requiredFields": ["request.maxResults", "request.pageToken", "request.formatOptions.useInt64Timestamp", "response.totalRows", "response.rows"]
+        "requiredFields": ["request.maxResults", "request.pageToken", "request.formatOptions.useInt64Timestamp", "response.totalRows", "response.rows", "client.rows[].TIMESTAMP"]
       },
       {
         "stage": "get_tabledata_start_index",
         "protocol": "REST",
         "method": "GET",
         "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
-        "requiredFields": ["request.maxResults", "request.startIndex", "request.formatOptions.useInt64Timestamp", "response.totalRows", "response.rows"]
+        "requiredFields": ["request.maxResults", "request.startIndex", "request.formatOptions.useInt64Timestamp", "response.totalRows", "response.rows", "client.rows[].TIMESTAMP"]
       }
     ]
   }
