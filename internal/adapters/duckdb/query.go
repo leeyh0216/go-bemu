@@ -22,10 +22,15 @@ import (
 var _ ports.QueryEngine = (*Warehouse)(nil)
 
 func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (result domain.QueryResult, err error) {
+	statement, adapterModel, err := translateSQLWithModel(request)
+	if err != nil {
+		return domain.QueryResult{}, err
+	}
 	queryAttrs := observability.PayloadAttrs("query", []byte(request.SQL))
 	queryAttrs = append(queryAttrs,
 		"project_id", request.ProjectID, "default_dataset", request.DefaultDataset,
 		"statement_type", queryStatementType(request.SQL), "transaction_mode", "autocommit",
+		"model_version", adapterModel,
 	)
 	started := observability.LogSideEffectStart(ctx, "duckdb", "query", queryAttrs...)
 	defer func() {
@@ -37,10 +42,6 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 			"result_bytes", len(resultSummary), "result_digest", observability.Digest([]byte(resultSummary)),
 			"schema_fingerprint", observability.Digest([]byte(columnsSummary)), "transaction_mode", "autocommit")
 	}()
-	statement, err := translateSQL(request)
-	if err != nil {
-		return domain.QueryResult{}, err
-	}
 	if !returnsRows(statement) {
 		execResult, err := w.db.ExecContext(ctx, statement)
 		if err != nil {
@@ -88,7 +89,16 @@ func queryStatementType(statement string) string {
 }
 
 func translateSQL(request ports.QueryRequest) (string, error) {
-	return rewriteGoogleSQLIdentifiers(request)
+	statement, _, err := translateSQLWithModel(request)
+	return statement, err
+}
+
+func translateSQLWithModel(request ports.QueryRequest) (string, string, error) {
+	if statement, matched, err := rewriteSparkStaticOverwrite(request); matched || err != nil {
+		return statement, sparkStaticOverwriteModel, err
+	}
+	statement, err := rewriteGoogleSQLIdentifiers(request)
+	return statement, "google-sql-identifiers-v1", err
 }
 
 // rewriteGoogleSQLIdentifiers is a lexical boundary, not a general GoogleSQL

@@ -2,8 +2,10 @@ package duckdb
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
@@ -74,7 +76,8 @@ func TestTranslateSQLRejectsMalformedQuotedInput(t *testing.T) {
 
 func TestWarehouseCreateInsertSelectAndMerge(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
 	warehouse, err := New("")
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +134,8 @@ func TestWarehouseCreateInsertSelectAndMerge(t *testing.T) {
 }
 
 func TestWarehouseExecutesReservedQuotedColumnAndAlias(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
 	warehouse, err := New("")
 	if err != nil {
 		t.Fatal(err)
@@ -156,4 +160,104 @@ func TestWarehouseExecutesReservedQuotedColumnAndAlias(t *testing.T) {
 	if len(result.Columns) != 1 || result.Columns[0].Name != "from" || len(result.Rows) != 1 || result.Rows[0][0] != "value `kept`" {
 		t.Fatalf("unexpected quoted identifier result: %#v", result)
 	}
+}
+
+func TestWarehouseExecutesSparkConnectorStaticOverwriteAtomically(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "analytics"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tableID := range []string{"destination", "temporary"} {
+		if err := warehouse.CreateTable(ctx, domain.Table{
+			ProjectID: "test-project", DatasetID: "analytics", ID: tableID,
+			Schema: []domain.Field{
+				{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+				{Name: "payload", Type: "STRING"},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query := func(sql string) domain.QueryResult {
+		t.Helper()
+		result, err := warehouse.Query(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: sql})
+		if err != nil {
+			t.Fatalf("query failed: %v", err)
+		}
+		return result
+	}
+	query("INSERT INTO `test-project.analytics.destination` VALUES (1, 'old'), (2, 'remove')")
+	query("INSERT INTO `test-project.analytics.temporary` VALUES (3, 'new'), (4, 'replacement')")
+
+	connectorSQL := "MERGE `test-project.analytics.destination`\n" +
+		"USING (SELECT * FROM `test-project.analytics.temporary`)\n" +
+		"ON FALSE\n" +
+		"WHEN NOT MATCHED THEN INSERT ROW\n" +
+		"WHEN NOT MATCHED BY SOURCE THEN DELETE"
+	translated, model, err := translateSQLWithModel(ports.QueryRequest{ProjectID: "test-project", SQL: connectorSQL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != sparkStaticOverwriteModel || !strings.Contains(translated, "INSERT BY NAME") {
+		t.Fatalf("adapter model=%q SQL=%q", model, translated)
+	}
+	query(connectorSQL)
+
+	result := query("SELECT id, payload FROM `test-project.analytics.destination` ORDER BY id")
+	if len(result.Rows) != 2 || result.Rows[0][0] != int64(3) || result.Rows[1][0] != int64(4) {
+		t.Fatalf("static overwrite result = %#v", result.Rows)
+	}
+
+	// A failed replacement must not expose the delete half of the MERGE. The
+	// connector relies on one query job being atomic when it swaps the temporary
+	// direct-write table into the destination.
+	if err := warehouse.CreateTable(ctx, domain.Table{
+		ProjectID: "test-project", DatasetID: "analytics", ID: "invalid_temporary",
+		Schema: []domain.Field{
+			{Name: "id", Type: "STRING", Mode: "REQUIRED"},
+			{Name: "payload", Type: "STRING"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	query("INSERT INTO `test-project.analytics.invalid_temporary` VALUES ('not-an-int', 'invalid')")
+	invalidOverwrite := strings.Replace(connectorSQL, "analytics.temporary", "analytics.invalid_temporary", 1)
+	if _, err := warehouse.Query(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: invalidOverwrite}); err == nil {
+		t.Fatal("expected incompatible replacement source to fail")
+	}
+	result = query("SELECT id, payload FROM `test-project.analytics.destination` ORDER BY id")
+	if len(result.Rows) != 2 || result.Rows[0][0] != int64(3) || result.Rows[1][0] != int64(4) {
+		t.Fatalf("failed overwrite changed destination: %#v", result.Rows)
+	}
+}
+
+func TestSparkConnectorStaticOverwriteRejectsProfileDrift(t *testing.T) {
+	statement := "MERGE `p.d.target`\n" +
+		"USING (SELECT * FROM `p.d.source`)\n" +
+		"ON FALSE\n" +
+		"WHEN NOT MATCHED THEN INSERT ROW\n" +
+		"WHEN MATCHED THEN DELETE"
+	_, model, err := translateSQLWithModel(ports.QueryRequest{SQL: statement})
+	if err == nil || model != sparkStaticOverwriteModel || !strings.Contains(err.Error(), sparkStaticOverwriteModel) {
+		t.Fatalf("profile drift result: model=%q err=%v", model, err)
+	}
+}
+
+func duckDBQueryTestContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	timeout := 10 * time.Second
+	if configured := os.Getenv("BQEMU_QUERY_TEST_TIMEOUT"); configured != "" {
+		parsed, err := time.ParseDuration(configured)
+		if err != nil || parsed <= 0 {
+			t.Fatalf("BQEMU_QUERY_TEST_TIMEOUT must be a positive Go duration: %q", configured)
+		}
+		timeout = parsed
+	}
+	return context.WithTimeout(context.Background(), timeout)
 }
