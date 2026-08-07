@@ -17,6 +17,7 @@ BQEMU_ARTIFACT_TIMEOUT_SECONDS ?= 180
 BQEMU_SPARK_VENV ?= $(CURDIR)/.artifacts/spark/venv
 BQEMU_SPARK_PYTHON ?= $(BQEMU_SPARK_VENV)/bin/python
 GO_TEST_FLAGS ?=
+GO_SOURCE_DIRS ?= ./cmd ./contract ./docs ./internal
 IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
@@ -63,11 +64,15 @@ run:
 	CGO_ENABLED=1 go run ./cmd/emulator --config "$(BQEMU_CONFIG)"
 
 format:
-	gofmt -w ./cmd ./contract ./docs ./internal
+	gofmt -w $(GO_SOURCE_DIRS)
 
 format-check:
-	@test -z "$$(gofmt -l ./cmd ./contract ./docs ./internal)" || \
-	  (printf '%s\n' 'stage=format operation=gofmt shape=go-source status=failed fix_hint=make-format' >&2; exit 1)
+	@unformatted="$$(gofmt -l $(GO_SOURCE_DIRS))"; \
+	  if test -n "$$unformatted"; then \
+	    files="$$(printf '%s\n' "$$unformatted" | paste -sd, -)"; \
+	    printf '%s\n' "stage=format operation=gofmt shape=go-source status=failed files=$$files fix_hint=make-format" >&2; \
+	    exit 1; \
+	  fi
 
 test:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...

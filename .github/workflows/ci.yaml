@@ -30,7 +30,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Check formatting
-        run: test -z "$(gofmt -l cmd contract docs internal)"
+        run: make format-check
       - name: Test with race detector
         run: go test -race -timeout "$BQEMU_GO_TEST_TIMEOUT" ./...
       - name: Vet
