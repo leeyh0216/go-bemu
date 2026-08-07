@@ -1,0 +1,328 @@
+package main
+
+// The executable is the composition root for the ports-and-adapters runtime.
+// Protocol handlers stay in internal/transport, while this package owns only
+// configuration, adapter wiring, listener lifecycle, and graceful shutdown.
+//
+// Lifecycle references:
+//   - net/http shutdown: https://pkg.go.dev/net/http#Server.Shutdown
+//   - gRPC graceful stop: https://pkg.go.dev/google.golang.org/grpc#Server.GracefulStop
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+
+	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
+	"github.com/leeyh0216/go-bemu/internal/adapters/system"
+	"github.com/leeyh0216/go-bemu/internal/admin"
+	"github.com/leeyh0216/go-bemu/internal/application"
+	"github.com/leeyh0216/go-bemu/internal/config"
+	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/observability"
+	grpcserver "github.com/leeyh0216/go-bemu/internal/transport/grpc"
+	"github.com/leeyh0216/go-bemu/internal/transport/rest"
+)
+
+type servingEndpoint struct {
+	name     string
+	listener net.Listener
+	serve    func() error
+}
+
+type serveResult struct {
+	name string
+	err  error
+}
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
+		slog.Error("BQEMU stopped", "event", "runtime.exit", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, args []string, stdout io.Writer) error {
+	loaded, err := config.Load(args)
+	if err != nil {
+		return err
+	}
+	if loaded.PrintEffective {
+		_, err := stdout.Write(loaded.EffectiveYAML)
+		return err
+	}
+	cfg := loaded.Config
+	logger, err := configureLogger(cfg.Logging, os.Stderr)
+	if err != nil {
+		return err
+	}
+	slog.SetDefault(logger)
+	observability.Configure(cfg.Logging.UnsafePayloads)
+	logger.InfoContext(ctx, "configuration loaded",
+		"event", "runtime.configuration.loaded",
+		"model_version", config.APIVersion,
+		"config_path", emptyAs(loaded.ConfigPath, "defaults"),
+		"source_fingerprint", emptyAs(loaded.SourceFingerprint, "none"),
+		"effective_fingerprint", loaded.EffectiveFingerprint,
+	)
+
+	if err := prepareDirectory(ctx, cfg.Database.TempDirectory); err != nil {
+		return err
+	}
+	warehouse, err := duckdb.New(cfg.Database.DSN)
+	if err != nil {
+		return err
+	}
+	defer warehouse.Close()
+
+	catalogRepository := memory.NewCatalogRepository()
+	jobRepository := memory.NewJobRepository()
+	clock := system.Clock{}
+	catalogService := application.NewCatalogService(
+		catalogRepository, warehouse, clock, application.WithDefaultLocation(cfg.Defaults.Location),
+	)
+	if _, err := catalogService.CreateProject(ctx, domain.Project{
+		ID: cfg.Defaults.ProjectID, FriendlyName: "BQEMU default project",
+	}); err != nil {
+		return fmt.Errorf("initialize default project: %w", err)
+	}
+	queryService := application.NewQueryService(
+		jobRepository, warehouse, clock, system.IDGenerator{},
+		application.WithQueryDefaultLocation(cfg.Defaults.Location),
+	)
+
+	restOptions := make([]rest.Option, 0, 1)
+	if cfg.UI.Enabled {
+		restOptions = append(restOptions, rest.WithConsoleDirectory(cfg.UI.Directory))
+	}
+	restServer := rest.NewServer(catalogService, queryService, warehouse, cfg.Server.HTTP.PublicURL, restOptions...)
+	publicHTTP := &http.Server{
+		Addr:              cfg.Server.HTTP.Address,
+		Handler:           restServer.Handler(),
+		ReadHeaderTimeout: cfg.Server.HTTP.ReadHeaderTimeout.Value(),
+		ReadTimeout:       cfg.Server.HTTP.ReadTimeout.Value(),
+		WriteTimeout:      cfg.Server.HTTP.WriteTimeout.Value(),
+		IdleTimeout:       cfg.Server.HTTP.IdleTimeout.Value(),
+	}
+
+	grpcOptions := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(cfg.Server.GRPC.MaxReceiveMessageBytes),
+		grpc.MaxSendMsgSize(cfg.Server.GRPC.MaxSendMessageBytes),
+	}
+	if cfg.Server.TLS.CertFile != "" {
+		transportCredentials, err := credentials.NewServerTLSFromFile(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+		if err != nil {
+			return fmt.Errorf("load gRPC TLS identity: %w", err)
+		}
+		grpcOptions = append(grpcOptions, grpc.Creds(transportCredentials))
+	}
+	// Storage Read and Write adapters are registered independently. Until an
+	// application service is wired, their generated RPC surface returns
+	// UNIMPLEMENTED and the corresponding gRPC health service is NOT_SERVING.
+	grpcService := grpcserver.New(grpcOptions...)
+
+	endpoints := make([]servingEndpoint, 0, 3)
+	publicListener, err := net.Listen("tcp", cfg.Server.HTTP.Address)
+	if err != nil {
+		return fmt.Errorf("listen on public HTTP address %s: %w", cfg.Server.HTTP.Address, err)
+	}
+	endpoints = append(endpoints, servingEndpoint{
+		name: "rest", listener: publicListener,
+		serve: func() error {
+			if cfg.Server.TLS.CertFile != "" {
+				return publicHTTP.ServeTLS(publicListener, cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+			}
+			return publicHTTP.Serve(publicListener)
+		},
+	})
+
+	grpcListener, err := net.Listen("tcp", cfg.Server.GRPC.Address)
+	if err != nil {
+		closeEndpoints(endpoints)
+		return fmt.Errorf("listen on gRPC address %s: %w", cfg.Server.GRPC.Address, err)
+	}
+	endpoints = append(endpoints, servingEndpoint{
+		name: "storage-grpc", listener: grpcListener,
+		serve: func() error { return grpcService.Serve(grpcListener) },
+	})
+
+	var adminHTTP *http.Server
+	if cfg.Admin.Enabled {
+		adminService, err := admin.New(admin.Options{
+			TokenFile: cfg.Admin.TokenFile, MaxStackBytes: cfg.Admin.MaxStackBytes, Logger: logger,
+		})
+		if err != nil {
+			closeEndpoints(endpoints)
+			return fmt.Errorf("configure admin server: %w", err)
+		}
+		adminHTTP = &http.Server{
+			Addr: cfg.Admin.Address, Handler: adminService.Handler(),
+			ReadHeaderTimeout: cfg.Admin.ReadHeaderTimeout.Value(),
+			ReadTimeout:       cfg.Server.HTTP.ReadTimeout.Value(),
+			WriteTimeout:      cfg.Server.HTTP.WriteTimeout.Value(),
+			IdleTimeout:       cfg.Server.HTTP.IdleTimeout.Value(),
+		}
+		adminListener, err := net.Listen("tcp", cfg.Admin.Address)
+		if err != nil {
+			closeEndpoints(endpoints)
+			return fmt.Errorf("listen on admin address %s: %w", cfg.Admin.Address, err)
+		}
+		endpoints = append(endpoints, servingEndpoint{
+			name: "admin", listener: adminListener,
+			serve: func() error {
+				if cfg.Server.TLS.CertFile != "" {
+					return adminHTTP.ServeTLS(adminListener, cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+				}
+				return adminHTTP.Serve(adminListener)
+			},
+		})
+	}
+	defer closeEndpoints(endpoints)
+
+	results := make(chan serveResult, len(endpoints))
+	for _, endpoint := range endpoints {
+		endpoint := endpoint
+		logger.InfoContext(ctx, "listener starting",
+			"event", "side_effect.before", "side_effect", "network.listen",
+			"endpoint", endpoint.name, "address", endpoint.listener.Addr().String(),
+			"tls", cfg.Server.TLS.CertFile != "",
+		)
+		go func() { results <- serveResult{name: endpoint.name, err: endpoint.serve()} }()
+	}
+
+	var servingFailure error
+	select {
+	case <-ctx.Done():
+		logger.InfoContext(context.Background(), "shutdown requested",
+			"event", "domain.transition", "state_from", "SERVING", "state_to", "STOPPING",
+			"reason", context.Cause(ctx),
+		)
+	case result := <-results:
+		if !isExpectedServeError(result.err) {
+			servingFailure = fmt.Errorf("%s server stopped: %w", result.name, result.err)
+		}
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())
+	defer cancel()
+	shutdownErr := shutdownServers(shutdownCtx, publicHTTP, adminHTTP, grpcService)
+	if servingFailure != nil {
+		return errors.Join(servingFailure, shutdownErr)
+	}
+	return shutdownErr
+}
+
+func configureLogger(cfg config.LoggingConfig, output io.Writer) (*slog.Logger, error) {
+	var level slog.Level
+	switch cfg.Level {
+	case "debug":
+		level = slog.LevelDebug
+	case "info":
+		level = slog.LevelInfo
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		return nil, fmt.Errorf("unsupported log level %q", cfg.Level)
+	}
+	options := &slog.HandlerOptions{Level: level}
+	if cfg.Format == "text" {
+		return slog.New(slog.NewTextHandler(output, options)), nil
+	}
+	if cfg.Format != "json" {
+		return nil, fmt.Errorf("unsupported log format %q", cfg.Format)
+	}
+	return slog.New(slog.NewJSONHandler(output, options)), nil
+}
+
+func prepareDirectory(ctx context.Context, path string) error {
+	started := time.Now()
+	slog.InfoContext(ctx, "temporary directory preparation",
+		"event", "side_effect.before", "side_effect", "filesystem.mkdir",
+		"path", path, "mode", "0700",
+	)
+	err := os.MkdirAll(path, 0o700)
+	attrs := []any{
+		"event", "side_effect.after", "side_effect", "filesystem.mkdir",
+		"path", path, "duration_ms", time.Since(started).Milliseconds(), "success", err == nil,
+	}
+	if err != nil {
+		attrs = append(attrs, observability.ErrorAttrs(err)...)
+	}
+	slog.InfoContext(ctx, "temporary directory preparation", attrs...)
+	if err != nil {
+		return fmt.Errorf("prepare temporary directory %s: %w", path, err)
+	}
+	return nil
+}
+
+func shutdownServers(ctx context.Context, publicHTTP, adminHTTP *http.Server, grpcService *grpc.Server) error {
+	started := time.Now()
+	slog.InfoContext(ctx, "server shutdown",
+		"event", "side_effect.before", "side_effect", "network.shutdown",
+	)
+	var shutdownErrors []error
+	if publicHTTP != nil {
+		if err := publicHTTP.Shutdown(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("shutdown public HTTP: %w", err))
+		}
+	}
+	if adminHTTP != nil {
+		if err := adminHTTP.Shutdown(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("shutdown admin HTTP: %w", err))
+		}
+	}
+	if grpcService != nil {
+		stopped := make(chan struct{})
+		go func() {
+			grpcService.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-ctx.Done():
+			grpcService.Stop()
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("graceful gRPC shutdown: %w", ctx.Err()))
+		}
+	}
+	err := errors.Join(shutdownErrors...)
+	slog.InfoContext(context.Background(), "server shutdown",
+		"event", "side_effect.after", "side_effect", "network.shutdown",
+		"duration_ms", time.Since(started).Milliseconds(), "success", err == nil,
+	)
+	return err
+}
+
+func closeEndpoints(endpoints []servingEndpoint) {
+	for _, endpoint := range endpoints {
+		_ = endpoint.listener.Close()
+	}
+}
+
+func isExpectedServeError(err error) bool {
+	return err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, grpc.ErrServerStopped) ||
+		errors.Is(err, net.ErrClosed)
+}
+
+func emptyAs(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
