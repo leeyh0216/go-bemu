@@ -76,6 +76,30 @@ func TestRegistryReturnsDefensiveProfileCopies(t *testing.T) {
 	}
 }
 
+func TestSparkWriteProfilePinsManagedWriterInitializationAndContinuation(t *testing.T) {
+	profile, ok := DefaultRegistry().ForConnectorVersion("0.44.2")
+	if !ok {
+		t.Fatal("Spark connector profile is missing")
+	}
+	for _, flow := range []string{"direct-append-pending", "direct-at-least-once-default"} {
+		calls := profile.Flows[flow]
+		var hasGetWriteStream, hasContinuation bool
+		for _, call := range calls {
+			if call.Target == "/google.cloud.bigquery.storage.v1.BigQueryWrite/GetWriteStream" {
+				hasGetWriteStream = true
+			}
+			for _, field := range call.RequiredFields {
+				if field == "request.continuation.proto_rows.writer_schema" {
+					hasContinuation = true
+				}
+			}
+		}
+		if !hasGetWriteStream || !hasContinuation {
+			t.Fatalf("flow %s does not pin managed-writer initialization and continuation: %#v", flow, calls)
+		}
+	}
+}
+
 func TestEveryGoldenTraceSatisfiesItsProfile(t *testing.T) {
 	traces, err := GoldenTraces()
 	if err != nil {
