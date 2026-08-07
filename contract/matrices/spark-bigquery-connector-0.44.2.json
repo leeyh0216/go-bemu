@@ -1,9 +1,10 @@
 {
   "schemaVersion": "1",
-  "id": "spark-bigquery-connector-0.44.2-spark-3.5.8",
+  "id": "spark-bigquery-connector-dsv1-0.44.2-spark-3.5.8",
+  "artifactVariant": "dsv1-with-dependencies-2.12",
   "connector": {
-    "kind": "connector",
-    "name": "spark-bigquery-connector",
+    "kind": "connector-artifact",
+    "name": "spark-bigquery-with-dependencies_2.12",
     "versions": [
       "0.44.2"
     ]

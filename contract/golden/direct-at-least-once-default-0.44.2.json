@@ -1,7 +1,7 @@
 {
-  "profileId": "spark-bigquery-connector-0.44.2",
-  "consumerKind": "connector",
-  "consumerName": "spark-bigquery-connector",
+  "profileId": "spark-bigquery-connector-dsv1-0.44.2",
+  "consumerKind": "connector-artifact",
+  "consumerName": "spark-bigquery-with-dependencies_2.12",
   "consumerVersion": "0.44.2",
   "fixtureKind": "source-derived",
   "sourceRefs": [

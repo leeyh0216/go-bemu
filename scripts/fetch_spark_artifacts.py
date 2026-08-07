@@ -2,10 +2,11 @@
 """Fetch exact Spark test artifacts without cloning or building upstream.
 
 Artifact coordinates come from Maven Central and are checked byte-for-byte
-against tests/spark/artifacts.lock.json before an atomic rename.
+against the reviewed variant-specific lock files before an atomic rename.
 
 Official artifact:
 https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/
+https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/
 """
 
 from __future__ import annotations
@@ -21,7 +22,10 @@ import urllib.request
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_LOCK = REPOSITORY_ROOT / "tests" / "spark" / "artifacts.lock.json"
+DEFAULT_LOCKS = (
+    REPOSITORY_ROOT / "tests" / "spark" / "artifacts.lock.json",
+    REPOSITORY_ROOT / "tests" / "spark" / "artifacts-dsv2.lock.json",
+)
 DEFAULT_OUTPUT = REPOSITORY_ROOT / ".artifacts" / "spark"
 
 
@@ -36,7 +40,14 @@ def _positive_seconds(name: str, default: str) -> float:
     return value
 
 
-def _event(*, stage: str, shape: str, fingerprint: str, status: str, fix_hint: str) -> None:
+def _event(
+    *,
+    stage: str,
+    shape: str,
+    fingerprint: str,
+    status: str,
+    fix_hint: str,
+) -> None:
     # URL query strings and response bodies are deliberately absent. These
     # fields are safe to retain in CI drift reports.
     print(
@@ -79,7 +90,7 @@ def _fetch(artifact: dict[str, object], output: Path, timeout: float) -> Path:
     if _validate_existing(target, expected_hash, expected_size):
         _event(
             stage="cache-check",
-            shape="maven-jar",
+            shape=str(artifact.get("kind", "artifact")),
             fingerprint=f"sha256:{expected_hash}",
             status="hit",
             fix_hint="none",
@@ -114,7 +125,7 @@ def _fetch(artifact: dict[str, object], output: Path, timeout: float) -> Path:
 
     _event(
         stage="checksum",
-        shape="maven-jar",
+        shape=str(artifact.get("kind", "artifact")),
         fingerprint=f"sha256:{expected_hash}",
         status="verified",
         fix_hint="none",
@@ -124,22 +135,56 @@ def _fetch(artifact: dict[str, object], output: Path, timeout: float) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lock", type=Path, default=DEFAULT_LOCK)
+    parser.add_argument(
+        "--lock",
+        action="append",
+        type=Path,
+        help="Exact lock to fetch; repeat for multiple locks (defaults to DSv1 and DSv2).",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     arguments = parser.parse_args()
     timeout = _positive_seconds("BQEMU_ARTIFACT_TIMEOUT_SECONDS", "120")
 
-    with arguments.lock.open("r", encoding="utf-8") as stream:
-        lock = json.load(stream)
-    if (
-        lock.get("schemaVersion") != "1"
-        or lock.get("connectorVersion") != "0.44.2"
-        or lock.get("sparkVersion") != "3.5.8"
-        or lock.get("sourceCommit") != "719817782a214b8ca72be520870013a3e0253d92"
-    ):
-        raise SystemExit("unreviewed Spark artifact lock version")
-
-    targets = [_fetch(artifact, arguments.output, timeout) for artifact in lock["artifacts"]]
+    targets: list[Path] = []
+    for lock_path in arguments.lock or DEFAULT_LOCKS:
+        with lock_path.open("r", encoding="utf-8") as stream:
+            lock = json.load(stream)
+        common_binding_valid = (
+            lock.get("connectorVersion") == "0.44.2"
+            and lock.get("sourceCommit")
+            == "719817782a214b8ca72be520870013a3e0253d92"
+        )
+        dsv1_binding_valid = (
+            lock.get("schemaVersion") == "1"
+            and lock.get("sparkVersion") == "3.5.8"
+            and lock.get("scalaBinaryVersion") == "2.12"
+            and "artifactVariant" not in lock
+            and "artifactBuild" not in lock
+            and "testRuntime" not in lock
+            and "executionClasspathPolicy" not in lock
+        )
+        dsv2_binding_valid = (
+            lock.get("schemaVersion") == "2"
+            and lock.get("artifactVariant") == "dsv2-spark-3.5-raw"
+            and "sparkVersion" not in lock
+            and "scalaBinaryVersion" not in lock
+            and lock.get("artifactBuild", {}).get("sparkVersion") == "3.5.0"
+            and lock.get("artifactBuild", {}).get("scalaBinaryVersion") == "2.13"
+            and lock.get("testRuntime", {}).get("sparkVersion") == "3.5.8"
+            and lock.get("testRuntime", {}).get("scalaBinaryVersion") == "2.12"
+            and lock.get("testRuntime", {}).get("scalaVersion") == "2.12.18"
+            and lock.get("executionClasspathPolicy")
+            == "exactly-one-connector-variant"
+        )
+        if not common_binding_valid or not (dsv1_binding_valid or dsv2_binding_valid):
+            raise SystemExit("unreviewed Spark artifact lock version")
+        targets.extend(
+            _fetch(artifact, arguments.output, timeout)
+            for artifact in lock["artifacts"]
+        )
+        source = lock.get("artifactBuild", {}).get("source")
+        if source is not None:
+            targets.append(_fetch(source, arguments.output, timeout))
     for target in targets:
         print(target)
     return 0

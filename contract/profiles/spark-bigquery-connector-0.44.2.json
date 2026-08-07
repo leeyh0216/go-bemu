@@ -1,16 +1,22 @@
 {
   "schemaVersion": "1",
-  "id": "spark-bigquery-connector-0.44.2",
+  "id": "spark-bigquery-connector-dsv1-0.44.2",
   "consumers": [
     {
       "kind": "connector",
       "name": "spark-bigquery-connector",
       "versions": ["0.44.2"]
+    },
+    {
+      "kind": "connector-artifact",
+      "name": "spark-bigquery-with-dependencies_2.12",
+      "versions": ["0.44.2"]
     }
   ],
-  "description": "Source-derived protocol profile for Spark BigQuery connector 0.44.2. Capability state determines whether the emulator currently serves each flow.",
+  "description": "Source-derived DSv1 protocol profile for the exact spark-bigquery-with-dependencies_2.12:0.44.2 artifact. Capability state determines whether the emulator currently serves each flow.",
   "sources": [
-    "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2",
+    "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92",
+    "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar",
     "https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2",
     "https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1"

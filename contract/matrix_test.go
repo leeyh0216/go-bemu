@@ -16,10 +16,10 @@ func TestSparkCapabilityMatrixIsCompleteAndClassified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matrices) != 1 {
-		t.Fatalf("matrix count = %d, want exactly one reviewed connector version", len(matrices))
+	if len(matrices) != 2 {
+		t.Fatalf("matrix count = %d, want DSv1 and raw DSv2", len(matrices))
 	}
-	matrix := matrices[0]
+	matrix := matrixByArtifactVariant(t, matrices, "dsv1-with-dependencies-2.12")
 
 	required := map[string]map[string]bool{
 		"format":            stringSet("ARROW", "AVRO", "PROTO_ROWS", "PARQUET", "ORC"),
@@ -73,7 +73,7 @@ func TestSparkCapabilityMatrixRejectsDriftClasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := matrices[0]
+	base := matrixByArtifactVariant(t, matrices, "dsv1-with-dependencies-2.12")
 	tests := map[string]func(*CapabilityMatrix){
 		"unclassified": func(matrix *CapabilityMatrix) { matrix.Entries[0].State = "" },
 		"duplicate-id": func(matrix *CapabilityMatrix) { matrix.Entries[1].ID = matrix.Entries[0].ID },
@@ -103,13 +103,15 @@ func TestEveryNonVerifiedSparkEntryLinksBilingualIssue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range matrices[0].Entries {
-		if entry.State == MatrixVerified {
-			continue
-		}
-		issue := matrices[0].Issues[entry.IssueRef]
-		if !strings.HasPrefix(issue.URL, "https://github.com/leeyh0216/go-bemu/issues/") || strings.Join(issue.Languages, ",") != "en,ko" {
-			t.Errorf("%s does not have an EN/KO issue: %#v", entry.ID, issue)
+	for _, matrix := range matrices {
+		for _, entry := range matrix.Entries {
+			if entry.State == MatrixVerified {
+				continue
+			}
+			issue := matrix.Issues[entry.IssueRef]
+			if !strings.HasPrefix(issue.URL, "https://github.com/leeyh0216/go-bemu/issues/") || strings.Join(issue.Languages, ",") != "en,ko" {
+				t.Errorf("%s does not have an EN/KO issue: %#v", entry.ID, issue)
+			}
 		}
 	}
 }
@@ -119,22 +121,92 @@ func TestSparkEvidenceMatchesCommittedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range matrices[0].Entries {
-		for _, evidence := range entry.Evidence {
-			clean := filepath.ToSlash(filepath.Clean(evidence.Ref))
-			if strings.HasPrefix(clean, "../") || (!strings.HasPrefix(clean, "tests/spark/evidence/") && clean != "tests/spark/artifacts.lock.json") {
-				t.Fatalf("%s evidence escapes reviewed Spark paths: %q", entry.ID, evidence.Ref)
-			}
-			contents, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(clean)))
-			if err != nil {
-				t.Fatalf("%s evidence %s: %v", entry.ID, evidence.Ref, err)
-			}
-			fingerprint := fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
-			if fingerprint != evidence.Fingerprint {
-				t.Fatalf("%s evidence drift ref=%s got=%s want=%s", entry.ID, evidence.Ref, fingerprint, evidence.Fingerprint)
+	for _, matrix := range matrices {
+		for _, entry := range matrix.Entries {
+			for _, evidence := range entry.Evidence {
+				clean := filepath.ToSlash(filepath.Clean(evidence.Ref))
+				allowedLock := clean == "tests/spark/artifacts.lock.json" || clean == "tests/spark/artifacts-dsv2.lock.json"
+				if strings.HasPrefix(clean, "../") || (!strings.HasPrefix(clean, "tests/spark/evidence/") && !allowedLock) {
+					t.Fatalf("%s evidence escapes reviewed Spark paths: %q", entry.ID, evidence.Ref)
+				}
+				contents, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(clean)))
+				if err != nil {
+					t.Fatalf("%s evidence %s: %v", entry.ID, evidence.Ref, err)
+				}
+				fingerprint := fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
+				if fingerprint != evidence.Fingerprint {
+					t.Fatalf("%s evidence drift ref=%s got=%s want=%s", entry.ID, evidence.Ref, fingerprint, evidence.Fingerprint)
+				}
 			}
 		}
 	}
+}
+
+func TestSparkArtifactVariantsRemainDistinct(t *testing.T) {
+	matrices, err := SparkCapabilityMatrices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"dsv1-with-dependencies-2.12": "spark-bigquery-with-dependencies_2.12",
+		"dsv2-spark-3.5-raw":          "spark-3.5-bigquery-raw",
+	}
+	for _, matrix := range matrices {
+		if want[matrix.ArtifactVariant] != matrix.Connector.Name {
+			t.Fatalf("artifact profile drift: variant=%q consumer=%q", matrix.ArtifactVariant, matrix.Connector.Name)
+		}
+		delete(want, matrix.ArtifactVariant)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing artifact variants: %v", sortedKeysString(want))
+	}
+}
+
+func TestRawDSv2MatrixCoversExactAndAtLeastOnceStreaming(t *testing.T) {
+	matrices, err := SparkCapabilityMatrices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := matrixByArtifactVariant(t, matrices, "dsv2-spark-3.5-raw")
+	want := map[string]string{
+		"SBQ-DSV2-RAW-STREAM-EXACT-APPEND-V1": "exactly-once",
+		"SBQ-DSV2-RAW-STREAM-ALO-APPEND-V1":   "at-least-once",
+	}
+	for _, entry := range raw.Entries {
+		delivery, ok := want[entry.ID]
+		if !ok {
+			t.Fatalf("raw DSv2 matrix contains an unreviewed row %q", entry.ID)
+		}
+		if entry.Flow != "write-structured-streaming" || entry.Axes.Execution != "structured-streaming" ||
+			entry.Axes.Delivery != delivery || entry.Axes.SaveMode != "append" || entry.State != MatrixGap ||
+			entry.IssueRef != "dsv2-streaming" || entry.Limitation == "" {
+			t.Fatalf("raw DSv2 row is incomplete: %#v", entry)
+		}
+		delete(want, entry.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("raw DSv2 matrix is missing rows: %v", sortedKeysString(want))
+	}
+}
+
+func matrixByArtifactVariant(t *testing.T, matrices []CapabilityMatrix, variant string) CapabilityMatrix {
+	t.Helper()
+	for _, matrix := range matrices {
+		if matrix.ArtifactVariant == variant {
+			return matrix
+		}
+	}
+	t.Fatalf("missing matrix artifact variant %q", variant)
+	return CapabilityMatrix{}
+}
+
+func sortedKeysString(set map[string]string) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func cloneCapabilityMatrix(t *testing.T, source CapabilityMatrix) CapabilityMatrix {

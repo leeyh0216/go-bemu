@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "1",
+  "id": "spark-bigquery-connector-dsv2-raw-0.44.2-spark-3.5.8",
+  "artifactVariant": "dsv2-spark-3.5-raw",
+  "connector": {
+    "kind": "connector-artifact",
+    "name": "spark-3.5-bigquery-raw",
+    "versions": ["0.44.2"]
+  },
+  "sparkVersion": "3.5.8",
+  "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92",
+  "sourceCatalog": {
+    "streaming-write": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-dsv2/spark-3.1-bigquery-lib/src/main/java/com/google/cloud/spark/bigquery/v2/BigQueryStreamingWrite.java"
+    },
+    "writer-context-interface": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/DataSourceWriterContext.java"
+    },
+    "direct-writer": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataSourceWriterContext.java"
+    },
+    "direct-partition-writer": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java"
+    },
+    "spark-3.5-maven-jar": {
+      "kind": "artifact",
+      "url": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/spark-3.5-bigquery-0.44.2.jar",
+      "fingerprint": "sha256:2e6bbb41bcaf56ae17a5488dd4453698bd35f13e9849f4daed744ca7b57b053f"
+    },
+    "spark-3.5-maven-pom": {
+      "kind": "artifact-metadata",
+      "url": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/spark-3.5-bigquery-0.44.2.pom",
+      "fingerprint": "sha256:70a849546be6e7aa2daf05669db4db44672cccb3f383881114c4a63dd0f18238"
+    }
+  },
+  "issueCatalog": {
+    "dsv2-streaming": {
+      "url": "https://github.com/leeyh0216/go-bemu/issues/23",
+      "languages": ["en", "ko"]
+    }
+  },
+  "entries": [
+    {
+      "id": "SBQ-DSV2-RAW-STREAM-EXACT-APPEND-V1",
+      "flow": "write-structured-streaming",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "structured-streaming",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "tablePartitioning": "unpartitioned",
+        "parallelism": "spark-partition-negotiated",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token"
+      },
+      "state": "gap",
+      "officialSourceRefs": ["streaming-write", "writer-context-interface", "direct-writer", "direct-partition-writer"],
+      "issueRef": "dsv2-streaming",
+      "limitation": "The raw DSv2 driver invokes interface streaming hooks that are no-ops; finalized PENDING streams are not batch committed."
+    },
+    {
+      "id": "SBQ-DSV2-RAW-STREAM-ALO-APPEND-V1",
+      "flow": "write-structured-streaming",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "structured-streaming",
+        "format": "PROTO_ROWS",
+        "delivery": "at-least-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "tablePartitioning": "unpartitioned",
+        "parallelism": "spark-partition-negotiated",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token"
+      },
+      "state": "gap",
+      "officialSourceRefs": ["streaming-write", "direct-writer", "direct-partition-writer"],
+      "issueRef": "dsv2-streaming",
+      "limitation": "For existing-table Append, raw DSv2 creates a temporary table and executors write to that table's default stream; the no-op driver hook neither copies rows to the destination nor deletes the temporary table."
+    }
+  ]
+}

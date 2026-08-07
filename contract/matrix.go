@@ -79,14 +79,15 @@ type MatrixEntry struct {
 }
 
 type CapabilityMatrix struct {
-	SchemaVersion string                  `json:"schemaVersion"`
-	ID            string                  `json:"id"`
-	Connector     ConsumerSpec            `json:"connector"`
-	SparkVersion  string                  `json:"sparkVersion"`
-	SourceCommit  string                  `json:"sourceCommit"`
-	Sources       map[string]MatrixSource `json:"sourceCatalog"`
-	Issues        map[string]MatrixIssue  `json:"issueCatalog"`
-	Entries       []MatrixEntry           `json:"entries"`
+	SchemaVersion   string                  `json:"schemaVersion"`
+	ID              string                  `json:"id"`
+	ArtifactVariant string                  `json:"artifactVariant"`
+	Connector       ConsumerSpec            `json:"connector"`
+	SparkVersion    string                  `json:"sparkVersion"`
+	SourceCommit    string                  `json:"sourceCommit"`
+	Sources         map[string]MatrixSource `json:"sourceCatalog"`
+	Issues          map[string]MatrixIssue  `json:"issueCatalog"`
+	Entries         []MatrixEntry           `json:"entries"`
 }
 
 //go:embed matrices/*.json
@@ -122,8 +123,12 @@ func validateCapabilityMatrix(path string, matrix CapabilityMatrix) error {
 	if matrix.SchemaVersion != "1" {
 		return fmt.Errorf("%s: unsupported schemaVersion %q", path, matrix.SchemaVersion)
 	}
-	if matrix.ID == "" || matrix.Connector.Kind != "connector" ||
-		matrix.Connector.Name != "spark-bigquery-connector" || len(matrix.Connector.Versions) != 1 {
+	variantConsumers := map[string]string{
+		"dsv1-with-dependencies-2.12": "spark-bigquery-with-dependencies_2.12",
+		"dsv2-spark-3.5-raw":          "spark-3.5-bigquery-raw",
+	}
+	if matrix.ID == "" || matrix.Connector.Kind != "connector-artifact" ||
+		variantConsumers[matrix.ArtifactVariant] != matrix.Connector.Name || len(matrix.Connector.Versions) != 1 {
 		return fmt.Errorf("%s: matrix must bind one exact Spark connector consumer", path)
 	}
 	version := matrix.Connector.Versions[0]
