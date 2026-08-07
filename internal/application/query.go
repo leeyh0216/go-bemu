@@ -1,5 +1,17 @@
 package application
 
+// Query jobs follow the BigQuery REST lifecycle while execution is delegated
+// through the replaceable QueryEngine port.
+//
+// Official sources:
+//   - jobs.insert: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert
+//   - jobs.get: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/get
+//   - jobs.query: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query
+//
+// The application owns PENDING -> RUNNING -> DONE transitions and persists each
+// observable state through JobRepository. SQL execution remains behind the
+// replaceable QueryEngine outbound port.
+
 import (
 	"context"
 	"fmt"
@@ -19,14 +31,32 @@ type QueryInput struct {
 }
 
 type QueryService struct {
-	jobs      ports.JobRepository
-	warehouse ports.QueryEngine
-	clock     ports.Clock
-	ids       ports.IDGenerator
+	jobs            ports.JobRepository
+	warehouse       ports.QueryEngine
+	clock           ports.Clock
+	ids             ports.IDGenerator
+	defaultLocation string
 }
 
-func NewQueryService(jobs ports.JobRepository, warehouse ports.QueryEngine, clock ports.Clock, ids ports.IDGenerator) *QueryService {
-	return &QueryService{jobs: jobs, warehouse: warehouse, clock: clock, ids: ids}
+type QueryOption func(*QueryService)
+
+// WithQueryDefaultLocation supplies the configured location when callers omit
+// jobReference.location. Values follow the BigQuery location catalog:
+// https://cloud.google.com/bigquery/docs/locations.
+func WithQueryDefaultLocation(location string) QueryOption {
+	return func(service *QueryService) {
+		if location != "" {
+			service.defaultLocation = location
+		}
+	}
+}
+
+func NewQueryService(jobs ports.JobRepository, warehouse ports.QueryEngine, clock ports.Clock, ids ports.IDGenerator, options ...QueryOption) *QueryService {
+	service := &QueryService{jobs: jobs, warehouse: warehouse, clock: clock, ids: ids, defaultLocation: "US"}
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 func (s *QueryService) RunSync(ctx context.Context, input QueryInput) (*domain.Job, error) {
@@ -59,6 +89,9 @@ func (s *QueryService) List(ctx context.Context, projectID string) ([]*domain.Jo
 func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Job, error) {
 	if input.JobID == "" {
 		input.JobID = "job_" + s.ids.NewID()
+	}
+	if input.Location == "" {
+		input.Location = s.defaultLocation
 	}
 	job, err := domain.NewQueryJob(domain.JobReference{
 		ProjectID: input.ProjectID,

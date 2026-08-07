@@ -89,7 +89,11 @@ func TestLoadRejectsMultipleDocumentsAndAmbiguousDuration(t *testing.T) {
 
 func TestValidateProtectsRemoteAdminAndStaticAuth(t *testing.T) {
 	for name, override := range map[string][]string{
-		"remote-admin":    {"--set", "admin.enabled=true", "--set", "admin.address=0.0.0.0:9051"},
+		"remote-admin": {"--set", "admin.enabled=true", "--set", "admin.address=0.0.0.0:9051"},
+		"remote-admin-with-token-but-no-tls": {
+			"--set", "admin.enabled=true", "--set", "admin.address=0.0.0.0:9051",
+			"--set", "admin.tokenFile=token.txt",
+		},
 		"static-auth":     {"--set", "auth.mode=static"},
 		"oversize-append": {"--set", "storage.write.maxAppendRequestBytes=20971521"},
 	} {

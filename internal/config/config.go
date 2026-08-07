@@ -516,8 +516,13 @@ func (cfg Config) Validate() error {
 			return err
 		}
 		host, _, _ := net.SplitHostPort(cfg.Admin.Address)
-		if !isLoopbackHost(host) && cfg.Admin.TokenFile == "" {
-			return errors.New("admin.tokenFile is required when admin.address is not loopback-only")
+		if !isLoopbackHost(host) {
+			if cfg.Admin.TokenFile == "" {
+				return errors.New("admin.tokenFile is required when admin.address is not loopback-only")
+			}
+			if cfg.Server.TLS.CertFile == "" {
+				return errors.New("server TLS is required when admin.address is not loopback-only")
+			}
 		}
 		if cfg.Admin.ReadHeaderTimeout.Value() <= 0 {
 			return errors.New("admin.readHeaderTimeout must be positive")

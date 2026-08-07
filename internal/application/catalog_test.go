@@ -81,7 +81,7 @@ func TestCatalogUseCaseDependsOnWarehousePort(t *testing.T) {
 	repository := memory.NewCatalogRepository()
 	warehouse := &fakeWarehouse{}
 	now := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
-	service := NewCatalogService(repository, warehouse, fixedClock{now: now})
+	service := NewCatalogService(repository, warehouse, fixedClock{now: now}, WithDefaultLocation("EU"))
 
 	if _, err := service.CreateProject(ctx, domain.Project{ID: "test-project"}); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestCatalogUseCaseDependsOnWarehousePort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dataset.CreatedAt != now || len(warehouse.datasets) != 1 {
+	if dataset.CreatedAt != now || dataset.Location != "EU" || len(warehouse.datasets) != 1 {
 		t.Fatalf("unexpected dataset or adapter calls: %#v %#v", dataset, warehouse.datasets)
 	}
 	_, err = service.CreateTable(ctx, domain.Table{

@@ -20,13 +20,31 @@ import (
 )
 
 type CatalogService struct {
-	catalog   ports.CatalogRepository
-	warehouse ports.WarehouseAdmin
-	clock     ports.Clock
+	catalog         ports.CatalogRepository
+	warehouse       ports.WarehouseAdmin
+	clock           ports.Clock
+	defaultLocation string
 }
 
-func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.WarehouseAdmin, clock ports.Clock) *CatalogService {
-	return &CatalogService{catalog: catalog, warehouse: warehouse, clock: clock}
+type CatalogOption func(*CatalogService)
+
+// WithDefaultLocation applies the configured project location when a dataset
+// insert omits location. BigQuery locations and their case-sensitive values are
+// documented at https://cloud.google.com/bigquery/docs/locations.
+func WithDefaultLocation(location string) CatalogOption {
+	return func(service *CatalogService) {
+		if location != "" {
+			service.defaultLocation = location
+		}
+	}
+}
+
+func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.WarehouseAdmin, clock ports.Clock, options ...CatalogOption) *CatalogService {
+	service := &CatalogService{catalog: catalog, warehouse: warehouse, clock: clock, defaultLocation: "US"}
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 func (s *CatalogService) CreateProject(ctx context.Context, project domain.Project) (domain.Project, error) {
@@ -76,7 +94,7 @@ func (s *CatalogService) CreateDataset(ctx context.Context, dataset domain.Datas
 		return domain.Dataset{}, err
 	}
 	if dataset.Location == "" {
-		dataset.Location = "US"
+		dataset.Location = s.defaultLocation
 	}
 	now := s.clock.Now()
 	dataset.CreatedAt = now
