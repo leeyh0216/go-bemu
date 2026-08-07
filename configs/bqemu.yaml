@@ -1,0 +1,65 @@
+# BQEMU runtime configuration. Mount this file at /etc/bqemu/bqemu.yaml in
+# Docker and select it with --config or BQEMU_CONFIG.
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+
+defaults:
+  projectId: local-project
+  location: US
+
+server:
+  http:
+    address: ":9050"
+    publicUrl: http://localhost:9050
+    readHeaderTimeout: "5s"
+    readTimeout: "30s"
+    writeTimeout: "30s"
+    idleTimeout: "2m"
+  grpc:
+    address: ":9060"
+    maxReceiveMessageBytes: 33554432
+    maxSendMessageBytes: 33554432
+  tls:
+    certFile: ""
+    keyFile: ""
+
+database:
+  adapter: duckdb
+  dsn: /data/bqemu.duckdb
+  tempDirectory: /tmp/bqemu
+
+runtime:
+  shutdownTimeout: "10s"
+  jobPollInterval: "100ms"
+  readSessionTtl: "6h"
+  cleanupInterval: "1m"
+
+storage:
+  read:
+    maxStreams: 64
+    rowsPerResponse: 10000
+    maxResponseBytes: 16777216
+  write:
+    maxStreams: 1024
+    maxAppendRequestBytes: 20971520
+
+auth:
+  mode: disabled
+  staticTokensFile: ""
+
+logging:
+  level: info
+  format: json
+  unsafePayloads: false
+
+admin:
+  enabled: false
+  address: 127.0.0.1:9051
+  tokenFile: ""
+
+ui:
+  enabled: false
+  directory: ""
+
+contracts:
+  profileDirectory: contract/profiles
