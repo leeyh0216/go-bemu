@@ -1,0 +1,135 @@
+package domain
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+)
+
+var (
+	projectIDPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{2,62}$`)
+	resourceIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+type Project struct {
+	ID           string
+	FriendlyName string
+	Description  string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (p Project) Validate() error {
+	if !projectIDPattern.MatchString(p.ID) {
+		return fmt.Errorf("%w: project ID %q must match %s", ErrInvalid, p.ID, projectIDPattern)
+	}
+	return nil
+}
+
+type Dataset struct {
+	ProjectID    string
+	ID           string
+	FriendlyName string
+	Description  string
+	Location     string
+	Labels       map[string]string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (d Dataset) Validate() error {
+	if !projectIDPattern.MatchString(d.ProjectID) {
+		return fmt.Errorf("%w: invalid project ID %q", ErrInvalid, d.ProjectID)
+	}
+	if len(d.ID) > 1024 || !resourceIDPattern.MatchString(d.ID) {
+		return fmt.Errorf("%w: invalid dataset ID %q", ErrInvalid, d.ID)
+	}
+	return nil
+}
+
+type Field struct {
+	Name        string
+	Type        string
+	Mode        string
+	Description string
+	Fields      []Field
+}
+
+func (f Field) Validate() error {
+	if len(f.Name) > 1024 || !resourceIDPattern.MatchString(f.Name) {
+		return fmt.Errorf("%w: invalid field name %q", ErrInvalid, f.Name)
+	}
+	t := strings.ToUpper(f.Type)
+	switch t {
+	case "BOOL", "BOOLEAN", "INT64", "INTEGER", "FLOAT64", "FLOAT", "NUMERIC", "BIGNUMERIC", "STRING", "BYTES", "DATE", "DATETIME", "TIME", "TIMESTAMP", "GEOGRAPHY", "JSON", "RECORD", "STRUCT":
+	default:
+		return fmt.Errorf("%w: unsupported field type %q", ErrInvalid, f.Type)
+	}
+	mode := strings.ToUpper(f.Mode)
+	if mode != "" && mode != "NULLABLE" && mode != "REQUIRED" && mode != "REPEATED" {
+		return fmt.Errorf("%w: unsupported field mode %q", ErrInvalid, f.Mode)
+	}
+	if (t == "RECORD" || t == "STRUCT") && len(f.Fields) == 0 {
+		return fmt.Errorf("%w: %s field %q requires nested fields", ErrInvalid, t, f.Name)
+	}
+	for _, nested := range f.Fields {
+		if err := nested.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type TimePartitioning struct {
+	Type         string
+	Field        string
+	ExpirationMs int64
+}
+
+type Range struct {
+	Start    int64
+	End      int64
+	Interval int64
+}
+
+type RangePartitioning struct {
+	Field string
+	Range Range
+}
+
+type Table struct {
+	ProjectID         string
+	DatasetID         string
+	ID                string
+	FriendlyName      string
+	Description       string
+	Type              string
+	Schema            []Field
+	TimePartitioning  *TimePartitioning
+	RangePartitioning *RangePartitioning
+	ClusteringFields  []string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+func (t Table) Validate() error {
+	if !projectIDPattern.MatchString(t.ProjectID) || len(t.DatasetID) > 1024 || len(t.ID) > 1024 || !resourceIDPattern.MatchString(t.DatasetID) || !resourceIDPattern.MatchString(t.ID) {
+		return fmt.Errorf("%w: invalid table reference %s:%s.%s", ErrInvalid, t.ProjectID, t.DatasetID, t.ID)
+	}
+	if len(t.Schema) == 0 {
+		return fmt.Errorf("%w: a table schema requires at least one field", ErrInvalid)
+	}
+	seen := make(map[string]struct{}, len(t.Schema))
+	for _, field := range t.Schema {
+		if err := field.Validate(); err != nil {
+			return err
+		}
+		key := strings.ToLower(field.Name)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%w: duplicate field %q", ErrInvalid, field.Name)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
