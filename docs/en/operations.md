@@ -34,7 +34,7 @@ materialization and settled to the adapter's retained bytes; the sum of live
 sessions and in-flight reservations cannot exceed `maxTotalSnapshotBytes`.
 `query.operationTimeout` (default `2m`, environment
 `BQEMU_QUERY_OPERATION_TIMEOUT`) is the server hard ceiling for both synchronous
-and detached asynchronous query execution. `query.anonymousResultTtl` (default
+and service-owned asynchronous query execution. `query.anonymousResultTtl` (default
 `24h`, environment `BQEMU_QUERY_ANONYMOUS_RESULT_TTL`) controls generated result
 table expiration. Both values must be positive and can be overridden in the
 configuration file or with `--set`. Their protocol basis is official
@@ -232,8 +232,12 @@ and [Compose service configuration](https://docs.docker.com/reference/compose-fi
 On SIGINT, SIGTERM, or a listener failure, the runtime first marks all gRPC health
 entries `NOT_SERVING`. One context using `runtime.serverDrainTimeout` (default
 `5s`) bounds public/admin HTTP shutdown and gRPC `GracefulStop`; expiry forces
-`grpc.Stop`. A separate `runtime.storageCloseTimeout` (default `4s`) bounds Read
-snapshot cleanup, Write orphan cleanup, and coordinator close.
+`grpc.Stop`. A separate `runtime.storageCloseTimeout` (default `4s`) is the
+shared resource-close budget. It first rejects new queries, cancels and waits
+for admitted synchronous/asynchronous query work, then bounds Read snapshot
+cleanup, Write orphan cleanup, and coordinator close. If query work does not
+release DuckDB within that budget, Storage and DuckDB close are skipped instead
+of racing an active query; process teardown owns those remaining resources.
 `runtime.shutdownTimeout` (default `10s`) remains the fallback for deferred
 Storage cleanup during startup or early-return paths. HTTP readiness does not
 flip to false before draining, outstanding operation counts are not reported,
@@ -241,8 +245,10 @@ and a second signal has no dedicated immediate-exit path. Abrupt termination can
 lose the process-local catalog, jobs, Read sessions, Write streams, and load
 idempotency records even when the DuckDB file persists.
 
-Tests must cover idle shutdown, an active REST request, an active gRPC stream,
-deadline expiry, second-signal force exit, and restart with a mounted volume.
+Tests cover query admission rejection, active sync/async cancellation, bounded
+query drain, and query-before-Storage close order. Idle shutdown, an active REST
+request, an active gRPC stream, deadline expiry, second-signal force exit, and
+restart with a mounted volume remain required runtime scenarios.
 The Storage Write visibility contract remains the official
 [`BatchCommitWriteStreams` contract](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams);
 shutdown must not invent commit success.

@@ -51,6 +51,8 @@ configuration, source/effective fingerprints, protected bounded diagnostics,
 hardened Compose profile, and file-configured composition are implemented. The
 runtime applies configured HTTP/gRPC limits and shared TLS, starts admin only
 when enabled, and forces gRPC stop when its shared shutdown deadline expires.
+The resource-close phase owns QueryService admission/cancellation/drain and
+orders it before Storage Read, Storage Write, and DuckDB teardown.
 Legacy configurations that set `logging.unsafePayloads` still parse and produce
 the same effective model, but a true value emits only a deprecation event and
 does not change payload-safe logging.

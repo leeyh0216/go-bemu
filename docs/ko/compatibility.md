@@ -75,13 +75,13 @@ Schema support는 nested/repeated record를 포함한 append-only
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset만 지원, gap `query.destination.truncate-schema-replacement-v1` |
 | SQL DDL | Unsupported | physical/canonical catalog 변경이 하나의 application 계약을 공유할 때까지 `CREATE`/`ALTER`/`DROP`/`TRUNCATE`는 job/engine side effect 전에 실패, gap `query.ddl.catalog-sync-v1` |
 | multi-statement query | Unsupported | literal/comment를 구분하는 scan은 선택적인 마지막 semicolon 하나만 허용하고 script를 job/engine side effect 전에 거부, gap `query.scripts.unsupported-v1`, 공식 [multi-statement query 계약](https://cloud.google.com/bigquery/docs/multi-statement-queries) 참고 |
-| cancellation | Unsupported | route/state 없음 |
+| cancellation | Partial | runtime shutdown은 새 work를 거부하고 이미 수용한 sync/async work를 취소·drain한 뒤 Storage 또는 DuckDB를 닫음, 공개 [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel)과 cancellation state는 미지원 |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, 기존 destination table, process-local state |
 | copy/extract | Unsupported | configuration 거부 |
 | durable job/result state | Unsupported | in-memory repository |
 | bounded query result retention | Unsupported | 모든 result row가 Go memory에 남음, gap `query.results.unbounded-memory-v1` |
 | complex query-result schema | Strict gap | ARRAY/STRUCT result는 mode/child를 평탄화하지 않고 metadata publication 전에 실패, gap `query.results.complex-schema-v1` |
-| bounded async query execution | Partial | 파일 설정 `query.operationTimeout`으로 sync/async backend 실행을 제한하며 queue admission과 정확한 request `timeoutMs`는 gap, capability `query.execution.bounded-v1` |
+| bounded async query execution | Partial | 파일 설정 `query.operationTimeout`으로 service-owned sync/async 실행을 제한하고 shutdown admission/cancel/wait를 구현, worker capacity와 정확한 request `timeoutMs`는 gap, capability `query.execution.bounded-v1` |
 | same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness, 모든 재사용은 `409 duplicate`, fingerprint는 진단용으로 유지 |
 | exact-request replay extension | Unsupported | 향후 opt-in 전용, gap `query.jobs.exact-replay-extension-v1` |
 | query/load cross-type identity | Unsupported | 분리된 repository의 check/create race, gap `query.jobs.cross-repository-identity-v1` |

@@ -113,11 +113,14 @@ fingerprint. Every reused ID returns `409 duplicate`; the fingerprint only makes
 same-versus-different configuration drift visible without logging SQL. This
 follows BigQuery's documented retry behavior; see the official
 [reliability guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions).
-`jobs.insert` executes in a detached background goroutine with the file-configured
-`query.operationTimeout` hard ceiling. Every query result row still remains in
-Go memory. Worker admission, durable terminal state, result retention, and a
-public cancellation route remain gaps under
-`query.results.unbounded-memory-v1`. Cross-type
+`jobs.insert` executes in a service-owned background goroutine with the
+file-configured `query.operationTimeout` hard ceiling. Shutdown rejects new
+query work, cancels admitted synchronous and asynchronous work, and waits for
+the service to become idle before Storage services or DuckDB close. Every query
+result row still remains in Go memory. Bounded worker admission, durable
+terminal state, result retention, and the public
+[`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel)
+route remain gaps. Cross-type
 query/load uniqueness and terminal-update recovery remain
 `query.jobs.cross-repository-identity-v1` and `query.terminal-persistence-v1`.
 REST DTOs preserve the presence of known unsupported query controls and reject

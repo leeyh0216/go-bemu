@@ -90,7 +90,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer warehouse.Close()
+	closeWarehouse := true
+	defer func() {
+		if closeWarehouse {
+			_ = warehouse.Close()
+		}
+	}()
 
 	catalogRepository := memory.NewCatalogRepository()
 	jobRepository := memory.NewJobRepository()
@@ -276,14 +281,48 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	drainCancel()
 	storageContext, storageCancel := context.WithTimeout(context.Background(), cfg.Runtime.StorageCloseTimeout.Value())
 	defer storageCancel()
-	readCloseErr := readRuntime.Close(storageContext)
+	queryCloseErr, readCloseErr, writeCloseErr := shutdownQueryAndStorage(
+		storageContext, queryService, readRuntime, writeRuntime,
+	)
 	readRuntime = nil
-	writeCloseErr := writeRuntime.Close(storageContext)
 	writeRuntime = nil
-	if servingFailure != nil {
-		return errors.Join(servingFailure, shutdownErr, readCloseErr, writeCloseErr)
+	// Closing DuckDB while a query ignored cancellation would introduce a data
+	// race in the adapter. On a bounded query-drain failure, leave process-owned
+	// resources to OS teardown rather than crossing the still-active boundary.
+	if queryCloseErr != nil {
+		closeWarehouse = false
 	}
-	return errors.Join(shutdownErr, readCloseErr, writeCloseErr)
+	if servingFailure != nil {
+		return errors.Join(servingFailure, shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
+	}
+	return errors.Join(shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
+}
+
+type runtimeCloser interface {
+	Close(context.Context) error
+}
+
+// shutdownQueryAndStorage uses one configured cleanup budget. Query workers
+// must relinquish the warehouse before Storage Read/Write cleanup begins.
+func shutdownQueryAndStorage(ctx context.Context, query, read, write runtimeCloser) (queryErr, readErr, writeErr error) {
+	started := time.Now()
+	slog.InfoContext(ctx, "query service shutdown",
+		"event", "side_effect.before", "side_effect", "application.query.close")
+	queryErr = query.Close(ctx)
+	attrs := []any{
+		"event", "side_effect.after", "side_effect", "application.query.close",
+		"duration_ms", time.Since(started).Milliseconds(), "success", queryErr == nil,
+	}
+	if queryErr != nil {
+		attrs = append(attrs, observability.ErrorAttrs(queryErr)...)
+	}
+	slog.InfoContext(context.Background(), "query service shutdown", attrs...)
+	if queryErr != nil {
+		return queryErr, nil, nil
+	}
+	readErr = read.Close(ctx)
+	writeErr = write.Close(ctx)
+	return queryErr, readErr, writeErr
 }
 
 func configureLogger(cfg config.LoggingConfig, output io.Writer) (*slog.Logger, error) {

@@ -33,7 +33,7 @@ budget, logging, admin, UI, 두 Storage service, opt-in load field를 사용한�
 retained byte로 정산한다. Live session과 in-flight reservation 합계는
 `maxTotalSnapshotBytes`를 넘을 수 없다.
 `query.operationTimeout`(default `2m`, 환경 변수
-`BQEMU_QUERY_OPERATION_TIMEOUT`)은 동기 query와 분리된 비동기 query 실행 모두의 server
+`BQEMU_QUERY_OPERATION_TIMEOUT`)은 동기 query와 service가 소유하는 비동기 query 실행 모두의 server
 hard ceiling이다. `query.anonymousResultTtl`(default `24h`, 환경 변수
 `BQEMU_QUERY_ANONYMOUS_RESULT_TTL`)은 생성된 result table 만료를 제어한다. 두 값은
 양수여야 하고 configuration file 또는 `--set`으로 바꿀 수 있다. Protocol 근거는 공식
@@ -222,15 +222,21 @@ SIGINT, SIGTERM 또는 listener failure가 발생하면 runtime은 먼저 모든
 entry를 `NOT_SERVING`으로 바꾼다. `runtime.serverDrainTimeout`(default `5s`) context
 하나가 public/admin HTTP shutdown과 gRPC `GracefulStop`을 제한하며 만료 시
 `grpc.Stop`으로 강제 종료한다. 별도 `runtime.storageCloseTimeout`(default `4s`)은
-Read snapshot cleanup, Write orphan cleanup, coordinator close를 제한한다.
+공유 resource-close budget이다. 먼저 새 query를 거부하고 이미 수용한 sync/async query를
+취소한 뒤 종료를 기다리고, 이어 Read snapshot cleanup, Write orphan cleanup,
+coordinator close를 제한한다. Query가 이 budget 안에 DuckDB를 반환하지 않으면 active
+query와 경합하지 않도록 Storage 및 DuckDB close를 건너뛰고 남은 resource는 process
+teardown이 회수한다.
 `runtime.shutdownTimeout`(default `10s`)은 startup 또는 early-return path의 deferred
 Storage cleanup fallback이다. HTTP readiness는 drain 전에 false가 되지 않고
 outstanding operation count를 보고하지 않으며 두 번째 signal 전용 즉시 종료 path도
 없다. DuckDB file이 남더라도 abrupt termination은 process-local catalog, job, Read
 session, Write stream, load idempotency record를 잃을 수 있다.
 
-Test는 idle shutdown, active REST request, active gRPC stream, deadline expiry,
-second-signal force exit, mounted volume restart를 다뤄야 한다. Storage Write
+Test는 query admission 거부, active sync/async 취소, bounded query drain,
+query-before-Storage close 순서를 검증한다. Idle shutdown, active REST request,
+active gRPC stream, deadline expiry, second-signal force exit, mounted volume
+restart는 계속 필요한 runtime scenario다. Storage Write
 visibility 계약은 공식
 [`BatchCommitWriteStreams` 계약](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams)이며
 shutdown이 commit 성공을 만들어내면 안 된다.

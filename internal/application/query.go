@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -52,7 +53,17 @@ type QueryService struct {
 	anonymousTTL        time.Duration
 	operationTimeout    time.Duration
 	compensationTimeout time.Duration
+	runtimeCtx          context.Context
+	cancelRuntime       context.CancelFunc
+	runtimeMu           sync.Mutex
+	closing             bool
+	activeWork          int
+	idle                chan struct{}
 }
+
+// ErrQueryServiceClosed rejects execution admission once shutdown begins.
+// Metadata reads remain available while transports finish draining.
+var ErrQueryServiceClosed = errors.New("query service is closing")
 
 type QueryOption func(*QueryService)
 
@@ -125,10 +136,14 @@ func WithQueryCompensationTimeout(timeout time.Duration) QueryOption {
 }
 
 func NewQueryService(jobs ports.JobRepository, warehouse ports.QueryEngine, clock ports.Clock, ids ports.IDGenerator, options ...QueryOption) *QueryService {
+	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
+	idle := make(chan struct{})
+	close(idle)
 	service := &QueryService{
 		jobs: jobs, warehouse: warehouse, clock: clock, ids: ids,
 		defaultLocation: "US", anonymousTTL: 24 * time.Hour,
 		operationTimeout: 2 * time.Minute, compensationTimeout: 30 * time.Second,
+		runtimeCtx: runtimeCtx, cancelRuntime: cancelRuntime, idle: idle,
 	}
 	for _, option := range options {
 		option(service)
@@ -137,36 +152,112 @@ func NewQueryService(jobs ports.JobRepository, warehouse ports.QueryEngine, cloc
 }
 
 func (s *QueryService) RunSync(ctx context.Context, input QueryInput) (*domain.Job, error) {
-	job, created, err := s.newJob(ctx, input)
+	if err := s.beginWork(); err != nil {
+		return nil, err
+	}
+	defer s.finishWork()
+	workCtx, cancelWork := s.withRuntimeCancellation(ctx)
+	defer cancelWork()
+
+	job, created, err := s.newJob(workCtx, input)
 	if err != nil {
 		return nil, err
 	}
 	if !created {
 		return nil, fmt.Errorf("%w: query job ID %q already exists", domain.ErrConflict, job.Reference.JobID)
 	}
-	executionCtx, cancelExecution := context.WithTimeout(ctx, s.operationTimeout)
+	executionCtx, cancelExecution := context.WithTimeout(workCtx, s.operationTimeout)
 	s.execute(executionCtx, job)
 	cancelExecution()
-	readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), s.operationTimeout)
+	readBase, cancelReadBase := s.withRuntimeCancellation(context.WithoutCancel(ctx))
+	defer cancelReadBase()
+	readCtx, cancelRead := context.WithTimeout(readBase, s.operationTimeout)
 	defer cancelRead()
 	return s.jobs.Get(readCtx, job.Reference)
 }
 
 func (s *QueryService) Submit(ctx context.Context, input QueryInput) (*domain.Job, error) {
-	job, created, err := s.newJob(ctx, input)
+	if err := s.beginWork(); err != nil {
+		return nil, err
+	}
+	workCtx, cancelWork := s.withRuntimeCancellation(ctx)
+	job, created, err := s.newJob(workCtx, input)
+	cancelWork()
 	if err != nil {
+		s.finishWork()
 		return nil, err
 	}
 	if !created {
+		s.finishWork()
 		return nil, fmt.Errorf("%w: query job ID %q already exists", domain.ErrConflict, job.Reference.JobID)
 	}
 	executionJob := *job
 	go func() {
-		executionCtx, cancelExecution := context.WithTimeout(context.WithoutCancel(ctx), s.operationTimeout)
+		defer s.finishWork()
+		executionBase, cancelExecutionBase := s.withRuntimeCancellation(context.WithoutCancel(ctx))
+		defer cancelExecutionBase()
+		executionCtx, cancelExecution := context.WithTimeout(executionBase, s.operationTimeout)
 		defer cancelExecution()
 		s.execute(executionCtx, &executionJob)
 	}()
 	return job, nil
+}
+
+// Close stops query admission, cancels service-owned execution, and waits for
+// every admitted synchronous and asynchronous operation. The caller controls
+// the bounded wait; a later Close may resume waiting after a deadline.
+func (s *QueryService) Close(ctx context.Context) error {
+	s.runtimeMu.Lock()
+	if !s.closing {
+		s.closing = true
+		s.cancelRuntime()
+	}
+	idle := s.idle
+	s.runtimeMu.Unlock()
+
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("close query service: %w", ctx.Err())
+	}
+}
+
+func (s *QueryService) beginWork() error {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	if s.closing {
+		return ErrQueryServiceClosed
+	}
+	if s.activeWork == 0 {
+		s.idle = make(chan struct{})
+	}
+	s.activeWork++
+	return nil
+}
+
+func (s *QueryService) finishWork() {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.activeWork--
+	if s.activeWork == 0 {
+		close(s.idle)
+	}
+}
+
+// withRuntimeCancellation preserves request values and cancellation while also
+// making service shutdown authoritative. context.AfterFunc adds no waiter that
+// can retain DuckDB ownership after the operation completes.
+func (s *QueryService) withRuntimeCancellation(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(s.runtimeCtx, cancel)
+	if s.runtimeCtx.Err() != nil {
+		cancel()
+	}
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func (s *QueryService) Get(ctx context.Context, reference domain.JobReference) (*domain.Job, error) {
@@ -299,9 +390,11 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job) {
 	} else {
 		_ = job.Complete(result, s.clock.Now())
 	}
-	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), s.operationTimeout)
+	persistBase, cancelPersistBase := s.withRuntimeCancellation(context.WithoutCancel(ctx))
+	persistCtx, cancelPersist := context.WithTimeout(persistBase, s.operationTimeout)
 	persistErr := s.jobs.Update(persistCtx, job)
 	cancelPersist()
+	cancelPersistBase()
 	columnsSummary := fmt.Sprintf("%v", result.Columns)
 	exitAttrs := append(observability.ContextAttrs(ctx),
 		"event", "boundary.exit", "boundary", "application.query",
@@ -405,7 +498,9 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domai
 }
 
 func (s *QueryService) compensateMaterializedDestination(ctx context.Context, destination domain.TableReference) error {
-	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), s.compensationTimeout)
+	cleanupBase, cancelCleanupBase := s.withRuntimeCancellation(context.WithoutCancel(ctx))
+	defer cancelCleanupBase()
+	cleanupCtx, cancelCleanup := context.WithTimeout(cleanupBase, s.compensationTimeout)
 	defer cancelCleanup()
 	if err := s.materializer.DropMaterializedDestination(cleanupCtx, destination); err != nil {
 		return fmt.Errorf("compensate unpublished destination: %w", err)

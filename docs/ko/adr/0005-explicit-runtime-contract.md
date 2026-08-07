@@ -51,6 +51,8 @@ configuration, source/effective fingerprint, 보호되고 bounded한 diagnostics
 hardened Compose profile, file-configured composition은 구현되어 있다. Runtime은
 configured HTTP/gRPC limit와 shared TLS를 적용하고 enabled일 때만 admin을 시작하며
 shared shutdown deadline 만료 시 gRPC를 강제 중지한다.
+Resource-close phase는 QueryService admission/cancellation/drain을 소유하고 Storage
+Read, Storage Write, DuckDB teardown보다 먼저 실행한다.
 `logging.unsafePayloads`를 설정한 legacy configuration은 계속 parse되고 같은 effective
 model을 생성하지만 true 값은 deprecation event만 남기며 payload-safe logging을
 바꾸지 않는다. Readiness drain,

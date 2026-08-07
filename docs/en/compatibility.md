@@ -76,13 +76,13 @@ not implied.
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset only; gap `query.destination.truncate-schema-replacement-v1` |
 | SQL DDL | Unsupported | `CREATE`/`ALTER`/`DROP`/`TRUNCATE` fail before job or engine side effects until physical and canonical catalog changes share one application contract; gap `query.ddl.catalog-sync-v1` |
 | multi-statement queries | Unsupported | literal/comment-aware scanning permits one optional trailing semicolon and rejects scripts before job or engine side effects; gap `query.scripts.unsupported-v1`; see the official [multi-statement query contract](https://cloud.google.com/bigquery/docs/multi-statement-queries) |
-| cancellation | Unsupported | no route/state |
+| cancellation | Partial | runtime shutdown rejects new work, cancels and drains admitted sync/async work before closing Storage or DuckDB; public [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel) and cancellation state remain unsupported |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, existing destination table, process-local state |
 | copy/extract | Unsupported | configuration rejected |
 | durable job/result state | Unsupported | in-memory repository |
 | bounded query result retention | Unsupported | all result rows remain in Go memory; gap `query.results.unbounded-memory-v1` |
 | complex query-result schema | Strict gap | ARRAY/STRUCT results fail before metadata publication rather than flattening mode/children; gap `query.results.complex-schema-v1` |
-| bounded async query execution | Partial | file-configured `query.operationTimeout` bounds sync/async backend execution; queue admission and exact request `timeoutMs` remain gaps; capability `query.execution.bounded-v1` |
+| bounded async query execution | Partial | file-configured `query.operationTimeout` bounds service-owned sync/async execution; shutdown admission/cancel/wait is implemented, while worker capacity and exact request `timeoutMs` remain gaps; capability `query.execution.bounded-v1` |
 | same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness; every reuse returns `409 duplicate`, fingerprint retained for diagnostics |
 | exact-request replay extension | Unsupported | future opt-in only; gap `query.jobs.exact-replay-extension-v1` |
 | query/load cross-type identity | Unsupported | separate repositories have a check/create race; gap `query.jobs.cross-repository-identity-v1` |

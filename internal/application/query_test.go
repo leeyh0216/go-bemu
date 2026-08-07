@@ -93,6 +93,113 @@ func (engine *deadlineAwareQueryEngine) Query(ctx context.Context, _ ports.Query
 	return domain.QueryResult{}, ctx.Err()
 }
 
+type closeControlledQueryEngine struct {
+	started  chan struct{}
+	canceled chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+}
+
+func newCloseControlledQueryEngine() *closeControlledQueryEngine {
+	return &closeControlledQueryEngine{
+		started: make(chan struct{}), canceled: make(chan struct{}),
+		release: make(chan struct{}), finished: make(chan struct{}),
+	}
+}
+
+func (engine *closeControlledQueryEngine) Query(ctx context.Context, _ ports.QueryRequest) (domain.QueryResult, error) {
+	close(engine.started)
+	<-ctx.Done()
+	close(engine.canceled)
+	<-engine.release
+	close(engine.finished)
+	return domain.QueryResult{}, ctx.Err()
+}
+
+func TestQueryServiceCloseCancelsWaitsRejectsAndIsIdempotent(t *testing.T) {
+	for _, asynchronous := range []bool{false, true} {
+		name := "sync"
+		if asynchronous {
+			name = "async"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := queryApplicationTestContext(t)
+			defer cancel()
+			engine := newCloseControlledQueryEngine()
+			service := NewQueryService(
+				memory.NewJobRepository(), engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID(name),
+				WithQueryOperationTimeout(time.Minute),
+			)
+			input := QueryInput{ProjectID: "test-project", JobID: name, SQL: "SELECT 1"}
+			workResult := make(chan error, 1)
+			if asynchronous {
+				if _, err := service.Submit(ctx, input); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				go func() {
+					_, err := service.RunSync(ctx, input)
+					workResult <- err
+				}()
+			}
+			waitForQueryLifecycleSignal(t, ctx, engine.started, "query start")
+
+			closeResult := make(chan error, 1)
+			go func() { closeResult <- service.Close(ctx) }()
+			waitForQueryLifecycleSignal(t, ctx, engine.canceled, "query cancellation")
+			select {
+			case err := <-closeResult:
+				t.Fatalf("Close returned before active query released: %v", err)
+			default:
+			}
+			if _, err := service.Submit(ctx, QueryInput{ProjectID: "test-project", JobID: name + "-rejected", SQL: "SELECT 2"}); !errors.Is(err, ErrQueryServiceClosed) {
+				t.Fatalf("Submit during close error = %v, want ErrQueryServiceClosed", err)
+			}
+			if _, err := service.RunSync(ctx, QueryInput{ProjectID: "test-project", JobID: name + "-sync-rejected", SQL: "SELECT 3"}); !errors.Is(err, ErrQueryServiceClosed) {
+				t.Fatalf("RunSync during close error = %v, want ErrQueryServiceClosed", err)
+			}
+			canceledCtx, cancelClose := context.WithCancel(ctx)
+			cancelClose()
+			if err := service.Close(canceledCtx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("bounded Close error = %v, want context canceled", err)
+			}
+
+			close(engine.release)
+			waitForQueryLifecycleSignal(t, ctx, engine.finished, "query finish")
+			select {
+			case err := <-closeResult:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if !asynchronous {
+				select {
+				case err := <-workResult:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+			if err := service.Close(ctx); err != nil {
+				t.Fatalf("idempotent Close: %v", err)
+			}
+		})
+	}
+}
+
+func waitForQueryLifecycleSignal(t *testing.T, ctx context.Context, signal <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-ctx.Done():
+		t.Fatalf("waiting for %s: %v", name, ctx.Err())
+	}
+}
+
 func TestQueryOperationTimeoutBoundsSyncAndAsyncExecution(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()

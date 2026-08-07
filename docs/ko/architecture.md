@@ -111,10 +111,13 @@ canonical configuration fingerprint다. 모든 재사용 ID는 동일 configurat
 SQL을 기록하지 않고 same/different configuration drift를 구분하는 진단 값이다. 이는
 BigQuery의 공식 retry 동작을 따른다. 공식
 [reliability guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions)를
-참고한다. `jobs.insert`는 분리된 background goroutine에서 실행하되 파일로 설정한
-`query.operationTimeout` hard ceiling을 적용한다. 모든 query result row는 여전히 Go
-memory에 남는다. Worker admission, durable terminal state, result retention, public
-cancellation route는 `query.results.unbounded-memory-v1` gap으로 남는다. Cross-type query/load uniqueness와
+참고한다. `jobs.insert`는 service가 소유하는 background goroutine에서 실행하고 파일로
+설정한 `query.operationTimeout` hard ceiling을 적용한다. Shutdown은 새 query work를
+거부하고 이미 수용한 sync/async work를 취소한 뒤 service가 idle이 될 때까지 기다리고
+나서 Storage service나 DuckDB를 닫는다. 모든 query result row는 여전히 Go memory에
+남는다. Bounded worker admission, durable terminal state, result retention, 공개
+[`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel)
+route는 gap으로 남는다. Cross-type query/load uniqueness와
 terminal-update recovery는 `query.jobs.cross-repository-identity-v1`과
 `query.terminal-persistence-v1` gap이다.
 REST DTO는 알려진 미지원 query control의 presence를 보존하고
