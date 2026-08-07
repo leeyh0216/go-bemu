@@ -44,6 +44,7 @@ storage:
     defaultStreamCount: 4
     rowsPerResponse: 10000
     maxResponseBytes: 16777216
+    maxSchemaBytes: 1048576
     maxSessions: 128
     spillThresholdBytes: 67108864
     maxRowBytes: 8388608

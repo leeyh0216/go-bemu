@@ -111,13 +111,14 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"defaults.projectId=p", "defaults.location=EU",
 		"server.http.address=127.0.0.1:19050", "server.http.publicUrl=https://localhost:19050",
 		"server.http.readHeaderTimeout=1s", "server.http.readTimeout=2s", "server.http.writeTimeout=3s", "server.http.idleTimeout=4s",
-		"server.grpc.address=127.0.0.1:19060", "server.grpc.maxReceiveMessageBytes=1048576", "server.grpc.maxSendMessageBytes=1048576",
+		"server.grpc.address=127.0.0.1:19060", "server.grpc.maxReceiveMessageBytes=1048576", "server.grpc.maxSendMessageBytes=3145728",
 		"server.tls.certFile=cert.pem", "server.tls.keyFile=key.pem",
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
 		"runtime.shutdownTimeout=9s", "runtime.serverDrainTimeout=4s", "runtime.storageCloseTimeout=4s",
 		"runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
 		"storage.read.enabled=true", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
-		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSessions=8",
+		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSchemaBytes=1048576",
+		"storage.read.maxSessions=8",
 		"storage.read.spillThresholdBytes=524288", "storage.read.maxRowBytes=524288",
 		"storage.read.maxSnapshotRows=1000",
 		"storage.read.tempFilePattern=read-*", "storage.read.protocolModelVersion=test-read-v1",
@@ -176,6 +177,7 @@ func TestStorageReadConfigurationRejectsUnsafeOrInconsistentLimits(t *testing.T)
 		"default-over-max": {
 			"--set", "storage.read.maxStreams=2", "--set", "storage.read.defaultStreamCount=4",
 		},
+		"over-system-stream-max": {"--set", "storage.read.maxStreams=1001"},
 		"row-over-response": {
 			"--set", "storage.read.maxResponseBytes=1048576", "--set", "storage.read.maxRowBytes=1048577",
 		},
@@ -183,6 +185,11 @@ func TestStorageReadConfigurationRejectsUnsafeOrInconsistentLimits(t *testing.T)
 		"zero-snapshot":  {"--set", "storage.read.maxSnapshotRows=0"},
 		"path-pattern":   {"--set", "storage.read.tempFilePattern=outside/read-*"},
 		"missing-model":  {"--set", "storage.read.protocolModelVersion="},
+		"send-envelope": {
+			"--set", "server.grpc.maxSendMessageBytes=1048576",
+			"--set", "storage.read.maxResponseBytes=1048576",
+			"--set", "storage.read.maxSchemaBytes=1",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(overrides, lookup(nil)); err == nil {

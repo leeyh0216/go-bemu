@@ -20,10 +20,18 @@ import (
 )
 
 const (
-	APIVersion        = "config.bqemu.dev/v1alpha1"
-	Kind              = "BQEMUConfig"
-	maxConfigFileSize = 1 << 20
+	APIVersion                     = "config.bqemu.dev/v1alpha1"
+	Kind                           = "BQEMUConfig"
+	maxConfigFileSize              = 1 << 20
+	storageReadSystemMaxStreams    = 1_000
+	storageReadGRPCEnvelopeReserve = 64 << 10
 )
+
+// The generated CreateReadSession contract documents a default system maximum
+// of 1,000 streams. The envelope reserve covers protobuf framing around one
+// bounded ReadRows payload and reference schema; both data bounds remain
+// independently configurable and are checked against the gRPC send ceiling.
+// Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#createreadsessionrequest
 
 // Duration uses Go duration strings on the wire, for example "5s" or "6h".
 // Numeric values are rejected because their unit would be ambiguous.
@@ -136,6 +144,7 @@ type StorageReadConfig struct {
 	DefaultStreamCount   int    `yaml:"defaultStreamCount" json:"defaultStreamCount"`
 	RowsPerResponse      int    `yaml:"rowsPerResponse" json:"rowsPerResponse"`
 	MaxResponseBytes     int    `yaml:"maxResponseBytes" json:"maxResponseBytes"`
+	MaxSchemaBytes       int    `yaml:"maxSchemaBytes" json:"maxSchemaBytes"`
 	MaxSessions          int    `yaml:"maxSessions" json:"maxSessions"`
 	SpillThresholdBytes  int64  `yaml:"spillThresholdBytes" json:"spillThresholdBytes"`
 	MaxRowBytes          int64  `yaml:"maxRowBytes" json:"maxRowBytes"`
@@ -252,7 +261,7 @@ func Defaults() Config {
 		Storage: StorageConfig{
 			Read: StorageReadConfig{
 				Enabled: true, MaxStreams: 64, DefaultStreamCount: 4,
-				RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20, MaxSessions: 128,
+				RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20, MaxSchemaBytes: 1 << 20, MaxSessions: 128,
 				SpillThresholdBytes: 64 << 20, MaxRowBytes: 8 << 20, MaxSnapshotRows: 10_000_000,
 				TempFilePattern:      "bqemu-storage-read-*",
 				ProtocolModelVersion: "google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2",
@@ -403,6 +412,7 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STORAGE_READ_DEFAULT_STREAM_COUNT", "storage.read.defaultStreamCount"},
 	{"BQEMU_STORAGE_READ_ROWS_PER_RESPONSE", "storage.read.rowsPerResponse"},
 	{"BQEMU_STORAGE_READ_MAX_RESPONSE_BYTES", "storage.read.maxResponseBytes"},
+	{"BQEMU_STORAGE_READ_MAX_SCHEMA_BYTES", "storage.read.maxSchemaBytes"},
 	{"BQEMU_STORAGE_READ_MAX_SESSIONS", "storage.read.maxSessions"},
 	{"BQEMU_STORAGE_READ_SPILL_THRESHOLD_BYTES", "storage.read.spillThresholdBytes"},
 	{"BQEMU_STORAGE_READ_MAX_ROW_BYTES", "storage.read.maxRowBytes"},
@@ -513,6 +523,8 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt(&cfg.Storage.Read.RowsPerResponse)
 	case "storage.read.maxResponseBytes":
 		return setInt(&cfg.Storage.Read.MaxResponseBytes)
+	case "storage.read.maxSchemaBytes":
+		return setInt(&cfg.Storage.Read.MaxSchemaBytes)
 	case "storage.read.maxSessions":
 		return setInt(&cfg.Storage.Read.MaxSessions)
 	case "storage.read.spillThresholdBytes":
@@ -648,17 +660,21 @@ func (cfg Config) Validate() error {
 	if strings.TrimSpace(cfg.Database.TempDirectory) == "" {
 		return errors.New("database.tempDirectory is required")
 	}
-	if cfg.Storage.Read.MaxStreams < 1 || int64(cfg.Storage.Read.MaxStreams) > int64(^uint32(0)>>1) ||
+	if cfg.Storage.Read.MaxStreams < 1 || cfg.Storage.Read.MaxStreams > storageReadSystemMaxStreams ||
 		cfg.Storage.Read.DefaultStreamCount < 1 || cfg.Storage.Read.DefaultStreamCount > cfg.Storage.Read.MaxStreams {
-		return errors.New("storage.read stream counts must be positive, defaultStreamCount must not exceed maxStreams, and maxStreams must fit int32")
+		return fmt.Errorf("storage.read stream counts must be positive, defaultStreamCount must not exceed maxStreams, and maxStreams must not exceed the protocol system max %d", storageReadSystemMaxStreams)
 	}
-	if cfg.Storage.Read.RowsPerResponse < 1 || cfg.Storage.Read.MaxResponseBytes < 1<<20 ||
+	if cfg.Storage.Read.RowsPerResponse < 1 || cfg.Storage.Read.MaxResponseBytes < 1<<20 || cfg.Storage.Read.MaxSchemaBytes < 1 ||
 		cfg.Storage.Read.MaxSessions < 1 || cfg.Storage.Read.SpillThresholdBytes < 0 ||
 		cfg.Storage.Read.MaxRowBytes < 1 || cfg.Storage.Read.MaxSnapshotRows < 1 {
 		return errors.New("storage.read row/session limits must be positive, spillThresholdBytes non-negative, and maxResponseBytes at least 1 MiB")
 	}
 	if cfg.Storage.Read.MaxRowBytes > int64(cfg.Storage.Read.MaxResponseBytes) {
 		return errors.New("storage.read.maxRowBytes must not exceed maxResponseBytes")
+	}
+	minimumSendBytes := int64(cfg.Storage.Read.MaxResponseBytes) + int64(cfg.Storage.Read.MaxSchemaBytes) + storageReadGRPCEnvelopeReserve
+	if int64(cfg.Server.GRPC.MaxSendMessageBytes) < minimumSendBytes {
+		return fmt.Errorf("server.grpc.maxSendMessageBytes must be at least %d for the configured Storage Read payload, schema, and envelope reserve", minimumSendBytes)
 	}
 	if pattern := strings.TrimSpace(cfg.Storage.Read.TempFilePattern); pattern == "" || filepath.Base(pattern) != pattern || pattern == "." {
 		return errors.New("storage.read.tempFilePattern must be a non-empty filename pattern without directory separators")
