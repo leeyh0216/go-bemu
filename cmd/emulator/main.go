@@ -105,12 +105,23 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		jobRepository, warehouse, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
 	)
+	loadService, err := composeLoadJobs(cfg, catalogService, warehouse, clock, system.IDGenerator{})
+	if err != nil {
+		return err
+	}
 
 	restOptions := make([]rest.Option, 0, 1)
 	if cfg.UI.Enabled {
 		restOptions = append(restOptions, rest.WithConsoleDirectory(cfg.UI.Directory))
 	}
-	restServer := rest.NewServer(catalogService, queryService, warehouse, cfg.Server.HTTP.PublicURL, restOptions...)
+	var restServer *rest.Server
+	if loadService == nil {
+		restServer = rest.NewServer(catalogService, queryService, warehouse, cfg.Server.HTTP.PublicURL, restOptions...)
+	} else {
+		restServer = rest.NewServerWithLoadJobs(
+			catalogService, queryService, loadService, warehouse, cfg.Server.HTTP.PublicURL, restOptions...,
+		)
+	}
 	publicHTTP := &http.Server{
 		Addr:              cfg.Server.HTTP.Address,
 		Handler:           restServer.Handler(),
