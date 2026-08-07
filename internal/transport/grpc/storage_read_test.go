@@ -21,8 +21,10 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
@@ -119,11 +121,63 @@ func TestStorageReadRejectsUnsupportedCompressionExplicitly(t *testing.T) {
 			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "response compression is not implemented") {
-		t.Fatalf("compression error = %v, want explicit unsupported result", err)
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("compression status = %s, want UNIMPLEMENTED: %v", status.Code(err), err)
+	}
+	if strings.Contains(err.Error(), "response compression is not implemented") {
+		t.Fatalf("public status leaked internal option detail: %v", err)
 	}
 	if materializer.calls != 0 {
 		t.Fatalf("materializer called for unsupported request")
+	}
+}
+
+func TestStorageReadGeneratedClientReceivesClassifiedMaterializerStatus(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{
+			name: "invalid argument",
+			err:  domain.NewError(domain.ErrorInvalidArgument, "snapshot.materialize", errors.New("private selected field")),
+			want: codes.InvalidArgument,
+		},
+		{
+			name: "not found",
+			err:  domain.NewError(domain.ErrorNotFound, "snapshot.materialize", errors.New("private catalog key")),
+			want: codes.NotFound,
+		},
+		{
+			name: "unimplemented",
+			err:  domain.NewError(domain.ErrorUnimplemented, "snapshot.materialize", errors.New("private snapshot option")),
+			want: codes.Unimplemented,
+		},
+		{
+			name: "backend internal",
+			err:  errors.New("private DuckDB query"),
+			want: codes.Internal,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := grpcTestContext(t)
+			defer cancel()
+			materializer := &wireMaterializer{err: testCase.err}
+			client, _ := startReadServer(t, newWireReadService(t, materializer))
+			_, err := client.CreateReadSession(ctx, &storagepb.CreateReadSessionRequest{
+				Parent: "projects/reader-project",
+				ReadSession: &storagepb.ReadSession{
+					Table:      "projects/data-project/datasets/analytics/tables/events",
+					DataFormat: storagepb.DataFormat_ARROW,
+				},
+			})
+			if status.Code(err) != testCase.want {
+				t.Fatalf("generated client status = %s, want %s: %v", status.Code(err), testCase.want, err)
+			}
+			if strings.Contains(err.Error(), "private") {
+				t.Fatalf("generated client error leaked materializer cause: %v", err)
+			}
+		})
 	}
 }
 
@@ -254,6 +308,7 @@ func (g *wireIDs) NewID() string {
 type wireMaterializer struct {
 	calls    int
 	snapshot *wireSnapshot
+	err      error
 }
 
 func newWireMaterializer(t *testing.T, format domain.Format, rows int64) *wireMaterializer {
@@ -270,7 +325,7 @@ func newWireMaterializer(t *testing.T, format domain.Format, rows int64) *wireMa
 
 func (m *wireMaterializer) Materialize(context.Context, domain.MaterializeRequest) (ports.ReadSnapshot, error) {
 	m.calls++
-	return m.snapshot, nil
+	return m.snapshot, m.err
 }
 
 type wireRange struct {

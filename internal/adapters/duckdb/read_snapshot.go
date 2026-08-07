@@ -35,12 +35,32 @@ type ReadTableSchemaResolver interface {
 	GetTable(context.Context, string, string, string) (catalogdomain.Table, error)
 }
 
+const storageReadMaterializeOperation = "storage_read.snapshot.materialize"
+
+var errNestedReadProjectionUnsupported = errors.New("nested Storage Read projection is not implemented")
+
+// Request-derived failures are classified before they cross the outbound
+// port. INVALID_ARGUMENT means the projection/filter cannot be valid for this
+// table, NOT_FOUND means the catalog resource is absent, and UNIMPLEMENTED
+// means the official request shape is valid but this adapter does not support
+// it yet. DuckDB query, staging, and codec failures remain unclassified so the
+// application reports INTERNAL without exposing backend details.
+//
+// Official contracts:
+//   - status semantics: https://grpc.io/docs/guides/status-codes/
+//   - projection/filter options: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
+//   - snapshot_time: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablemodifiers
+func classifiedReadSnapshotError(code readdomain.ErrorCode, cause error) error {
+	return readdomain.NewError(code, storageReadMaterializeOperation, cause)
+}
+
 type ReadSnapshotConfig struct {
 	TempDir              string
 	TempFilePattern      string
 	SpillThresholdBytes  int64
 	MaxRowBytes          int64
 	MaxBatchBytes        int
+	MaxSchemaBytes       int
 	MaxSnapshotRows      int64
 	ProtocolModelVersion string
 }
@@ -60,7 +80,7 @@ func NewReadSnapshotMaterializer(warehouse *Warehouse, resolver ReadTableSchemaR
 	if strings.TrimSpace(config.TempDir) == "" || strings.TrimSpace(config.TempFilePattern) == "" {
 		return nil, fmt.Errorf("read snapshot temp directory and file pattern are required")
 	}
-	if config.SpillThresholdBytes < 0 || config.MaxRowBytes <= 0 || config.MaxBatchBytes <= 0 || config.MaxSnapshotRows <= 0 {
+	if config.SpillThresholdBytes < 0 || config.MaxRowBytes <= 0 || config.MaxBatchBytes <= 0 || config.MaxSchemaBytes <= 0 || config.MaxSnapshotRows <= 0 {
 		return nil, fmt.Errorf("read snapshot spill threshold must be non-negative and limits must be positive")
 	}
 	if strings.TrimSpace(config.ProtocolModelVersion) == "" {
@@ -77,13 +97,14 @@ func NewReadSnapshotMaterializer(warehouse *Warehouse, resolver ReadTableSchemaR
 }
 
 func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, request readdomain.MaterializeRequest) (_ readports.ReadSnapshot, resultErr error) {
-	const operation = "storage_read.snapshot.materialize"
+	const operation = storageReadMaterializeOperation
 	projectID, datasetID, tableID, err := parseStorageReadTable(request.Table)
 	if err != nil {
-		return nil, err
+		return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument, err)
 	}
 	if request.SnapshotTime != nil {
-		return nil, fmt.Errorf("historical snapshot_time is not supported by the DuckDB adapter")
+		return nil, classifiedReadSnapshotError(readdomain.ErrorUnimplemented,
+			fmt.Errorf("historical snapshot_time is not supported by the DuckDB adapter"))
 	}
 
 	resolveStarted := observability.LogSideEffectStart(ctx, "duckdb", "resolve_read_schema",
@@ -94,26 +115,39 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 		"operation_name", operation, "model_version", m.config.ProtocolModelVersion,
 		"project_id", projectID, "dataset_id", datasetID, "table_id", tableID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve Storage Read table schema: %w", err)
+		cause := fmt.Errorf("resolve Storage Read table schema: %w", err)
+		if errors.Is(err, catalogdomain.ErrNotFound) {
+			return nil, classifiedReadSnapshotError(readdomain.ErrorNotFound, cause)
+		}
+		return nil, cause
 	}
 	if table.ProjectID != projectID || table.DatasetID != datasetID || table.ID != tableID {
 		return nil, fmt.Errorf("schema resolver returned table %s:%s.%s for %s", table.ProjectID, table.DatasetID, table.ID, request.Table)
 	}
 	if table.Type != "" && !strings.EqualFold(table.Type, "TABLE") {
-		return nil, fmt.Errorf("Storage Read supports physical TABLE resources, got %q", table.Type)
+		return nil, classifiedReadSnapshotError(readdomain.ErrorUnimplemented,
+			fmt.Errorf("Storage Read supports physical TABLE resources, got %q", table.Type))
 	}
 	fields, err := projectReadFields(table.Schema, request.SelectedFields)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, errNestedReadProjectionUnsupported) {
+			return nil, classifiedReadSnapshotError(readdomain.ErrorUnimplemented, err)
+		}
+		return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument, err)
 	}
 	filterSQL, filterArgs, err := compileRowRestriction(request.RowRestriction, table.Schema)
 	if err != nil {
-		return nil, fmt.Errorf("compile row restriction: %w", err)
+		return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument,
+			fmt.Errorf("compile row restriction: %w", err))
 	}
 
 	arrowSchema, referenceSchema, err := referenceReadSchema(request.Format, fields)
 	if err != nil {
 		return nil, err
+	}
+	if len(referenceSchema.Serialized) > m.config.MaxSchemaBytes {
+		return nil, classifiedReadSnapshotError(readdomain.ErrorResourceExhausted,
+			fmt.Errorf("Storage Read reference schema is %d bytes, exceeds configured max %d", len(referenceSchema.Serialized), m.config.MaxSchemaBytes))
 	}
 	statement := materializeReadStatement(projectID, datasetID, tableID, fields, filterSQL)
 	queryStarted := observability.LogSideEffectStart(ctx, "duckdb", "materialize_read_snapshot",
@@ -217,7 +251,10 @@ func projectReadFields(schema []catalogdomain.Field, selected []string) ([]catal
 	wanted := make(map[string]struct{}, len(selected))
 	for _, name := range selected {
 		if strings.Contains(name, ".") {
-			return nil, fmt.Errorf("nested selected_field %q is not supported by the DuckDB adapter", name)
+			// Nested projection is valid in the official API. Classify this
+			// adapter limitation separately from a missing/invalid field name.
+			// Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
+			return nil, fmt.Errorf("%w: %q", errNestedReadProjectionUnsupported, name)
 		}
 		key := strings.ToLower(name)
 		if _, duplicate := wanted[key]; duplicate {

@@ -97,6 +97,14 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
 			"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
 		)
+		// Outbound adapters classify request, capability, and lookup failures.
+		// Preserve that category across the application boundary while replacing
+		// the adapter operation with this public use-case operation. Error.Error
+		// intentionally omits Cause, so backend SQL, paths, and values stay private.
+		var classified *domain.Error
+		if errors.As(err, &classified) {
+			return domain.Session{}, domain.NewError(classified.Code, operation, err)
+		}
 		return domain.Session{}, domain.NewError(domain.ErrorInternal, operation, err)
 	}
 	if snapshot == nil {

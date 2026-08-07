@@ -239,6 +239,48 @@ func TestAvroReferenceSchemaMustBeJSON(t *testing.T) {
 	}
 }
 
+func TestCreateSessionPreservesClassifiedMaterializerErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want domain.ErrorCode
+	}{
+		{
+			name: "invalid projection",
+			err:  domain.NewError(domain.ErrorInvalidArgument, "adapter.materialize", fmt.Errorf("secret selected field")),
+			want: domain.ErrorInvalidArgument,
+		},
+		{
+			name: "missing table",
+			err:  domain.NewError(domain.ErrorNotFound, "adapter.materialize", fmt.Errorf("secret catalog key")),
+			want: domain.ErrorNotFound,
+		},
+		{
+			name: "unsupported snapshot",
+			err:  domain.NewError(domain.ErrorUnimplemented, "adapter.materialize", fmt.Errorf("secret option")),
+			want: domain.ErrorUnimplemented,
+		},
+		{
+			name: "backend failure",
+			err:  fmt.Errorf("secret backend query"),
+			want: domain.ErrorInternal,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := testContext(t)
+			defer cancel()
+			service := newTestService(t, &fakeMaterializer{err: testCase.err}, newFakeClock())
+			_, err := service.CreateSession(ctx, createRequest(domain.FormatArrow, 1))
+			if domain.CodeOf(err) != testCase.want {
+				t.Fatalf("materializer error code = %s, want %s: %v", domain.CodeOf(err), testCase.want, err)
+			}
+			if strings.Contains(err.Error(), "secret") {
+				t.Fatalf("public application error leaked adapter cause: %v", err)
+			}
+		})
+	}
+}
+
 func createRequest(format domain.Format, streams int32) domain.CreateSessionRequest {
 	return domain.CreateSessionRequest{
 		Parent:         "projects/reader-project",

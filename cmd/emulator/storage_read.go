@@ -40,6 +40,7 @@ func composeStorageRead(
 		TempDir: cfg.Database.TempDirectory, TempFilePattern: cfg.Storage.Read.TempFilePattern,
 		SpillThresholdBytes: cfg.Storage.Read.SpillThresholdBytes,
 		MaxRowBytes:         cfg.Storage.Read.MaxRowBytes, MaxBatchBytes: cfg.Storage.Read.MaxResponseBytes,
+		MaxSchemaBytes:       cfg.Storage.Read.MaxSchemaBytes,
 		MaxSnapshotRows:      cfg.Storage.Read.MaxSnapshotRows,
 		ProtocolModelVersion: cfg.Storage.Read.ProtocolModelVersion,
 	})

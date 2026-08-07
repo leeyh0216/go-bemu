@@ -253,6 +253,7 @@ func readSnapshotTestConfig(tempDir string, spillThreshold int64) ReadSnapshotCo
 		SpillThresholdBytes:  spillThreshold,
 		MaxRowBytes:          1 << 20,
 		MaxBatchBytes:        1 << 20,
+		MaxSchemaBytes:       1 << 20,
 		MaxSnapshotRows:      10_000,
 		ProtocolModelVersion: readSnapshotTestModelVersion,
 	}
@@ -403,6 +404,7 @@ func TestReadSnapshotConfigRequiresExplicitPortableSettings(t *testing.T) {
 		{name: "spill threshold", mutate: func(config *ReadSnapshotConfig) { config.SpillThresholdBytes = -1 }},
 		{name: "row limit", mutate: func(config *ReadSnapshotConfig) { config.MaxRowBytes = 0 }},
 		{name: "batch limit", mutate: func(config *ReadSnapshotConfig) { config.MaxBatchBytes = 0 }},
+		{name: "schema limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSchemaBytes = 0 }},
 		{name: "snapshot limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSnapshotRows = 0 }},
 		{name: "model version", mutate: func(config *ReadSnapshotConfig) { config.ProtocolModelVersion = "" }},
 	}
@@ -424,6 +426,25 @@ func TestReadSnapshotConfigRequiresExplicitPortableSettings(t *testing.T) {
 	missingDir.TempDir = filepath.Join(t.TempDir(), "missing")
 	if _, err := NewReadSnapshotMaterializer(warehouse, resolver, missingDir); err == nil {
 		t.Fatal("expected a missing configured temp directory to fail")
+	}
+}
+
+func TestDuckDBReadSnapshotBoundsReferenceSchema(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "bounded_schema", Type: "TABLE",
+		Schema: []catalogdomain.Field{{Name: "id", Type: "INT64"}},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	config := readSnapshotTestConfig(t.TempDir(), 1<<20)
+	config.MaxSchemaBytes = 1
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, config)
+	_, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+	})
+	if readdomain.CodeOf(err) != readdomain.ErrorResourceExhausted {
+		t.Fatalf("schema bound error code = %s, want RESOURCE_EXHAUSTED: %v", readdomain.CodeOf(err), err)
 	}
 }
 
@@ -514,37 +535,47 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 	tests := []struct {
 		name    string
 		request readdomain.MaterializeRequest
+		want    readdomain.ErrorCode
 	}{
 		{
 			name: "SQL injection grammar",
 			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 				RowRestriction: "id = 1; DROP TABLE restricted"},
+			want: readdomain.ErrorInvalidArgument,
 		},
 		{
 			name: "repeated filter",
 			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 				RowRestriction: "tags = 'safe'"},
+			want: readdomain.ErrorInvalidArgument,
 		},
 		{
 			name: "nested projection",
 			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 				SelectedFields: []string{"tags.value"}},
+			want: readdomain.ErrorUnimplemented,
+		},
+		{
+			name: "missing projection",
+			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+				SelectedFields: []string{"missing"}},
+			want: readdomain.ErrorInvalidArgument,
 		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			ctx, cancel := duckDBReadTestContext(t)
 			defer cancel()
-			if _, err := materializer.Materialize(ctx, testCase.request); err == nil {
-				t.Fatal("expected the explicitly unsupported option to fail")
+			if _, err := materializer.Materialize(ctx, testCase.request); readdomain.CodeOf(err) != testCase.want {
+				t.Fatalf("option error code = %s, want %s: %v", readdomain.CodeOf(err), testCase.want, err)
 			}
 		})
 	}
 	historical := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
 	if _, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow, SnapshotTime: &historical,
-	}); err == nil || !strings.Contains(err.Error(), "historical snapshot_time") {
-		t.Fatalf("historical snapshot error = %v", err)
+	}); readdomain.CodeOf(err) != readdomain.ErrorUnimplemented {
+		t.Fatalf("historical snapshot error code = %s, want UNIMPLEMENTED: %v", readdomain.CodeOf(err), err)
 	}
 	var rows int
 	statement := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
@@ -554,5 +585,31 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("table changed after rejected restriction: rows = %d", rows)
+	}
+}
+
+func TestDuckDBReadSnapshotClassifiesCatalogLookupFailures(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "catalog_errors", Type: "TABLE",
+		Schema: []catalogdomain.Field{{Name: "id", Type: "INT64"}},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	request := readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow}
+
+	notFound := fmt.Errorf("%w: private catalog key", catalogdomain.ErrNotFound)
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table, err: notFound}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+	_, err := materializer.Materialize(ctx, request)
+	if readdomain.CodeOf(err) != readdomain.ErrorNotFound || !errors.Is(err, catalogdomain.ErrNotFound) {
+		t.Fatalf("catalog error = %v, code = %s; want NOT_FOUND preserving cause", err, readdomain.CodeOf(err))
+	}
+
+	backendFailure := fmt.Errorf("catalog backend unavailable")
+	materializer = newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table, err: backendFailure}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+	_, err = materializer.Materialize(ctx, request)
+	var classified *readdomain.Error
+	if !errors.Is(err, backendFailure) || errors.As(err, &classified) {
+		t.Fatalf("backend lookup error must remain unclassified for application INTERNAL mapping: %v", err)
 	}
 }

@@ -1,5 +1,11 @@
 package domain
 
+// Stable codes mirror the official gRPC status categories while keeping
+// generated protobuf types out of the domain. In particular, UNIMPLEMENTED is
+// reserved for request features that this emulator deliberately does not yet
+// support; malformed supported options remain INVALID_ARGUMENT.
+// Source: https://grpc.io/docs/guides/status-codes/
+
 import (
 	"errors"
 	"fmt"
@@ -12,6 +18,7 @@ const (
 	ErrorNotFound           ErrorCode = "NOT_FOUND"
 	ErrorFailedPrecondition ErrorCode = "FAILED_PRECONDITION"
 	ErrorResourceExhausted  ErrorCode = "RESOURCE_EXHAUSTED"
+	ErrorUnimplemented      ErrorCode = "UNIMPLEMENTED"
 	ErrorInternal           ErrorCode = "INTERNAL"
 )
 

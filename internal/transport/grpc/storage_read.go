@@ -27,12 +27,30 @@ import (
 // Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
 const maxRowRestrictionBytes = 1 << 20
 
+const storageReadCreateOperation = "storage_read.create_session"
+
+// The fields are part of the official TableReadOptions contract, so rejecting
+// a recognized but unavailable feature is UNIMPLEMENTED rather than treating
+// the request as malformed. INVALID_ARGUMENT is still used for inconsistent
+// combinations such as Arrow options with AVRO output.
+//
+// Sources:
+//   - options: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
+//   - UNIMPLEMENTED: https://grpc.io/docs/guides/status-codes/
+func unsupportedStorageReadOption(message string) error {
+	return domain.NewError(domain.ErrorUnimplemented, storageReadCreateOperation, errors.New(message))
+}
+
 func (s *StorageServer) CreateReadSession(ctx context.Context, request *storagepb.CreateReadSessionRequest) (*storagepb.ReadSession, error) {
 	if s.read == nil {
 		return nil, status.Error(codes.Unimplemented, "Storage Read is not configured")
 	}
 	domainRequest, err := createSessionRequestFromProto(request)
 	if err != nil {
+		var classified *domain.Error
+		if errors.As(err, &classified) {
+			return nil, storageReadStatus(err)
+		}
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	session, err := s.read.CreateSession(ctx, domainRequest)
@@ -73,10 +91,10 @@ func createSessionRequestFromProto(request *storagepb.CreateReadSessionRequest) 
 			return domain.CreateSessionRequest{}, fmt.Errorf("row_restriction exceeds %d bytes", maxRowRestrictionBytes)
 		}
 		if options.SamplePercentage != nil {
-			return domain.CreateSessionRequest{}, errors.New("sample_percentage is not implemented")
+			return domain.CreateSessionRequest{}, unsupportedStorageReadOption("sample_percentage is not implemented")
 		}
 		if options.GetResponseCompressionCodec() != storagepb.ReadSession_TableReadOptions_RESPONSE_COMPRESSION_CODEC_UNSPECIFIED {
-			return domain.CreateSessionRequest{}, errors.New("response compression is not implemented")
+			return domain.CreateSessionRequest{}, unsupportedStorageReadOption("response compression is not implemented")
 		}
 		if arrow := options.GetArrowSerializationOptions(); arrow != nil {
 			if format != domain.FormatArrow {
@@ -84,7 +102,7 @@ func createSessionRequestFromProto(request *storagepb.CreateReadSessionRequest) 
 			}
 			if arrow.GetBufferCompression() != storagepb.ArrowSerializationOptions_COMPRESSION_UNSPECIFIED ||
 				arrow.GetPicosTimestampPrecision() != storagepb.ArrowSerializationOptions_PICOS_TIMESTAMP_PRECISION_UNSPECIFIED {
-				return domain.CreateSessionRequest{}, errors.New("non-default Arrow serialization options are not implemented")
+				return domain.CreateSessionRequest{}, unsupportedStorageReadOption("non-default Arrow serialization options are not implemented")
 			}
 		}
 		if avro := options.GetAvroSerializationOptions(); avro != nil {
@@ -93,7 +111,7 @@ func createSessionRequestFromProto(request *storagepb.CreateReadSessionRequest) 
 			}
 			if avro.GetEnableDisplayNameAttribute() ||
 				avro.GetPicosTimestampPrecision() != storagepb.AvroSerializationOptions_PICOS_TIMESTAMP_PRECISION_UNSPECIFIED {
-				return domain.CreateSessionRequest{}, errors.New("non-default Avro serialization options are not implemented")
+				return domain.CreateSessionRequest{}, unsupportedStorageReadOption("non-default Avro serialization options are not implemented")
 			}
 		}
 	}
@@ -239,6 +257,8 @@ func storageReadStatus(err error) error {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case domain.ErrorResourceExhausted:
 		return status.Error(codes.ResourceExhausted, err.Error())
+	case domain.ErrorUnimplemented:
+		return status.Error(codes.Unimplemented, err.Error())
 	default:
 		return status.Error(codes.Internal, "Storage Read operation failed")
 	}
