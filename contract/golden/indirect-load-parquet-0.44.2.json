@@ -1,0 +1,54 @@
+{
+  "profileId": "spark-bigquery-connector-0.44.2",
+  "connectorVersion": "0.44.2",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context",
+    "https://cloud.google.com/bigquery/docs/loading-data-cloud-storage-parquet"
+  ],
+  "flow": "indirect-load-parquet",
+  "events": [
+    {
+      "stage": "gcs_stage_objects",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/upload/storage/v1/b/{bucket}/o",
+      "fields": {
+        "request.object_name": "spark_temporary_path/part-file.parquet",
+        "request.payload_digest": "sha256",
+        "response.name": "object_name"
+      }
+    },
+    {
+      "stage": "insert_load_job",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.jobReference.jobId": "stable_retry_id",
+        "request.configuration.load.sourceUris": "gs://bucket/path/*.parquet",
+        "request.configuration.load.destinationTable": "table_reference",
+        "request.configuration.load.sourceFormat": "PARQUET",
+        "response.status.state": "PENDING_or_RUNNING_or_DONE"
+      }
+    },
+    {
+      "stage": "poll_load_job",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+      "fields": {
+        "response.status.state": "DONE_terminal"
+      }
+    },
+    {
+      "stage": "gcs_cleanup",
+      "protocol": "REST",
+      "method": "DELETE",
+      "target": "/storage/v1/b/{bucket}/o/{object}",
+      "fields": {
+        "request.object_name": "staged_object"
+      }
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "profileId": "spark-bigquery-connector-0.44.2",
+  "connectorVersion": "0.44.2",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java",
+    "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataSourceWriterContext.java"
+  ],
+  "flow": "direct-append-pending",
+  "events": [
+    {
+      "stage": "destination_metadata",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+      "fields": {
+        "response.tableReference": "present",
+        "response.schema.fields": "present"
+      }
+    },
+    {
+      "stage": "create_pending_stream",
+      "protocol": "gRPC",
+      "method": "UNARY",
+      "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/CreateWriteStream",
+      "fields": {
+        "request.parent": "table_resource",
+        "request.write_stream.type": "PENDING",
+        "response.name": "write_stream_resource"
+      }
+    },
+    {
+      "stage": "append_rows",
+      "protocol": "gRPC",
+      "method": "BIDI_STREAM",
+      "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/AppendRows",
+      "fields": {
+        "request.write_stream": "write_stream_resource",
+        "request.offset": "monotonic_row_offset",
+        "request.proto_rows": "serialized_proto_rows",
+        "response.append_result.offset": "accepted_row_offset"
+      }
+    },
+    {
+      "stage": "finalize_stream",
+      "protocol": "gRPC",
+      "method": "UNARY",
+      "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/FinalizeWriteStream",
+      "fields": {
+        "request.name": "write_stream_resource",
+        "response.row_count": "exact_appended_count"
+      }
+    },
+    {
+      "stage": "batch_commit",
+      "protocol": "gRPC",
+      "method": "UNARY",
+      "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/BatchCommitWriteStreams",
+      "fields": {
+        "request.parent": "table_resource",
+        "request.write_streams": "all_partition_streams",
+        "response.commit_time": "present"
+      }
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "schemaVersion": "1",
+  "id": "spark-bigquery-connector-0.44.2",
+  "connectorVersions": ["0.44.2"],
+  "description": "Source-derived protocol profile for Spark BigQuery connector 0.44.2. Capability state determines whether the emulator currently serves each flow.",
+  "sources": [
+    "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2",
+    "https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1"
+  ],
+  "capabilities": {
+    "rest.discovery": "verified",
+    "rest.metadata": "verified",
+    "rest.query_jobs": "partial",
+    "grpc.storage_read": "registered",
+    "grpc.storage_write": "registered",
+    "gcs.indirect_stage": "planned",
+    "jobs.load": "planned",
+    "sql.connector_overwrite": "planned"
+  },
+  "flows": {
+    "read-arrow": [
+      {
+        "stage": "table_metadata",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+        "requiredFields": ["response.tableReference", "response.schema.fields"]
+      },
+      {
+        "stage": "create_read_session",
+        "protocol": "gRPC",
+        "method": "UNARY",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryRead/CreateReadSession",
+        "requiredFields": ["request.parent", "request.read_session.table", "request.read_session.data_format", "request.max_stream_count", "response.schema", "response.streams"]
+      },
+      {
+        "stage": "read_rows",
+        "protocol": "gRPC",
+        "method": "SERVER_STREAM",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryRead/ReadRows",
+        "requiredFields": ["request.read_stream", "request.offset", "response.arrow_record_batch.serialized_record_batch", "response.row_count"]
+      }
+    ],
+    "direct-append-pending": [
+      {
+        "stage": "destination_metadata",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+        "requiredFields": ["response.tableReference", "response.schema.fields"]
+      },
+      {
+        "stage": "create_pending_stream",
+        "protocol": "gRPC",
+        "method": "UNARY",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/CreateWriteStream",
+        "requiredFields": ["request.parent", "request.write_stream.type", "response.name"]
+      },
+      {
+        "stage": "append_rows",
+        "protocol": "gRPC",
+        "method": "BIDI_STREAM",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/AppendRows",
+        "requiredFields": ["request.write_stream", "request.offset", "request.proto_rows", "response.append_result.offset"]
+      },
+      {
+        "stage": "finalize_stream",
+        "protocol": "gRPC",
+        "method": "UNARY",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/FinalizeWriteStream",
+        "requiredFields": ["request.name", "response.row_count"]
+      },
+      {
+        "stage": "batch_commit",
+        "protocol": "gRPC",
+        "method": "UNARY",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/BatchCommitWriteStreams",
+        "requiredFields": ["request.parent", "request.write_streams", "response.commit_time"]
+      }
+    ],
+    "indirect-load-parquet": [
+      {
+        "stage": "gcs_stage_objects",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/upload/storage/v1/b/{bucket}/o",
+        "requiredFields": ["request.object_name", "request.payload_digest", "response.name"]
+      },
+      {
+        "stage": "insert_load_job",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.jobReference.jobId", "request.configuration.load.sourceUris", "request.configuration.load.destinationTable", "request.configuration.load.sourceFormat", "response.status.state"]
+      },
+      {
+        "stage": "poll_load_job",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["response.status.state"]
+      },
+      {
+        "stage": "gcs_cleanup",
+        "protocol": "REST",
+        "method": "DELETE",
+        "target": "/storage/v1/b/{bucket}/o/{object}",
+        "requiredFields": ["request.object_name"]
+      }
+    ]
+  }
+}

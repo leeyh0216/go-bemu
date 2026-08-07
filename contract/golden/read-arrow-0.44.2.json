@@ -1,0 +1,48 @@
+{
+  "profileId": "spark-bigquery-connector-0.44.2",
+  "connectorVersion": "0.44.2",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java",
+    "https://cloud.google.com/bigquery/docs/reference/storage"
+  ],
+  "flow": "read-arrow",
+  "events": [
+    {
+      "stage": "table_metadata",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+      "fields": {
+        "response.tableReference": "present",
+        "response.schema.fields": "present"
+      }
+    },
+    {
+      "stage": "create_read_session",
+      "protocol": "gRPC",
+      "method": "UNARY",
+      "target": "/google.cloud.bigquery.storage.v1.BigQueryRead/CreateReadSession",
+      "fields": {
+        "request.parent": "projects/{billing-project}",
+        "request.read_session.table": "projects/{project}/datasets/{dataset}/tables/{table}",
+        "request.read_session.data_format": "ARROW",
+        "request.max_stream_count": "positive",
+        "response.schema": "arrow_schema",
+        "response.streams": "one_or_more"
+      }
+    },
+    {
+      "stage": "read_rows",
+      "protocol": "gRPC",
+      "method": "SERVER_STREAM",
+      "target": "/google.cloud.bigquery.storage.v1.BigQueryRead/ReadRows",
+      "fields": {
+        "request.read_stream": "session_stream_name",
+        "request.offset": "non_negative",
+        "response.arrow_record_batch.serialized_record_batch": "ipc_record_batch_payload",
+        "response.row_count": "non_negative"
+      }
+    }
+  ]
+}
