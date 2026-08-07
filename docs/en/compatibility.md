@@ -183,8 +183,11 @@ atomic multi-stream commit are therefore unsupported.
 <!-- section: client-coverage -->
 ## Client Coverage
 
-REST contract tests exercise shapes used by basic `bq` metadata/query commands,
-but an installed CLI is not part of every test run. Four official [Python client
+The exact [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)
+from [Google Cloud SDK `566.0.0`](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28)
+runs in its own CI layer with UI disabled. It verifies project listing, dataset
+and table lifecycle, additive nullable schema update, query polling, job/table
+listing, cleanup, and the not-found exit contract. Four official [Python client
 `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E tests verify
 dataset administration, table metadata/schema administration, synchronous
 [`jobs.query`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query),
@@ -196,6 +199,13 @@ goldens pin those shapes. Load/copy/extract, `insertAll`, and `tabledata.list`
 remain five strict expected-gap xfails. The connector profile records expected
 calls for version `0.44.2`; it does not imply Storage flows succeed. Every
 capability promotion needs a public-edge test and a negative/boundary test.
+
+The [`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
+[`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),
+[`bq-query-job`](../../contract/golden/bq-query-job-2.1.31.json), and
+[`bq-not-found-error`](../../contract/golden/bq-not-found-error-2.1.31.json)
+goldens pin the CLI wire stages. Load, copy, and extract remain Planned in that
+profile and therefore keep issue #13 open.
 
 <!-- section: removal-criteria -->
 ## Workaround Removal Criteria

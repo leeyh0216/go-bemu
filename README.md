@@ -35,6 +35,9 @@ Implemented and exercised through repository tests:
   `jobs.get`/`getQueryResults`, exercised by the official [Python client
   `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/), including
   terminal `invalidQuery` mapping;
+- project/dataset/table/query/job and additive-schema flows exercised by the
+  official [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)
+  from [Google Cloud SDK `566.0.0`](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28);
 - isolated physical DuckDB schemas and a deliberately small SQL translation
   boundary;
 - canonical Storage Read/Write service registration and gRPC reflection;
@@ -91,7 +94,8 @@ introduction](https://duckdb.org/docs/stable/sql/introduction).
 ## Quick Start
 
 Requirements are Go 1.26+, a C/C++ toolchain for the DuckDB Go driver, and
-optionally Docker.
+optionally Docker. The `bq` contract additionally requires the exact CLI version
+installed by Google Cloud SDK `566.0.0`.
 
 ```bash
 make test
@@ -108,7 +112,7 @@ Default endpoints:
 Create the emulator-only project before using BigQuery v2 resources:
 
 ```bash
-curl -sS -X POST http://localhost:9050/emulator/v1/projects \
+curl -sS -X POST http://localhost:9050/bqemu/v1/projects \
   -H 'Content-Type: application/json' \
   -d '{"projectId":"test-project"}'
 
@@ -206,6 +210,8 @@ make format
 make test
 make vet
 make build
+make python-test
+make bq-test
 ```
 
 Consumers build this repository directly; they do not clone or rebuild another

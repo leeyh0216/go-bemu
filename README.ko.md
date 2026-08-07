@@ -35,6 +35,9 @@ source](https://github.com/goccy/bigquery-emulator/tree/v0.8.1)에 고정한다.
   `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/)으로 실행한 동기
   `jobs.query`, process-local `jobs.insert`의 `jobs.get`/`getQueryResults` polling,
   terminal `invalidQuery` mapping;
+- [Google Cloud SDK `566.0.0`](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28)의
+  공식 [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)로
+  실행한 project/dataset/table/query/job 및 additive-schema flow;
 - 격리된 DuckDB 물리 schema와 의도적으로 작은 SQL 변환 경계;
 - 공식 Storage Read/Write 서비스 등록과 gRPC reflection;
 - replaceable snapshot port, deterministic stream range/offset resume, fake
@@ -90,7 +93,8 @@ domain과 application package는 DuckDB, HTTP, gRPC, Google DTO에 의존하지
 ## 빠른 시작
 
 Go 1.26 이상, DuckDB Go driver용 C/C++ toolchain, 선택적으로 Docker가
-필요하다.
+필요하다. `bq` 계약에는 Google Cloud SDK `566.0.0`이 설치하는 정확한 CLI
+버전도 필요하다.
 
 ```bash
 make test
@@ -107,7 +111,7 @@ make run
 BigQuery v2 resource를 사용하기 전에 emulator 전용 project를 생성한다.
 
 ```bash
-curl -sS -X POST http://localhost:9050/emulator/v1/projects \
+curl -sS -X POST http://localhost:9050/bqemu/v1/projects \
   -H 'Content-Type: application/json' \
   -d '{"projectId":"test-project"}'
 
@@ -205,6 +209,8 @@ make format
 make test
 make vet
 make build
+make python-test
+make bq-test
 ```
 
 소비자는 이 저장소를 직접 빌드하며 다른 emulator를 clone하거나 다시 빌드하지

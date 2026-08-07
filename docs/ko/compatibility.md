@@ -183,8 +183,11 @@ disposition, atomic multi-stream commit은 unsupported다.
 <!-- section: client-coverage -->
 ## Client Coverage
 
-REST contract test는 기본 `bq` metadata/query command가 사용하는 shape를
-실행하지만 설치된 CLI가 모든 test run에 포함되는 것은 아니다. 공식 [Python
+[Google Cloud SDK `566.0.0`](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28)의
+정확한 [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)은
+UI를 끈 독립 CI 계층에서 실행된다. Project 목록, dataset/table lifecycle,
+nullable additive schema update, query polling, job/table 목록, cleanup,
+not-found exit 계약을 검증한다. 공식 [Python
 client `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E 네 개는
 dataset administration, table metadata/schema administration, synchronous
 [`jobs.query`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query),
@@ -196,6 +199,13 @@ asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/re
 다섯 개로 남는다. Connector profile은 version `0.44.2`의 예상 call을 기록할 뿐
 Storage flow 성공을 뜻하지 않는다. Capability 승격에는 public-edge test와
 negative/boundary test가 필요하다.
+
+[`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
+[`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),
+[`bq-query-job`](../../contract/golden/bq-query-job-2.1.31.json),
+[`bq-not-found-error`](../../contract/golden/bq-not-found-error-2.1.31.json) golden은
+CLI wire stage를 고정한다. Load, copy, extract는 이 profile에서 Planned로 남아
+있으므로 이슈 #13은 계속 열린 상태다.
 
 <!-- section: removal-criteria -->
 ## Workaround 제거 기준
