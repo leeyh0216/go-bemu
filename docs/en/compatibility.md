@@ -148,15 +148,17 @@ service and connector
 | --- | --- |
 | official service registration/reflection | Verified |
 | write service health | lifecycle-aware `SERVING` while enabled and not draining |
-| PENDING create/get/append/finalize/commit | Partial; ProtoRows, exact offsets, and finalized row count |
+| PENDING create/get/append/finalize/commit | Partial; ProtoRows, exact offsets, hidden DuckDB staging, and finalized row count |
 | default stream | Partial; official and connector `0.44.2` legacy aliases, immediate append |
-| multiple logical streams | Partial; bounded process-local ledgers over one serialized DuckDB coordinator |
-| atomic batch commit | Verified for a validated group of finalized PENDING streams |
+| multiple logical streams | Partial; weighted in-flight/staged-byte admission over one serialized DuckDB coordinator |
+| atomic batch commit | Verified for a validated group: destination insert and staging/receipt deletion share one transaction |
 | ArrowRows, BUFFERED/explicit COMMITTED streams, and `FlushRows` | Unsupported |
 
 CDC, missing-value default expressions, durable staging/recovery after restart,
-and distributed write concurrency remain unsupported. The serialized backend is
-an intentional embedded-engine bound, not BigQuery throughput parity.
+and distributed write concurrency remain unsupported. PENDING rows no longer
+accumulate as decoded Go objects, but the stable staged-byte charge is not an
+exact DuckDB physical-size measurement. The serialized backend is an intentional
+embedded-engine bound, not BigQuery throughput parity.
 
 The target contract is the official
 [`BigQueryWrite`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite)

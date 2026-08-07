@@ -46,8 +46,9 @@ source](https://github.com/goccy/bigquery-emulator/tree/v0.8.1)에 고정한다.
   INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)로 변환한다;
 - 하나의 bounded DuckDB snapshot, Arrow/Avro encoding, projection/restriction
   validation, logical stream range, offset resume를 사용하는 공개 Storage Read session;
-- exact offset, finalize, atomic batch commit, 여러 logical stream, serialized
-  DuckDB backend를 포함하는 PENDING/default stream 공개 Storage Write `ProtoRows` 경로;
+- exact offset, finalize, atomic batch commit, 여러 logical stream, weighted request
+  admission, bounded hidden DuckDB staging, serialized DuckDB backend를 포함하는
+  PENDING/default stream 공개 Storage Write `ProtoRows` 경로;
 - bounded fake-GCS-compatible JSON adapter 또는 명시적으로 활성화한 `file://`
   adapter, Parquet staging, 기존 table 대상 atomic `WRITE_APPEND`, `WRITE_EMPTY`,
   `WRITE_TRUNCATE`를 사용하는 opt-in load job;

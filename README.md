@@ -49,7 +49,8 @@ Implemented and exercised through repository tests:
   offset resume;
 - public Storage Write `ProtoRows` paths for PENDING streams and the default
   stream, including exact offsets, finalization, atomic batch commit, multiple
-  logical streams, and a serialized DuckDB backend;
+  logical streams, weighted request admission, bounded hidden DuckDB staging,
+  and a serialized DuckDB backend;
 - opt-in load jobs through a bounded fake-GCS-compatible JSON adapter or an
   explicitly enabled `file://` adapter, with Parquet staging and atomic
   `WRITE_APPEND`, `WRITE_EMPTY`, and `WRITE_TRUNCATE` for an existing table;

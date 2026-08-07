@@ -29,13 +29,19 @@ mapping도 있다. 완전한 Docker-oriented example은
 
 Composition root는 default, HTTP/gRPC/TLS limit, database/temp path, shutdown
 budget, logging, admin, UI, 두 Storage service, opt-in load field를 사용한다.
-`storage.read.*`는 session, logical stream, materialization, spill, schema, row,
-wire response를 제한한다. `storage.write.*`는 logical stream, append request,
-serialized DuckDB queue, orphan cleanup을 제한한다. `load.enabled`에는 absolute
-`load.gcsEndpoint`가 필요하고 `load.allowFileSources`는 default false이며
-object/list/download limit을 적용한다. Authentication과 runtime contract-profile
-negotiation은 아직 composition되지 않는다. 유효한 setting은 각 Partial capability를
-넘어서는 주장이 아니다.
+`storage.read.maxSnapshotBytes`는 각 materialization 전에 예약하고 adapter의 실제
+retained byte로 정산한다. Live session과 in-flight reservation 합계는
+`maxTotalSnapshotBytes`를 넘을 수 없다. Memory snapshot은 encoded row byte를,
+spill file은 각 row의 8-byte frame prefix까지 계산한다.
+`storage.write.maxInFlightBytes*`는 serialized DuckDB coordinator를 기다리는 decoded
+request를 제한하고, `maxStagedBytes*`는 숨김 DuckDB PENDING table에 보관된
+deterministic serialized-row charge를 제한한다. Configured append size는 stream별
+limit 이하이고, stream별 limit은 global limit 이하여야 한다. Staged-byte 계산은
+안정적이고 이식 가능한 논리적 크기이며 DuckDB의 실제 file/page 크기는 아니다.
+`load.enabled`에는 absolute `load.gcsEndpoint`가 필요하고
+`load.allowFileSources`는 default false이며 object/list/download limit을 적용한다.
+Authentication과 runtime contract-profile negotiation은 아직 composition되지 않는다.
+유효한 setting은 각 Partial capability를 넘어서는 주장이 아니다.
 
 Unknown YAML field, multiple document, ambiguous numeric duration, unknown
 override path, invalid cross-field 조합은 listener 시작 전에 실패한다. Error에는

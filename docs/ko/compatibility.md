@@ -148,15 +148,17 @@ service와 connector
 | --- | --- |
 | official service registration/reflection | Verified |
 | write service health | enabled이고 draining 전에는 lifecycle-aware `SERVING` |
-| PENDING create/get/append/finalize/commit | Partial, ProtoRows, exact offset, finalized row count |
+| PENDING create/get/append/finalize/commit | Partial, ProtoRows, exact offset, 숨김 DuckDB staging, finalized row count |
 | default stream | Partial, 공식 alias와 connector `0.44.2` legacy alias, immediate append |
-| multiple logical stream | Partial, 직렬화된 DuckDB coordinator 위의 bounded process-local ledger |
-| atomic batch commit | finalized PENDING stream의 검증된 group에 대해 Verified |
+| multiple logical stream | Partial, 하나의 serialized DuckDB coordinator 위에서 weighted in-flight/staged-byte admission 적용 |
+| atomic batch commit | 검증된 group의 destination insert와 staging/receipt 삭제를 하나의 transaction으로 처리해 Verified |
 | ArrowRows, BUFFERED/explicit COMMITTED stream, `FlushRows` | Unsupported |
 
 CDC, missing-value default expression, restart 후 durable staging/recovery,
-distributed write concurrency는 unsupported다. Serialized backend는 의도적인 embedded
-engine bound이며 BigQuery throughput parity가 아니다.
+distributed write concurrency는 unsupported다. PENDING row는 더 이상 decoded Go
+object로 누적되지 않지만 stable staged-byte charge는 DuckDB의 정확한 물리 크기가
+아니다. Serialized backend는 의도적인 embedded engine bound이며 BigQuery throughput
+parity가 아니다.
 
 목표 계약은 공식
 [`BigQueryWrite`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite)

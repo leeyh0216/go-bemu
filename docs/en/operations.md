@@ -29,9 +29,16 @@ environment mappings. The complete Docker-oriented example is
 
 The composition root consumes defaults, HTTP/gRPC/TLS limits, database/temp
 paths, shutdown budgets, logging, admin, UI, both Storage services, and opt-in
-load fields. `storage.read.*` bounds sessions, logical streams, materialization,
-spill, schema, rows, and wire responses. `storage.write.*` bounds logical streams,
-append requests, the serialized DuckDB queue, and orphan cleanup. `load.enabled`
+load fields. `storage.read.maxSnapshotBytes` is reserved before each
+materialization and settled to the adapter's retained bytes; the sum of live
+sessions and in-flight reservations cannot exceed `maxTotalSnapshotBytes`.
+In-memory snapshots charge encoded row bytes, while spill files also charge the
+eight-byte frame prefix for every row. `storage.write.maxInFlightBytes*` bounds
+decoded requests waiting for the serialized DuckDB coordinator, and
+`maxStagedBytes*` bounds deterministic serialized-row charges held in hidden
+DuckDB PENDING tables. The configured append size must fit the per-stream limit,
+which must fit the global limit. Staged-byte accounting is deliberately stable
+and portable; it is not DuckDB's physical file/page size. `load.enabled`
 requires an absolute `load.gcsEndpoint`; `load.allowFileSources` defaults false,
 and object/list/download limits are enforced. Authentication and runtime
 contract-profile negotiation remain uncomposed. A valid setting is not a claim
