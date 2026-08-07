@@ -58,6 +58,11 @@ Those paths require staging, validation against the destination's current
 schema, atomic data plus metadata publication, and a durable job error. They are
 not implemented merely by accepting the JSON option.
 
+The current opt-in Parquet load slice validates casts against an existing table
+and applies a write disposition atomically, but it rejects
+`schemaUpdateOptions`, destination creation, and autodetect. Load-driven schema
+evolution therefore remains unsupported.
+
 <!-- section: write-schema-updates -->
 ## Storage Write Schema Changes
 
@@ -68,11 +73,11 @@ detection](https://cloud.google.com/bigquery/docs/write-api#schema_update_detect
 and the canonical messages are in the
 [`AppendRows` RPC](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows).
 
-A future write-stream ledger must retain destination schema version and writer
-schema fingerprint per connection. It must reject incompatible descriptors,
-publish the exact updated schema once applicable, and preserve offset
-idempotency across the change. The registered but `UNIMPLEMENTED` Storage Write
-service currently provides none of those semantics.
+The current public Partial Write service retains a writer-schema fingerprint for
+ProtoRows appends and preserves exact PENDING-stream offsets during the live
+process. It does not track a durable destination schema version or emit
+`updated_schema`. Incompatible evolution, schema notification, and offset
+recovery across restart therefore remain unsupported.
 
 <!-- section: cdc-contract -->
 ## BigQuery CDC Contract
@@ -127,9 +132,10 @@ CDC UPSERT/DELETE. Connector code adds CDC pseudocolumns in
 [`BigQueryCdcSchemaProvider.java`](https://github.com/GoogleCloudDataproc/flink-bigquery-connector/blob/1.2.0/flink-1.17-connector-bigquery/flink-connector-bigquery/src/main/java/com/google/cloud/flink/bigquery/sink/serializer/BigQueryCdcSchemaProvider.java)
 and composes checkpointed writers in
 [`BigQueryExactlyOnceSink.java`](https://github.com/GoogleCloudDataproc/flink-bigquery-connector/blob/1.2.0/flink-1.17-connector-bigquery/flink-connector-bigquery/src/main/java/com/google/cloud/flink/bigquery/sink/BigQueryExactlyOnceSink.java).
-These source links describe client expectations, not emulator support. The
-public Storage services remain `UNIMPLEMENTED`, so every Flink E2E operation is
-planned or an explicit capability gap.
+These source links describe client expectations, not emulator support. Public
+Storage Read and the ProtoRows PENDING/default Write subset are Partial, but no
+Flink `1.2.0` E2E has promoted an operation. Buffered/checkpointed Write, schema
+notification, and CDC are explicit capability gaps.
 
 <!-- section: evolution-pipeline -->
 ## Modular Evolution Pipeline
@@ -169,8 +175,9 @@ golden, or E2E step that must change.
 
 Verified schema tests cover top-level, nested, and repeated-record additions,
 populated-table nulls, rejected destructive changes, transactional physical
-failure, stale ETags, and Python-client E2E. Restart reconciliation, DDL and
-load/query schema-update paths, and Storage Write remain gaps. CDC later requires out-of-order and
+failure, stale ETags, and Python-client E2E. Restart reconciliation, DDL,
+load/query schema-update paths, and Storage Write schema notification remain
+gaps. CDC later requires out-of-order and
 duplicate sequence values, UPSERT/DELETE, missing key, invalid pseudocolumn,
 reconnect/replay offsets, multiple streams, commit visibility, apply lag, and
 failure recovery. Promotion must still compare result types with [BigQuery data

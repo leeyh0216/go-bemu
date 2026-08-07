@@ -21,8 +21,9 @@ The exact client behavior discussed here is anchored to [connector
 BigQuery's canonical service boundaries are the [REST
 reference](https://cloud.google.com/bigquery/docs/reference/rest) and [Storage RPC
 reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
-`go-bemu` currently implements only the REST metadata/query slice; the Storage
-sections below are implementation requirements, not current support claims.
+`go-bemu` exposes REST metadata/query plus opt-in Parquet load jobs, and public
+Partial Storage Read and Storage Write slices. The sections below distinguish
+those bounded runtime paths from the remaining BigQuery requirements.
 
 <!-- section: read-planning -->
 ## Read Planning
@@ -43,6 +44,12 @@ defined by the official
 [`ReadSession`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession)
 and [`ReadRowsRequest`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readrowsrequest)
 messages.
+
+The current public runtime materializes one bounded DuckDB result per live
+session, divides it into a configured number of stable logical ranges, and
+resumes from a stream-relative offset. Top-level projection and a bounded row
+restriction subset are Partial. `SplitReadStream`, historical `snapshot_time`,
+nested projection, and restart recovery are unsupported.
 
 <!-- section: read-wire -->
 ## Arrow and Avro Read Wire Formats
@@ -65,6 +72,11 @@ batches, nested/repeated values, compression, and offset resume must agree. A
 decoder that succeeds on one scalar fixture does not establish wire
 compatibility.
 
+The current DuckDB adapter encodes bounded Arrow record-batch messages and Avro
+binary rows for the public `ReadRows` path. Compression and complete
+nested/repeated type mappings remain gaps, so this is Partial rather than full
+wire compatibility.
+
 <!-- section: direct-exact -->
 ## Direct Write: Pending Streams and Exact Offsets
 
@@ -85,10 +97,13 @@ pending streams visible. The canonical RPC contract is
 and the operational sequence is in [batch loading with pending
 streams](https://cloud.google.com/bigquery/docs/write-api-batch).
 
-An emulator therefore needs a durable ledger keyed by stream, with schema
-fingerprint, next offset, accepted payload digest, final row count, state, and
-staging relation. A process-global offset or arbitrary stream-map lookup is
-incorrect under concurrent Spark tasks.
+The current Partial implementation keeps a process-local ledger keyed by stream,
+including schema fingerprint, next offset, accepted payload digest, final row
+count, state, and staging relation. ProtoRows append, exact offsets, finalize,
+and atomic commit of a validated PENDING group are public. DuckDB mutations are
+serialized through one bounded coordinator; ledger and staging recovery are not
+durable across restart. A process-global offset or arbitrary stream-map lookup
+would be incorrect under concurrent Spark tasks.
 
 <!-- section: direct-at-least-once -->
 ## Direct Write: Default Stream and At-least-once Mode
@@ -103,6 +118,12 @@ Local tests must keep the two modes separate. Removing a response offset for the
 default stream is not proof of at-least-once retry behavior; fault tests must
 interrupt after the server side effect and before the client receives the
 response.
+
+The public Partial implementation accepts both the official
+`/streams/_default` name and connector `0.44.2`'s legacy `/_default` alias and
+applies rows immediately without an offset. Ambiguous-response retries can
+duplicate rows by design. ArrowRows, BUFFERED and explicit COMMITTED streams,
+and `FlushRows` remain unsupported.
 
 <!-- section: overwrite-merge -->
 ## Direct Overwrite and MERGE
@@ -122,6 +143,14 @@ Regex text substitution cannot implement general `MERGE`; a compatibility rule
 must recognize one exact connector template and pass unknown SQL unchanged or
 report it unsupported.
 
+The current Static Partial adapter does exactly that narrow job: a token parser
+accepts the source-derived connector `0.44.2` constant-false shape, resolves its
+source and destination tables, and runs one atomic [DuckDB `MERGE
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). The
+[`direct-overwrite-static`](../../contract/golden/direct-overwrite-static-0.44.2.json)
+golden covers `jobs.insert`, polling, and temporary-table deletion. Dynamic
+time/range partition overwrite and general BigQuery `MERGE` parity remain gaps.
+
 <!-- section: indirect-write -->
 ## Indirect Write and Load Jobs
 
@@ -139,6 +168,15 @@ and the format/type behavior in [batch loading
 documentation](https://cloud.google.com/bigquery/docs/loading-data).
 Opening a Parquet file is only one step; it does not prove BigQuery load
 semantics, job errors, wildcard URI handling, or atomic visibility.
+
+The opt-in public slice resolves bounded `gs://` list/get/media requests through
+a fake-GCS-compatible JSON adapter, downloads objects to a private temporary
+workspace, validates Parquet columns and casts against an existing table, and
+applies `WRITE_APPEND`, `WRITE_EMPTY`, or `WRITE_TRUNCATE` in one DuckDB
+transaction. File sources require an explicit local-only option. Destination
+creation, autodetect, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, and
+multipart/resumable download are unsupported; job and idempotency state is
+process-local.
 
 <!-- section: rest-jobs -->
 ## REST Jobs, Polling, and Paging
@@ -195,10 +233,10 @@ authorization must remain separate capability claims.
 | REST metadata | catalog use cases and JSON transport | basic lifecycle, patch/update, paging, ETag verified |
 | additive schema | schema validator plus warehouse transaction | top-level/nested/repeated-record additions verified |
 | query job | job repository plus query-engine port | official Python sync/async path verified; process-local partial slice |
-| CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | application/protobuf slice verified with fakes; public runtime unimplemented without DuckDB snapshot/encoder adapter |
-| AppendRows/finalize/commit | per-stream ledger plus transaction coordinator | RPC registered, unimplemented |
-| indirect load | object store, staging, load dispositions | planned |
-| direct overwrite MERGE | structural connector-template adapter | planned |
+| CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical streams, stable offsets; Split/compression/historical snapshot/nested projection gaps |
+| AppendRows/finalize/commit | per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit; advanced stream kinds and durability gaps |
+| indirect load | object store, staging, load dispositions | opt-in public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
+| direct overwrite MERGE | structural connector-template adapter | Static Partial for source-derived connector `0.44.2`; dynamic time/range and general parity gaps |
 | ADC/WIF | optional token stub plus auth middleware | planned |
 
 Capability changes require public-boundary tests and a compatibility update in

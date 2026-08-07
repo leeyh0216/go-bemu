@@ -60,9 +60,10 @@ Schema support는 nested/repeated record를 포함한 append-only
 | `jobs.getQueryResults` | Partial | `startIndex`/max results, opaque page token 없음 |
 | destination table/disposition | Unsupported | job domain에 없음 |
 | cancellation | Unsupported | route/state 없음 |
-| load/copy/extract | Unsupported | query configuration만 수락 |
+| Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, 기존 destination table, process-local state |
+| copy/extract | Unsupported | configuration 거부 |
 | durable job/result state | Unsupported | in-memory repository |
-| same-ID idempotent replay | Unsupported | duplicate conflict |
+| same-ID idempotent replay | Partial | load는 `(project, location, jobId)` fingerprint 사용, query duplicate는 conflict |
 
 Canonical job state와 error field는 공식
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job) resource를
@@ -79,7 +80,7 @@ encoding이 아니다.
 | `SELECT`/`INSERT` | Partial | DuckDB syntax와 function |
 | `UPDATE`/`DELETE` | Partial | DuckDB statement 동작 |
 | basic `MERGE` | Partial | DuckDB-compatible 형식 하나 테스트 |
-| connector static overwrite | Planned | exact template adapter 필요 |
+| connector `0.44.2` static overwrite | Partial | source-derived token shape, atomic DuckDB `MERGE` |
 | dynamic partition overwrite | Unsupported | script/array/partition 의미 없음 |
 | parameter/script/view/UDF | Unsupported | semantic adapter 없음 |
 
@@ -91,6 +92,13 @@ quoted column, comment, string을 안전하게 분류하지 못하므로 임의 
 [공식 DML
 규칙](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
 따라야 한다.
+
+Static Partial adapter는
+[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)가
+조정하는 source-derived connector shape만 인식하고 identifier와 clause를 token으로
+parse한 뒤 하나의 atomic [DuckDB `MERGE
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 실행한다. Dynamic
+time/range partition overwrite와 일반 BigQuery `MERGE` parity는 gap으로 남는다.
 
 <!-- section: types -->
 ## Type
@@ -114,18 +122,19 @@ end-to-end로 검증한 type은 아직 없다.
 
 | RPC/동작 | 상태 |
 | --- | --- |
-| official service registration/reflection | Registered |
-| read service health | `NOT_SERVING` |
-| `CreateReadSession` / `ReadRows` application과 protobuf adapter | fake snapshot으로 Verified |
-| public `CreateReadSession` / `ReadRows` | snapshot adapter가 composition되지 않아 Registered, `UNIMPLEMENTED` 반환 |
-| public `SplitReadStream` | Registered, 상속된 `UNIMPLEMENTED` |
-| Arrow/Avro schema와 row payload | bare wire pass-through verified, DuckDB encoder 없음 |
-| projection/filter/snapshot | request forwarding verified, DuckDB 의미 없음 |
-| multiple stream/offset resume | application range/offset 동작 verified, public runtime unsupported |
+| official service registration/reflection | Verified |
+| read service health | enabled이고 draining 전에는 lifecycle-aware `SERVING` |
+| public `CreateReadSession` / `ReadRows` | Partial, session마다 bounded DuckDB materialization 하나 |
+| public `SplitReadStream` | Unsupported, `UNIMPLEMENTED` 반환 |
+| Arrow/Avro schema와 row payload | Partial, bounded DuckDB row와 response byte에서 encoding |
+| projection과 row restriction | Partial, top-level field와 제한된 expression subset, nested projection 미지원 |
+| logical stream과 offset resume | Partial, live session 안에서 stable range와 stream-relative offset |
+| historical snapshot과 compression | Unsupported |
 
-이 내부 test는 public capability를 Registered보다 높이지 않는다. 실제 DuckDB
-`SnapshotMaterializer`, Arrow/Avro encoder, runtime composition, public-endpoint
-E2E를 모두 통과해야 한다.
+Public capability는 Partial이다. 각 live session은 안정되고 bounded된 DuckDB
+materialization 하나를 소유하고 설정 가능한 logical stream을 노출한다. Split RPC,
+wire compression, historical `snapshot_time`, nested projection, restart 후 durable
+session recovery는 gap으로 남는다.
 
 목표 계약은 공식
 [`BigQueryRead`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryRead)
@@ -137,12 +146,17 @@ service와 connector
 
 | RPC/동작 | 상태 |
 | --- | --- |
-| official service registration/reflection | Registered |
-| write service health | `NOT_SERVING` |
-| create/get/append/finalize/commit/flush | Registered, `UNIMPLEMENTED` 반환 |
-| default stream | Planned |
-| multiple pending stream과 offset | Planned |
-| atomic batch commit | Planned |
+| official service registration/reflection | Verified |
+| write service health | enabled이고 draining 전에는 lifecycle-aware `SERVING` |
+| PENDING create/get/append/finalize/commit | Partial, ProtoRows, exact offset, finalized row count |
+| default stream | Partial, 공식 alias와 connector `0.44.2` legacy alias, immediate append |
+| multiple logical stream | Partial, 직렬화된 DuckDB coordinator 위의 bounded process-local ledger |
+| atomic batch commit | finalized PENDING stream의 검증된 group에 대해 Verified |
+| ArrowRows, BUFFERED/explicit COMMITTED stream, `FlushRows` | Unsupported |
+
+CDC, missing-value default expression, restart 후 durable staging/recovery,
+distributed write concurrency는 unsupported다. Serialized backend는 의도적인 embedded
+engine bound이며 BigQuery throughput parity가 아니다.
 
 목표 계약은 공식
 [`BigQueryWrite`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite)
@@ -154,10 +168,12 @@ service와 connector
 
 | Capability | 상태 |
 | --- | --- |
-| filesystem object-store adapter | Verified structurally |
-| GCS/fake-GCS adapter | Planned |
-| Parquet/Avro/ORC/CSV/JSON load job | Unsupported |
-| write disposition과 atomic staging | Unsupported |
+| filesystem object-store adapter | 명시적 local opt-in 뒤에서만 Verified |
+| GCS/fake-GCS JSON adapter | Partial, bounded list/get/media와 URI glob expansion |
+| 기존 table로의 Parquet load | Partial, explicit schema/cast validation |
+| Avro/ORC/CSV/NDJSON load | terminal `notImplemented` job error와 함께 Unsupported |
+| `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | 하나의 DuckDB transaction에서 Verified |
+| destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | 설정 시 구현 |
 | authentication disabled | 현재 mode |
 | static token, ADC, OAuth, STS/WIF | Planned |
@@ -165,6 +181,9 @@ service와 connector
 
 Load 목표는
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad)다.
+Opt-in path는 bounded immutable object를 private temporary workspace에 download한 뒤
+선택 disposition을 atomic하게 적용한다. Download는 destination transaction 밖에서
+실행되고 load job과 idempotency record는 process-local이다.
 Identity 주장은 [Google Cloud
 인증](https://cloud.google.com/docs/authentication)에 따라 구분한다. 로컬 token
 acquisition을 IAM parity로 설명하면 안 된다.
@@ -172,13 +191,12 @@ acquisition을 IAM parity로 설명하면 안 된다.
 <!-- section: persistence-atomicity -->
 ## 영속성과 Atomicity
 
-DuckDB file storage는 physical row를 보존할 수 있지만 catalog와 job은
-process-local이다. Metadata DDL과 physical DDL은 하나의 durable transaction을
-공유하지 않는다. Additive physical column은 하나의 DuckDB transaction으로
-적용하지만 in-memory catalog publish는 그 transaction과 crash-atomic하지 않다.
-Read-snapshot ledger, write-stream ledger, load staging
-transaction도 없다. 따라서 restart durability, same-ID replay, atomic load
-disposition, atomic multi-stream commit은 unsupported다.
+DuckDB file storage는 physical row를 보존할 수 있지만 catalog, job, read session,
+write stream, load idempotency record는 process-local이다. Additive physical column은
+하나의 DuckDB transaction을 사용하지만 in-memory catalog publish는 그 transaction과
+crash-atomic하지 않다. Load disposition, default-stream append, 검증된 PENDING-stream
+group commit은 각각 destination transaction을 사용한다. 이 atomicity는 live process
+안에서만 성립하며 restart recovery와 durable replay는 unsupported다.
 
 <!-- section: client-coverage -->
 ## Client Coverage
@@ -196,9 +214,9 @@ asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/re
 검증한다. 해당 shape는 [`python-query-sync`](../../contract/golden/python-query-sync-3.43.0.json)와
 [`python-query-async`](../../contract/golden/python-query-async-3.43.0.json) golden에
 고정한다. Load/copy/extract, `insertAll`, `tabledata.list`는 strict expected-gap xfail
-다섯 개로 남는다. Connector profile은 version `0.44.2`의 예상 call을 기록할 뿐
-Storage flow 성공을 뜻하지 않는다. Capability 승격에는 public-edge test와
-negative/boundary test가 필요하다.
+다섯 개로 남는다. Connector `0.44.2` profile은 public Storage Read, Storage Write,
+indirect load를 Partial로 기록하지만 완전한 Spark E2E compatibility를 주장하지 않는다.
+Capability 승격에는 public-edge test와 negative/boundary test가 필요하다.
 
 [`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
 [`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),

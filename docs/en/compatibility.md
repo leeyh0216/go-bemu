@@ -60,9 +60,10 @@ not implied.
 | `jobs.getQueryResults` | Partial | `startIndex`/max results, no opaque page token |
 | destination table/dispositions | Unsupported | not represented in job domain |
 | cancellation | Unsupported | no route/state |
-| load/copy/extract | Unsupported | only query configuration accepted |
+| Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, existing destination table, process-local state |
+| copy/extract | Unsupported | configuration rejected |
 | durable job/result state | Unsupported | in-memory repository |
-| same-ID idempotent replay | Unsupported | duplicate conflicts |
+| same-ID idempotent replay | Partial | load fingerprints `(project, location, jobId)`; query duplicates conflict |
 
 Canonical job state and error fields come from the official
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job) resource.
@@ -79,7 +80,7 @@ encodings.
 | `SELECT`/`INSERT` | Partial | DuckDB syntax and functions |
 | `UPDATE`/`DELETE` | Partial | DuckDB statement behavior |
 | basic `MERGE` | Partial | one tested DuckDB-compatible form |
-| connector static overwrite | Planned | requires exact template adapter |
+| connector `0.44.2` static overwrite | Partial | source-derived token shape; atomic DuckDB `MERGE` |
 | dynamic partition overwrite | Unsupported | scripts/arrays/partition semantics absent |
 | parameters/scripts/views/UDFs | Unsupported | no semantic adapter |
 
@@ -91,6 +92,13 @@ therefore arbitrary backtick SQL is not supported. General `MERGE` must follow
 the [official DML
 rules](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),
 including source cardinality and atomic visibility.
+
+The Static Partial adapter recognizes only the source-derived connector shape
+orchestrated by
+[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java),
+parses its identifiers and clauses as tokens, and executes one atomic [DuckDB
+`MERGE INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). Dynamic
+time/range partition overwrite and general BigQuery `MERGE` parity remain gaps.
 
 <!-- section: types -->
 ## Types
@@ -114,18 +122,19 @@ and indirect load.
 
 | RPC/behavior | Status |
 | --- | --- |
-| official service registration/reflection | Registered |
-| read service health | `NOT_SERVING` |
-| `CreateReadSession` / `ReadRows` application and protobuf adapter | Verified with fake snapshots |
-| public `CreateReadSession` / `ReadRows` | Registered, returns `UNIMPLEMENTED` because no snapshot adapter is composed |
-| public `SplitReadStream` | Registered, inherited `UNIMPLEMENTED` |
-| Arrow/Avro schema and row payloads | bare wire pass-through verified; DuckDB encoders absent |
-| projection/filter/snapshot | request forwarding verified; DuckDB semantics absent |
-| multiple streams/offset resume | application range/offset behavior verified; public runtime unsupported |
+| official service registration/reflection | Verified |
+| read service health | lifecycle-aware `SERVING` while enabled and not draining |
+| public `CreateReadSession` / `ReadRows` | Partial; one bounded DuckDB materialization per session |
+| public `SplitReadStream` | Unsupported; returns `UNIMPLEMENTED` |
+| Arrow/Avro schema and row payloads | Partial; encoded from bounded DuckDB rows and response bytes |
+| projection and row restriction | Partial; top-level fields and a bounded expression subset; nested projection unsupported |
+| logical streams and offset resume | Partial; stable ranges and stream-relative offsets within a live session |
+| historical snapshot and compression | Unsupported |
 
-These internal tests do not raise the public capability above Registered. A real
-DuckDB `SnapshotMaterializer`, Arrow/Avro encoders, runtime composition, and
-public-endpoint E2E must all pass first.
+The public capability is Partial. Each live session owns one stable, bounded
+DuckDB materialization and exposes configurable logical streams. Split RPC,
+wire compression, historical `snapshot_time`, nested projection, and durable
+session recovery after restart remain gaps.
 
 The target contract is the official
 [`BigQueryRead`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryRead)
@@ -137,12 +146,17 @@ service and connector
 
 | RPC/behavior | Status |
 | --- | --- |
-| official service registration/reflection | Registered |
-| write service health | `NOT_SERVING` |
-| create/get/append/finalize/commit/flush | Registered, returns `UNIMPLEMENTED` |
-| default stream | Planned |
-| multiple pending streams and offsets | Planned |
-| atomic batch commit | Planned |
+| official service registration/reflection | Verified |
+| write service health | lifecycle-aware `SERVING` while enabled and not draining |
+| PENDING create/get/append/finalize/commit | Partial; ProtoRows, exact offsets, and finalized row count |
+| default stream | Partial; official and connector `0.44.2` legacy aliases, immediate append |
+| multiple logical streams | Partial; bounded process-local ledgers over one serialized DuckDB coordinator |
+| atomic batch commit | Verified for a validated group of finalized PENDING streams |
+| ArrowRows, BUFFERED/explicit COMMITTED streams, and `FlushRows` | Unsupported |
+
+CDC, missing-value default expressions, durable staging/recovery after restart,
+and distributed write concurrency remain unsupported. The serialized backend is
+an intentional embedded-engine bound, not BigQuery throughput parity.
 
 The target contract is the official
 [`BigQueryWrite`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite)
@@ -154,10 +168,12 @@ service and connector
 
 | Capability | Status |
 | --- | --- |
-| filesystem object-store adapter | Verified structurally |
-| GCS/fake-GCS adapter | Planned |
-| Parquet/Avro/ORC/CSV/JSON load job | Unsupported |
-| write dispositions and atomic staging | Unsupported |
+| filesystem object-store adapter | Verified only behind explicit local opt-in |
+| GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
+| Parquet load into an existing table | Partial; explicit schema/cast validation |
+| Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
+| `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
+| destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | Implemented when configured |
 | authentication disabled | Current mode |
 | static token, ADC, OAuth, STS/WIF | Planned |
@@ -165,6 +181,10 @@ service and connector
 
 The load target is
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad).
+The opt-in path downloads bounded immutable objects into a private temporary
+workspace, then applies the selected disposition atomically. Download is outside
+the destination transaction, and load jobs and idempotency records are
+process-local.
 Identity claims are separated according to [Google Cloud
 authentication](https://cloud.google.com/docs/authentication); local token
 acquisition must never be described as IAM parity.
@@ -172,13 +192,13 @@ acquisition must never be described as IAM parity.
 <!-- section: persistence-atomicity -->
 ## Persistence and Atomicity
 
-DuckDB file storage can retain physical rows, but catalog and jobs are
-process-local. Metadata DDL and physical DDL do not share one durable transaction.
-Additive physical columns are applied in one DuckDB transaction, but publication
-to the in-memory catalog is not crash-atomic with that transaction.
-There is no read-snapshot ledger, write-stream ledger, or load staging
-transaction. Restart durability, same-ID replay, atomic load disposition, and
-atomic multi-stream commit are therefore unsupported.
+DuckDB file storage can retain physical rows, but catalog, jobs, read sessions,
+write streams, and load idempotency records are process-local. Additive physical
+columns use one DuckDB transaction, but in-memory catalog publication is not
+crash-atomic with it. Load dispositions, default-stream appends, and a validated
+PENDING-stream group commit each use a destination transaction. This provides
+atomicity only within a live process; restart recovery and durable replay are
+unsupported.
 
 <!-- section: client-coverage -->
 ## Client Coverage
@@ -196,9 +216,10 @@ through [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/referenc
 The corresponding [`python-query-sync`](../../contract/golden/python-query-sync-3.43.0.json)
 and [`python-query-async`](../../contract/golden/python-query-async-3.43.0.json)
 goldens pin those shapes. Load/copy/extract, `insertAll`, and `tabledata.list`
-remain five strict expected-gap xfails. The connector profile records expected
-calls for version `0.44.2`; it does not imply Storage flows succeed. Every
-capability promotion needs a public-edge test and a negative/boundary test.
+remain five strict expected-gap xfails. The connector `0.44.2` profile records
+public Storage Read, Storage Write, and indirect load as Partial; it does not
+claim complete Spark E2E compatibility. Every capability promotion needs a
+public-edge test and a negative/boundary test.
 
 The [`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
 [`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),

@@ -7,8 +7,8 @@
 
 `go-bemu`는 Go로 처음부터 구현하는 실험적 BigQuery 호환 로컬 서비스다.
 DuckDB는 외부 실행 어댑터이며 도메인 모델 자체가 아니다. 현재 제한된
-BigQuery v2 메타데이터/쿼리 범위를 구현하고 공식 Storage Read/Write gRPC
-서비스를 등록한다. 프로덕션 데이터베이스나 BigQuery의 완전한 대체재가 아니다.
+BigQuery v2 메타데이터/쿼리/load 경로와 공개 Storage Read/Write gRPC data plane의
+부분집합을 구현한다. 프로덕션 데이터베이스나 BigQuery의 완전한 대체재가 아니다.
 
 호환성 계약은 [BigQuery REST v2
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest), [Storage RPC
@@ -39,10 +39,18 @@ source](https://github.com/goccy/bigquery-emulator/tree/v0.8.1)에 고정한다.
   공식 [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)로
   실행한 project/dataset/table/query/job 및 additive-schema flow;
 - 격리된 DuckDB 물리 schema와 의도적으로 작은 SQL 변환 경계;
-- 공식 Storage Read/Write 서비스 등록과 gRPC reflection;
-- replaceable snapshot port, deterministic stream range/offset resume, fake
-  snapshot을 사용한 Arrow/Avro wire pass-through test를 갖는 Storage Read
-  application/protocol slice;
+- [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)에서
+  파생한 connector `0.44.2` static-overwrite token adapter. Constant-false [BigQuery
+  `MERGE`](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)를
+  하나의 atomic [DuckDB `MERGE
+  INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)로 변환한다;
+- 하나의 bounded DuckDB snapshot, Arrow/Avro encoding, projection/restriction
+  validation, logical stream range, offset resume를 사용하는 공개 Storage Read session;
+- exact offset, finalize, atomic batch commit, 여러 logical stream, serialized
+  DuckDB backend를 포함하는 PENDING/default stream 공개 Storage Write `ProtoRows` 경로;
+- bounded fake-GCS-compatible JSON adapter 또는 명시적으로 활성화한 `file://`
+  adapter, Parquet staging, 기존 table 대상 atomic `WRITE_APPEND`, `WRITE_EMPTY`,
+  `WRITE_TRUNCATE`를 사용하는 opt-in load job;
 - 선택적 REST/gRPC TLS termination;
 - strict versioned configuration, optional protected admin composition, bounded
   multi-listener shutdown, hardened non-root Compose profile;
@@ -50,11 +58,16 @@ source](https://github.com/goccy/bigquery-emulator/tree/v0.8.1)에 고정한다.
 
 중요한 제한은 다음과 같다.
 
-- 영속 metadata, row insert/preview, load/copy/extract job, 전체 GoogleSQL은
-  구현하지 않았다.
-- 공개 Storage Read runtime에는 DuckDB snapshot/encoder adapter와 composition이
-  아직 없어 내부 slice가 검증됐어도 RPC는 `UNIMPLEMENTED`로 남는다.
-- Storage Write RPC는 등록되어 있지만 `UNIMPLEMENTED`를 반환한다.
+- 영속 metadata, row insert/preview, copy/extract job, 전체 GoogleSQL은 구현하지 않았다.
+- Static overwrite는 Partial이다. Dynamic time/range partition overwrite와 일반
+  BigQuery `MERGE` parity는 gap이다.
+- Storage Read는 partial이다. `SplitReadStream`, response compression, historical
+  `snapshot_time`, restart-durable session, nested-field projection은 gap이다.
+- Storage Write는 partial이다. CDC, Arrow row, BUFFERED 및 명시적으로 생성하는
+  COMMITTED stream, `FlushRows`, default-value expression, restart-durable pending
+  staging은 gap이다.
+- load는 partial이다. Parquet 이외 format, table이 없을 때 `CREATE_IF_NEEDED`,
+  schema-update option, autodetect, multipart/resumable transfer는 gap이다.
 - 인증은 비활성 상태이며 IAM을 에뮬레이션하지 않는다.
 - DuckDB 파일에 table data가 남아도 canonical BigQuery metadata는 메모리
   repository와 함께 프로세스 종료 시 사라진다.

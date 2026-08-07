@@ -7,9 +7,9 @@
 
 `go-bemu` is an experimental, from-scratch BigQuery-compatible local service in
 Go. DuckDB is an outbound execution adapter; it is not the domain model. The
-service currently implements a limited BigQuery v2 metadata/query slice and
-registers the official Storage Read and Write gRPC services. It is not a
-production database or a drop-in BigQuery replacement.
+service currently implements limited BigQuery v2 metadata/query/load paths and
+public partial Storage Read and Write gRPC data planes. It is not a production
+database or a drop-in BigQuery replacement.
 
 The compatibility contract follows the [BigQuery REST v2
 reference](https://cloud.google.com/bigquery/docs/reference/rest), the
@@ -40,10 +40,19 @@ Implemented and exercised through repository tests:
   from [Google Cloud SDK `566.0.0`](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28);
 - isolated physical DuckDB schemas and a deliberately small SQL translation
   boundary;
-- canonical Storage Read/Write service registration and gRPC reflection;
-- a Storage Read application/protocol slice with a replaceable snapshot port,
-  deterministic stream ranges and offset resume, and Arrow/Avro wire pass-through
-  tests using fake snapshots;
+- a source-derived connector `0.44.2` static-overwrite token adapter from
+  [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)
+  that maps the constant-false [BigQuery `MERGE`](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)
+  to one atomic [DuckDB `MERGE INTO`](https://duckdb.org/docs/current/sql/statements/merge_into);
+- public Storage Read sessions backed by one bounded DuckDB snapshot, Arrow or
+  Avro encoding, projection/restriction validation, logical stream ranges, and
+  offset resume;
+- public Storage Write `ProtoRows` paths for PENDING streams and the default
+  stream, including exact offsets, finalization, atomic batch commit, multiple
+  logical streams, and a serialized DuckDB backend;
+- opt-in load jobs through a bounded fake-GCS-compatible JSON adapter or an
+  explicitly enabled `file://` adapter, with Parquet staging and atomic
+  `WRITE_APPEND`, `WRITE_EMPTY`, and `WRITE_TRUNCATE` for an existing table;
 - optional REST and gRPC TLS termination;
 - strict versioned configuration, optional protected admin composition, bounded
   multi-listener shutdown, and a hardened non-root Compose profile;
@@ -51,12 +60,18 @@ Implemented and exercised through repository tests:
 
 Important limits:
 
-- durable metadata, row insert/preview, load/copy/extract jobs, and full
-  GoogleSQL are not implemented;
-- the public Storage Read runtime has no DuckDB snapshot/encoder adapter or
-  composition yet, so its RPCs remain `UNIMPLEMENTED` despite the verified
-  internal slice;
-- Storage Write RPC methods are registered but return `UNIMPLEMENTED`;
+- durable metadata, row insert/preview, copy/extract jobs, and full GoogleSQL are
+  not implemented;
+- static overwrite is Partial; dynamic time/range partition overwrite and
+  general BigQuery `MERGE` parity are gaps;
+- Storage Read remains partial: `SplitReadStream`, response compression,
+  historical `snapshot_time`, restart-durable sessions, and nested-field
+  projection are gaps;
+- Storage Write remains partial: CDC, Arrow rows, BUFFERED and explicitly
+  created COMMITTED streams, `FlushRows`, default-value expressions, and
+  restart-durable pending staging are gaps;
+- load remains partial: non-Parquet formats, missing-table `CREATE_IF_NEEDED`,
+  schema-update options, autodetect, and multipart/resumable transfer are gaps;
 - authentication is disabled, and IAM is not emulated;
 - canonical BigQuery metadata can outlive neither the process nor the in-memory
   repositories, even if a DuckDB file retains table data.

@@ -58,6 +58,10 @@ write disposition 상호작용은
 metadata의 atomic publish, durable job error가 필요하다. JSON option을
 받아들이는 것만으로 구현된 것이 아니다.
 
+현재 opt-in Parquet load 범위는 기존 table 기준으로 cast를 검증하고 write
+disposition을 atomic하게 적용하지만 `schemaUpdateOptions`, destination create,
+autodetect를 거부한다. 따라서 load-driven schema evolution은 unsupported로 남는다.
+
 <!-- section: write-schema-updates -->
 ## Storage Write Schema 변경
 
@@ -68,11 +72,11 @@ update detection](https://cloud.google.com/bigquery/docs/write-api#schema_update
 [`AppendRows` RPC](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows)에
 정의된다.
 
-향후 write-stream ledger는 connection별 destination schema version과 writer
-schema fingerprint를 보관해야 한다. 호환되지 않는 descriptor를 거부하고,
-해당 시점에 정확한 updated schema를 공개하며, 변경 전후 offset idempotency를
-보존해야 한다. 현재 등록만 되고 `UNIMPLEMENTED`인 Storage Write 서비스는 이
-의미를 제공하지 않는다.
+현재 public Partial Write service는 ProtoRows append의 writer-schema fingerprint를
+보관하고 live process에서 PENDING-stream exact offset을 유지한다. Durable destination
+schema version을 추적하거나 `updated_schema`를 내보내지는 않는다. 따라서
+incompatible evolution, schema notification, restart 후 offset recovery는
+unsupported로 남는다.
 
 <!-- section: cdc-contract -->
 ## BigQuery CDC 계약
@@ -128,8 +132,9 @@ Connector code는
 CDC pseudocolumn을 추가하고
 [`BigQueryExactlyOnceSink.java`](https://github.com/GoogleCloudDataproc/flink-bigquery-connector/blob/1.2.0/flink-1.17-connector-bigquery/flink-connector-bigquery/src/main/java/com/google/cloud/flink/bigquery/sink/BigQueryExactlyOnceSink.java)에서
 checkpointed writer를 구성한다. 이 source link는 client expectation을 설명할 뿐
-emulator support를 뜻하지 않는다. 현재 public Storage service는 `UNIMPLEMENTED`이므로
-모든 Flink E2E operation은 planned 또는 명시적 capability gap이다.
+emulator support를 뜻하지 않는다. Public Storage Read와 ProtoRows PENDING/default
+Write subset은 Partial이지만 Flink `1.2.0` E2E로 승격된 operation은 없다.
+Buffered/checkpointed Write, schema notification, CDC는 명시적 capability gap이다.
 
 <!-- section: evolution-pipeline -->
 ## 모듈식 Evolution Pipeline
@@ -170,7 +175,7 @@ profile을 선택하고 shape/fingerprint는 drift 위치를 좁히며 `fix_hint
 Verified schema test는 top-level, nested, repeated-record addition, populated
 table null, destructive change 거부, transactional physical failure, stale ETag,
 Python-client E2E를 다룬다. Restart reconciliation, DDL 및 load/query schema-update
-path, Storage Write는 gap으로 남는다. 향후 CDC에는 out-of-order와 duplicate sequence value,
+path, Storage Write schema notification은 gap으로 남는다. 향후 CDC에는 out-of-order와 duplicate sequence value,
 UPSERT/DELETE, missing key, invalid pseudocolumn, reconnect/replay offset,
 multiple stream, commit visibility, apply lag, failure recovery가 필요하다.
 승격 시에도 [BigQuery data

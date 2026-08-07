@@ -57,12 +57,15 @@ into streams, as defined by
 Write stream type controls visibility and commit behavior, as described by the
 [Storage Write API](https://cloud.google.com/bigquery/docs/write-api).
 
-**Current implementation:** REST metadata/query is the first public vertical
-slice. Storage Read has a tested application service and protobuf adapter for
-snapshot ownership, deterministic ranges, offset resume, and bare Arrow/Avro
-payload pass-through. No DuckDB snapshot/encoder adapter is composed, so the
-public Read service remains `NOT_SERVING` and returns `UNIMPLEMENTED`. Storage
-Write is registration-only. Internal protocol tests are not data-plane support.
+**Current implementation:** REST metadata/query plus opt-in Parquet load jobs
+form the public control plane. Public Storage Read materializes one bounded
+DuckDB snapshot, encodes Arrow or Avro, and exposes deterministic logical ranges
+with offset resume. Public Storage Write accepts ProtoRows on PENDING and default
+streams, validates offsets, finalizes PENDING streams, and commits a validated
+group through one serialized DuckDB transaction. Both data planes are Partial:
+Read lacks split/compression/historical snapshots, restart recovery, and nested-field projection;
+Write lacks CDC, ArrowRows, BUFFERED/explicit COMMITTED streams, FlushRows, and
+durable staging.
 
 <!-- section: catalog-physical-model -->
 ## Catalog and Physical Model
@@ -100,13 +103,14 @@ remain design work.
 ## Transactions and Visibility
 
 An engine statement transaction is not automatically a BigQuery operation
-transaction. Metadata plus physical DDL, load staging plus destination
-disposition, and multi-stream batch commit each need an application-owned
-transaction port. BigQuery specifies that a group of pending streams is committed
-atomically by
+transaction. Metadata plus physical DDL still spans separate stores. A Parquet
+load validates a temporary staging table and applies its destination disposition
+inside one DuckDB transaction. Storage Write validates all named PENDING streams
+before its serialized coordinator applies one DuckDB transaction, following the
+atomic group contract of
 [`BatchCommitWriteStreams`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams).
-No current code may claim that behavior merely because DuckDB can start a SQL
-transaction.
+Those atomic transactions do not make the process-local job or stream ledgers
+restart-durable, and object download is deliberately outside the load commit.
 
 <!-- section: sql-boundary -->
 ## SQL Dialect Boundary
@@ -119,6 +123,15 @@ structural GoogleSQL parser/semantic adapter. The authoritative syntax is the
 and [query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax).
 Unknown or unsupported forms must fail explicitly rather than be approximately
 rewritten.
+
+One Static Partial exception is intentionally structural and versioned. A token
+parser recognizes the source-derived connector `0.44.2` shape from
+[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java),
+applies the constant-false [BigQuery `MERGE`
+contract](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),
+and executes one atomic [DuckDB `MERGE
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). It does not
+generalize to dynamic time/range partition overwrite or arbitrary `MERGE`.
 
 <!-- section: runtime-security -->
 ## Runtime, TLS, and Identity
@@ -143,15 +156,18 @@ that every flow succeeds.
 <!-- section: replacement-roadmap -->
 ## Replacement Roadmap
 
-1. Separate inbound metadata/query/read/write ports and outbound query-engine,
-   transaction, auth, and stream-ledger ports.
-2. Persist canonical metadata and jobs in transactional system tables.
-3. Replace regex SQL translation with a structural adapter.
-4. Implement the DuckDB read-snapshot/encoder adapter, compose it with the tested
-   ranged-stream application service, and prove exact Arrow/Avro framing at the
-   public endpoint.
-5. Add per-stream write ledgers and atomic pending-stream commit.
-6. Add staged load jobs through an endpoint-configurable object-store port.
+1. Persist canonical metadata, jobs, read sessions, and write/load ledgers in
+   transactional system tables.
+2. Replace broad regex SQL translation with structural adapters without
+   generalizing the pinned static-overwrite shape.
+3. Add Storage Read split/compression, historical snapshot support, nested
+   projection, and durable session recovery without weakening the current
+   byte/row/session bounds.
+4. Add Storage Write ArrowRows, BUFFERED/explicit COMMITTED streams, FlushRows,
+   default expressions, CDC, and durable pending recovery.
+5. Extend the load port with missing-table create, schema-update options,
+   non-Parquet formats, and multipart/resumable transfer while retaining bounded
+   staging.
 
 These changes preserve the dependency rule; DuckDB remains replaceable rather
 than becoming the application API.

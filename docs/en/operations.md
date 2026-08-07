@@ -27,11 +27,15 @@ environment mappings. The complete Docker-oriented example is
 | environment | documented `BQEMU_*` mappings | non-empty scalar overrides |
 | CLI | repeatable `--set path=value` | typed override for every leaf |
 
-The composition root currently consumes defaults, HTTP/gRPC/TLS limits,
-database/temp paths, shutdown budget, logging, admin, and UI fields. Storage,
-authentication, and contract-profile fields are validated configuration but do
-not yet compose Storage services, public auth middleware, or runtime profile
-negotiation. A valid setting is not a capability claim.
+The composition root consumes defaults, HTTP/gRPC/TLS limits, database/temp
+paths, shutdown budgets, logging, admin, UI, both Storage services, and opt-in
+load fields. `storage.read.*` bounds sessions, logical streams, materialization,
+spill, schema, rows, and wire responses. `storage.write.*` bounds logical streams,
+append requests, the serialized DuckDB queue, and orphan cleanup. `load.enabled`
+requires an absolute `load.gcsEndpoint`; `load.allowFileSources` defaults false,
+and object/list/download limits are enforced. Authentication and runtime
+contract-profile negotiation remain uncomposed. A valid setting is not a claim
+beyond each Partial capability.
 
 Unknown YAML fields, multiple documents, ambiguous numeric durations, unknown
 override paths, and invalid cross-field combinations fail before listeners
@@ -73,9 +77,10 @@ go run ./cmd/emulator --set logging.level=debug --print-effective-config
 ```
 
 Liveness proves the process can answer; readiness also pings the warehouse. gRPC
-exposes the standard health service: the server is serving, while Storage
-Read/Write remain `NOT_SERVING` until their application and production adapters
-are composed. Canonical Storage services are listed in the [Storage RPC
+exposes the standard health service. Enabled Storage Read/Write services report
+`SERVING`, disabled services report `NOT_SERVING`, and every gRPC health entry is
+switched to `NOT_SERVING` before transport draining. Canonical Storage services
+are listed in the [Storage RPC
 reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
 
 <!-- section: container -->
@@ -123,13 +128,17 @@ and [Compose service configuration](https://docs.docker.com/reference/compose-fi
 <!-- section: shutdown -->
 ## Health and Graceful Shutdown
 
-On SIGINT, SIGTERM, or a listener failure, the runtime creates one context using
-`runtime.shutdownTimeout` (default `10s`). It shuts down public HTTP and optional
-admin HTTP, then calls gRPC `GracefulStop`; expiry forces `grpc.Stop`. This bounds
-the whole sequence and all three composed listeners. The current runtime does not
-flip readiness to false before draining, report outstanding operation counts, or
-give a second signal a dedicated immediate-exit path. Abrupt termination can lose
-the process-local catalog and jobs even when the DuckDB file persists.
+On SIGINT, SIGTERM, or a listener failure, the runtime first marks all gRPC health
+entries `NOT_SERVING`. One context using `runtime.serverDrainTimeout` (default
+`5s`) bounds public/admin HTTP shutdown and gRPC `GracefulStop`; expiry forces
+`grpc.Stop`. A separate `runtime.storageCloseTimeout` (default `4s`) bounds Read
+snapshot cleanup, Write orphan cleanup, and coordinator close.
+`runtime.shutdownTimeout` (default `10s`) remains the fallback for deferred
+Storage cleanup during startup or early-return paths. HTTP readiness does not
+flip to false before draining, outstanding operation counts are not reported,
+and a second signal has no dedicated immediate-exit path. Abrupt termination can
+lose the process-local catalog, jobs, Read sessions, Write streams, and load
+idempotency records even when the DuckDB file persists.
 
 Tests must cover idle shutdown, an active REST request, an active gRPC stream,
 deadline expiry, second-signal force exit, and restart with a mounted volume.
@@ -147,6 +156,7 @@ their units and scope:
 | --- | --- | --- |
 | `BQEMU_GO_TEST_TIMEOUT` | Go duration, `10m` | `make test`, race tests, and CI package budget |
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go duration, `5s` | one Storage Read application-test context |
+| `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go duration, `5s` | Storage Write application, adapter, and public gRPC test contexts |
 | `BQEMU_PYTEST_TIMEOUT_SECONDS` | positive seconds, suite default `90`; direnv default `300` | official Python-client build, readiness, request, and shutdown budget |
 | `BQEMU_BQCLI_TIMEOUT_SECONDS` | positive seconds, `300` | each bq CLI subprocess plus emulator readiness budget |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | positive seconds, `120` | `docker compose --wait` startup budget |

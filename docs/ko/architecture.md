@@ -56,12 +56,14 @@ RPC는 대량 row data를 이동한다. Read session은 table snapshot을 stream
 정의되어 있다. Write stream type은 visibility와 commit 동작을 결정하며 [Storage
 Write API](https://cloud.google.com/bigquery/docs/write-api)에 설명되어 있다.
 
-**현재 구현:** REST metadata/query가 첫 public vertical slice다. Storage Read에는
-snapshot ownership, deterministic range, offset resume, bare Arrow/Avro payload
-pass-through를 다루는 테스트된 application service와 protobuf adapter가 있다.
-DuckDB snapshot/encoder adapter가 composition되지 않았으므로 public Read service는
-`NOT_SERVING`이고 `UNIMPLEMENTED`를 반환한다. Storage Write는 registration-only다.
-내부 protocol test는 data-plane 지원이 아니다.
+**현재 구현:** REST metadata/query와 opt-in Parquet load job이 public control
+plane을 구성한다. Public Storage Read는 하나의 bounded DuckDB snapshot을
+materialize하고 Arrow 또는 Avro로 encode하며 offset resume가 가능한 deterministic
+logical range를 노출한다. Public Storage Write는 PENDING/default stream에서
+ProtoRows를 수락하고 offset을 검증하며 PENDING stream을 finalize한 뒤 검증된 그룹을
+serialized DuckDB transaction 하나로 commit한다. 두 data plane은 Partial이다. Read는
+split/compression/historical snapshot, restart recovery, nested-field projection이 없고, Write는 CDC,
+ArrowRows, BUFFERED/explicit COMMITTED stream, FlushRows, durable staging이 없다.
 
 <!-- section: catalog-physical-model -->
 ## Catalog와 물리 모델
@@ -99,12 +101,14 @@ key, idempotent replay는 아직 설계 대상이다.
 ## Transaction과 Visibility
 
 Engine statement transaction이 자동으로 BigQuery operation transaction이 되는
-것은 아니다. Metadata와 physical DDL, load staging과 destination disposition,
-multi-stream batch commit은 각각 application 소유 transaction port가 필요하다.
-BigQuery는 pending stream 그룹을
+것은 아니다. Metadata와 physical DDL은 여전히 별도 store에 걸쳐 있다. Parquet
+load는 temporary staging table을 검증하고 destination disposition을 DuckDB
+transaction 하나에서 적용한다. Storage Write는 명명한 모든 PENDING stream을 먼저
+검증한 뒤 serialized coordinator의 DuckDB transaction 하나로 적용하며, 이는
 [`BatchCommitWriteStreams`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams)로
-atomic commit한다고 정의한다. DuckDB가 SQL transaction을 시작할 수 있다는
-이유만으로 현재 코드가 이 동작을 주장하면 안 된다.
+정의된 atomic group 계약을 따른다. 이 atomic transaction은 process-local job 또는
+stream ledger를 restart-durable하게 만들지 않으며 object download는 의도적으로
+load commit 밖에 있다.
 
 <!-- section: sql-boundary -->
 ## SQL Dialect 경계
@@ -116,6 +120,15 @@ adapter가 필요하다. 권위 있는 syntax는 [GoogleSQL lexical
 structure](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)와
 [query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax)다.
 알 수 없거나 지원하지 않는 형식은 근사 변환하지 말고 명시적으로 실패해야 한다.
+
+한 가지 Static Partial 예외는 의도적으로 structural하고 versioned되어 있다. Token
+parser가
+[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)의
+source-derived connector `0.44.2` shape를 인식하고 constant-false [BigQuery
+`MERGE` 계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
+적용하며 하나의 atomic [DuckDB `MERGE
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 실행한다. Dynamic
+time/range partition overwrite나 임의 `MERGE`로 일반화하지 않는다.
 
 <!-- section: runtime-security -->
 ## Runtime, TLS, Identity
@@ -139,15 +152,16 @@ switch가 payload logging을 허용하지 않는 한 제외한다. Capability pr
 <!-- section: replacement-roadmap -->
 ## 교체 로드맵
 
-1. inbound metadata/query/read/write port와 outbound query-engine, transaction,
-   auth, stream-ledger port를 분리한다.
-2. canonical metadata와 job을 transactional system table에 영속화한다.
-3. regex SQL 변환을 구조적 adapter로 교체한다.
-4. DuckDB read-snapshot/encoder adapter를 구현하고 테스트된 ranged-stream
-   application service에 composition한 뒤 public endpoint에서 정확한 Arrow/Avro
-   framing을 증명한다.
-5. stream별 write ledger와 atomic pending-stream commit을 추가한다.
-6. endpoint 설정 가능한 object-store port를 통해 staged load job을 추가한다.
+1. canonical metadata, job, read session, write/load ledger를 transactional system
+   table에 영속화한다.
+2. pinned static-overwrite shape를 일반화하지 않으면서 광범위한 regex SQL 변환을
+   structural adapter로 교체한다.
+3. 현재 byte/row/session bound를 약화하지 않고 Storage Read split/compression,
+   historical snapshot support, nested projection, durable session recovery를 추가한다.
+4. Storage Write ArrowRows, BUFFERED/explicit COMMITTED stream, FlushRows, default
+   expression, CDC, durable pending recovery를 추가한다.
+5. bounded staging을 유지하며 load port에 missing-table create, schema-update
+   option, Parquet 이외 format, multipart/resumable transfer를 추가한다.
 
 이 변경들은 dependency rule을 보존한다. DuckDB는 application API가 되지 않고
 교체 가능한 상태로 남는다.

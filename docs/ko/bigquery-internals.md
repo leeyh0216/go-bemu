@@ -20,8 +20,9 @@ Spark connector는 서로 다른 세 공개 경계를 통과한다.
 기준으로 한다. BigQuery의 canonical service 경계는 [REST
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest)와 [Storage RPC
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)다.
-`go-bemu`는 현재 REST metadata/query 범위만 구현한다. 아래 Storage 설명은 구현
-요구사항이지 현재 지원 주장이지 않다.
+`go-bemu`는 REST metadata/query와 opt-in Parquet load job, public Partial Storage
+Read/Write 범위를 노출한다. 아래 설명은 이 bounded runtime path와 남은 BigQuery
+요구사항을 구분한다.
 
 <!-- section: read-planning -->
 ## 읽기 계획
@@ -41,6 +42,12 @@ restriction은 session snapshot에 속하고 `ReadRows` offset은 선택 stream�
 [`ReadSession`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession)과
 [`ReadRowsRequest`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readrowsrequest)
 message에 정의되어 있다.
+
+현재 public runtime은 live session마다 bounded DuckDB result 하나를 materialize하고
+이를 설정된 수의 stable logical range로 나누며 stream-relative offset에서 재개한다.
+Top-level projection과 제한된 row restriction subset은 Partial이다.
+`SplitReadStream`, historical `snapshot_time`, nested projection, restart recovery는
+unsupported다.
 
 <!-- section: read-wire -->
 ## Arrow와 Avro Read Wire Format
@@ -64,6 +71,10 @@ details](https://cloud.google.com/bigquery/docs/reference/storage#avro_schema_de
 nested/repeated value, compression, offset resume가 일치해야 한다. Scalar fixture
 하나를 decode했다는 사실만으로 wire compatibility를 증명할 수 없다.
 
+현재 DuckDB adapter는 public `ReadRows` path에서 bounded Arrow record-batch message와
+Avro binary row를 encode한다. Compression과 완전한 nested/repeated type mapping은
+gap이므로 full wire compatibility가 아닌 Partial이다.
+
 <!-- section: direct-exact -->
 ## Direct Write: Pending Stream과 정확한 Offset
 
@@ -83,10 +94,12 @@ Canonical RPC 계약은
 운영 순서는 [pending stream batch
 load](https://cloud.google.com/bigquery/docs/write-api-batch)에 있다.
 
-따라서 emulator에는 stream을 key로 하는 durable ledger가 필요하다. Schema
-fingerprint, next offset, 수락 payload digest, final row count, state, staging
-relation을 추적해야 한다. Process-global offset이나 임의 stream-map 조회는 동시
-Spark task에서 올바르지 않다.
+현재 Partial 구현은 stream을 key로 하는 process-local ledger에 schema fingerprint,
+next offset, 수락 payload digest, final row count, state, staging relation을 보관한다.
+ProtoRows append, exact offset, finalize, 검증된 PENDING group의 atomic commit이 public
+경계에 연결되어 있다. DuckDB mutation은 bounded coordinator 하나를 통해 직렬화하며
+ledger와 staging은 restart 후 복구되지 않는다. Process-global offset이나 임의
+stream-map 조회는 동시 Spark task에서 올바르지 않다.
 
 <!-- section: direct-at-least-once -->
 ## Direct Write: Default Stream과 At-least-once Mode
@@ -100,6 +113,11 @@ semantics](https://cloud.google.com/bigquery/docs/write-api-streaming)에 이 �
 로컬 테스트는 두 mode를 구분해야 한다. Default stream response offset을
 제거했다는 사실만으로 at-least-once retry를 증명할 수 없다. Server side effect
 이후 client가 response를 받기 전에 끊는 fault test가 필요하다.
+
+Public Partial 구현은 공식 `/streams/_default` 이름과 connector `0.44.2`의 legacy
+`/_default` alias를 모두 받고 offset 없이 row를 즉시 적용한다. 모호한 response
+retry는 설계상 row를 중복시킬 수 있다. ArrowRows, BUFFERED와 explicit COMMITTED
+stream, `FlushRows`는 unsupported다.
 
 <!-- section: overwrite-merge -->
 ## Direct Overwrite와 MERGE
@@ -119,6 +137,14 @@ cardinality에도 의존한다. 권위 있는 규칙은 [GoogleSQL DML `MERGE`
 rule은 정확한 connector template 하나를 인식하고 알 수 없는 SQL은 그대로
 전달하거나 unsupported로 보고해야 한다.
 
+현재 Static Partial adapter는 이 좁은 작업만 수행한다. Token parser가 source-derived
+connector `0.44.2` constant-false shape를 수락하고 source/destination table을 해석한
+뒤 하나의 atomic [DuckDB `MERGE
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 실행한다.
+[`direct-overwrite-static`](../../contract/golden/direct-overwrite-static-0.44.2.json)
+golden은 `jobs.insert`, polling, temporary-table delete를 다룬다. Dynamic time/range
+partition overwrite와 일반 BigQuery `MERGE` parity는 gap으로 남는다.
+
 <!-- section: indirect-write -->
 ## Indirect Write와 Load Job
 
@@ -137,6 +163,14 @@ format/type 동작을 [batch loading
 문서](https://cloud.google.com/bigquery/docs/loading-data)에 정의한다. Parquet
 file을 열었다는 사실은 BigQuery load 의미, job error, wildcard URI, atomic
 visibility를 증명하지 않는다.
+
+Opt-in public 범위는 fake-GCS-compatible JSON adapter로 bounded `gs://` list/get/media
+request를 해석하고 object를 private temporary workspace에 download하며 기존 table
+기준으로 Parquet column과 cast를 검증한 뒤 `WRITE_APPEND`, `WRITE_EMPTY`,
+`WRITE_TRUNCATE`를 하나의 DuckDB transaction에서 적용한다. File source는 명시적인
+local-only option이 필요하다. Destination create, autodetect,
+`schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, multipart/resumable download는
+unsupported이며 job과 idempotency state는 process-local이다.
 
 <!-- section: rest-jobs -->
 ## REST Job, Polling, Paging
@@ -191,10 +225,10 @@ authorization은 서로 다른 capability 주장으로 유지해야 한다.
 | REST metadata | catalog use case와 JSON transport | 기본 lifecycle, patch/update, paging, ETag verified |
 | additive schema | schema validator와 warehouse transaction | top-level/nested/repeated-record addition verified |
 | query job | job repository와 query-engine port | 공식 Python sync/async path verified, process-local 부분 구현 |
-| CreateReadSession/ReadRows | snapshot/session ledger와 Arrow/Avro encoder | fake 기반 application/protobuf slice verified, DuckDB snapshot/encoder adapter가 없어 public runtime 미구현 |
-| AppendRows/finalize/commit | stream별 ledger와 transaction coordinator | RPC 등록, 미구현 |
-| indirect load | object store, staging, load disposition | 계획 |
-| direct overwrite MERGE | 구조적인 connector-template adapter | 계획 |
+| CreateReadSession/ReadRows | snapshot/session ledger와 Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical stream, stable offset, Split/compression/historical snapshot/nested projection gap |
+| AppendRows/finalize/commit | stream별 ledger와 transaction coordinator | public Partial: PENDING/default ProtoRows, offset, finalize, atomic commit, advanced stream kind와 durability gap |
+| indirect load | object store, staging, load disposition | opt-in public Partial: fake-GCS JSON과 기존 table 대상 Parquet, 다른 format/create/evolution/download gap |
+| direct overwrite MERGE | 구조적인 connector-template adapter | source-derived connector `0.44.2` Static Partial, dynamic time/range와 일반 parity gap |
 | ADC/WIF | 선택적 token stub과 auth middleware | 계획 |
 
 Capability 변경에는 공개 경계 테스트와 두 문서 언어의 호환성 갱신이 필요하다.

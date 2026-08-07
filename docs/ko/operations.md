@@ -27,11 +27,15 @@ mapping도 있다. 완전한 Docker-oriented example은
 | environment | 문서화된 `BQEMU_*` mapping | 비어 있지 않은 scalar override |
 | CLI | 반복 가능한 `--set path=value` | 모든 leaf의 typed override |
 
-Composition root는 현재 default, HTTP/gRPC/TLS limit, database/temp path,
-shutdown budget, logging, admin, UI field를 사용한다. Storage, authentication,
-contract-profile field는 검증되는 configuration이지만 아직 Storage service, public
-auth middleware, runtime profile negotiation을 composition하지 않는다. 유효한
-setting은 capability 주장이 아니다.
+Composition root는 default, HTTP/gRPC/TLS limit, database/temp path, shutdown
+budget, logging, admin, UI, 두 Storage service, opt-in load field를 사용한다.
+`storage.read.*`는 session, logical stream, materialization, spill, schema, row,
+wire response를 제한한다. `storage.write.*`는 logical stream, append request,
+serialized DuckDB queue, orphan cleanup을 제한한다. `load.enabled`에는 absolute
+`load.gcsEndpoint`가 필요하고 `load.allowFileSources`는 default false이며
+object/list/download limit을 적용한다. Authentication과 runtime contract-profile
+negotiation은 아직 composition되지 않는다. 유효한 setting은 각 Partial capability를
+넘어서는 주장이 아니다.
 
 Unknown YAML field, multiple document, ambiguous numeric duration, unknown
 override path, invalid cross-field 조합은 listener 시작 전에 실패한다. Error에는
@@ -71,10 +75,10 @@ go run ./cmd/emulator --set logging.level=debug --print-effective-config
 ```
 
 Liveness는 process가 응답함을, readiness는 warehouse ping도 성공함을 뜻한다.
-gRPC는 표준 health service를 노출한다. Server 자체는 serving이지만 Storage
-Read/Write application과 production adapter가 composition될 때까지 해당 서비스는
-`NOT_SERVING`이다. Canonical Storage service 목록은 [Storage RPC
-레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)에 있다.
+gRPC는 표준 health service를 노출한다. Enabled Storage Read/Write service는
+`SERVING`, disabled service는 `NOT_SERVING`을 보고하며 transport drain 전에 모든
+gRPC health entry를 `NOT_SERVING`으로 바꾼다. Canonical Storage service 목록은
+[Storage RPC 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)에 있다.
 
 <!-- section: container -->
 ## Container 계약
@@ -119,14 +123,16 @@ filesystem](https://docs.docker.com/reference/cli/docker/container/run/#read-onl
 <!-- section: shutdown -->
 ## Health와 Graceful Shutdown
 
-SIGINT, SIGTERM 또는 listener failure가 발생하면 runtime은
-`runtime.shutdownTimeout`(default `10s`)으로 하나의 context를 만든다. Public HTTP와
-optional admin HTTP를 shutdown한 다음 gRPC `GracefulStop`을 호출하며 만료 시
-`grpc.Stop`으로 강제 종료한다. 이 budget은 composition된 listener 세 개의 전체
-sequence를 제한한다. 현재 runtime은 drain 전에 readiness를 false로 바꾸거나
+SIGINT, SIGTERM 또는 listener failure가 발생하면 runtime은 먼저 모든 gRPC health
+entry를 `NOT_SERVING`으로 바꾼다. `runtime.serverDrainTimeout`(default `5s`) context
+하나가 public/admin HTTP shutdown과 gRPC `GracefulStop`을 제한하며 만료 시
+`grpc.Stop`으로 강제 종료한다. 별도 `runtime.storageCloseTimeout`(default `4s`)은
+Read snapshot cleanup, Write orphan cleanup, coordinator close를 제한한다.
+`runtime.shutdownTimeout`(default `10s`)은 startup 또는 early-return path의 deferred
+Storage cleanup fallback이다. HTTP readiness는 drain 전에 false가 되지 않고
 outstanding operation count를 보고하지 않으며 두 번째 signal 전용 즉시 종료 path도
-없다. DuckDB file이 남더라도 abrupt termination은 process-local catalog/job을 잃을
-수 있다.
+없다. DuckDB file이 남더라도 abrupt termination은 process-local catalog, job, Read
+session, Write stream, load idempotency record를 잃을 수 있다.
 
 Test는 idle shutdown, active REST request, active gRPC stream, deadline expiry,
 second-signal force exit, mounted volume restart를 다뤄야 한다. Storage Write
@@ -144,6 +150,7 @@ shutdown이 commit 성공을 만들어내면 안 된다.
 | --- | --- | --- |
 | `BQEMU_GO_TEST_TIMEOUT` | Go duration, `10m` | `make test`, race test, CI package budget |
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go duration, `5s` | Storage Read application test context 하나 |
+| `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go duration, `5s` | Storage Write application, adapter, public gRPC test context |
 | `BQEMU_PYTEST_TIMEOUT_SECONDS` | 양의 초, suite default `90`; direnv default `300` | 공식 Python-client build, readiness, request, shutdown budget |
 | `BQEMU_BQCLI_TIMEOUT_SECONDS` | 양의 초, `300` | 각 bq CLI subprocess와 emulator readiness budget |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | 양의 초, `120` | `docker compose --wait` startup budget |
