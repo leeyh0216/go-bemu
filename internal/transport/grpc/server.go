@@ -9,6 +9,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
+	writeapp "github.com/leeyh0216/go-bemu/internal/storagewrite/application"
 )
 
 const (
@@ -19,7 +20,8 @@ const (
 // Services keeps protocol adapters dependent on application services rather
 // than concrete databases. A nil service remains explicitly UNIMPLEMENTED.
 type Services struct {
-	Read *readapp.Service
+	Read  *readapp.Service
+	Write *writeapp.Service
 }
 
 // StorageServer binds the official Google-generated service definitions.
@@ -27,13 +29,11 @@ type Services struct {
 // https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1
 type StorageServer struct {
 	storagepb.UnimplementedBigQueryReadServer
-	storagepb.UnimplementedBigQueryWriteServer
 
 	read *readapp.Service
 }
 
 var _ storagepb.BigQueryReadServer = (*StorageServer)(nil)
-var _ storagepb.BigQueryWriteServer = (*StorageServer)(nil)
 
 func New(options ...grpc.ServerOption) *grpc.Server {
 	return NewWithServices(Services{}, options...)
@@ -47,7 +47,7 @@ func NewWithServices(services Services, options ...grpc.ServerOption) *grpc.Serv
 	server := grpc.NewServer(options...)
 	storage := &StorageServer{read: services.Read}
 	storagepb.RegisterBigQueryReadServer(server, storage)
-	storagepb.RegisterBigQueryWriteServer(server, storage)
+	storagepb.RegisterBigQueryWriteServer(server, NewStorageWriteServer(services.Write))
 
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
@@ -56,7 +56,11 @@ func NewWithServices(services Services, options ...grpc.ServerOption) *grpc.Serv
 		readStatus = grpc_health_v1.HealthCheckResponse_SERVING
 	}
 	healthServer.SetServingStatus(storageReadServiceName, readStatus)
-	healthServer.SetServingStatus(storageWriteServiceName, grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+	writeStatus := grpc_health_v1.HealthCheckResponse_NOT_SERVING
+	if services.Write != nil {
+		writeStatus = grpc_health_v1.HealthCheckResponse_SERVING
+	}
+	healthServer.SetServingStatus(storageWriteServiceName, writeStatus)
 	grpc_health_v1.RegisterHealthServer(server, healthServer)
 	reflection.Register(server)
 	return server

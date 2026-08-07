@@ -119,6 +119,7 @@ type StorageReadConfig struct {
 }
 
 type StorageWriteConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
 	MaxStreams            int      `yaml:"maxStreams" json:"maxStreams"`
 	MaxAppendRequestBytes int      `yaml:"maxAppendRequestBytes" json:"maxAppendRequestBytes"`
 	QueueCapacity         int      `yaml:"queueCapacity" json:"queueCapacity"`
@@ -224,7 +225,7 @@ func Defaults() Config {
 		Storage: StorageConfig{
 			Read: StorageReadConfig{MaxStreams: 64, RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20},
 			Write: StorageWriteConfig{
-				MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, QueueCapacity: 256,
+				Enabled: true, MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, QueueCapacity: 256,
 				OrphanTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
 				ProtocolModelVersion: "google.storage.v1+spark-bigquery-connector-0.44.2",
 			},
@@ -365,6 +366,7 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_LOAD_MAX_OBJECT_BYTES", "load.maxObjectBytes"}, {"BQEMU_LOAD_MAX_TOTAL_BYTES", "load.maxTotalBytes"},
 	{"BQEMU_LOAD_MAX_METADATA_BYTES", "load.maxMetadataBytes"}, {"BQEMU_LOAD_MAX_LISTED_OBJECTS", "load.maxListedObjects"},
 	{"BQEMU_STORAGE_WRITE_MAX_STREAMS", "storage.write.maxStreams"},
+	{"BQEMU_STORAGE_WRITE_ENABLED", "storage.write.enabled"},
 	{"BQEMU_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES", "storage.write.maxAppendRequestBytes"},
 	{"BQEMU_STORAGE_WRITE_QUEUE_CAPACITY", "storage.write.queueCapacity"},
 	{"BQEMU_STORAGE_WRITE_ORPHAN_TTL", "storage.write.orphanTtl"},
@@ -461,6 +463,8 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt(&cfg.Storage.Read.MaxResponseBytes)
 	case "storage.write.maxStreams":
 		return setInt(&cfg.Storage.Write.MaxStreams)
+	case "storage.write.enabled":
+		return setBool(&cfg.Storage.Write.Enabled)
 	case "storage.write.maxAppendRequestBytes":
 		return setInt(&cfg.Storage.Write.MaxAppendRequestBytes)
 	case "storage.write.queueCapacity":

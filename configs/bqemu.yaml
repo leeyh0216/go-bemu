@@ -41,6 +41,7 @@ storage:
     rowsPerResponse: 10000
     maxResponseBytes: 16777216
   write:
+    enabled: true
     maxStreams: 1024
     maxAppendRequestBytes: 20971520
     queueCapacity: 256

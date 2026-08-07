@@ -116,7 +116,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
 		"runtime.shutdownTimeout=5s", "runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
 		"storage.read.maxStreams=16", "storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576",
-		"storage.write.maxStreams=16", "storage.write.maxAppendRequestBytes=1048576",
+		"storage.write.enabled=true", "storage.write.maxStreams=16", "storage.write.maxAppendRequestBytes=1048576",
 		"storage.write.queueCapacity=8", "storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
 		"storage.write.protocolModelVersion=test-storage-v1",
 		"load.enabled=true", "load.gcsEndpoint=http://fake-gcs:4443", "load.allowFileSources=true",
