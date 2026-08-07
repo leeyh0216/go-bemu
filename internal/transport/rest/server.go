@@ -24,10 +24,12 @@ type CatalogUseCases interface {
 	ListProjects(context.Context) ([]domain.Project, error)
 	DeleteProject(context.Context, string) error
 	CreateDataset(context.Context, domain.Dataset) (domain.Dataset, error)
+	UpdateDataset(context.Context, string, string, application.DatasetPatch) (domain.Dataset, error)
 	GetDataset(context.Context, string, string) (domain.Dataset, error)
 	ListDatasets(context.Context, string) ([]domain.Dataset, error)
 	DeleteDataset(context.Context, string, string, bool) error
 	CreateTable(context.Context, domain.Table) (domain.Table, error)
+	UpdateTable(context.Context, string, string, string, application.TablePatch) (domain.Table, error)
 	GetTable(context.Context, string, string, string) (domain.Table, error)
 	ListTables(context.Context, string, string) ([]domain.Table, error)
 	DeleteTable(context.Context, string, string, string) error
@@ -40,7 +42,7 @@ type discoveryExtension func(map[string]any)
 
 type Server struct {
 	catalog             CatalogUseCases
-	readiness           ports.Warehouse
+	readiness           ports.HealthChecker
 	baseURL             string
 	routeExtensions     []routeRegistration
 	discoveryExtensions []discoveryExtension
@@ -60,7 +62,7 @@ func withDiscovery(extension discoveryExtension) Option {
 	}
 }
 
-func NewCatalogServer(catalog CatalogUseCases, readiness ports.Warehouse, baseURL string, options ...Option) *Server {
+func NewCatalogServer(catalog CatalogUseCases, readiness ports.HealthChecker, baseURL string, options ...Option) *Server {
 	server := &Server{catalog: catalog, readiness: readiness, baseURL: strings.TrimRight(baseURL, "/")}
 	for _, option := range options {
 		option(server)
@@ -93,10 +95,14 @@ func (s *Server) registerCatalogRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/datasets", s.createDataset)
 	mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets", s.listDatasets)
 	mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets/{datasetId}", s.getDataset)
+	mux.HandleFunc("PATCH /bigquery/v2/projects/{projectId}/datasets/{datasetId}", s.patchDataset)
+	mux.HandleFunc("PUT /bigquery/v2/projects/{projectId}/datasets/{datasetId}", s.updateDataset)
 	mux.HandleFunc("DELETE /bigquery/v2/projects/{projectId}/datasets/{datasetId}", s.deleteDataset)
 	mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables", s.createTable)
 	mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables", s.listTables)
 	mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}", s.getTable)
+	mux.HandleFunc("PATCH /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}", s.patchTable)
+	mux.HandleFunc("PUT /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}", s.updateTable)
 	mux.HandleFunc("DELETE /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}", s.deleteTable)
 }
 

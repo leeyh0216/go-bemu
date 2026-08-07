@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
@@ -20,11 +21,11 @@ import (
 
 type CatalogService struct {
 	catalog   ports.CatalogRepository
-	warehouse ports.Warehouse
+	warehouse ports.WarehouseAdmin
 	clock     ports.Clock
 }
 
-func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.Warehouse, clock ports.Clock) *CatalogService {
+func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.WarehouseAdmin, clock ports.Clock) *CatalogService {
 	return &CatalogService{catalog: catalog, warehouse: warehouse, clock: clock}
 }
 
@@ -119,7 +120,8 @@ func (s *CatalogService) CreateTable(ctx context.Context, table domain.Table) (d
 	if err := table.Validate(); err != nil {
 		return domain.Table{}, err
 	}
-	if _, err := s.catalog.GetDataset(ctx, table.ProjectID, table.DatasetID); err != nil {
+	dataset, err := s.catalog.GetDataset(ctx, table.ProjectID, table.DatasetID)
+	if err != nil {
 		return domain.Table{}, err
 	}
 	if _, err := s.catalog.GetTable(ctx, table.ProjectID, table.DatasetID, table.ID); err == nil {
@@ -131,6 +133,14 @@ func (s *CatalogService) CreateTable(ctx context.Context, table domain.Table) (d
 		table.Type = "TABLE"
 	}
 	now := s.clock.Now()
+	table.Location = dataset.Location
+	if table.ExpirationTime == nil && dataset.DefaultTableExpirationMs != nil {
+		expiration := now.Add(time.Duration(*dataset.DefaultTableExpirationMs) * time.Millisecond)
+		table.ExpirationTime = &expiration
+	}
+	if table.TimePartitioning != nil && table.TimePartitioning.ExpirationMs == 0 && dataset.DefaultPartitionExpirationMs != nil {
+		table.TimePartitioning.ExpirationMs = *dataset.DefaultPartitionExpirationMs
+	}
 	table.CreatedAt = now
 	table.UpdatedAt = now
 	if err := s.warehouse.CreateTable(ctx, table); err != nil {

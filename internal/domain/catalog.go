@@ -1,5 +1,10 @@
 package domain
 
+// Official BigQuery resource and schema semantics:
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets#Dataset
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/tables#Table
+//   - https://cloud.google.com/bigquery/docs/schemas
+
 import (
 	"fmt"
 	"regexp"
@@ -28,14 +33,16 @@ func (p Project) Validate() error {
 }
 
 type Dataset struct {
-	ProjectID    string
-	ID           string
-	FriendlyName string
-	Description  string
-	Location     string
-	Labels       map[string]string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ProjectID                    string
+	ID                           string
+	FriendlyName                 string
+	Description                  string
+	Location                     string
+	Labels                       map[string]string
+	DefaultTableExpirationMs     *int64
+	DefaultPartitionExpirationMs *int64
+	CreatedAt                    time.Time
+	UpdatedAt                    time.Time
 }
 
 func (d Dataset) Validate() error {
@@ -44,6 +51,12 @@ func (d Dataset) Validate() error {
 	}
 	if len(d.ID) > 1024 || !resourceIDPattern.MatchString(d.ID) {
 		return fmt.Errorf("%w: invalid dataset ID %q", ErrInvalid, d.ID)
+	}
+	if d.DefaultTableExpirationMs != nil && *d.DefaultTableExpirationMs < 0 {
+		return fmt.Errorf("%w: default table expiration must be non-negative", ErrInvalid)
+	}
+	if d.DefaultPartitionExpirationMs != nil && *d.DefaultPartitionExpirationMs < 0 {
+		return fmt.Errorf("%w: default partition expiration must be non-negative", ErrInvalid)
 	}
 	return nil
 }
@@ -104,8 +117,11 @@ type Table struct {
 	ID                string
 	FriendlyName      string
 	Description       string
+	Labels            map[string]string
 	Type              string
 	Schema            []Field
+	Location          string
+	ExpirationTime    *time.Time
 	TimePartitioning  *TimePartitioning
 	RangePartitioning *RangePartitioning
 	ClusteringFields  []string
@@ -120,16 +136,27 @@ func (t Table) Validate() error {
 	if len(t.Schema) == 0 {
 		return fmt.Errorf("%w: a table schema requires at least one field", ErrInvalid)
 	}
-	seen := make(map[string]struct{}, len(t.Schema))
-	for _, field := range t.Schema {
+	if err := validateFieldList(t.Schema, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateFieldList(fields []Field, parent []string) error {
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
 		if err := field.Validate(); err != nil {
 			return err
 		}
 		key := strings.ToLower(field.Name)
 		if _, ok := seen[key]; ok {
-			return fmt.Errorf("%w: duplicate field %q", ErrInvalid, field.Name)
+			path := strings.Join(append(parent, field.Name), ".")
+			return fmt.Errorf("%w: duplicate field %q", ErrInvalid, path)
 		}
 		seen[key] = struct{}{}
+		if err := validateFieldList(field.Fields, append(parent, field.Name)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

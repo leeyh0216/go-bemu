@@ -23,8 +23,9 @@ type catalogTestClock struct{ now time.Time }
 func (c catalogTestClock) Now() time.Time { return c.now }
 
 type catalogTestWarehouse struct {
-	datasets []string
-	tables   []string
+	datasets  []string
+	tables    []string
+	additions []domain.SchemaAddition
 }
 
 var _ ports.Warehouse = (*catalogTestWarehouse)(nil)
@@ -39,9 +40,62 @@ func (w *catalogTestWarehouse) CreateTable(_ context.Context, table domain.Table
 	w.tables = append(w.tables, table.ProjectID+"/"+table.DatasetID+"/"+table.ID)
 	return nil
 }
+func (w *catalogTestWarehouse) ApplySchemaAdditions(_ context.Context, _ domain.Table, additions []domain.SchemaAddition) error {
+	w.additions = append(w.additions, additions...)
+	return nil
+}
 func (*catalogTestWarehouse) DropTable(context.Context, string, string, string) error { return nil }
 func (*catalogTestWarehouse) Query(context.Context, ports.QueryRequest) (domain.QueryResult, error) {
 	return domain.QueryResult{}, nil
+}
+
+func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
+	warehouse := &catalogTestWarehouse{}
+	clock := catalogTestClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
+	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
+	server := httptest.NewServer(NewCatalogServer(catalog, warehouse, "").Handler())
+	t.Cleanup(server.Close)
+	request := catalogRequestHelper(t, server.URL)
+	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"test-project"}`, http.StatusOK)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets", `{
+		"datasetReference":{"datasetId":"analytics"},"location":"EU","description":"before"
+	}`, http.StatusOK)
+	dataset := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics", "", http.StatusOK)
+	datasetETag := dataset["etag"].(string)
+	dataset = catalogRequestWithETag(t, server.URL, http.MethodPatch, "/bigquery/v2/projects/test-project/datasets/analytics", `{
+		"description":"after","labels":{"tier":"gold"},"defaultTableExpirationMs":"86400000"
+	}`, datasetETag, http.StatusOK)
+	if dataset["description"] != "after" || dataset["defaultTableExpirationMs"] != "86400000" || dataset["etag"] == datasetETag {
+		t.Fatalf("unexpected dataset patch: %#v", dataset)
+	}
+	catalogRequestWithETag(t, server.URL, http.MethodPatch, "/bigquery/v2/projects/test-project/datasets/analytics", `{"description":"stale"}`, datasetETag, http.StatusPreconditionFailed)
+
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"events"},"schema":{"fields":[
+			{"name":"id","type":"INT64"},
+			{"name":"payload","type":"RECORD","fields":[{"name":"name","type":"STRING"}]}
+		]}
+	}`, http.StatusOK)
+	table := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events", "", http.StatusOK)
+	tableETag := table["etag"].(string)
+	table = catalogRequestWithETag(t, server.URL, http.MethodPatch, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events", `{
+		"description":"patched","labels":{"owner":"test"},"expirationTime":"1800000000000",
+		"schema":{"fields":[
+			{"name":"id","type":"INT64","mode":"NULLABLE"},
+			{"name":"payload","type":"RECORD","mode":"NULLABLE","fields":[
+				{"name":"name","type":"STRING","mode":"NULLABLE"},
+				{"name":"score","type":"FLOAT64","mode":"NULLABLE"}
+			]},
+			{"name":"tags","type":"STRING","mode":"REPEATED"}
+		]}
+	}`, tableETag, http.StatusOK)
+	if table["description"] != "patched" || table["expirationTime"] != "1800000000000" || len(warehouse.additions) != 2 {
+		t.Fatalf("unexpected table patch: table=%#v additions=%#v", table, warehouse.additions)
+	}
+	latestETag := table["etag"].(string)
+	catalogRequestWithETag(t, server.URL, http.MethodPatch, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events", `{
+		"schema":{"fields":[{"name":"id","type":"STRING"}]}
+	}`, latestETag, http.StatusBadRequest)
 }
 
 func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
@@ -158,4 +212,34 @@ func catalogRequestHelper(t *testing.T, baseURL string) func(string, string, str
 		}
 		return decoded
 	}
+}
+
+func catalogRequestWithETag(t *testing.T, baseURL, method, path, body, etag string, expectedStatus int) map[string]any {
+	t.Helper()
+	request, err := http.NewRequestWithContext(context.Background(), method, baseURL+path, bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("If-Match", etag)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != expectedStatus {
+		t.Fatalf("%s %s: got %d, want %d; body=%s", method, path, response.StatusCode, expectedStatus, payload)
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	return decoded
 }

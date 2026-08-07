@@ -103,6 +103,17 @@ func (r *CatalogRepository) CreateDataset(_ context.Context, d domain.Dataset) e
 	return nil
 }
 
+func (r *CatalogRepository) UpdateDataset(_ context.Context, dataset domain.Dataset) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := datasetKey(dataset.ProjectID, dataset.ID)
+	if _, ok := r.datasets[key]; !ok {
+		return fmt.Errorf("%w: dataset %s", domain.ErrNotFound, key)
+	}
+	r.datasets[key] = cloneDataset(dataset)
+	return nil
+}
+
 func (r *CatalogRepository) GetDataset(_ context.Context, projectID, datasetID string) (domain.Dataset, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -159,6 +170,17 @@ func (r *CatalogRepository) CreateTable(_ context.Context, t domain.Table) error
 	return nil
 }
 
+func (r *CatalogRepository) UpdateTable(_ context.Context, table domain.Table) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := tableKey(table.ProjectID, table.DatasetID, table.ID)
+	if _, ok := r.tables[key]; !ok {
+		return fmt.Errorf("%w: table %s", domain.ErrNotFound, key)
+	}
+	r.tables[key] = cloneTable(table)
+	return nil
+}
+
 func (r *CatalogRepository) GetTable(_ context.Context, projectID, datasetID, tableID string) (domain.Table, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -201,6 +223,8 @@ func cloneProject(project domain.Project) domain.Project { return project }
 func cloneDataset(dataset domain.Dataset) domain.Dataset {
 	clone := dataset
 	clone.Labels = cloneStringMap(dataset.Labels)
+	clone.DefaultTableExpirationMs = cloneInt64Pointer(dataset.DefaultTableExpirationMs)
+	clone.DefaultPartitionExpirationMs = cloneInt64Pointer(dataset.DefaultPartitionExpirationMs)
 	return clone
 }
 
@@ -208,6 +232,11 @@ func cloneTable(table domain.Table) domain.Table {
 	clone := table
 	clone.Schema = cloneFields(table.Schema)
 	clone.ClusteringFields = append([]string(nil), table.ClusteringFields...)
+	clone.Labels = cloneStringMap(table.Labels)
+	if table.ExpirationTime != nil {
+		expiration := *table.ExpirationTime
+		clone.ExpirationTime = &expiration
+	}
 	if table.TimePartitioning != nil {
 		partitioning := *table.TimePartitioning
 		clone.TimePartitioning = &partitioning
@@ -217,6 +246,14 @@ func cloneTable(table domain.Table) domain.Table {
 		clone.RangePartitioning = &partitioning
 	}
 	return clone
+}
+
+func cloneInt64Pointer(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func cloneFields(fields []domain.Field) []domain.Field {

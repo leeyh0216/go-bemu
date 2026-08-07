@@ -8,10 +8,14 @@ package rest
 // parent from the resource named on the wire.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 )
 
@@ -83,16 +87,90 @@ func (s *Server) createDataset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("%w: datasetReference.projectId must match path projectId", domain.ErrInvalid))
 		return
 	}
+	defaultTableExpiration, err := parseOptionalInt64Pointer(request.DefaultTableExpirationMs, "defaultTableExpirationMs")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defaultPartitionExpiration, err := parseOptionalInt64Pointer(request.DefaultPartitionExpirationMs, "defaultPartitionExpirationMs")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	dataset, err := s.catalog.CreateDataset(r.Context(), domain.Dataset{
 		ProjectID: projectID, ID: request.DatasetReference.DatasetID,
 		FriendlyName: request.FriendlyName, Description: request.Description,
 		Location: request.Location, Labels: request.Labels,
+		DefaultTableExpirationMs: defaultTableExpiration, DefaultPartitionExpirationMs: defaultPartitionExpiration,
 	})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, datasetFromDomain(dataset, s.baseURLFor(r)))
+}
+
+func (s *Server) patchDataset(w http.ResponseWriter, r *http.Request) {
+	s.mutateDataset(w, r, false)
+}
+
+func (s *Server) updateDataset(w http.ResponseWriter, r *http.Request) {
+	s.mutateDataset(w, r, true)
+}
+
+func (s *Server) mutateDataset(w http.ResponseWriter, r *http.Request, replace bool) {
+	var request datasetResource
+	fields, err := decodeJSONWithFields(r, &request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	projectID, datasetID := r.PathValue("projectId"), r.PathValue("datasetId")
+	current, err := s.catalog.GetDataset(r.Context(), projectID, datasetID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := checkIfMatch(r, metadataETag(current)); err != nil {
+		writeError(w, err)
+		return
+	}
+	if _, present := fields["datasetReference"]; present &&
+		((request.DatasetReference.ProjectID != "" && request.DatasetReference.ProjectID != projectID) ||
+			(request.DatasetReference.DatasetID != "" && request.DatasetReference.DatasetID != datasetID)) {
+		writeError(w, fmt.Errorf("%w: datasetReference must match the request path", domain.ErrInvalid))
+		return
+	}
+	if _, present := fields["location"]; present && request.Location != "" && request.Location != current.Location {
+		writeError(w, fmt.Errorf("%w: dataset location is immutable", domain.ErrInvalid))
+		return
+	}
+	patch := application.DatasetPatch{}
+	patch.FriendlyName = application.PatchValue[string]{Set: replace || hasField(fields, "friendlyName"), Value: request.FriendlyName}
+	patch.Description = application.PatchValue[string]{Set: replace || hasField(fields, "description"), Value: request.Description}
+	patch.Labels = application.PatchValue[map[string]string]{Set: replace || hasField(fields, "labels"), Value: request.Labels}
+	if replace || hasField(fields, "defaultTableExpirationMs") {
+		value, parseErr := parseOptionalInt64Pointer(request.DefaultTableExpirationMs, "defaultTableExpirationMs")
+		if parseErr != nil {
+			writeError(w, parseErr)
+			return
+		}
+		patch.DefaultTableExpirationMs = application.PatchValue[*int64]{Set: true, Value: value}
+	}
+	if replace || hasField(fields, "defaultPartitionExpirationMs") {
+		value, parseErr := parseOptionalInt64Pointer(request.DefaultPartitionExpirationMs, "defaultPartitionExpirationMs")
+		if parseErr != nil {
+			writeError(w, parseErr)
+			return
+		}
+		patch.DefaultPartitionExpirationMs = application.PatchValue[*int64]{Set: true, Value: value}
+	}
+	updated, err := s.catalog.UpdateDataset(r.Context(), projectID, datasetID, patch)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, datasetFromDomain(updated, s.baseURLFor(r)))
 }
 
 func (s *Server) getDataset(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +232,15 @@ func (s *Server) createTable(w http.ResponseWriter, r *http.Request) {
 	table := domain.Table{
 		ProjectID: projectID, DatasetID: datasetID,
 		ID: request.TableReference.TableID, FriendlyName: request.FriendlyName,
-		Description: request.Description, Type: request.Type, Schema: fieldsToDomain(request.Schema.Fields),
+		Description: request.Description, Labels: request.Labels, Type: request.Type, Schema: fieldsToDomain(request.Schema.Fields),
+	}
+	if request.ExpirationTime != "" {
+		expiration, err := parseMillis(request.ExpirationTime, "expirationTime")
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		table.ExpirationTime = &expiration
 	}
 	if request.TimePartitioning != nil {
 		expiration, err := parseOptionalInt64(request.TimePartitioning.ExpirationMs, "timePartitioning.expirationMs")
@@ -195,6 +281,74 @@ func (s *Server) createTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, tableFromDomain(created, s.baseURLFor(r)))
+}
+
+func (s *Server) patchTable(w http.ResponseWriter, r *http.Request) {
+	s.mutateTable(w, r, false)
+}
+
+func (s *Server) updateTable(w http.ResponseWriter, r *http.Request) {
+	s.mutateTable(w, r, true)
+}
+
+func (s *Server) mutateTable(w http.ResponseWriter, r *http.Request, replace bool) {
+	var request tableResource
+	fields, err := decodeJSONWithFields(r, &request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	projectID, datasetID, tableID := r.PathValue("projectId"), r.PathValue("datasetId"), r.PathValue("tableId")
+	current, err := s.catalog.GetTable(r.Context(), projectID, datasetID, tableID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := checkIfMatch(r, metadataETag(current)); err != nil {
+		writeError(w, err)
+		return
+	}
+	if _, present := fields["tableReference"]; present &&
+		((request.TableReference.ProjectID != "" && request.TableReference.ProjectID != projectID) ||
+			(request.TableReference.DatasetID != "" && request.TableReference.DatasetID != datasetID) ||
+			(request.TableReference.TableID != "" && request.TableReference.TableID != tableID)) {
+		writeError(w, fmt.Errorf("%w: tableReference must match the request path", domain.ErrInvalid))
+		return
+	}
+	if _, present := fields["type"]; present && request.Type != "" && request.Type != current.Type {
+		writeError(w, fmt.Errorf("%w: table type is immutable", domain.ErrInvalid))
+		return
+	}
+	if _, present := fields["location"]; present && request.Location != "" && request.Location != current.Location {
+		writeError(w, fmt.Errorf("%w: table location is immutable", domain.ErrInvalid))
+		return
+	}
+	patch := application.TablePatch{
+		FriendlyName: application.PatchValue[string]{Set: replace || hasField(fields, "friendlyName"), Value: request.FriendlyName},
+		Description:  application.PatchValue[string]{Set: replace || hasField(fields, "description"), Value: request.Description},
+		Labels:       application.PatchValue[map[string]string]{Set: replace || hasField(fields, "labels"), Value: request.Labels},
+	}
+	if replace || hasField(fields, "expirationTime") {
+		var expiration *time.Time
+		if request.ExpirationTime != "" {
+			parsed, parseErr := parseMillis(request.ExpirationTime, "expirationTime")
+			if parseErr != nil {
+				writeError(w, parseErr)
+				return
+			}
+			expiration = &parsed
+		}
+		patch.ExpirationTime = application.PatchValue[*time.Time]{Set: true, Value: expiration}
+	}
+	if replace || hasField(fields, "schema") {
+		patch.Schema = application.PatchValue[[]domain.Field]{Set: true, Value: fieldsToDomain(request.Schema.Fields)}
+	}
+	updated, err := s.catalog.UpdateTable(r.Context(), projectID, datasetID, tableID, patch)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tableFromDomain(updated, s.baseURLFor(r)))
 }
 
 func (s *Server) getTable(w http.ResponseWriter, r *http.Request) {
@@ -245,10 +399,46 @@ func parseOptionalInt64(value, field string) (int64, error) {
 	return parseRequiredInt64(value, field)
 }
 
+func parseOptionalInt64Pointer(value, field string) (*int64, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := parseRequiredInt64(value, field)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
 func parseRequiredInt64(value, field string) (int64, error) {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s must be an int64 decimal string", domain.ErrInvalid, field)
 	}
 	return parsed, nil
+}
+
+func parseMillis(value, field string) (time.Time, error) {
+	milliseconds, err := parseRequiredInt64(value, field)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.UnixMilli(milliseconds).UTC(), nil
+}
+
+func hasField(fields map[string]json.RawMessage, name string) bool {
+	_, present := fields[name]
+	return present
+}
+
+func checkIfMatch(r *http.Request, current string) error {
+	condition := strings.TrimSpace(r.Header.Get("If-Match"))
+	if condition == "" || condition == "*" {
+		return nil
+	}
+	condition = strings.Trim(condition, `"`)
+	if condition != current {
+		return fmt.Errorf("%w: metadata ETag does not match; fix_hint=GET the resource and retry with its latest etag", domain.ErrPrecondition)
+	}
+	return nil
 }

@@ -10,6 +10,9 @@ package rest
 // wire contract and translate only at the domain boundary.
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -42,17 +45,19 @@ type datasetReference struct {
 }
 
 type datasetResource struct {
-	Kind             string            `json:"kind,omitempty"`
-	ETag             string            `json:"etag,omitempty"`
-	ID               string            `json:"id,omitempty"`
-	SelfLink         string            `json:"selfLink,omitempty"`
-	DatasetReference datasetReference  `json:"datasetReference"`
-	FriendlyName     string            `json:"friendlyName,omitempty"`
-	Description      string            `json:"description,omitempty"`
-	Location         string            `json:"location,omitempty"`
-	Labels           map[string]string `json:"labels,omitempty"`
-	CreationTime     string            `json:"creationTime,omitempty"`
-	LastModifiedTime string            `json:"lastModifiedTime,omitempty"`
+	Kind                         string            `json:"kind,omitempty"`
+	ETag                         string            `json:"etag,omitempty"`
+	ID                           string            `json:"id,omitempty"`
+	SelfLink                     string            `json:"selfLink,omitempty"`
+	DatasetReference             datasetReference  `json:"datasetReference"`
+	FriendlyName                 string            `json:"friendlyName,omitempty"`
+	Description                  string            `json:"description,omitempty"`
+	Location                     string            `json:"location,omitempty"`
+	Labels                       map[string]string `json:"labels,omitempty"`
+	DefaultTableExpirationMs     string            `json:"defaultTableExpirationMs,omitempty"`
+	DefaultPartitionExpirationMs string            `json:"defaultPartitionExpirationMs,omitempty"`
+	CreationTime                 string            `json:"creationTime,omitempty"`
+	LastModifiedTime             string            `json:"lastModifiedTime,omitempty"`
 }
 
 type tableReference struct {
@@ -102,8 +107,11 @@ type tableResource struct {
 	TableReference    tableReference             `json:"tableReference"`
 	FriendlyName      string                     `json:"friendlyName,omitempty"`
 	Description       string                     `json:"description,omitempty"`
+	Labels            map[string]string          `json:"labels,omitempty"`
 	Type              string                     `json:"type,omitempty"`
 	Schema            tableSchema                `json:"schema"`
+	Location          string                     `json:"location,omitempty"`
+	ExpirationTime    string                     `json:"expirationTime,omitempty"`
 	TimePartitioning  *timePartitioningResource  `json:"timePartitioning,omitempty"`
 	RangePartitioning *rangePartitioningResource `json:"rangePartitioning,omitempty"`
 	Clustering        *clusteringResource        `json:"clustering,omitempty"`
@@ -123,8 +131,9 @@ func projectFromDomain(project domain.Project) projectResource {
 }
 
 func datasetFromDomain(dataset domain.Dataset, baseURL string) datasetResource {
-	return datasetResource{
+	resource := datasetResource{
 		Kind:             "bigquery#dataset",
+		ETag:             metadataETag(dataset),
 		ID:               dataset.ProjectID + ":" + dataset.ID,
 		SelfLink:         baseURL + "/bigquery/v2/projects/" + dataset.ProjectID + "/datasets/" + dataset.ID,
 		DatasetReference: datasetReference{ProjectID: dataset.ProjectID, DatasetID: dataset.ID},
@@ -135,20 +144,33 @@ func datasetFromDomain(dataset domain.Dataset, baseURL string) datasetResource {
 		CreationTime:     millis(dataset.CreatedAt),
 		LastModifiedTime: millis(dataset.UpdatedAt),
 	}
+	if dataset.DefaultTableExpirationMs != nil {
+		resource.DefaultTableExpirationMs = strconv.FormatInt(*dataset.DefaultTableExpirationMs, 10)
+	}
+	if dataset.DefaultPartitionExpirationMs != nil {
+		resource.DefaultPartitionExpirationMs = strconv.FormatInt(*dataset.DefaultPartitionExpirationMs, 10)
+	}
+	return resource
 }
 
 func tableFromDomain(table domain.Table, baseURL string) tableResource {
 	resource := tableResource{
 		Kind:             "bigquery#table",
+		ETag:             metadataETag(table),
 		ID:               fmt.Sprintf("%s:%s.%s", table.ProjectID, table.DatasetID, table.ID),
 		SelfLink:         fmt.Sprintf("%s/bigquery/v2/projects/%s/datasets/%s/tables/%s", baseURL, table.ProjectID, table.DatasetID, table.ID),
 		TableReference:   tableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
 		FriendlyName:     table.FriendlyName,
 		Description:      table.Description,
+		Labels:           table.Labels,
 		Type:             table.Type,
 		Schema:           tableSchema{Fields: fieldsFromDomain(table.Schema)},
+		Location:         table.Location,
 		CreationTime:     millis(table.CreatedAt),
 		LastModifiedTime: millis(table.UpdatedAt),
+	}
+	if table.ExpirationTime != nil {
+		resource.ExpirationTime = millis(*table.ExpirationTime)
 	}
 	if table.TimePartitioning != nil {
 		resource.TimePartitioning = &timePartitioningResource{
@@ -170,6 +192,12 @@ func tableFromDomain(table domain.Table, baseURL string) tableResource {
 		resource.Clustering = &clusteringResource{Fields: append([]string(nil), table.ClusteringFields...)}
 	}
 	return resource
+}
+
+func metadataETag(value any) string {
+	encoded, _ := json.Marshal(value)
+	digest := sha256.Sum256(encoded)
+	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
 func fieldsFromDomain(fields []domain.Field) []tableFieldSchema {

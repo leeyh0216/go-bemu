@@ -82,6 +82,8 @@ func catalogDiscoveryResources() map[string]any {
 				"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
 				"accessPolicyVersion": discoveryQueryParameter("integer"), "datasetView": discoveryQueryParameter("string"),
 			}, "projectId", "datasetId"),
+			"patch":  discoveryMethod("bigquery.datasets.patch", "PATCH", "projects/{projectId}/datasets/{datasetId}", "Dataset", "Dataset", projectDataset, "projectId", "datasetId"),
+			"update": discoveryMethod("bigquery.datasets.update", "PUT", "projects/{projectId}/datasets/{datasetId}", "Dataset", "Dataset", projectDataset, "projectId", "datasetId"),
 			"list": discoveryMethod("bigquery.datasets.list", "GET", "projects/{projectId}/datasets", "", "DatasetList", map[string]any{
 				"projectId": discoveryPathParameter("projectId"), "maxResults": discoveryQueryParameter("integer"),
 				"pageToken": discoveryQueryParameter("string"), "all": discoveryQueryParameter("boolean"),
@@ -95,6 +97,8 @@ func catalogDiscoveryResources() map[string]any {
 		"tables": map[string]any{"methods": map[string]any{
 			"insert": discoveryMethod("bigquery.tables.insert", "POST", "projects/{projectId}/datasets/{datasetId}/tables", "Table", "Table", projectDataset, "projectId", "datasetId"),
 			"get":    discoveryMethod("bigquery.tables.get", "GET", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "", "Table", projectDatasetTable, "projectId", "datasetId", "tableId"),
+			"patch":  discoveryMethod("bigquery.tables.patch", "PATCH", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "Table", "Table", projectDatasetTable, "projectId", "datasetId", "tableId"),
+			"update": discoveryMethod("bigquery.tables.update", "PUT", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "Table", "Table", projectDatasetTable, "projectId", "datasetId", "tableId"),
 			"list": discoveryMethod("bigquery.tables.list", "GET", "projects/{projectId}/datasets/{datasetId}/tables", "", "TableList", map[string]any{
 				"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
 				"maxResults": discoveryQueryParameter("integer"), "pageToken": discoveryQueryParameter("string"),

@@ -15,9 +15,10 @@ type fixedClock struct{ now time.Time }
 func (c fixedClock) Now() time.Time { return c.now }
 
 type fakeWarehouse struct {
-	datasets []string
-	tables   []string
-	dropped  []string
+	datasets  []string
+	tables    []string
+	dropped   []string
+	additions []domain.SchemaAddition
 }
 
 var _ ports.Warehouse = (*fakeWarehouse)(nil)
@@ -33,6 +34,10 @@ func (w *fakeWarehouse) DropDataset(_ context.Context, projectID, datasetID stri
 }
 func (w *fakeWarehouse) CreateTable(_ context.Context, table domain.Table) error {
 	w.tables = append(w.tables, table.ProjectID+"/"+table.DatasetID+"/"+table.ID)
+	return nil
+}
+func (w *fakeWarehouse) ApplySchemaAdditions(_ context.Context, _ domain.Table, additions []domain.SchemaAddition) error {
+	w.additions = append(w.additions, additions...)
 	return nil
 }
 
