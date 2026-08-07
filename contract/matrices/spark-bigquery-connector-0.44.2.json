@@ -301,17 +301,29 @@
         "delivery": "not-applicable",
         "saveMode": "not-applicable",
         "readShape": "table",
-        "typeFamily": "string-bytes",
+        "typeFamily": "boolean-integer-float",
         "auth": "static-access-token",
         "parallelism": "read-stream-1",
         "tablePartitioning": "unpartitioned"
       },
-      "state": "partial",
+      "state": "verified",
       "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
         "read-session"
       ],
-      "issueRef": "read",
-      "limitation": "One logical stream is supported; the released Spark process assertion is not yet a required passing gate."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/read-stream-counts-0.44.2.json",
+          "fingerprint": "sha256:6985faf4fc305f0c84f7a83e37f2d798b7a27712ce368eb3c2a54e6c2fc19076"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-READ-STREAM-TWO-V1",
@@ -324,17 +336,169 @@
         "delivery": "not-applicable",
         "saveMode": "not-applicable",
         "readShape": "table",
-        "typeFamily": "temporal",
+        "typeFamily": "boolean-integer-float",
         "auth": "static-access-token",
         "parallelism": "read-stream-2",
         "tablePartitioning": "unpartitioned"
       },
-      "state": "partial",
+      "state": "verified",
       "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
         "read-session"
       ],
-      "issueRef": "read",
-      "limitation": "Two logical streams are negotiated, but Spark partition scheduling has not been promoted to verified."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/read-stream-counts-0.44.2.json",
+          "fingerprint": "sha256:6985faf4fc305f0c84f7a83e37f2d798b7a27712ce368eb3c2a54e6c2fc19076"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-16",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/read-stream-counts-0.44.2.json",
+          "fingerprint": "sha256:6985faf4fc305f0c84f7a83e37f2d798b7a27712ce368eb3c2a54e6c2fc19076"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-STREAM-ONE-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-1",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/read-stream-counts-0.44.2.json",
+          "fingerprint": "sha256:6985faf4fc305f0c84f7a83e37f2d798b7a27712ce368eb3c2a54e6c2fc19076"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-STREAM-TWO-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-2",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/read-stream-counts-0.44.2.json",
+          "fingerprint": "sha256:6985faf4fc305f0c84f7a83e37f2d798b7a27712ce368eb3c2a54e6c2fc19076"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "table",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-16",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/read-stream-counts-0.44.2.json",
+          "fingerprint": "sha256:6985faf4fc305f0c84f7a83e37f2d798b7a27712ce368eb3c2a54e6c2fc19076"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-READ-STREAM-FOUR-V1",
@@ -679,7 +843,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/spark/evidence/default-stream-0.44.2.json",
-          "fingerprint": "sha256:5e0bcd0e3ad035eadc4f79b8bc3fa3269c1a8e315f120139676e690d1ab5364e"
+          "fingerprint": "sha256:8284f841cbd64fd9229de1c7e71817320b0b345e1e0cf6e59fce300d76f518a3"
         },
         {
           "kind": "artifact-lock",
@@ -699,17 +863,28 @@
         "delivery": "at-least-once",
         "saveMode": "append",
         "readShape": "not-applicable",
-        "typeFamily": "string-bytes",
+        "typeFamily": "boolean-integer-float",
         "auth": "static-access-token",
         "parallelism": "spark-partition-2",
         "tablePartitioning": "unpartitioned"
       },
-      "state": "gap",
+      "state": "verified",
       "officialSourceRefs": [
+        "connector-readme",
         "direct-partition-writer"
       ],
-      "issueRef": "write",
-      "limitation": "The two-partition default-stream append is blocked after successful Storage Write by the same copy-query job labels and priority contract; this partition count remains unexecuted."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/default-stream-0.44.2.json",
+          "fingerprint": "sha256:8284f841cbd64fd9229de1c7e71817320b0b345e1e0cf6e59fce300d76f518a3"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
@@ -722,17 +897,28 @@
         "delivery": "at-least-once",
         "saveMode": "append",
         "readShape": "not-applicable",
-        "typeFamily": "struct-array",
+        "typeFamily": "boolean-integer-float",
         "auth": "static-access-token",
         "parallelism": "spark-partition-4",
         "tablePartitioning": "unpartitioned"
       },
-      "state": "gap",
+      "state": "verified",
       "officialSourceRefs": [
+        "connector-readme",
         "direct-partition-writer"
       ],
-      "issueRef": "write",
-      "limitation": "The four-partition default-stream append is blocked after successful Storage Write by the same copy-query job labels and priority contract; this partition count remains unexecuted."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/default-stream-0.44.2.json",
+          "fingerprint": "sha256:8284f841cbd64fd9229de1c7e71817320b0b345e1e0cf6e59fce300d76f518a3"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1",

@@ -20,8 +20,10 @@ from conftest import (
     PublicEdge,
     connector_options,
     create_table,
+    load_connector_source,
+    observe_default_append_offsets,
+    public_edge_log_position,
     query,
-    raise_known_gap,
     record_capability,
 )
 
@@ -53,19 +55,55 @@ def seeded_table(public_edge: PublicEdge, test_timeout: float) -> str:
 
 
 @pytest.mark.parametrize(
-    ("wire_format", "expected_partitions"),
+    ("wire_format", "requested_streams"),
     [
+        pytest.param(
+            "ARROW",
+            1,
+            marks=pytest.mark.capability("SBQ-READ-STREAM-ONE-V1"),
+            id="arrow-1",
+        ),
+        pytest.param(
+            "ARROW",
+            2,
+            marks=pytest.mark.capability("SBQ-READ-STREAM-TWO-V1"),
+            id="arrow-2",
+        ),
         pytest.param(
             "ARROW",
             4,
             marks=pytest.mark.capability("SBQ-READ-ARROW-TABLE-V1"),
-            id="arrow",
+            id="arrow-4",
+        ),
+        pytest.param(
+            "ARROW",
+            16,
+            marks=pytest.mark.capability("SBQ-READ-ARROW-STREAM-SIXTEEN-V1"),
+            id="arrow-16",
+        ),
+        pytest.param(
+            "AVRO",
+            1,
+            marks=pytest.mark.capability("SBQ-READ-AVRO-STREAM-ONE-V1"),
+            id="avro-1",
+        ),
+        pytest.param(
+            "AVRO",
+            2,
+            marks=pytest.mark.capability("SBQ-READ-AVRO-STREAM-TWO-V1"),
+            id="avro-2",
         ),
         pytest.param(
             "AVRO",
             4,
             marks=pytest.mark.capability("SBQ-READ-AVRO-TABLE-V1"),
-            id="avro",
+            id="avro-4",
+        ),
+        pytest.param(
+            "AVRO",
+            16,
+            marks=pytest.mark.capability("SBQ-READ-AVRO-STREAM-SIXTEEN-V1"),
+            id="avro-16",
         ),
     ],
 )
@@ -74,58 +112,50 @@ def test_storage_read_arrow_and_avro(
     public_edge: PublicEdge,
     seeded_table: str,
     wire_format: str,
-    expected_partitions: int,
+    requested_streams: int,
 ) -> None:
-    reader = spark_session.read.format("bigquery")
-    for key, value in connector_options(public_edge).items():
-        reader = reader.option(key, value)
-    try:
-        frame = (
-            reader.option("readDataFormat", wire_format)
-            .option("maxParallelism", str(expected_partitions))
-            .option("preferredMinParallelism", str(expected_partitions))
-            .load(seeded_table)
-        )
-        rows = frame.select("id", "label", "score", "active").orderBy("id").collect()
-        actual = [(row.id, row.label, row.score, row.active) for row in rows]
-        expected = [
-            (1, "one", 1.5, True),
-            (2, "two", 2.5, False),
-            (3, "three", 3.5, True),
-            (4, "four", 4.5, False),
-        ]
-        if actual != expected:
-            fingerprint = hashlib.sha256(
-                json.dumps(actual, default=str, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
-            pytest.fail(
-                f"row mismatch shape=row-count:{len(actual)} fingerprint=sha256:{fingerprint}"
-            )
-        actual_partitions = frame.rdd.getNumPartitions()
-        if actual_partitions != expected_partitions:
-            pytest.fail(
-                f"partition mismatch shape=actual:{actual_partitions},expected:{expected_partitions}"
-            )
-    except Exception as error:
-        if wire_format != "AVRO":
-            raise
-        raise_known_gap(
-            "SBQ-READ-AVRO-TABLE-V1",
-            error=error,
-            expected_fragments=(
-                "Arrow serialization options require ARROW format",
-                "INVALID_ARGUMENT",
-            ),
-            stage="storage-read.create-session",
-            shape="AVRO+present-default-arrow-serialization-options->InvalidArgument",
-            fix_hint="tolerate-default-arrow-options-when-format-avro",
-        )
-    capability_id = (
-        "SBQ-READ-ARROW-TABLE-V1"
-        if wire_format == "ARROW"
-        else "SBQ-READ-AVRO-TABLE-V1"
+    frame = load_connector_source(
+        spark_session,
+        public_edge,
+        source=seeded_table,
+        source_kind="table",
+        wire_format=wire_format,
+        requested_streams=requested_streams,
     )
-    record_capability(capability_id, f"{wire_format.lower()}-rows+partitions")
+    rows = frame.select("id", "label", "score", "active").orderBy("id").collect()
+    actual = [(row.id, row.label, row.score, row.active) for row in rows]
+    expected = [
+        (1, "one", 1.5, True),
+        (2, "two", 2.5, False),
+        (3, "three", 3.5, True),
+        (4, "four", 4.5, False),
+    ]
+    if actual != expected:
+        fingerprint = hashlib.sha256(
+            json.dumps(actual, default=str, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        pytest.fail(
+            f"row mismatch shape=row-count:{len(actual)} fingerprint=sha256:{fingerprint}"
+        )
+    actual_partitions = frame.rdd.getNumPartitions()
+    if actual_partitions != requested_streams:
+        pytest.fail(
+            f"partition mismatch shape=actual:{actual_partitions},expected:{requested_streams}"
+        )
+    capability_ids = {
+        ("ARROW", 1): "SBQ-READ-STREAM-ONE-V1",
+        ("ARROW", 2): "SBQ-READ-STREAM-TWO-V1",
+        ("ARROW", 4): "SBQ-READ-ARROW-TABLE-V1",
+        ("ARROW", 16): "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
+        ("AVRO", 1): "SBQ-READ-AVRO-STREAM-ONE-V1",
+        ("AVRO", 2): "SBQ-READ-AVRO-STREAM-TWO-V1",
+        ("AVRO", 4): "SBQ-READ-AVRO-TABLE-V1",
+        ("AVRO", 16): "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
+    }
+    record_capability(
+        capability_ids[(wire_format, requested_streams)],
+        f"{wire_format.lower()}-rows+streams:{requested_streams}",
+    )
 
 
 @pytest.mark.parametrize(
@@ -193,13 +223,30 @@ def test_direct_pending_exact_append(
     )
 
 
-@pytest.mark.capability("SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1")
+@pytest.mark.parametrize(
+    "logical_partitions",
+    [
+        pytest.param(
+            1,
+            marks=pytest.mark.capability("SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1"),
+        ),
+        pytest.param(
+            2,
+            marks=pytest.mark.capability("SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1"),
+        ),
+        pytest.param(
+            4,
+            marks=pytest.mark.capability("SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1"),
+        ),
+    ],
+)
 def test_direct_default_stream_at_least_once(
     spark_session,
     public_edge: PublicEdge,
     test_timeout: float,
+    logical_partitions: int,
 ) -> None:
-    table_id = "default_" + uuid.uuid4().hex[:8]
+    table_id = f"default_{logical_partitions}_{uuid.uuid4().hex[:8]}"
     create_table(
         public_edge,
         test_timeout,
@@ -210,15 +257,29 @@ def test_direct_default_stream_at_least_once(
         ],
     )
     frame = spark_session.createDataFrame([(1, "one"), (2, "two")], ["id", "payload"])
-    writer = frame.coalesce(1).write.format("bigquery")
+    partitioned = frame.repartition(logical_partitions)
+    if partitioned.rdd.getNumPartitions() != logical_partitions:
+        pytest.fail(
+            "default stream source partition mismatch "
+            f"shape=actual:{partitioned.rdd.getNumPartitions()},expected:{logical_partitions}"
+        )
+    writer = partitioned.write.format("bigquery")
     for key, value in connector_options(public_edge).items():
         writer = writer.option(key, value)
+    log_position = public_edge_log_position(public_edge)
     (
         writer.option("writeMethod", "direct")
         .option("writeAtLeastOnce", "true")
         .mode("append")
         .save(f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}")
     )
+    append_batches, appended_rows = observe_default_append_offsets(
+        public_edge, since=log_position
+    )
+    if appended_rows != 2:
+        pytest.fail(
+            f"default append row mismatch shape=observed:{appended_rows},expected:2"
+        )
     result = query(
         public_edge,
         test_timeout,
@@ -226,6 +287,11 @@ def test_direct_default_stream_at_least_once(
     )
     if result["rows"][0]["f"][0]["v"] != "2":
         pytest.fail("default stream row count mismatch shape=single-count")
+    partition_name = {1: "ONE", 2: "TWO", 4: "FOUR"}[logical_partitions]
     record_capability(
-        "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1", "default-stream:one-partition"
+        f"SBQ-WRITE-DIRECT-ALO-APPEND-{partition_name}-V1",
+        (
+            f"default-stream:partitions:{logical_partitions} "
+            f"append-batches:{append_batches} offset-end:{appended_rows}"
+        ),
     )

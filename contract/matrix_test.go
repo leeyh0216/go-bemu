@@ -28,7 +28,7 @@ func TestSparkCapabilityMatrixIsCompleteAndClassified(t *testing.T) {
 		"saveMode":          stringSet("append", "overwrite", "ignore", "error-if-exists"),
 		"readShape":         stringSet("table", "projection", "filter", "count", "query", "view"),
 		"tablePartitioning": stringSet("unpartitioned", "time", "ingestion-time", "integer-range", "dynamic-overwrite"),
-		"parallelism":       stringSet("read-stream-1", "read-stream-2", "read-stream-4", "read-stream-negotiated", "spark-partition-1", "spark-partition-2", "spark-partition-4", "spark-partition-negotiated"),
+		"parallelism":       stringSet("read-stream-1", "read-stream-2", "read-stream-4", "read-stream-16", "read-stream-negotiated", "spark-partition-1", "spark-partition-2", "spark-partition-4", "spark-partition-negotiated"),
 		"typeFamily":        stringSet("boolean-integer-float", "string-bytes", "numeric-bignumeric", "temporal", "struct-array", "json", "map", "ml-vector-matrix", "geography"),
 		"auth":              stringSet("static-access-token", "service-account-file", "service-account-base64", "adc-service-account", "adc-user", "wif-external-account", "impersonation", "custom-token-provider"),
 	}
@@ -56,6 +56,15 @@ func TestSparkCapabilityMatrixIsCompleteAndClassified(t *testing.T) {
 	assertCombination(t, matrix, "write-direct-default", "at-least-once", "overwrite")
 	for _, format := range []string{"PARQUET", "AVRO", "ORC"} {
 		assertFormat(t, matrix, "write-indirect-load", format)
+	}
+	for _, format := range []string{"ARROW", "AVRO"} {
+		for _, parallelism := range []string{"read-stream-1", "read-stream-2", "read-stream-4", "read-stream-16"} {
+			assertFormatParallelism(t, matrix, "read-storage", format, parallelism)
+		}
+	}
+	for _, parallelism := range []string{"spark-partition-1", "spark-partition-2", "spark-partition-4"} {
+		assertFlowParallelism(t, matrix, "write-direct-pending", parallelism)
+		assertFlowParallelism(t, matrix, "write-direct-default", parallelism)
 	}
 }
 
@@ -159,6 +168,26 @@ func assertFormat(t *testing.T, matrix CapabilityMatrix, flow, format string) {
 		}
 	}
 	t.Errorf("missing combination flow=%s format=%s", flow, format)
+}
+
+func assertFormatParallelism(t *testing.T, matrix CapabilityMatrix, flow, format, parallelism string) {
+	t.Helper()
+	for _, entry := range matrix.Entries {
+		if entry.Flow == flow && entry.Axes.Format == format && entry.Axes.Parallelism == parallelism {
+			return
+		}
+	}
+	t.Errorf("missing combination flow=%s format=%s parallelism=%s", flow, format, parallelism)
+}
+
+func assertFlowParallelism(t *testing.T, matrix CapabilityMatrix, flow, parallelism string) {
+	t.Helper()
+	for _, entry := range matrix.Entries {
+		if entry.Flow == flow && entry.Axes.Parallelism == parallelism {
+			return
+		}
+	}
+	t.Errorf("missing combination flow=%s parallelism=%s", flow, parallelism)
 }
 
 func sortedKeys(set map[string]bool) []string {

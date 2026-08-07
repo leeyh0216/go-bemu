@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1",
+  "capabilityIds": [
+    "SBQ-READ-STREAM-ONE-V1",
+    "SBQ-READ-STREAM-TWO-V1",
+    "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
+    "SBQ-READ-AVRO-STREAM-ONE-V1",
+    "SBQ-READ-AVRO-STREAM-TWO-V1",
+    "SBQ-READ-AVRO-STREAM-SIXTEEN-V1"
+  ],
+  "observedOn": "2026-08-08",
+  "consumer": {
+    "connector": "spark-bigquery-connector-0.44.2",
+    "spark": "3.5.8",
+    "scalaBinaryVersion": "2.12",
+    "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92"
+  },
+  "artifacts": {
+    "lockFingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf",
+    "connectorJarFingerprint": "sha256:516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+  },
+  "edge": {
+    "rest": "HTTPS random loopback port with localhost SAN",
+    "storage": "TLS gRPC random loopback port with JVM PKCS12 truststore",
+    "credential": "static access token; bytes omitted"
+  },
+  "trace": [
+    {"stage": "spark_assertion", "operation": "SBQ-READ-STREAM-ONE-V1", "shape": "ARROW requested-streams:1 observed-partitions:1 rows:4", "fingerprint": "sha256:7a6ce63455587757b974073f68ebcc1d85039e013b666b6789fdc9c43635b793", "status": "passed"},
+    {"stage": "spark_assertion", "operation": "SBQ-READ-STREAM-TWO-V1", "shape": "ARROW requested-streams:2 observed-partitions:2 rows:4", "fingerprint": "sha256:cd35064a14a5e84544788b2d96d72495af69aa63949c17f81cfcd8543da11a4c", "status": "passed"},
+    {"stage": "spark_assertion", "operation": "SBQ-READ-ARROW-STREAM-SIXTEEN-V1", "shape": "ARROW requested-streams:16 observed-partitions:16 rows:4", "fingerprint": "sha256:79f5a72885c8451c7d4a6efa5a90edcce7e2cc415b5020f7cd3d2997928daf93", "status": "passed"},
+    {"stage": "spark_assertion", "operation": "SBQ-READ-AVRO-STREAM-ONE-V1", "shape": "AVRO requested-streams:1 observed-partitions:1 rows:4", "fingerprint": "sha256:a828a7de844920b749b67475274728ef927e15b44baa91633f0933d4d64d97d1", "status": "passed"},
+    {"stage": "spark_assertion", "operation": "SBQ-READ-AVRO-STREAM-TWO-V1", "shape": "AVRO requested-streams:2 observed-partitions:2 rows:4", "fingerprint": "sha256:7b279e4a0a8cdab149f25d8f34cf6ef7eb7302f8f9127b67e27ef94fafc6fdb2", "status": "passed"},
+    {"stage": "spark_assertion", "operation": "SBQ-READ-AVRO-STREAM-SIXTEEN-V1", "shape": "AVRO requested-streams:16 observed-partitions:16 rows:4", "fingerprint": "sha256:491b21bb2ad207d0b289a2031c62bcd67fe3f042fe03757f8f5f44d63ca83b8a", "status": "passed"}
+  ],
+  "redaction": {
+    "rawRows": false,
+    "rawSQL": false,
+    "rawToken": false,
+    "certificatePrivateKey": false,
+    "readStreamResourceNames": false
+  }
+}

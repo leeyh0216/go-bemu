@@ -242,6 +242,58 @@ def _retain_safe_tail(source: Path, name: str) -> None:
     _write_safe_bytes(payload, target)
 
 
+def public_edge_log_position(edge: PublicEdge) -> int:
+    """Return a byte boundary for one public-edge operation's observations."""
+
+    return edge.log_path.stat().st_size
+
+
+def observe_default_append_offsets(
+    edge: PublicEdge, *, since: int
+) -> tuple[int, int]:
+    """Assert contiguous default-stream offsets using numeric log fields only.
+
+    The application log records row counts and offsets around the Storage Write
+    side effect. This helper deliberately discards table/stream names, payload
+    digests, and all row data before returning an assertion shape.
+
+    Storage Write default-stream offset contract:
+    https://cloud.google.com/bigquery/docs/write-api#default_stream
+    """
+
+    with edge.log_path.open("rb") as stream:
+        stream.seek(since)
+        encoded_lines = stream.read().splitlines()
+    observations: list[tuple[int, int]] = []
+    for encoded in encoded_lines:
+        try:
+            event = json.loads(encoded)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if (
+            event.get("event") != "side_effect.after"
+            or event.get("side_effect") != "coordinator.append_default"
+            or event.get("operation") != "storage_write.append"
+            or event.get("success") is not True
+        ):
+            continue
+        offset, row_count = event.get("start_offset"), event.get("row_count")
+        if not isinstance(offset, int) or not isinstance(row_count, int):
+            raise AssertionError("default append observation omitted numeric shape")
+        observations.append((offset, row_count))
+    if not observations:
+        raise AssertionError("default append produced no observed side effect")
+    expected_offset = 0
+    for offset, row_count in sorted(observations):
+        if offset != expected_offset or row_count <= 0:
+            raise AssertionError(
+                "default append offset discontinuity "
+                f"shape=actual:{offset},expected:{expected_offset},rows:{row_count}"
+            )
+        expected_offset += row_count
+    return len(observations), expected_offset
+
+
 def _stop_public_edge(edge: PublicEdge, timeout: float) -> None:
     if edge.process.poll() is None:
         edge.process.terminate()
@@ -636,6 +688,40 @@ def connector_options(edge: PublicEdge) -> dict[str, str]:
         "httpReadTimeout": str(math.ceil(rpc_seconds * 1000)),
         "httpMaxRetry": "0",
     }
+
+
+def load_connector_source(
+    spark_session,
+    edge: PublicEdge,
+    *,
+    source: str,
+    source_kind: str,
+    wire_format: str,
+    requested_streams: int,
+):
+    """Load a table or query through the same released-connector read edge.
+
+    Query reads intentionally share this boundary with table reads. Once the
+    anonymous destination contract is frozen, query/view/count cases can assert
+    only their control-plane prefix while reusing the Storage Read assertions.
+
+    Exact option definitions:
+    https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/SparkBigQueryConfig.java
+    """
+
+    if source_kind not in {"table", "query"}:
+        raise ValueError(f"unsupported connector source kind: {source_kind}")
+    reader = spark_session.read.format("bigquery")
+    for key, value in connector_options(edge).items():
+        reader = reader.option(key, value)
+    reader = (
+        reader.option("readDataFormat", wire_format)
+        .option("maxParallelism", str(requested_streams))
+        .option("preferredMinParallelism", str(requested_streams))
+    )
+    if source_kind == "query":
+        return reader.option("viewsEnabled", "true").option("query", source).load()
+    return reader.load(source)
 
 
 def create_table(
