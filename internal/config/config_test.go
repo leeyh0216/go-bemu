@@ -117,6 +117,9 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"runtime.shutdownTimeout=5s", "runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
 		"storage.read.maxStreams=16", "storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576",
 		"storage.write.maxStreams=16", "storage.write.maxAppendRequestBytes=1048576",
+		"load.enabled=true", "load.gcsEndpoint=http://fake-gcs:4443", "load.allowFileSources=true",
+		"load.operationTimeout=30s", "load.maxObjects=20", "load.maxObjectBytes=1048576",
+		"load.maxTotalBytes=2097152", "load.maxMetadataBytes=65536", "load.maxListedObjects=30",
 		"auth.mode=static", "auth.staticTokensFile=tokens.txt", "logging.level=debug", "logging.format=text", "logging.unsafePayloads=true",
 		"admin.enabled=true", "admin.address=0.0.0.0:19051", "admin.tokenFile=admin-token", "admin.readHeaderTimeout=2s", "admin.maxStackBytes=65536",
 		"ui.enabled=true", "ui.directory=web/dist",
@@ -128,6 +131,25 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 	}
 	if _, err := load(args, lookup(nil)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLoadConfigurationRequiresExplicitEndpointAndPositiveBounds(t *testing.T) {
+	for name, overrides := range map[string][]string{
+		"missing-endpoint": {"--set", "load.enabled=true"},
+		"relative-endpoint": {
+			"--set", "load.enabled=true", "--set", "load.gcsEndpoint=fake-gcs:4443",
+		},
+		"object-over-total": {
+			"--set", "load.maxObjectBytes=2048", "--set", "load.maxTotalBytes=1024",
+		},
+		"zero-list-limit": {"--set", "load.maxListedObjects=0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := load(overrides, lookup(nil)); err == nil {
+				t.Fatal("expected load configuration validation error")
+			}
+		})
 	}
 }
 

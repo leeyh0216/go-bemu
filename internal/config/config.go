@@ -55,6 +55,7 @@ type Config struct {
 	Database   DatabaseConfig  `yaml:"database" json:"database"`
 	Runtime    RuntimeConfig   `yaml:"runtime" json:"runtime"`
 	Storage    StorageConfig   `yaml:"storage" json:"storage"`
+	Load       LoadConfig      `yaml:"load" json:"load"`
 	Auth       AuthConfig      `yaml:"auth" json:"auth"`
 	Logging    LoggingConfig   `yaml:"logging" json:"logging"`
 	Admin      AdminConfig     `yaml:"admin" json:"admin"`
@@ -120,6 +121,26 @@ type StorageReadConfig struct {
 type StorageWriteConfig struct {
 	MaxStreams            int `yaml:"maxStreams" json:"maxStreams"`
 	MaxAppendRequestBytes int `yaml:"maxAppendRequestBytes" json:"maxAppendRequestBytes"`
+}
+
+// LoadConfig bounds every network and filesystem side effect of a load job.
+// GCS sources use the JSON objects.get/list protocol; file sources are an
+// explicit local-only opt-in because they can read host-mounted paths.
+//
+// Official contracts:
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad
+//   - https://cloud.google.com/storage/docs/json_api/v1/objects/get
+//   - https://cloud.google.com/storage/docs/json_api/v1/objects/list
+type LoadConfig struct {
+	Enabled          bool     `yaml:"enabled" json:"enabled"`
+	GCSEndpoint      string   `yaml:"gcsEndpoint" json:"gcsEndpoint"`
+	AllowFileSources bool     `yaml:"allowFileSources" json:"allowFileSources"`
+	OperationTimeout Duration `yaml:"operationTimeout" json:"operationTimeout"`
+	MaxObjects       int      `yaml:"maxObjects" json:"maxObjects"`
+	MaxObjectBytes   int64    `yaml:"maxObjectBytes" json:"maxObjectBytes"`
+	MaxTotalBytes    int64    `yaml:"maxTotalBytes" json:"maxTotalBytes"`
+	MaxMetadataBytes int64    `yaml:"maxMetadataBytes" json:"maxMetadataBytes"`
+	MaxListedObjects int      `yaml:"maxListedObjects" json:"maxListedObjects"`
 }
 
 type AuthConfig struct {
@@ -199,6 +220,11 @@ func Defaults() Config {
 		Storage: StorageConfig{
 			Read:  StorageReadConfig{MaxStreams: 64, RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20},
 			Write: StorageWriteConfig{MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20},
+		},
+		Load: LoadConfig{
+			OperationTimeout: Duration(2 * time.Minute), MaxObjects: 1_000,
+			MaxObjectBytes: 1 << 30, MaxTotalBytes: 4 << 30,
+			MaxMetadataBytes: 8 << 20, MaxListedObjects: 10_000,
 		},
 		Auth:    AuthConfig{Mode: "disabled"},
 		Logging: LoggingConfig{Level: "info", Format: "json"},
@@ -325,6 +351,11 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_GRPC_ADDRESS", "server.grpc.address"}, {"BQEMU_TLS_CERT_FILE", "server.tls.certFile"},
 	{"BQEMU_TLS_KEY_FILE", "server.tls.keyFile"}, {"BQEMU_DATABASE_ADAPTER", "database.adapter"},
 	{"BQEMU_DATABASE_DSN", "database.dsn"}, {"BQEMU_TEMP_DIRECTORY", "database.tempDirectory"},
+	{"BQEMU_LOAD_ENABLED", "load.enabled"}, {"BQEMU_LOAD_GCS_ENDPOINT", "load.gcsEndpoint"},
+	{"BQEMU_LOAD_ALLOW_FILE_SOURCES", "load.allowFileSources"},
+	{"BQEMU_LOAD_OPERATION_TIMEOUT", "load.operationTimeout"}, {"BQEMU_LOAD_MAX_OBJECTS", "load.maxObjects"},
+	{"BQEMU_LOAD_MAX_OBJECT_BYTES", "load.maxObjectBytes"}, {"BQEMU_LOAD_MAX_TOTAL_BYTES", "load.maxTotalBytes"},
+	{"BQEMU_LOAD_MAX_METADATA_BYTES", "load.maxMetadataBytes"}, {"BQEMU_LOAD_MAX_LISTED_OBJECTS", "load.maxListedObjects"},
 	{"BQEMU_AUTH_MODE", "auth.mode"}, {"BQEMU_AUTH_STATIC_TOKENS_FILE", "auth.staticTokensFile"},
 	{"BQEMU_LOG_LEVEL", "logging.level"}, {"BQEMU_LOG_FORMAT", "logging.format"},
 	{"BQEMU_LOG_UNSAFE_PAYLOADS", "logging.unsafePayloads"}, {"BQEMU_ADMIN_ENABLED", "admin.enabled"},
@@ -344,6 +375,14 @@ func applyOverride(cfg *Config, path, value string) error {
 	}
 	setInt := func(target *int) error {
 		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		*target = parsed
+		return nil
+	}
+	setInt64 := func(target *int64) error {
+		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return err
 		}
@@ -410,6 +449,24 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt(&cfg.Storage.Write.MaxStreams)
 	case "storage.write.maxAppendRequestBytes":
 		return setInt(&cfg.Storage.Write.MaxAppendRequestBytes)
+	case "load.enabled":
+		return setBool(&cfg.Load.Enabled)
+	case "load.gcsEndpoint":
+		return setString(&cfg.Load.GCSEndpoint)
+	case "load.allowFileSources":
+		return setBool(&cfg.Load.AllowFileSources)
+	case "load.operationTimeout":
+		return setDuration(&cfg.Load.OperationTimeout)
+	case "load.maxObjects":
+		return setInt(&cfg.Load.MaxObjects)
+	case "load.maxObjectBytes":
+		return setInt64(&cfg.Load.MaxObjectBytes)
+	case "load.maxTotalBytes":
+		return setInt64(&cfg.Load.MaxTotalBytes)
+	case "load.maxMetadataBytes":
+		return setInt64(&cfg.Load.MaxMetadataBytes)
+	case "load.maxListedObjects":
+		return setInt(&cfg.Load.MaxListedObjects)
 	case "auth.mode":
 		return setString(&cfg.Auth.Mode)
 	case "auth.staticTokensFile":
@@ -476,6 +533,7 @@ func (cfg Config) Validate() error {
 		"runtime.jobPollInterval":       cfg.Runtime.JobPollInterval,
 		"runtime.readSessionTtl":        cfg.Runtime.ReadSessionTTL,
 		"runtime.cleanupInterval":       cfg.Runtime.CleanupInterval,
+		"load.operationTimeout":         cfg.Load.OperationTimeout,
 	} {
 		if value.Value() <= 0 {
 			return fmt.Errorf("%s must be positive", name)
@@ -498,6 +556,19 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.Storage.Write.MaxStreams < 1 || cfg.Storage.Write.MaxAppendRequestBytes < 1<<20 || cfg.Storage.Write.MaxAppendRequestBytes > 20<<20 {
 		return errors.New("storage.write limits must be positive and maxAppendRequestBytes between 1 MiB and 20 MiB")
+	}
+	if cfg.Load.MaxObjects < 1 || cfg.Load.MaxObjectBytes < 1 || cfg.Load.MaxTotalBytes < 1 ||
+		cfg.Load.MaxMetadataBytes < 1 || cfg.Load.MaxListedObjects < 1 {
+		return errors.New("load object and byte limits must be positive")
+	}
+	if cfg.Load.MaxObjectBytes > cfg.Load.MaxTotalBytes {
+		return errors.New("load.maxObjectBytes must not exceed load.maxTotalBytes")
+	}
+	if cfg.Load.Enabled {
+		endpoint, err := url.Parse(cfg.Load.GCSEndpoint)
+		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+			return errors.New("load.gcsEndpoint must be an absolute HTTP(S) URL when load is enabled")
+		}
 	}
 	if !oneOf(cfg.Auth.Mode, "disabled", "bearer-present", "static") {
 		return fmt.Errorf("unsupported auth.mode %q", cfg.Auth.Mode)
