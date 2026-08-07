@@ -1,0 +1,38 @@
+{
+  "profileId": "google-cloud-bigquery-python-3.43.0",
+  "consumerKind": "client",
+  "consumerName": "google-cloud-bigquery-python",
+  "consumerVersion": "3.43.0",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/_job_helpers.py#L499-L575",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest"
+  ],
+  "flow": "python-query-request-idempotency",
+  "events": [
+    {
+      "stage": "query_response_lost_after_edge",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/queries",
+      "fields": {
+        "request.requestId": "generated_once",
+        "request.timeoutMs": "bounded_api_timeout",
+        "response.jobReference.jobId": "created_query_job",
+        "response.delivery": "lost_after_public_edge"
+      }
+    },
+    {
+      "stage": "retry_query_with_same_request_id",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/queries",
+      "fields": {
+        "request.requestId": "same_as_first_attempt",
+        "request.timeoutMs": "same_bounded_api_timeout",
+        "response.jobReference.jobId": "same_as_first_attempt",
+        "response.execution": "reused_not_duplicated"
+      }
+    }
+  ]
+}

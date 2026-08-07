@@ -9,11 +9,17 @@
       "versions": ["3.43.0"]
     }
   ],
-  "description": "Source-derived REST metadata profile for the official google-cloud-bigquery Python client 3.43.0.",
+  "description": "Source-derived REST metadata, query lifecycle, and tabledata.list profile for the official google-cloud-bigquery Python client 3.43.0.",
   "sources": [
     "https://pypi.org/project/google-cloud-bigquery/3.43.0/",
+    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/_job_helpers.py#L420-L641",
+    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/client.py#L4118-L4237",
+    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/table.py#L1838-L1995",
     "https://cloud.google.com/python/docs/reference/bigquery/latest/google.cloud.bigquery.client.Client",
-    "https://cloud.google.com/bigquery/docs/reference/rest/v2"
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list"
   ],
   "capabilities": {
     "CAP-REST-METADATA-PATCH-V1": "verified",
@@ -22,12 +28,16 @@
     "rest.tables.crud": "verified",
     "rest.query_jobs": "verified",
     "rest.pagination": "verified",
+    "rest.query.destination": "verified",
+    "query.sync.request-controls-v1": "partial",
+    "rest.jobs.location": "verified",
+    "rest.jobs.duplicate-conflict": "verified",
     "rest.etag-precondition": "verified",
     "jobs.load": "planned",
     "jobs.copy": "planned",
     "jobs.extract": "planned",
     "tabledata.insertAll": "planned",
-    "tabledata.list": "planned"
+    "tabledata.list": "verified"
   },
   "flows": {
     "python-dataset-admin": [
@@ -133,6 +143,112 @@
         "method": "GET",
         "target": "/bigquery/v2/projects/{project}/queries/{job}",
         "requiredFields": ["request.location", "response.jobComplete", "response.jobReference"]
+      }
+    ],
+    "python-query-destination-lifecycle": [
+      {
+        "stage": "insert_destination_query_job",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.jobReference.location", "request.configuration.query.destinationTable", "request.configuration.query.writeDisposition", "request.configuration.query.createDisposition", "response.status.state"]
+      },
+      {
+        "stage": "reject_duplicate_query_job",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.jobReference.jobId", "response.error.code", "response.error.errors.reason"]
+      },
+      {
+        "stage": "get_location_scoped_job",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["request.location", "response.jobReference.location", "response.configuration.query.writeDisposition"]
+      },
+      {
+        "stage": "poll_destination_query_results",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/queries/{job}",
+        "requiredFields": ["request.location", "request.maxResults", "response.jobComplete"]
+      }
+    ],
+    "python-query-pagination-location": [
+      {
+        "stage": "reject_wrong_job_location",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["request.location", "response.error.code", "response.error.errors.reason"]
+      },
+      {
+        "stage": "get_query_results_first_page",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/queries/{job}",
+        "requiredFields": ["request.location", "request.maxResults", "response.pageToken", "response.rows"]
+      },
+      {
+        "stage": "get_query_results_next_page",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/queries/{job}",
+        "requiredFields": ["request.location", "request.maxResults", "request.pageToken", "response.rows"]
+      },
+      {
+        "stage": "list_jobs_first_page",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.maxResults", "response.nextPageToken", "response.jobs", "response.jobs[].jobReference.location"]
+      },
+      {
+        "stage": "list_jobs_next_page",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.maxResults", "request.pageToken", "response.jobs", "response.jobs[].jobReference.location"]
+      }
+    ],
+    "python-query-request-idempotency": [
+      {
+        "stage": "query_response_lost_after_edge",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/queries",
+        "requiredFields": ["request.requestId", "request.timeoutMs", "response.jobReference.jobId", "response.delivery"]
+      },
+      {
+        "stage": "retry_query_with_same_request_id",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/queries",
+        "requiredFields": ["request.requestId", "request.timeoutMs", "response.jobReference.jobId", "response.execution"]
+      }
+    ],
+    "python-tabledata-list": [
+      {
+        "stage": "get_tabledata_first_page",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
+        "requiredFields": ["request.maxResults", "request.formatOptions.useInt64Timestamp", "response.kind", "response.totalRows", "response.rows", "response.pageToken"]
+      },
+      {
+        "stage": "get_tabledata_next_page",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
+        "requiredFields": ["request.maxResults", "request.pageToken", "request.formatOptions.useInt64Timestamp", "response.totalRows", "response.rows"]
+      },
+      {
+        "stage": "get_tabledata_start_index",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
+        "requiredFields": ["request.maxResults", "request.startIndex", "request.formatOptions.useInt64Timestamp", "response.totalRows", "response.rows"]
       }
     ]
   }

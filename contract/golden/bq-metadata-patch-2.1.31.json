@@ -1,0 +1,38 @@
+{
+  "profileId": "bq-cli-2.1.31",
+  "consumerKind": "client",
+  "consumerName": "bq-cli",
+  "consumerVersion": "2.1.31",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28",
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_update",
+    "https://cloud.google.com/bigquery/docs/managing-table-schemas#bq"
+  ],
+  "flow": "bq-metadata-patch",
+  "events": [
+    {
+      "stage": "patch_dataset_metadata",
+      "protocol": "REST",
+      "method": "PATCH",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+      "fields": {
+        "request.description": "present",
+        "request.labels": "key_shape_only",
+        "response.etag": "changed"
+      }
+    },
+    {
+      "stage": "patch_table_metadata_and_schema",
+      "protocol": "REST",
+      "method": "PATCH",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+      "fields": {
+        "request.description": "present",
+        "request.labels": "key_shape_only",
+        "request.schema.fields": "existing_plus_nullable_field",
+        "response.etag": "changed"
+      }
+    }
+  ]
+}

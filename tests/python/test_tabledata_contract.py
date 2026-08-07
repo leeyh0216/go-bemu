@@ -1,0 +1,169 @@
+"""Official google-cloud-bigquery 3.43.0 tabledata.list contract.
+
+Pinned client and protocol sources:
+https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/client.py#L4118-L4237
+https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/table.py#L1838-L1995
+https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
+
+Captured evidence contains only normalized method/path/query-key and response
+shape metadata. Table names and response row values are never retained.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+import uuid
+
+from google.cloud import bigquery
+
+
+CLIENT_VERSION = "3.43.0"
+TABLEDATA_CONTRACT = "PY-TABLEDATA-LIST-001"
+
+
+def _diagnostic(shape: str, fix_hint: str) -> str:
+    return (
+        f"consumer=google-cloud-bigquery consumer_version={CLIENT_VERSION} "
+        f"contract={TABLEDATA_CONTRACT} shape={shape} fix_hint={fix_hint}"
+    )
+
+
+def test_list_rows_decodes_nested_repeated_values_and_pages(
+    bq_client: bigquery.Client, project_id: str, test_timeout: float
+) -> None:
+    suffix = uuid.uuid4().hex[:10]
+    dataset_ref = f"{project_id}.tabledata_{suffix}"
+    table_ref = f"{dataset_ref}.current_source"
+    dataset = bigquery.Dataset(dataset_ref)
+    dataset.location = "US"
+    bq_client.create_dataset(dataset, timeout=test_timeout)
+    try:
+        table = bigquery.Table(
+            table_ref,
+            schema=[
+                bigquery.SchemaField("ordinal", "INT64", mode="REQUIRED"),
+                bigquery.SchemaField("label", "STRING"),
+                bigquery.SchemaField(
+                    "payload",
+                    "RECORD",
+                    fields=[
+                        bigquery.SchemaField("score", "INT64"),
+                        bigquery.SchemaField("name", "STRING"),
+                    ],
+                ),
+                bigquery.SchemaField("tags", "STRING", mode="REPEATED"),
+            ],
+        )
+        table = bq_client.create_table(table, timeout=test_timeout)
+        insert_job = bq_client.query(
+            f"""
+            INSERT INTO `{table_ref}` VALUES
+            (1, 'first', {{'score': 3, 'name': 'nested-one'}}, ['alpha', 'beta']),
+            (2, NULL, {{'score': NULL, 'name': 'nested-two'}}, []),
+            (3, 'third', {{'score': 9, 'name': 'nested-three'}}, ['omega'])
+            """,
+            location="US",
+            retry=None,
+            timeout=test_timeout,
+            job_retry=None,
+        )
+        list(insert_job.result(timeout=test_timeout, retry=None, job_retry=None))
+
+        calls: list[dict[str, Any]] = []
+        original_call_api: Callable[..., dict[str, Any]] = bq_client._call_api
+
+        def capture_tabledata_shape(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            response = original_call_api(*args, **kwargs)
+            path = str(kwargs.get("path", ""))
+            if kwargs.get("method") == "GET" and path.endswith("/data"):
+                query = dict(kwargs.get("query_params") or {})
+                calls.append(
+                    {
+                        "method": "GET",
+                        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
+                        "query_keys": sorted(query),
+                        "max_results": query.get("maxResults"),
+                        "has_page_token": bool(query.get("pageToken")),
+                        "start_index": query.get("startIndex"),
+                        "timestamp_option": query.get(
+                            "formatOptions.useInt64Timestamp"
+                        ),
+                        "response_kind": response.get("kind"),
+                        "response_total_rows": response.get("totalRows"),
+                        "response_row_count": len(response.get("rows", [])),
+                        "response_has_page_token": bool(response.get("pageToken")),
+                    }
+                )
+            return response
+
+        bq_client._call_api = capture_tabledata_shape
+        try:
+            page_iterator = bq_client.list_rows(
+                table,
+                max_results=2,
+                page_size=1,
+                retry=None,
+                timeout=test_timeout,
+            )
+            pages = list(page_iterator.pages)
+            rows = [row for page in pages for row in page]
+            start_rows = list(
+                bq_client.list_rows(
+                    table,
+                    start_index=1,
+                    max_results=1,
+                    page_size=1,
+                    retry=None,
+                    timeout=test_timeout,
+                )
+            )
+        finally:
+            bq_client._call_api = original_call_api
+
+        assert len(pages) == 2 and all(page.num_items == 1 for page in pages), (
+            _diagnostic("two-single-row-pages", "compare-tabledata-page-token")
+        )
+        assert page_iterator.total_rows == 3
+        assert [row["ordinal"] for row in rows] == [1, 2]
+        assert rows[0]["label"] == "first"
+        assert rows[1]["label"] is None
+        assert rows[0]["payload"]["score"] == 3
+        assert rows[0]["payload"]["name"] == "nested-one"
+        assert rows[1]["payload"]["score"] is None
+        assert rows[1]["payload"]["name"] == "nested-two"
+        assert list(rows[0]["tags"]) == ["alpha", "beta"]
+        assert list(rows[1]["tags"]) == []
+        assert len(start_rows) == 1 and start_rows[0]["ordinal"] == 2
+
+        assert len(calls) == 3, _diagnostic(
+            "three-tabledata-requests", "compare-client-pagination"
+        )
+        common_keys = {"formatOptions.useInt64Timestamp", "maxResults"}
+        assert all(
+            call["method"] == "GET"
+            and call["target"]
+            == "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data"
+            for call in calls
+        )
+        assert set(calls[0]["query_keys"]) == common_keys
+        assert calls[0]["max_results"] == 1
+        assert calls[0]["response_kind"] == "bigquery#tableDataList"
+        assert calls[0]["response_total_rows"] == "3"
+        assert calls[0]["response_row_count"] == 1
+        assert calls[0]["response_has_page_token"] is True
+        assert calls[1]["max_results"] == 1
+        assert set(calls[1]["query_keys"]) == common_keys | {"pageToken"}
+        assert calls[1]["has_page_token"] is True
+        assert calls[1]["response_row_count"] == 1
+        assert set(calls[2]["query_keys"]) == common_keys | {"startIndex"}
+        assert calls[2]["start_index"] == 1
+        assert calls[2]["response_row_count"] == 1
+        assert all(call["timestamp_option"] is True for call in calls)
+    finally:
+        bq_client.delete_dataset(
+            dataset_ref,
+            delete_contents=True,
+            not_found_ok=True,
+            timeout=test_timeout,
+        )

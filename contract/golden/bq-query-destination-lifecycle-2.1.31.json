@@ -1,0 +1,90 @@
+{
+  "profileId": "bq-cli-2.1.31",
+  "consumerKind": "client",
+  "consumerName": "bq-cli",
+  "consumerVersion": "2.1.31",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28",
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_query",
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_show",
+    "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_ls",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs"
+  ],
+  "flow": "bq-query-destination-lifecycle",
+  "events": [
+    {
+      "stage": "insert_destination_query_job",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.jobReference.jobId": "fixed_cli_job_id",
+        "request.jobReference.location": "US",
+        "request.configuration.query.destinationTable": "project.dataset.table",
+        "request.configuration.query.writeDisposition": "WRITE_APPEND_or_WRITE_TRUNCATE"
+      }
+    },
+    {
+      "stage": "get_destination_query_job",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+      "fields": {
+        "request.location": "US",
+        "response.jobReference.location": "US",
+        "response.configuration.query.writeDisposition": "round_trip"
+      }
+    },
+    {
+      "stage": "reject_duplicate_query_job",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.jobReference.jobId": "same_fixed_cli_job_id",
+        "response.error.code": 409,
+        "response.error.errors.reason": "duplicate",
+        "consumer.exitCode": 2
+      }
+    },
+    {
+      "stage": "reject_wrong_job_location",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+      "fields": {
+        "request.location": "different_location",
+        "response.error.code": 404,
+        "response.error.errors.reason": "notFound",
+        "consumer.exitCode": 2
+      }
+    },
+    {
+      "stage": "get_query_results_pages",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/queries/{job}",
+      "fields": {
+        "request.location": "US",
+        "request.maxResults": 1,
+        "request.pageToken": "opaque_after_first_page",
+        "response.rows": "bounded_pages"
+      }
+    },
+    {
+      "stage": "list_jobs_pages",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.location": "US",
+        "request.maxResults": 1,
+        "request.pageToken": "opaque_after_first_page",
+        "response.nextPageToken": "opaque_when_more_results",
+        "response.jobs": "one_job_per_page",
+        "response.jobs[].jobReference.location": "US"
+      }
+    }
+  ]
+}

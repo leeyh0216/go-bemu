@@ -13,6 +13,9 @@
     "https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28",
     "https://cloud.google.com/bigquery/docs/bq-command-line-tool",
     "https://cloud.google.com/bigquery/docs/reference/bq-cli-reference",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list",
     "https://bigquery.googleapis.com/$discovery/rest?version=v2"
   ],
   "capabilities": {
@@ -21,8 +24,12 @@
     "rest.datasets.crud": "verified",
     "rest.tables.crud": "verified",
     "CAP-SCHEMA-ADDITIVE-V1": "verified",
+    "CAP-REST-METADATA-PATCH-V1": "verified",
     "rest.query_jobs": "verified",
     "rest.jobs.list": "verified",
+    "rest.query.destination": "verified",
+    "rest.jobs.location": "verified",
+    "rest.jobs.duplicate-conflict": "verified",
     "rest.errors.not-found": "verified",
     "jobs.load": "planned",
     "jobs.copy": "planned",
@@ -131,6 +138,66 @@
         "method": "GET",
         "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
         "requiredFields": ["response.error.code", "response.error.errors.reason"]
+      }
+    ],
+    "bq-metadata-patch": [
+      {
+        "stage": "patch_dataset_metadata",
+        "protocol": "REST",
+        "method": "PATCH",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}",
+        "requiredFields": ["request.description", "request.labels", "response.etag"]
+      },
+      {
+        "stage": "patch_table_metadata_and_schema",
+        "protocol": "REST",
+        "method": "PATCH",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+        "requiredFields": ["request.description", "request.labels", "request.schema.fields", "response.etag"]
+      }
+    ],
+    "bq-query-destination-lifecycle": [
+      {
+        "stage": "insert_destination_query_job",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.jobReference.jobId", "request.jobReference.location", "request.configuration.query.destinationTable", "request.configuration.query.writeDisposition"]
+      },
+      {
+        "stage": "get_destination_query_job",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["request.location", "response.jobReference.location", "response.configuration.query.writeDisposition"]
+      },
+      {
+        "stage": "reject_duplicate_query_job",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.jobReference.jobId", "response.error.code", "response.error.errors.reason", "consumer.exitCode"]
+      },
+      {
+        "stage": "reject_wrong_job_location",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["request.location", "response.error.code", "response.error.errors.reason", "consumer.exitCode"]
+      },
+      {
+        "stage": "get_query_results_pages",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/queries/{job}",
+        "requiredFields": ["request.location", "request.maxResults", "request.pageToken", "response.rows"]
+      },
+      {
+        "stage": "list_jobs_pages",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.location", "request.maxResults", "request.pageToken", "response.nextPageToken", "response.jobs", "response.jobs[].jobReference.location"]
       }
     ]
   }

@@ -28,6 +28,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from extended_contract import run_extended_contract
+
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_VERSION = os.getenv("BQEMU_BQCLI_VERSION", "2.1.31")
@@ -309,6 +311,19 @@ def main() -> int:
                 "get_table",
                 "additive-schema",
                 "compare-schema-evolution-rules",
+            )
+
+            run_extended_contract(
+                base=base,
+                project=project,
+                dataset_ref=dataset_ref,
+                table=table,
+                existing_schema_fields=fields,
+                location=location,
+                suffix=suffix,
+                run_process=run_process,
+                decode_json=decode_json,
+                require=require,
             )
 
             query = decode_json(

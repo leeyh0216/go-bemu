@@ -1,0 +1,55 @@
+{
+  "profileId": "google-cloud-bigquery-python-3.43.0",
+  "consumerKind": "client",
+  "consumerName": "google-cloud-bigquery-python",
+  "consumerVersion": "3.43.0",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/client.py#L4118-L4237",
+    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/table.py#L1838-L1995",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list"
+  ],
+  "flow": "python-tabledata-list",
+  "events": [
+    {
+      "stage": "get_tabledata_first_page",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
+      "fields": {
+        "request.maxResults": "one-row-page",
+        "request.formatOptions.useInt64Timestamp": true,
+        "response.kind": "bigquery#tableDataList",
+        "response.totalRows": "exact-decimal-string",
+        "response.rows": "one-nested-repeated-row-shape",
+        "response.pageToken": "opaque-next-offset"
+      }
+    },
+    {
+      "stage": "get_tabledata_next_page",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
+      "fields": {
+        "request.maxResults": "one-row-page",
+        "request.pageToken": "opaque-next-offset",
+        "request.formatOptions.useInt64Timestamp": true,
+        "response.totalRows": "exact-decimal-string",
+        "response.rows": "one-nested-repeated-row-shape"
+      }
+    },
+    {
+      "stage": "get_tabledata_start_index",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
+      "fields": {
+        "request.maxResults": "one-row-page",
+        "request.startIndex": "zero-based-ordinal",
+        "request.formatOptions.useInt64Timestamp": true,
+        "response.totalRows": "exact-decimal-string",
+        "response.rows": "one-nested-repeated-row-shape"
+      }
+    }
+  ]
+}

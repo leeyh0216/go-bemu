@@ -29,14 +29,6 @@ import pytest
                 reason="GAP-TABLEDATA-INSERTALL-001: insertAll not implemented",
             ),
         ),
-        pytest.param(
-            "GAP-TABLEDATA-LIST-001",
-            "tabledata.list",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="GAP-TABLEDATA-LIST-001: tabledata.list not implemented",
-            ),
-        ),
     ],
 )
 @pytest.mark.gap("capability-gap")

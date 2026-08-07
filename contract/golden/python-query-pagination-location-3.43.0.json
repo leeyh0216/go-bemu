@@ -1,0 +1,75 @@
+{
+  "profileId": "google-cloud-bigquery-python-3.43.0",
+  "consumerKind": "client",
+  "consumerName": "google-cloud-bigquery-python",
+  "consumerVersion": "3.43.0",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://pypi.org/project/google-cloud-bigquery/3.43.0/",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/get",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list"
+  ],
+  "flow": "python-query-pagination-location",
+  "events": [
+    {
+      "stage": "reject_wrong_job_location",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+      "fields": {
+        "request.location": "different_location",
+        "response.error.code": 404,
+        "response.error.errors.reason": "notFound"
+      }
+    },
+    {
+      "stage": "get_query_results_first_page",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/queries/{job}",
+      "fields": {
+        "request.location": "US",
+        "request.maxResults": 1,
+        "response.pageToken": "opaque",
+        "response.rows": "one_row"
+      }
+    },
+    {
+      "stage": "get_query_results_next_page",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/queries/{job}",
+      "fields": {
+        "request.location": "US",
+        "request.maxResults": 1,
+        "request.pageToken": "opaque",
+        "response.rows": "one_row"
+      }
+    },
+    {
+      "stage": "list_jobs_first_page",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.maxResults": 1,
+        "response.nextPageToken": "opaque",
+        "response.jobs": "one_job",
+        "response.jobs[].jobReference.location": "US"
+      }
+    },
+    {
+      "stage": "list_jobs_next_page",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.maxResults": 1,
+        "request.pageToken": "opaque",
+        "response.jobs": "one_job",
+        "response.jobs[].jobReference.location": "US"
+      }
+    }
+  ]
+}
