@@ -47,11 +47,16 @@ type MaterializeRequest struct {
 
 // SnapshotMetadata describes one immutable materialized result. All streams in
 // a session share this result; adapters must not rerun the source query per
-// stream.
+// stream. RetainedBytes is the adapter-defined storage charge held for the
+// snapshot lifetime (memory payload or spill-file bytes). Container and
+// allocator overhead is deliberately excluded because it is not stable across
+// adapters or Go versions. RetainedBytes is distinct from EstimatedBytes,
+// which populates the protocol's estimated bytes scanned.
 type SnapshotMetadata struct {
 	Schema         ReferenceSchema
 	RowCount       int64
 	EstimatedBytes int64
+	RetainedBytes  int64
 }
 
 // EncodedBatch is an exact contiguous range in a materialized snapshot.

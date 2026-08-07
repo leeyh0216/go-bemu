@@ -14,6 +14,8 @@ import (
 type ErrorCode string
 
 const (
+	ErrorCanceled           ErrorCode = "CANCELED"
+	ErrorDeadlineExceeded   ErrorCode = "DEADLINE_EXCEEDED"
 	ErrorInvalidArgument    ErrorCode = "INVALID_ARGUMENT"
 	ErrorNotFound           ErrorCode = "NOT_FOUND"
 	ErrorFailedPrecondition ErrorCode = "FAILED_PRECONDITION"

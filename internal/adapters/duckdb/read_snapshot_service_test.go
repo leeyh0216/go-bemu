@@ -215,6 +215,14 @@ func TestDuckDBReadSnapshotSpillsOnlyInsideConfiguredDirectoryAndRemovesOnClose(
 	if err != nil {
 		t.Fatal(err)
 	}
+	metadata := snapshot.Metadata()
+	if metadata.RetainedBytes != metadata.EstimatedBytes+8*metadata.RowCount {
+		t.Fatalf("spill retained/encoded rows = %d/%d/%d, want encoded bytes plus one uint64 frame per row",
+			metadata.RetainedBytes, metadata.EstimatedBytes, metadata.RowCount)
+	}
+	if info.Size() != metadata.RetainedBytes {
+		t.Fatalf("spill file/retained bytes = %d/%d, want exact file charge", info.Size(), metadata.RetainedBytes)
+	}
 	if info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("spill permissions = %o, want no group/other access", info.Mode().Perm())
 	}
@@ -310,6 +318,38 @@ func TestDuckDBReadSnapshotMaterializationFailureRemovesPartialSpill(t *testing.
 	}
 }
 
+func TestDuckDBReadSnapshotByteLimitIsResourceExhaustedAndRemovesPartialSpill(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "byte_limited_rows", Type: "TABLE",
+		Schema: []catalogdomain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table, "(1), (2)")
+	first, err := encodeSnapshotRow([]snapshotValue{{Int: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := encodeSnapshotRow([]snapshotValue{{Int: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempDir := t.TempDir()
+	config := readSnapshotTestConfig(tempDir, 0)
+	config.MaxSnapshotBytes = int64(max(len(first), len(second)) + 8)
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, config)
+	_, err = materializer.Materialize(ctx, readdomain.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+	})
+	if readdomain.CodeOf(err) != readdomain.ErrorResourceExhausted {
+		t.Fatalf("snapshot byte limit code = %s, want RESOURCE_EXHAUSTED: %v", readdomain.CodeOf(err), err)
+	}
+	if entries := readTempEntries(t, tempDir); len(entries) != 0 {
+		t.Fatalf("partial spill survived byte-limit failure: %v", entries)
+	}
+}
+
 func TestDuckDBReadSnapshotLogsOpaquePayloadShapesAndSideEffects(t *testing.T) {
 	ctx, cancel := duckDBReadTestContext(t)
 	defer cancel()
@@ -370,14 +410,16 @@ func TestDuckDBReadSnapshotLogsOpaquePayloadShapesAndSideEffects(t *testing.T) {
 func newReadAdapterService(t *testing.T, materializer *DuckDBReadSnapshotMaterializer, clock *readAdapterClock, ttl time.Duration) *readapp.Service {
 	t.Helper()
 	service, err := readapp.New(readapp.Config{
-		Location:             "test-location",
-		ProtocolModelVersion: readSnapshotTestModelVersion,
-		MaxStreams:           16,
-		DefaultStreamCount:   4,
-		SessionTTL:           ttl,
-		CleanupInterval:      time.Minute,
-		MaxRowsPerResponse:   7,
-		MaxSessions:          32,
+		Location:              "test-location",
+		ProtocolModelVersion:  readSnapshotTestModelVersion,
+		MaxStreams:            16,
+		DefaultStreamCount:    4,
+		SessionTTL:            ttl,
+		CleanupInterval:       time.Minute,
+		MaxRowsPerResponse:    7,
+		MaxSessions:           32,
+		MaxSnapshotBytes:      32 << 20,
+		MaxTotalSnapshotBytes: 128 << 20,
 	}, materializer, clock, &readAdapterIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

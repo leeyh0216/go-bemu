@@ -67,7 +67,7 @@ func validateCreateRequest(request domain.CreateSessionRequest) error {
 }
 
 func validateSnapshotMetadata(format domain.Format, metadata *domain.SnapshotMetadata) error {
-	if metadata.RowCount < 0 || metadata.EstimatedBytes < 0 {
+	if metadata.RowCount < 0 || metadata.EstimatedBytes < 0 || metadata.RetainedBytes < 0 {
 		return errors.New("snapshot metadata contains a negative size")
 	}
 	if metadata.Schema.Format != format {

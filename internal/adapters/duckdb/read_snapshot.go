@@ -61,6 +61,7 @@ type ReadSnapshotConfig struct {
 	MaxRowBytes          int64
 	MaxBatchBytes        int
 	MaxSchemaBytes       int
+	MaxSnapshotBytes     int64
 	MaxSnapshotRows      int64
 	ProtocolModelVersion string
 }
@@ -80,7 +81,7 @@ func NewReadSnapshotMaterializer(warehouse *Warehouse, resolver ReadTableSchemaR
 	if strings.TrimSpace(config.TempDir) == "" || strings.TrimSpace(config.TempFilePattern) == "" {
 		return nil, fmt.Errorf("read snapshot temp directory and file pattern are required")
 	}
-	if config.SpillThresholdBytes < 0 || config.MaxRowBytes <= 0 || config.MaxBatchBytes <= 0 || config.MaxSchemaBytes <= 0 || config.MaxSnapshotRows <= 0 {
+	if config.SpillThresholdBytes < 0 || config.MaxRowBytes <= 0 || config.MaxBatchBytes <= 0 || config.MaxSchemaBytes <= 0 || config.MaxSnapshotBytes <= 0 || config.MaxSnapshotRows <= 0 {
 		return nil, fmt.Errorf("read snapshot spill threshold must be non-negative and limits must be positive")
 	}
 	if strings.TrimSpace(config.ProtocolModelVersion) == "" {
@@ -156,7 +157,8 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 		"format", request.Format.String(), "selected_field_count", len(fields),
 		"statement_bytes", len(statement), "statement_digest", observability.Digest([]byte(statement)),
 		"restriction_bytes", len(request.RowRestriction), "restriction_digest", observability.Digest([]byte(request.RowRestriction)),
-		"spill_threshold_bytes", m.config.SpillThresholdBytes)
+		"spill_threshold_bytes", m.config.SpillThresholdBytes,
+		"max_snapshot_bytes", m.config.MaxSnapshotBytes)
 	defer func() {
 		observability.LogSideEffectEnd(ctx, "duckdb", "materialize_read_snapshot", queryStarted, resultErr,
 			"operation_name", operation, "model_version", m.config.ProtocolModelVersion,
@@ -222,6 +224,7 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 			Schema:         referenceSchema,
 			RowCount:       int64(storage.rowCount()),
 			EstimatedBytes: storage.encodedBytes,
+			RetainedBytes:  storage.retainedBytes,
 		},
 		format:        request.Format,
 		fields:        cloneCatalogFields(fields),
@@ -316,10 +319,11 @@ type stagedRowLocation struct {
 }
 
 type snapshotStorage struct {
-	memoryRows   [][]byte
-	spillPath    string
-	spillRows    []stagedRowLocation
-	encodedBytes int64
+	memoryRows    [][]byte
+	spillPath     string
+	spillRows     []stagedRowLocation
+	encodedBytes  int64
+	retainedBytes int64
 }
 
 func (s snapshotStorage) rowCount() int {
@@ -330,12 +334,13 @@ func (s snapshotStorage) rowCount() int {
 }
 
 type snapshotStager struct {
-	config       ReadSnapshotConfig
-	memoryRows   [][]byte
-	spillFile    *os.File
-	spillPath    string
-	spillRows    []stagedRowLocation
-	encodedBytes int64
+	config        ReadSnapshotConfig
+	memoryRows    [][]byte
+	spillFile     *os.File
+	spillPath     string
+	spillRows     []stagedRowLocation
+	encodedBytes  int64
+	retainedBytes int64
 }
 
 func newSnapshotStager(config ReadSnapshotConfig) *snapshotStager {
@@ -350,8 +355,18 @@ func (s *snapshotStager) rowCount() int {
 }
 
 func (s *snapshotStager) append(ctx context.Context, row []byte) error {
-	nextBytes := s.encodedBytes + int64(len(row))
-	if s.spillFile == nil && nextBytes > s.config.SpillThresholdBytes {
+	rowBytes := int64(len(row))
+	if rowBytes > s.config.MaxSnapshotBytes-s.encodedBytes {
+		return classifiedReadSnapshotError(readdomain.ErrorResourceExhausted,
+			fmt.Errorf("read snapshot encoded bytes exceed configured max %d", s.config.MaxSnapshotBytes))
+	}
+	nextBytes := s.encodedBytes + rowBytes
+	willSpill := s.spillFile == nil && nextBytes > s.config.SpillThresholdBytes
+	nextRetainedBytes, err := s.nextRetainedBytes(rowBytes, willSpill)
+	if err != nil {
+		return err
+	}
+	if willSpill {
 		if err := s.startSpill(ctx); err != nil {
 			return err
 		}
@@ -364,7 +379,38 @@ func (s *snapshotStager) append(ctx context.Context, row []byte) error {
 		s.memoryRows = append(s.memoryRows, slices.Clone(row))
 	}
 	s.encodedBytes = nextBytes
+	s.retainedBytes = nextRetainedBytes
 	return nil
+}
+
+// Spill storage adds one uint64 length prefix per encoded row. Admission uses
+// this retained size, not estimated bytes scanned, because it is the resource
+// that remains live until session expiry or shutdown.
+func (s *snapshotStager) nextRetainedBytes(rowBytes int64, willSpill bool) (int64, error) {
+	const spillFrameBytes int64 = 8
+	current := s.retainedBytes
+	charge := rowBytes
+	if s.spillFile != nil {
+		remaining := s.config.MaxSnapshotBytes - current
+		if remaining < spillFrameBytes || rowBytes > remaining-spillFrameBytes {
+			return 0, classifiedReadSnapshotError(readdomain.ErrorResourceExhausted,
+				fmt.Errorf("read snapshot retained bytes exceed configured max %d", s.config.MaxSnapshotBytes))
+		}
+		charge += spillFrameBytes
+	} else if willSpill {
+		rowCountAfterAppend := int64(len(s.memoryRows)) + 1
+		nextEncodedBytes := s.encodedBytes + rowBytes
+		if rowCountAfterAppend > (s.config.MaxSnapshotBytes-nextEncodedBytes)/spillFrameBytes {
+			return 0, classifiedReadSnapshotError(readdomain.ErrorResourceExhausted,
+				fmt.Errorf("read snapshot spill framing exceeds configured max %d", s.config.MaxSnapshotBytes))
+		}
+		return nextEncodedBytes + rowCountAfterAppend*spillFrameBytes, nil
+	}
+	if charge > s.config.MaxSnapshotBytes-current {
+		return 0, classifiedReadSnapshotError(readdomain.ErrorResourceExhausted,
+			fmt.Errorf("read snapshot retained bytes exceed configured max %d", s.config.MaxSnapshotBytes))
+	}
+	return current + charge, nil
 }
 
 func (s *snapshotStager) startSpill(ctx context.Context) (resultErr error) {
@@ -423,11 +469,11 @@ func (s *snapshotStager) finish(ctx context.Context) (_ snapshotStorage, resultE
 	if s.spillFile != nil {
 		started := observability.LogSideEffectStart(ctx, "duckdb", "close_read_snapshot_spill_writer",
 			"model_version", s.config.ProtocolModelVersion, "row_count", len(s.spillRows),
-			"encoded_bytes", s.encodedBytes)
+			"encoded_bytes", s.encodedBytes, "retained_bytes", s.retainedBytes)
 		defer func() {
 			observability.LogSideEffectEnd(ctx, "duckdb", "close_read_snapshot_spill_writer", started, resultErr,
 				"model_version", s.config.ProtocolModelVersion, "row_count", len(s.spillRows),
-				"encoded_bytes", s.encodedBytes)
+				"encoded_bytes", s.encodedBytes, "retained_bytes", s.retainedBytes)
 		}()
 		if err := s.spillFile.Sync(); err != nil {
 			return snapshotStorage{}, fmt.Errorf("sync read snapshot spill: %w", err)
@@ -440,6 +486,7 @@ func (s *snapshotStager) finish(ctx context.Context) (_ snapshotStorage, resultE
 	return snapshotStorage{
 		memoryRows: slices.Clone(s.memoryRows), spillPath: s.spillPath,
 		spillRows: slices.Clone(s.spillRows), encodedBytes: s.encodedBytes,
+		retainedBytes: s.retainedBytes,
 	}, nil
 }
 
@@ -448,11 +495,11 @@ func (s *snapshotStager) abort(ctx context.Context) error {
 	if s.spillFile != nil {
 		started := observability.LogSideEffectStart(ctx, "duckdb", "close_failed_read_snapshot_spill_writer",
 			"model_version", s.config.ProtocolModelVersion, "row_count", len(s.spillRows),
-			"encoded_bytes", s.encodedBytes)
+			"encoded_bytes", s.encodedBytes, "retained_bytes", s.retainedBytes)
 		err := s.spillFile.Close()
 		observability.LogSideEffectEnd(ctx, "duckdb", "close_failed_read_snapshot_spill_writer", started, err,
 			"model_version", s.config.ProtocolModelVersion, "row_count", len(s.spillRows),
-			"encoded_bytes", s.encodedBytes)
+			"encoded_bytes", s.encodedBytes, "retained_bytes", s.retainedBytes)
 		result = errors.Join(result, err)
 		s.spillFile = nil
 	}
@@ -541,11 +588,11 @@ func (s *duckDBReadSnapshot) Close(ctx context.Context) (resultErr error) {
 	}
 	started := observability.LogSideEffectStart(ctx, "duckdb", "remove_read_snapshot_spill",
 		"model_version", s.modelVersion, "row_count", s.metadata.RowCount,
-		"encoded_bytes", s.metadata.EstimatedBytes)
+		"encoded_bytes", s.metadata.EstimatedBytes, "retained_bytes", s.metadata.RetainedBytes)
 	defer func() {
 		observability.LogSideEffectEnd(ctx, "duckdb", "remove_read_snapshot_spill", started, resultErr,
 			"model_version", s.modelVersion, "row_count", s.metadata.RowCount,
-			"encoded_bytes", s.metadata.EstimatedBytes)
+			"encoded_bytes", s.metadata.EstimatedBytes, "retained_bytes", s.metadata.RetainedBytes)
 	}()
 	if err := os.Remove(s.spillPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove read snapshot spill: %w", err)

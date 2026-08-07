@@ -154,6 +154,11 @@ func TestStorageReadGeneratedClientReceivesClassifiedMaterializerStatus(t *testi
 			want: codes.Unimplemented,
 		},
 		{
+			name: "resource exhausted",
+			err:  domain.NewError(domain.ErrorResourceExhausted, "snapshot.materialize", errors.New("private spill limit")),
+			want: codes.ResourceExhausted,
+		},
+		{
 			name: "backend internal",
 			err:  errors.New("private DuckDB query"),
 			want: codes.Internal,
@@ -176,6 +181,156 @@ func TestStorageReadGeneratedClientReceivesClassifiedMaterializerStatus(t *testi
 			}
 			if strings.Contains(err.Error(), "private") {
 				t.Fatalf("generated client error leaked materializer cause: %v", err)
+			}
+		})
+	}
+}
+
+func TestStorageReadGeneratedClientReceivesAdmissionResourceExhausted(t *testing.T) {
+	for _, testCase := range []struct {
+		name             string
+		maxSessions      int
+		maxSnapshotBytes int64
+		maxTotalBytes    int64
+	}{
+		{name: "session slots", maxSessions: 1, maxSnapshotBytes: 64, maxTotalBytes: 128},
+		{name: "global snapshot bytes", maxSessions: 2, maxSnapshotBytes: 64, maxTotalBytes: 64},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := grpcTestContext(t)
+			defer cancel()
+			materializer := newWireMaterializer(t, domain.FormatArrow, 1)
+			client, _ := startReadServer(t, newWireReadServiceWithLimits(
+				t, materializer, testCase.maxSessions, testCase.maxSnapshotBytes, testCase.maxTotalBytes,
+			))
+			request := &storagepb.CreateReadSessionRequest{
+				Parent: "projects/reader-project",
+				ReadSession: &storagepb.ReadSession{
+					Table:      "projects/data-project/datasets/analytics/tables/events",
+					DataFormat: storagepb.DataFormat_ARROW,
+				},
+			}
+			if _, err := client.CreateReadSession(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.CreateReadSession(ctx, request); status.Code(err) != codes.ResourceExhausted {
+				t.Fatalf("second generated-client create status = %s, want RESOURCE_EXHAUSTED: %v", status.Code(err), err)
+			}
+			if materializer.calls != 1 {
+				t.Fatalf("materializer calls = %d, want rejected request stopped before outbound port", materializer.calls)
+			}
+		})
+	}
+}
+
+func TestStorageReadGeneratedClientCallerCancellationReleasesAdmission(t *testing.T) {
+	ctx, cancel := grpcTestContext(t)
+	defer cancel()
+	base := newWireMaterializer(t, domain.FormatArrow, 1)
+	materializer := &wireCallerCancelMaterializer{snapshot: base.snapshot, started: make(chan struct{})}
+	var logs synchronizedLogBuffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	service := newWireReadServiceWithLimitsAndLogger(t, materializer, 1, 64, 64, logger)
+	client, _ := startReadServer(t, service)
+	request := wireCreateSessionRequest(storagepb.DataFormat_ARROW)
+	requestContext, requestCancel := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.CreateReadSession(requestContext, request)
+		result <- err
+	}()
+	select {
+	case <-materializer.started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	requestCancel()
+	select {
+	case err := <-result:
+		if status.Code(err) != codes.Canceled {
+			t.Fatalf("caller cancellation status = %s, want CANCELED: %v", status.Code(err), err)
+		}
+		if strings.Contains(err.Error(), "private caller cancellation") {
+			t.Fatalf("generated-client status leaked cancellation cause: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	waitForReadLog(t, ctx, &logs, `"msg":"read session admission released"`)
+	if _, err := client.CreateReadSession(ctx, request); err != nil {
+		t.Fatalf("create after canceled reservation: %v", err)
+	}
+	if materializer.callCount() != 2 {
+		t.Fatalf("materializer calls = %d, want canceled call plus admitted retry", materializer.callCount())
+	}
+	if got := strings.Count(logs.String(), `"msg":"read session admission released"`); got != 1 {
+		t.Fatalf("reservation release log count = %d, want 1: %s", got, logs.String())
+	}
+}
+
+func TestStorageReadGeneratedClientShutdownIsFailedPrecondition(t *testing.T) {
+	for _, stubborn := range []bool{false, true} {
+		name := "materializer cancellation"
+		if stubborn {
+			name = "commit after reservation removal"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := grpcTestContext(t)
+			defer cancel()
+			base := newWireMaterializer(t, domain.FormatArrow, 1)
+			materializer := newWireShutdownMaterializer(base.snapshot, stubborn)
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(materializer.release) })
+			var logs synchronizedLogBuffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			service := newWireReadServiceWithLimitsAndLogger(t, materializer, 1, 64, 64, logger)
+			client, _ := startReadServer(t, service)
+			result := make(chan error, 1)
+			go func() {
+				_, err := client.CreateReadSession(ctx, wireCreateSessionRequest(storagepb.DataFormat_ARROW))
+				result <- err
+			}()
+			select {
+			case <-materializer.started:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			closeResult := make(chan error, 1)
+			go func() { closeResult <- service.Close(ctx) }()
+			select {
+			case <-materializer.canceled:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if stubborn {
+				releaseOnce.Do(func() { close(materializer.release) })
+			}
+			select {
+			case err := <-closeResult:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			select {
+			case err := <-result:
+				if status.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("shutdown create status = %s, want FAILED_PRECONDITION: %v", status.Code(err), err)
+				}
+				for _, private := range []string{"private shutdown cancellation", "context canceled"} {
+					if strings.Contains(err.Error(), private) {
+						t.Fatalf("generated-client shutdown status leaked %q: %v", private, err)
+					}
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if got := strings.Count(logs.String(), `"msg":"read session admission released"`); got != 1 {
+				t.Fatalf("reservation release log count = %d, want 1: %s", got, logs.String())
+			}
+			if stubborn && base.snapshot.closes != 1 {
+				t.Fatalf("post-cancel snapshot close calls = %d, want 1", base.snapshot.closes)
 			}
 		})
 	}
@@ -260,16 +415,28 @@ func startReadServer(t *testing.T, service *readapp.Service) (storagepb.BigQuery
 
 func newWireReadService(t *testing.T, materializer ports.SnapshotMaterializer) *readapp.Service {
 	t.Helper()
+	return newWireReadServiceWithLimits(t, materializer, 16, 1<<20, 16<<20)
+}
+
+func newWireReadServiceWithLimits(t *testing.T, materializer ports.SnapshotMaterializer, maxSessions int, maxSnapshotBytes, maxTotalSnapshotBytes int64) *readapp.Service {
+	t.Helper()
+	return newWireReadServiceWithLimitsAndLogger(t, materializer, maxSessions, maxSnapshotBytes, maxTotalSnapshotBytes, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func newWireReadServiceWithLimitsAndLogger(t *testing.T, materializer ports.SnapshotMaterializer, maxSessions int, maxSnapshotBytes, maxTotalSnapshotBytes int64, logger *slog.Logger) *readapp.Service {
+	t.Helper()
 	service, err := readapp.New(readapp.Config{
-		Location:             "test-location",
-		ProtocolModelVersion: "google.cloud.bigquery.storage.v1@cloud-bigquery-go-v1.79.0",
-		MaxStreams:           16,
-		DefaultStreamCount:   4,
-		SessionTTL:           30 * time.Minute,
-		CleanupInterval:      time.Minute,
-		MaxRowsPerResponse:   2,
-		MaxSessions:          16,
-	}, materializer, wireClock{}, &wireIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		Location:              "test-location",
+		ProtocolModelVersion:  "google.cloud.bigquery.storage.v1@cloud-bigquery-go-v1.79.0",
+		MaxStreams:            16,
+		DefaultStreamCount:    4,
+		SessionTTL:            30 * time.Minute,
+		CleanupInterval:       time.Minute,
+		MaxRowsPerResponse:    2,
+		MaxSessions:           maxSessions,
+		MaxSnapshotBytes:      maxSnapshotBytes,
+		MaxTotalSnapshotBytes: maxTotalSnapshotBytes,
+	}, materializer, wireClock{}, &wireIDs{}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,8 +486,19 @@ func newWireMaterializer(t *testing.T, format domain.Format, rows int64) *wireMa
 			Schema:         domain.ReferenceSchema{Format: format, Serialized: wireReferenceSchema(t, format)},
 			RowCount:       rows,
 			EstimatedBytes: rows * 8,
+			RetainedBytes:  rows * 8,
 		},
 	}}
+}
+
+func wireCreateSessionRequest(format storagepb.DataFormat) *storagepb.CreateReadSessionRequest {
+	return &storagepb.CreateReadSessionRequest{
+		Parent: "projects/reader-project",
+		ReadSession: &storagepb.ReadSession{
+			Table:      "projects/data-project/datasets/analytics/tables/events",
+			DataFormat: format,
+		},
+	}
 }
 
 func (m *wireMaterializer) Materialize(context.Context, domain.MaterializeRequest) (ports.ReadSnapshot, error) {
@@ -338,6 +516,7 @@ type wireSnapshot struct {
 	format    domain.Format
 	metadata  domain.SnapshotMetadata
 	lastRange wireRange
+	closes    int
 }
 
 func (s *wireSnapshot) Metadata() domain.SnapshotMetadata { return s.metadata }
@@ -347,7 +526,98 @@ func (s *wireSnapshot) OpenRange(_ context.Context, start, end, maxRows int64) (
 	return &wireIterator{format: s.format, next: start, end: end, maxRows: maxRows}, nil
 }
 
-func (*wireSnapshot) Close(context.Context) error { return nil }
+func (s *wireSnapshot) Close(context.Context) error {
+	s.closes++
+	return nil
+}
+
+type wireCallerCancelMaterializer struct {
+	mu       sync.Mutex
+	calls    int
+	snapshot *wireSnapshot
+	started  chan struct{}
+}
+
+func (m *wireCallerCancelMaterializer) Materialize(ctx context.Context, _ domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+	m.mu.Lock()
+	m.calls++
+	call := m.calls
+	m.mu.Unlock()
+	if call == 1 {
+		close(m.started)
+		<-ctx.Done()
+		return nil, fmt.Errorf("private caller cancellation: %w", ctx.Err())
+	}
+	return m.snapshot, nil
+}
+
+func (m *wireCallerCancelMaterializer) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+type wireShutdownMaterializer struct {
+	snapshot *wireSnapshot
+	stubborn bool
+	started  chan struct{}
+	canceled chan struct{}
+	release  chan struct{}
+}
+
+func newWireShutdownMaterializer(snapshot *wireSnapshot, stubborn bool) *wireShutdownMaterializer {
+	return &wireShutdownMaterializer{
+		snapshot: snapshot,
+		stubborn: stubborn,
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (m *wireShutdownMaterializer) Materialize(ctx context.Context, _ domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+	close(m.started)
+	<-ctx.Done()
+	close(m.canceled)
+	if m.stubborn {
+		<-m.release
+		return m.snapshot, nil
+	}
+	return nil, fmt.Errorf("private shutdown cancellation: %w", ctx.Err())
+}
+
+type synchronizedLogBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedLogBuffer) Write(payload []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(payload)
+}
+
+func (b *synchronizedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func waitForReadLog(t *testing.T, ctx context.Context, logs *synchronizedLogBuffer, marker string) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if strings.Contains(logs.String(), marker) {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatalf("log marker %q not observed: %s", marker, logs.String())
+		}
+	}
+}
 
 type wireIterator struct {
 	format  domain.Format

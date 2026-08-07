@@ -23,6 +23,12 @@ type Config struct {
 	CleanupInterval    time.Duration
 	MaxRowsPerResponse int64
 	MaxSessions        int
+	// MaxSnapshotBytes is reserved before materialization. On success, the
+	// reservation is reduced to SnapshotMetadata.RetainedBytes and held until
+	// expiry/Close. This bounds concurrent materializers without coupling them
+	// to the application budget implementation.
+	MaxSnapshotBytes      int64
+	MaxTotalSnapshotBytes int64
 }
 
 func validateConfig(config *Config) error {
@@ -38,8 +44,11 @@ func validateConfig(config *Config) error {
 	if config.SessionTTL <= 0 || config.CleanupInterval <= 0 {
 		return fmt.Errorf("session TTL and cleanup interval must be positive")
 	}
-	if config.MaxRowsPerResponse <= 0 || config.MaxSessions <= 0 {
-		return fmt.Errorf("response row and session limits must be positive")
+	if config.MaxRowsPerResponse <= 0 || config.MaxSessions <= 0 || config.MaxSnapshotBytes <= 0 || config.MaxTotalSnapshotBytes <= 0 {
+		return fmt.Errorf("response row, session, and snapshot byte limits must be positive")
+	}
+	if config.MaxSnapshotBytes > config.MaxTotalSnapshotBytes {
+		return fmt.Errorf("per-session snapshot byte limit must not exceed the total snapshot byte limit")
 	}
 	return nil
 }

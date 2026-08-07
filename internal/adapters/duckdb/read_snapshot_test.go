@@ -67,6 +67,9 @@ func TestDuckDBReadSnapshotAppliesProjectionRestrictionAndStableResume(t *testin
 	if metadata.EstimatedBytes <= 0 {
 		t.Fatalf("snapshot estimated bytes = %d, want positive", metadata.EstimatedBytes)
 	}
+	if metadata.RetainedBytes != metadata.EstimatedBytes {
+		t.Fatalf("in-memory retained/estimated bytes = %d/%d, want equal encoded payload charge", metadata.RetainedBytes, metadata.EstimatedBytes)
+	}
 	if got, want := fieldNames(snapshot.fields), []string{"id", "name"}; !slices.Equal(got, want) {
 		t.Fatalf("projected fields = %v, want catalog order %v", got, want)
 	}
@@ -254,8 +257,82 @@ func readSnapshotTestConfig(tempDir string, spillThreshold int64) ReadSnapshotCo
 		MaxRowBytes:          1 << 20,
 		MaxBatchBytes:        1 << 20,
 		MaxSchemaBytes:       1 << 20,
+		MaxSnapshotBytes:     32 << 20,
 		MaxSnapshotRows:      10_000,
 		ProtocolModelVersion: readSnapshotTestModelVersion,
+	}
+}
+
+func TestSnapshotStagerAccountsMemoryAndSpillBytes(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		threshold     int64
+		wantRetained  int64
+		wantSpillFile bool
+	}{
+		{name: "memory", threshold: 1 << 20, wantRetained: 7},
+		{name: "spill", threshold: 0, wantRetained: 23, wantSpillFile: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := duckDBReadTestContext(t)
+			defer cancel()
+			config := readSnapshotTestConfig(t.TempDir(), testCase.threshold)
+			stager := newSnapshotStager(config)
+			for _, row := range [][]byte{{1, 2, 3}, {4, 5, 6, 7}} {
+				if err := stager.append(ctx, row); err != nil {
+					t.Fatal(err)
+				}
+			}
+			storage, err := stager.finish(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if storage.encodedBytes != 7 || storage.retainedBytes != testCase.wantRetained {
+				t.Fatalf("encoded/retained bytes = %d/%d, want 7/%d", storage.encodedBytes, storage.retainedBytes, testCase.wantRetained)
+			}
+			if (storage.spillPath != "") != testCase.wantSpillFile {
+				t.Fatalf("spill path present = %t, want %t", storage.spillPath != "", testCase.wantSpillFile)
+			}
+			if storage.spillPath != "" {
+				info, err := os.Stat(storage.spillPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if info.Size() != storage.retainedBytes {
+					t.Fatalf("spill file/retained bytes = %d/%d, want exact file charge", info.Size(), storage.retainedBytes)
+				}
+				if err := stager.abort(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestSnapshotStagerRejectsByteLimitBeforeFurtherSpillSideEffect(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	tempDir := t.TempDir()
+	config := readSnapshotTestConfig(tempDir, 0)
+	config.MaxSnapshotBytes = 11 // three payload bytes plus one uint64 spill frame
+	stager := newSnapshotStager(config)
+	if err := stager.append(ctx, []byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stager.append(ctx, []byte{4}); readdomain.CodeOf(err) != readdomain.ErrorResourceExhausted {
+		t.Fatalf("second append code = %s, want RESOURCE_EXHAUSTED: %v", readdomain.CodeOf(err), err)
+	}
+	if stager.rowCount() != 1 || stager.retainedBytes != 11 {
+		t.Fatalf("stager changed after rejected row: rows=%d retained=%d", stager.rowCount(), stager.retainedBytes)
+	}
+	if entries := readTempEntries(t, tempDir); len(entries) != 1 {
+		t.Fatalf("spill files after accepted row = %v, want one", entries)
+	}
+	if err := stager.abort(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if entries := readTempEntries(t, tempDir); len(entries) != 0 {
+		t.Fatalf("spill files after abort = %v, want none", entries)
 	}
 }
 
@@ -405,6 +482,7 @@ func TestReadSnapshotConfigRequiresExplicitPortableSettings(t *testing.T) {
 		{name: "row limit", mutate: func(config *ReadSnapshotConfig) { config.MaxRowBytes = 0 }},
 		{name: "batch limit", mutate: func(config *ReadSnapshotConfig) { config.MaxBatchBytes = 0 }},
 		{name: "schema limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSchemaBytes = 0 }},
+		{name: "snapshot byte limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSnapshotBytes = 0 }},
 		{name: "snapshot limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSnapshotRows = 0 }},
 		{name: "model version", mutate: func(config *ReadSnapshotConfig) { config.ProtocolModelVersion = "" }},
 	}

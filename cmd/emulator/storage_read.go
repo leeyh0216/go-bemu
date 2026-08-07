@@ -41,6 +41,7 @@ func composeStorageRead(
 		SpillThresholdBytes: cfg.Storage.Read.SpillThresholdBytes,
 		MaxRowBytes:         cfg.Storage.Read.MaxRowBytes, MaxBatchBytes: cfg.Storage.Read.MaxResponseBytes,
 		MaxSchemaBytes:       cfg.Storage.Read.MaxSchemaBytes,
+		MaxSnapshotBytes:     cfg.Storage.Read.MaxSnapshotBytes,
 		MaxSnapshotRows:      cfg.Storage.Read.MaxSnapshotRows,
 		ProtocolModelVersion: cfg.Storage.Read.ProtocolModelVersion,
 	})
@@ -52,6 +53,7 @@ func composeStorageRead(
 		MaxStreams: int32(cfg.Storage.Read.MaxStreams), DefaultStreamCount: int32(cfg.Storage.Read.DefaultStreamCount),
 		SessionTTL: cfg.Runtime.ReadSessionTTL.Value(), CleanupInterval: cfg.Runtime.CleanupInterval.Value(),
 		MaxRowsPerResponse: int64(cfg.Storage.Read.RowsPerResponse), MaxSessions: cfg.Storage.Read.MaxSessions,
+		MaxSnapshotBytes: cfg.Storage.Read.MaxSnapshotBytes, MaxTotalSnapshotBytes: cfg.Storage.Read.MaxTotalSnapshotBytes,
 	}, materializer, clock, ids, logger)
 	if err != nil {
 		return nil, err

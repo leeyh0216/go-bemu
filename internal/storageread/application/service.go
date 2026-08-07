@@ -27,16 +27,20 @@ type Service struct {
 	ids          ports.IDGenerator
 	logger       *slog.Logger
 
-	mu       sync.RWMutex
-	sessions map[string]*sessionState
-	streams  map[string]streamState
-	closed   bool
+	mu                    sync.RWMutex
+	sessions              map[string]*sessionState
+	streams               map[string]streamState
+	reservations          map[uint64]*sessionReservation
+	nextReservationID     uint64
+	retainedSnapshotBytes int64
+	closed                bool
 }
 
 type sessionState struct {
-	mu       sync.RWMutex
-	session  domain.Session
-	snapshot ports.ReadSnapshot
+	mu            sync.RWMutex
+	session       domain.Session
+	snapshot      ports.ReadSnapshot
+	retainedBytes int64
 }
 
 type streamState struct {
@@ -59,6 +63,7 @@ func New(config Config, materializer ports.SnapshotMaterializer, clock ports.Clo
 		logger:       logger,
 		sessions:     make(map[string]*sessionState),
 		streams:      make(map[string]streamState),
+		reservations: make(map[uint64]*sessionReservation),
 	}, nil
 }
 
@@ -71,9 +76,21 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 	if err != nil {
 		return domain.Session{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
 	}
-	if err := s.admissionError(operation); err != nil {
+	reservation, materializeContext, err := s.reserveSession(ctx, operation)
+	if err != nil {
 		return domain.Session{}, err
 	}
+	// The creator owns this completion signal. Shutdown can return admission
+	// reservations immediately while still waiting, within its context, for an
+	// outbound materializer to observe cancellation and leave the port call.
+	defer close(reservation.done)
+	reservationReason := "materialization_failed"
+	committed := false
+	defer func() {
+		if !committed {
+			s.releaseReservation(context.WithoutCancel(ctx), reservation, reservationReason)
+		}
+	}()
 
 	materializeRequest := domain.MaterializeRequest{
 		Table:          request.Table,
@@ -90,24 +107,17 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		"row_restriction_bytes", len(request.RowRestriction),
 		"row_restriction_digest", digest([]byte(request.RowRestriction)),
 	)
-	snapshot, err := s.materializer.Materialize(ctx, materializeRequest)
+	snapshot, err := s.materializer.Materialize(materializeContext, materializeRequest)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "read snapshot materialization failed",
 			"event", "side_effect.error", "side_effect", "snapshot.materialize",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
 			"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
 		)
-		// Outbound adapters classify request, capability, and lookup failures.
-		// Preserve that category across the application boundary while replacing
-		// the adapter operation with this public use-case operation. Error.Error
-		// intentionally omits Cause, so backend SQL, paths, and values stay private.
-		var classified *domain.Error
-		if errors.As(err, &classified) {
-			return domain.Session{}, domain.NewError(classified.Code, operation, err)
-		}
-		return domain.Session{}, domain.NewError(domain.ErrorInternal, operation, err)
+		return domain.Session{}, s.classifyMaterializationFailure(ctx, operation, err)
 	}
 	if snapshot == nil {
+		reservationReason = "nil_snapshot"
 		err := errors.New("materializer returned a nil snapshot")
 		s.logger.ErrorContext(ctx, "read snapshot materialization returned no snapshot",
 			"event", "side_effect.error", "side_effect", "snapshot.materialize",
@@ -118,6 +128,7 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 	}
 	metadata := snapshot.Metadata()
 	if err := validateSnapshotMetadata(request.Format, &metadata); err != nil {
+		reservationReason = "invalid_metadata"
 		s.logger.ErrorContext(ctx, "read snapshot metadata violated the port contract",
 			"event", "side_effect.error", "side_effect", "snapshot.materialize",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
@@ -128,11 +139,17 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		closeErr := s.closeUnstoredSnapshot(ctx, operation, "invalid_metadata", snapshot)
 		return domain.Session{}, domain.NewError(domain.ErrorInternal, operation, errors.Join(err, closeErr))
 	}
+	if metadata.RetainedBytes > s.config.MaxSnapshotBytes {
+		reservationReason = "snapshot_byte_limit"
+		err := fmt.Errorf("snapshot retained bytes %d exceed configured per-session limit %d", metadata.RetainedBytes, s.config.MaxSnapshotBytes)
+		closeErr := s.closeUnstoredSnapshot(ctx, operation, reservationReason, snapshot)
+		return domain.Session{}, domain.NewError(domain.ErrorResourceExhausted, operation, errors.Join(err, closeErr))
+	}
 	s.logger.InfoContext(ctx, "read snapshot materialized",
 		"event", "side_effect.after", "side_effect", "snapshot.materialize",
 		"operation", operation, "model_version", s.config.ProtocolModelVersion,
 		"format", metadata.Schema.Format.String(), "row_count", metadata.RowCount,
-		"estimated_bytes", metadata.EstimatedBytes,
+		"estimated_bytes", metadata.EstimatedBytes, "retained_bytes", metadata.RetainedBytes,
 		"schema_bytes", len(metadata.Schema.Serialized),
 		"schema_fingerprint", metadata.Schema.Fingerprint,
 	)
@@ -160,29 +177,13 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		SnapshotTime:          cloneTime(request.SnapshotTime),
 		TraceID:               request.TraceID,
 	}
-	state := &sessionState{session: session, snapshot: snapshot}
-
-	s.mu.Lock()
-	closed := s.closed
-	atCapacity := len(s.sessions) >= s.config.MaxSessions
-	if closed || atCapacity {
-		s.mu.Unlock()
-		reason := "capacity_race"
-		code := domain.ErrorResourceExhausted
-		cause := errors.New("session capacity reached")
-		if closed {
-			reason = "service_closed"
-			code = domain.ErrorFailedPrecondition
-			cause = errors.New("Storage Read service is closed")
-		}
-		closeErr := s.closeUnstoredSnapshot(ctx, operation, reason, snapshot)
-		return domain.Session{}, domain.NewError(code, operation, errors.Join(cause, closeErr))
+	state := &sessionState{session: session, snapshot: snapshot, retainedBytes: metadata.RetainedBytes}
+	if err := s.commitReservedSession(ctx, operation, reservation, state); err != nil {
+		reservationReason = "commit_rejected"
+		closeErr := s.closeUnstoredSnapshot(ctx, operation, reservationReason, snapshot)
+		return domain.Session{}, domain.NewError(domain.CodeOf(err), operation, errors.Join(err, closeErr))
 	}
-	s.sessions[session.Name] = state
-	for _, stream := range streams {
-		s.streams[stream.Name] = streamState{session: state, stream: stream}
-	}
-	s.mu.Unlock()
+	committed = true
 	s.logger.InfoContext(ctx, "read session stored",
 		"event", "domain.transition", "operation", operation,
 		"model_version", s.config.ProtocolModelVersion, "session", session.Name,
@@ -190,4 +191,31 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		"expires_at", session.ExpireTime,
 	)
 	return cloneSession(session), nil
+}
+
+// classifyMaterializationFailure separates caller cancellation from the
+// service-owned cancellation used by Close. Both status categories are stable
+// public protocol outcomes; the adapter cause remains available only through
+// errors.Is/internal digests and is never rendered by domain.Error.Error.
+// Source: https://grpc.io/docs/guides/status-codes/
+func (s *Service) classifyMaterializationFailure(ctx context.Context, operation string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if callerErr := ctx.Err(); callerErr != nil {
+			return domain.NewError(contextErrorCode(callerErr), operation, callerErr)
+		}
+		s.mu.RLock()
+		closed := s.closed
+		s.mu.RUnlock()
+		if closed {
+			return domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Read service closed during materialization"))
+		}
+	}
+	// Outbound adapters classify request, capability, and lookup failures.
+	// Preserve that category across the application boundary while replacing
+	// the adapter operation with this public use-case operation.
+	var classified *domain.Error
+	if errors.As(err, &classified) {
+		return domain.NewError(classified.Code, operation, err)
+	}
+	return domain.NewError(domain.ErrorInternal, operation, err)
 }

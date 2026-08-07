@@ -28,7 +28,8 @@ type SnapshotMaterializer interface {
 // message or concatenated raw Avro datums as selected by Metadata().Schema.
 //
 // Close is called after session expiry or service shutdown, after active reads
-// have completed.
+// have completed. Metadata().RetainedBytes must remain stable until Close and
+// is the value charged to the application-wide snapshot byte budget.
 type ReadSnapshot interface {
 	Metadata() domain.SnapshotMetadata
 	OpenRange(ctx context.Context, startOffset, endOffset, maxRowsPerBatch int64) (BatchIterator, error)

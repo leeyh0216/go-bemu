@@ -249,6 +249,10 @@ func storageReadStatus(err error) error {
 		return err
 	}
 	switch domain.CodeOf(err) {
+	case domain.ErrorCanceled:
+		return status.Error(codes.Canceled, err.Error())
+	case domain.ErrorDeadlineExceeded:
+		return status.Error(codes.DeadlineExceeded, err.Error())
 	case domain.ErrorInvalidArgument:
 		return status.Error(codes.InvalidArgument, err.Error())
 	case domain.ErrorNotFound:

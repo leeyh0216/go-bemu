@@ -217,7 +217,7 @@ func TestStructuredLogsKeepRestrictionAndRowPayloadOpaque(t *testing.T) {
 			t.Fatalf("logs contain raw value %q: %s", secret, logs)
 		}
 	}
-	for _, field := range []string{"model_version", "schema_fingerprint", "payload_digest", "row_count", "side_effect.before", "side_effect.after"} {
+	for _, field := range []string{"model_version", "schema_fingerprint", "payload_digest", "row_count", "retained_snapshot_bytes", "reservation_bytes", "side_effect.before", "side_effect.after"} {
 		if !strings.Contains(logs, field) {
 			t.Fatalf("logs do not contain %q: %s", field, logs)
 		}
@@ -299,14 +299,16 @@ func newTestService(t *testing.T, materializer ports.SnapshotMaterializer, clock
 func newTestServiceWithLogger(t *testing.T, materializer ports.SnapshotMaterializer, clock ports.Clock, logger *slog.Logger) *Service {
 	t.Helper()
 	service, err := New(Config{
-		Location:             "test-location",
-		ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
-		MaxStreams:           16,
-		DefaultStreamCount:   4,
-		SessionTTL:           30 * time.Minute,
-		CleanupInterval:      time.Minute,
-		MaxRowsPerResponse:   2,
-		MaxSessions:          32,
+		Location:              "test-location",
+		ProtocolModelVersion:  "google.cloud.bigquery.storage.v1@test",
+		MaxStreams:            16,
+		DefaultStreamCount:    4,
+		SessionTTL:            30 * time.Minute,
+		CleanupInterval:       time.Minute,
+		MaxRowsPerResponse:    2,
+		MaxSessions:           32,
+		MaxSnapshotBytes:      1 << 20,
+		MaxTotalSnapshotBytes: 32 << 20,
 	}, materializer, clock, &fakeIDs{}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -405,6 +407,7 @@ func newFakeSnapshot(format domain.Format, rows int64) *fakeSnapshot {
 			Schema:         domain.ReferenceSchema{Format: format, Serialized: schema},
 			RowCount:       rows,
 			EstimatedBytes: rows * 8,
+			RetainedBytes:  rows * 8,
 		},
 		payloadPrefix: "batch",
 	}
