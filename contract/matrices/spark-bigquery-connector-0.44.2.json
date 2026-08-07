@@ -23,6 +23,18 @@
       "kind": "source",
       "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java"
     },
+    "query-materialization": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java"
+    },
+    "query-client-module": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClientModule.java"
+    },
+    "direct-relation": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/direct/DirectBigQueryRelation.java"
+    },
     "direct-writer": {
       "kind": "source",
       "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataSourceWriterContext.java"
@@ -229,16 +241,29 @@
         "readShape": "count",
         "typeFamily": "boolean-integer-float",
         "auth": "static-access-token",
-        "parallelism": "read-stream-negotiated",
+        "parallelism": "not-applicable",
         "tablePartitioning": "unpartitioned"
       },
-      "state": "gap",
+      "state": "verified",
       "officialSourceRefs": [
         "connector-readme",
-        "spark-config"
+        "spark-config",
+        "query-materialization",
+        "query-client-module",
+        "direct-relation"
       ],
-      "issueRef": "read",
-      "limitation": "The connector optimized empty projection and filtered COUNT metadata/query paths lack a real-process contract."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/query-count-0.44.2.json",
+          "fingerprint": "sha256:ea93c1983b0f76a640efdcdb8f1a51306b6f548030851361c2db5920fa31c0c1"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-READ-ARROW-QUERY-V1",
@@ -251,19 +276,31 @@
         "delivery": "not-applicable",
         "saveMode": "not-applicable",
         "readShape": "query",
-        "typeFamily": "temporal",
+        "typeFamily": "boolean-integer-float",
         "auth": "static-access-token",
-        "parallelism": "read-stream-negotiated",
+        "parallelism": "read-stream-4",
         "tablePartitioning": "unpartitioned"
       },
-      "state": "gap",
+      "state": "verified",
       "officialSourceRefs": [
         "connector-readme",
         "spark-config",
-        "read-session"
+        "read-session",
+        "query-materialization",
+        "query-client-module"
       ],
-      "issueRef": "read",
-      "limitation": "Connector query materialization lifecycle is not emulated end to end."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/query-read-0.44.2.json",
+          "fingerprint": "sha256:b1cca092650921b0e001d9ff1c216914cd577b5e3e320b781e41a7ee5a8f67e0"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-READ-ARROW-VIEW-V1",
@@ -289,6 +326,154 @@
       ],
       "issueRef": "read",
       "limitation": "View metadata and connector materialization lifecycle are not implemented."
+    },
+    {
+      "id": "SBQ-READ-AVRO-QUERY-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "AVRO",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "query",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-4",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session",
+        "query-materialization",
+        "query-client-module"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/query-read-0.44.2.json",
+          "fingerprint": "sha256:b1cca092650921b0e001d9ff1c216914cd577b5e3e320b781e41a7ee5a8f67e0"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "projection",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-4",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session",
+        "query-materialization",
+        "query-client-module"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/query-read-shapes-0.44.2.json",
+          "fingerprint": "sha256:5bb55a271317e93631137568e2e651093844cdf6ebc7d6694774ef00059604f7"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-QUERY-FILTER-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "filter",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-4",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session",
+        "query-materialization",
+        "query-client-module"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/query-read-shapes-0.44.2.json",
+          "fingerprint": "sha256:5bb55a271317e93631137568e2e651093844cdf6ebc7d6694774ef00059604f7"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "query",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-1",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "spark-config",
+        "read-session",
+        "query-materialization",
+        "query-client-module"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/query-materialization-0.44.2.json",
+          "fingerprint": "sha256:5206f3c8e6f3bb58916ec01499429ba08b8ce11055ef3cbb469ce345c369ca08"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-READ-STREAM-ONE-V1",

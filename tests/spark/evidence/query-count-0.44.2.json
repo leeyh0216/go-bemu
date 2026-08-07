@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "1",
+  "capabilityIds": [
+    "SBQ-READ-ARROW-COUNT-V1"
+  ],
+  "observedOn": "2026-08-08",
+  "consumer": {
+    "connector": "spark-bigquery-connector-0.44.2",
+    "spark": "3.5.8",
+    "scalaBinaryVersion": "2.12",
+    "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92"
+  },
+  "artifacts": {
+    "lockFingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf",
+    "connectorJarFingerprint": "sha256:516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+  },
+  "edge": {
+    "rest": "HTTPS random loopback port with localhost SAN",
+    "storage": "TLS gRPC random loopback port with JVM PKCS12 truststore",
+    "credential": "static access token; bytes omitted"
+  },
+  "trace": [
+    {
+      "stage": "query_source_materialization",
+      "operation": "jobs.insert+jobs.getQueryResults+jobs.get+tables.get",
+      "shape": "calls:1+2+1+1 anonymous-destinations:1",
+      "status": "DONE"
+    },
+    {
+      "stage": "optimized_empty_projection_count",
+      "operation": "jobs.insert+jobs.getQueryResults+jobs.get+tabledata.list",
+      "shape": "calls:1+2+1+1 anonymous-destinations:1 page-rows:1 total-rows:1 result-bytes:5 result-digest:sha256:119b714d831408db2dfd9a9ccdade9ed156f595018f81525bcfe504b51097278",
+      "status": "DONE"
+    },
+    {
+      "stage": "spark_assertion",
+      "operation": "count",
+      "shape": "count:4 CreateReadSession:0 ReadRows:0 tables.patch:0 jobs.query:0",
+      "status": "passed"
+    }
+  ],
+  "redaction": {
+    "rawRows": false,
+    "rawSQL": false,
+    "rawToken": false,
+    "certificatePrivateKey": false,
+    "jobResourceNames": false,
+    "tableResourceNames": false,
+    "readSessionResourceNames": false,
+    "readStreamResourceNames": false
+  }
+}

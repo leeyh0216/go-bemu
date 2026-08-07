@@ -111,6 +111,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    """Redact connector exception text before console and JUnit serialization."""
+
+    outcome = yield
+    report = outcome.get_result()
+    if report.failed and report.longrepr:
+        report.longrepr = _redact_diagnostic_text(str(report.longrepr))
+    report.sections = [
+        (name, _redact_diagnostic_text(contents))
+        for name, contents in report.sections
+    ]
+
+
 def _emit(*, operation: str, stage: str, shape: str, status: str, fix_hint: str) -> None:
     fingerprint = hashlib.sha256(
         f"{operation}\0{stage}\0{shape}\0{status}".encode("utf-8")
@@ -209,8 +223,7 @@ def _run(command: list[str], *, cwd: Path, timeout: float, stage: str) -> None:
         raise RuntimeError(f"bounded setup command failed at {stage}") from error
 
 
-def _write_safe_bytes(payload: bytes, target: Path) -> None:
-    text = payload.decode("utf-8", errors="replace")
+def _redact_diagnostic_text(text: str) -> str:
     text = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1<redacted>", text)
     text = text.replace(STATIC_ACCESS_TOKEN, "<redacted-token>")
     text = re.sub(
@@ -223,7 +236,28 @@ def _write_safe_bytes(payload: bytes, target: Path) -> None:
         r"\1<redacted-resource-name>",
         text,
     )
+    for segment in ("projects", "jobs", "queries", "datasets", "tables", "sessions"):
+        text = re.sub(
+            rf"(/{segment}/)[^/\s?\]&]+",
+            rf"\1<redacted-resource-name>",
+            text,
+        )
+    text = re.sub(
+        r'(?im)((?:"(?:query|sql)"|(?:query|sql))\s*(?::|=|->)\s*"?)'
+        r'(?:SELECT|WITH)\b[^\r\n]*',
+        r"\1<redacted-sql>",
+        text,
+    )
+    # Connector INFO messages embed the complete query after free-form text
+    # such as `running query [` or `created from "`. Keep retained diagnostics
+    # useful without depending on every upstream log prefix.
+    text = re.sub(r"(?im)\b(?:SELECT|WITH)\b[^\r\n]*", "<redacted-sql>", text)
     text = re.sub(r"(?i)(VALUES\s*)\([^\n]+", r"\1<redacted-row-values>", text)
+    return text
+
+
+def _write_safe_bytes(payload: bytes, target: Path) -> None:
+    text = _redact_diagnostic_text(payload.decode("utf-8", errors="replace"))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text[-131072:], encoding="utf-8")
 
@@ -292,6 +326,145 @@ def observe_default_append_offsets(
             )
         expected_offset += row_count
     return len(observations), expected_offset
+
+
+def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object]:
+    """Return a value-free connector query lifecycle observed at the public edge.
+
+    Dynamic project, job, dataset, table, session, and stream identifiers are
+    deliberately discarded. The returned sequence contains only public REST
+    operation names, the anonymous-destination transition, and Storage Read RPC
+    names.
+
+    Official connector query option and materialization sources:
+    https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/SparkBigQueryConfig.java
+    https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java
+    """
+
+    with edge.log_path.open("rb") as stream:
+        stream.seek(since)
+        encoded_lines = stream.read().splitlines()
+
+    sequence: list[str] = []
+    anonymous_destinations = 0
+    read_session_shapes: list[dict[str, object]] = []
+    for encoded in encoded_lines:
+        try:
+            event = json.loads(encoded)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+
+        if event.get("event") == "boundary.enter" and event.get("boundary") == "http":
+            method, path = event.get("method"), event.get("path")
+            if not isinstance(path, str):
+                continue
+            if method == "POST" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/jobs", path
+            ):
+                sequence.append("jobs.insert")
+            elif method == "POST" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/queries", path
+            ):
+                sequence.append("jobs.query")
+            elif method == "GET" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/jobs/[^/]+", path
+            ):
+                sequence.append("jobs.get")
+            elif method == "GET" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/queries/[^/]+", path
+            ):
+                sequence.append("jobs.getQueryResults")
+            elif (
+                method == "PATCH"
+                or (
+                    method == "POST"
+                    and "x-http-method-override" in event.get("header_keys", [])
+                )
+            ) and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/]+", path
+            ):
+                sequence.append("tables.patch")
+            elif method == "GET" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/]+/data",
+                path,
+            ):
+                sequence.append("tabledata.list")
+            elif method == "GET" and re.fullmatch(
+                r"/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/]+", path
+            ):
+                sequence.append("tables.get")
+            continue
+
+        if (
+            event.get("event") == "side_effect.before"
+            and event.get("side_effect") == "snapshot.materialize"
+            and event.get("operation") == "storage_read.create_session"
+        ):
+            wire_format = event.get("format")
+            selected_field_count = event.get("selected_field_count")
+            row_restriction_bytes = event.get("row_restriction_bytes")
+            if (
+                wire_format not in {"ARROW", "AVRO"}
+                or not isinstance(selected_field_count, int)
+                or not isinstance(row_restriction_bytes, int)
+            ):
+                raise AssertionError("read session observation omitted its safe shape")
+            read_session_shapes.append(
+                {
+                    "format": wire_format,
+                    "selected_field_count": selected_field_count,
+                    "row_restriction_bytes": row_restriction_bytes,
+                }
+            )
+
+        if (
+            event.get("event") == "side_effect.post"
+            and event.get("operation") == "materialize_query_destination"
+            and event.get("success") is True
+            and isinstance(event.get("dataset_id"), str)
+            and event["dataset_id"].startswith("_bqemu_anonymous_")
+            and isinstance(event.get("table_id"), str)
+            and event["table_id"].startswith("_bqemu_query_")
+        ):
+            anonymous_destinations += 1
+            sequence.append("anonymous.destination")
+            continue
+
+        if event.get("event") == "boundary.enter" and event.get("boundary") in {
+            "grpc.unary",
+            "grpc.stream",
+        }:
+            rpc = event.get("rpc")
+            if isinstance(rpc, str) and rpc.endswith("/CreateReadSession"):
+                sequence.append("CreateReadSession")
+            elif isinstance(rpc, str) and rpc.endswith("/ReadRows"):
+                sequence.append("ReadRows")
+
+    counts = {operation: sequence.count(operation) for operation in set(sequence)}
+    return {
+        "sequence": tuple(sequence),
+        "counts": counts,
+        "anonymous_destinations": anonymous_destinations,
+        "read_session_shapes": tuple(read_session_shapes),
+    }
+
+
+def assert_ordered_operations(
+    observation: dict[str, object], required: tuple[str, ...]
+) -> None:
+    sequence = observation["sequence"]
+    if not isinstance(sequence, tuple):
+        raise AssertionError("query observation sequence has an invalid shape")
+    cursor = 0
+    for operation in sequence:
+        if cursor < len(required) and operation == required[cursor]:
+            cursor += 1
+    if cursor != len(required):
+        present = ",".join(sorted(set(sequence)))
+        raise AssertionError(
+            "query operation order mismatch "
+            f"shape=matched:{cursor},required:{len(required)},present:{present}"
+        )
 
 
 def _stop_public_edge(edge: PublicEdge, timeout: float) -> None:
@@ -604,7 +777,9 @@ def spark_session(connector_jar: Path, public_edge: PublicEdge, test_timeout: fl
                 "rootLogger.level = warn",
                 "rootLogger.appenderRef.file.ref = ContractFile",
                 "logger.connector.name = com.google.cloud.spark.bigquery",
-                "logger.connector.level = info",
+                # Query text is emitted at INFO by the pinned connector. The
+                # public-edge trace retains operation shapes instead.
+                "logger.connector.level = warn",
                 "logger.connector.additivity = false",
                 "logger.connector.appenderRef.file.ref = ContractFile",
             )
@@ -698,6 +873,7 @@ def load_connector_source(
     source_kind: str,
     wire_format: str,
     requested_streams: int,
+    extra_options: dict[str, str] | None = None,
 ):
     """Load a table or query through the same released-connector read edge.
 
@@ -719,6 +895,8 @@ def load_connector_source(
         .option("maxParallelism", str(requested_streams))
         .option("preferredMinParallelism", str(requested_streams))
     )
+    for key, value in (extra_options or {}).items():
+        reader = reader.option(key, value)
     if source_kind == "query":
         return reader.option("viewsEnabled", "true").option("query", source).load()
     return reader.load(source)
