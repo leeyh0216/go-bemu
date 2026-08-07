@@ -71,8 +71,8 @@ Schema support는 nested/repeated record를 포함한 append-only
 | same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness, 모든 재사용은 `409 duplicate`, fingerprint는 진단용으로 유지 |
 | exact-request replay extension | Unsupported | 향후 opt-in 전용, gap `query.jobs.exact-replay-extension-v1` |
 | query/load cross-type identity | Unsupported | 분리된 repository의 check/create race, gap `query.jobs.cross-repository-identity-v1` |
-| synchronous request controls | Unsupported | `requestId`, `timeoutMs`, `jobTimeoutMs`, gap `query.sync.request-controls-v1` |
-| unsupported query option | Strict gap | parameter, `dryRun`, cache/billing control, request control은 명시적으로 `400` 거부, gap `query.options.unsupported-v1` |
+| synchronous request controls | Partial | 36바이트 ASCII `requestId`를 검증하고 음수가 아닌 `timeoutMs`를 수용함, 미완료 응답의 대기 제한·변경 쿼리 중복 제거·`jobTimeoutMs`는 gap `query.sync.request-controls-v1` |
+| unsupported query option | Strict gap | parameter, `dryRun`, cache/billing control, `jobTimeoutMs`는 명시적으로 `400` 거부, gap `query.options.unsupported-v1` |
 | omitted-location dataset inference | Unsupported | configured default가 우선함, gap `query.location.dataset-inference-v1` |
 | terminal persistence recovery | Unsupported | terminal repository update 실패 시 `RUNNING` 잔류 가능, gap `query.terminal-persistence-v1` |
 

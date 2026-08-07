@@ -14,24 +14,34 @@ import (
 )
 
 type queryRequest struct {
-	Query              string            `json:"query"`
-	UseLegacySQL       bool              `json:"useLegacySql"`
-	MaxResults         int               `json:"maxResults,omitempty"`
-	DefaultDataset     *datasetReference `json:"defaultDataset,omitempty"`
-	DestinationTable   *tableReference   `json:"destinationTable,omitempty"`
-	WriteDisposition   string            `json:"writeDisposition,omitempty"`
-	CreateDisposition  string            `json:"createDisposition,omitempty"`
-	Location           string            `json:"location,omitempty"`
-	RequestID          json.RawMessage   `json:"requestId,omitempty"`
-	TimeoutMs          json.RawMessage   `json:"timeoutMs,omitempty"`
-	JobTimeoutMs       json.RawMessage   `json:"jobTimeoutMs,omitempty"`
-	DryRun             json.RawMessage   `json:"dryRun,omitempty"`
-	Priority           json.RawMessage   `json:"priority,omitempty"`
-	ParameterMode      json.RawMessage   `json:"parameterMode,omitempty"`
-	QueryParameters    json.RawMessage   `json:"queryParameters,omitempty"`
-	Labels             json.RawMessage   `json:"labels,omitempty"`
-	UseQueryCache      json.RawMessage   `json:"useQueryCache,omitempty"`
-	MaximumBytesBilled json.RawMessage   `json:"maximumBytesBilled,omitempty"`
+	Query              string             `json:"query"`
+	UseLegacySQL       bool               `json:"useLegacySql"`
+	MaxResults         int                `json:"maxResults,omitempty"`
+	DefaultDataset     *datasetReference  `json:"defaultDataset,omitempty"`
+	DestinationTable   *tableReference    `json:"destinationTable,omitempty"`
+	WriteDisposition   string             `json:"writeDisposition,omitempty"`
+	CreateDisposition  string             `json:"createDisposition,omitempty"`
+	Location           string             `json:"location,omitempty"`
+	RequestID          string             `json:"requestId,omitempty"`
+	TimeoutMs          *int64             `json:"timeoutMs,omitempty"`
+	JobTimeoutMs       json.RawMessage    `json:"jobTimeoutMs,omitempty"`
+	FormatOptions      *dataFormatOptions `json:"formatOptions,omitempty"`
+	DryRun             json.RawMessage    `json:"dryRun,omitempty"`
+	Priority           json.RawMessage    `json:"priority,omitempty"`
+	ParameterMode      json.RawMessage    `json:"parameterMode,omitempty"`
+	QueryParameters    json.RawMessage    `json:"queryParameters,omitempty"`
+	Labels             json.RawMessage    `json:"labels,omitempty"`
+	UseQueryCache      json.RawMessage    `json:"useQueryCache,omitempty"`
+	MaximumBytesBilled json.RawMessage    `json:"maximumBytesBilled,omitempty"`
+}
+
+// DataFormatOptions is emitted by google-cloud-bigquery's query_and_wait
+// helper. The current query row encoder has no timestamp-specific branch, so
+// this option is accepted as wire-compatible metadata and covered by the type
+// matrix before timestamp rows are advertised as fully compatible.
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#dataformatoptions
+type dataFormatOptions struct {
+	UseInt64Timestamp bool `json:"useInt64Timestamp,omitempty"`
 }
 
 type jobReferenceResource struct {

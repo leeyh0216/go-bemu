@@ -128,16 +128,24 @@ func TestQueryDestinationAndPagingCrossPublicRESTEdge(t *testing.T) {
 	request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs?location=EU&pageToken="+url.QueryEscape(jobsToken), "", http.StatusBadRequest)
 
 	for name, body := range map[string]string{
-		"dry run":          `{"query":"SELECT 1","dryRun":true}`,
-		"priority":         `{"query":"SELECT 1","priority":"BATCH"}`,
-		"parameters":       `{"query":"SELECT @id","queryParameters":[]}`,
-		"labels":           `{"query":"SELECT 1","labels":{"component":"test"}}`,
-		"request controls": `{"query":"SELECT 1","requestId":"request-1","timeoutMs":1000,"jobTimeoutMs":2000}`,
+		"dry run":     `{"query":"SELECT 1","dryRun":true}`,
+		"priority":    `{"query":"SELECT 1","priority":"BATCH"}`,
+		"parameters":  `{"query":"SELECT @id","queryParameters":[]}`,
+		"labels":      `{"query":"SELECT 1","labels":{"component":"test"}}`,
+		"job timeout": `{"query":"SELECT 1","jobTimeoutMs":2000}`,
 	} {
 		t.Run("reject synchronous "+name, func(t *testing.T) {
 			request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", body, http.StatusBadRequest)
 		})
 	}
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", `{
+		"query":"SELECT 1","requestId":"123e4567-e89b-12d3-a456-426614174000",
+		"timeoutMs":1000,"formatOptions":{"useInt64Timestamp":true}
+	}`, http.StatusOK)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/queries",
+		`{"query":"SELECT 1","requestId":"1234567890123456789012345678901234567"}`, http.StatusBadRequest)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/queries",
+		`{"query":"SELECT 1","timeoutMs":-1}`, http.StatusBadRequest)
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", `{
 		"jobReference":{"projectId":"test-project","jobId":"unsupported-options","location":"US"},
 		"configuration":{"dryRun":true,"jobTimeoutMs":"1000","labels":{"component":"test"},

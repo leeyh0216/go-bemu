@@ -125,12 +125,36 @@ func (h *queryHandlers) insertJob(w http.ResponseWriter, r *http.Request) {
 //   - QueryRequest: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest
 //   - JobConfigurationQuery: https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 func validateSynchronousQueryOptions(request queryRequest) error {
+	// requestId may be ignored for read-only queries because they are
+	// nullipotent. BQEMU currently executes the synchronous query to completion,
+	// so timeoutMs is validated and accepted while the bounded-wait/unfinished
+	// response behavior remains an explicit partial capability.
+	// https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#body.request_body.FIELDS.request_id
+	// https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#body.request_body.FIELDS.timeout_ms
+	if err := validateSynchronousRequestControls(request); err != nil {
+		return err
+	}
 	return rejectPresentQueryOptions(map[string]json.RawMessage{
-		"requestId": request.RequestID, "timeoutMs": request.TimeoutMs, "jobTimeoutMs": request.JobTimeoutMs,
-		"dryRun": request.DryRun, "priority": request.Priority, "parameterMode": request.ParameterMode,
+		"jobTimeoutMs": request.JobTimeoutMs,
+		"dryRun":       request.DryRun, "priority": request.Priority, "parameterMode": request.ParameterMode,
 		"queryParameters": request.QueryParameters, "labels": request.Labels, "useQueryCache": request.UseQueryCache,
 		"maximumBytesBilled": request.MaximumBytesBilled,
 	})
+}
+
+func validateSynchronousRequestControls(request queryRequest) error {
+	if len(request.RequestID) > 36 {
+		return fmt.Errorf("%w: requestId must contain at most 36 ASCII characters", domain.ErrInvalid)
+	}
+	for _, value := range []byte(request.RequestID) {
+		if value > 0x7f {
+			return fmt.Errorf("%w: requestId must contain at most 36 ASCII characters", domain.ErrInvalid)
+		}
+	}
+	if request.TimeoutMs != nil && *request.TimeoutMs < 0 {
+		return fmt.Errorf("%w: timeoutMs must not be negative", domain.ErrInvalid)
+	}
+	return nil
 }
 
 func validateQueryJobOptions(configuration jobConfiguration) error {

@@ -71,8 +71,8 @@ not implied.
 | same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness; every reuse returns `409 duplicate`, fingerprint retained for diagnostics |
 | exact-request replay extension | Unsupported | future opt-in only; gap `query.jobs.exact-replay-extension-v1` |
 | query/load cross-type identity | Unsupported | separate repositories have a check/create race; gap `query.jobs.cross-repository-identity-v1` |
-| synchronous request controls | Unsupported | `requestId`, `timeoutMs`, and `jobTimeoutMs`; gap `query.sync.request-controls-v1` |
-| unsupported query options | Strict gap | parameters, `dryRun`, cache/billing controls, and request controls are explicitly rejected with `400`; gap `query.options.unsupported-v1` |
+| synchronous request controls | Partial | validates the 36-byte ASCII `requestId` and accepts non-negative `timeoutMs`; bounded unfinished responses, mutating-query deduplication, and `jobTimeoutMs` remain gap `query.sync.request-controls-v1` |
+| unsupported query options | Strict gap | parameters, `dryRun`, cache/billing controls, and `jobTimeoutMs` are explicitly rejected with `400`; gap `query.options.unsupported-v1` |
 | omitted-location dataset inference | Unsupported | configured default wins; gap `query.location.dataset-inference-v1` |
 | terminal persistence recovery | Unsupported | a failed terminal repository update can leave `RUNNING`; gap `query.terminal-persistence-v1` |
 
