@@ -100,6 +100,25 @@ func TestSparkWriteProfilePinsManagedWriterInitializationAndContinuation(t *test
 	}
 }
 
+func TestSparkStaticOverwriteProfilePinsAtomicReplaceShape(t *testing.T) {
+	profile, ok := DefaultRegistry().ForConnectorVersion("0.44.2")
+	if !ok {
+		t.Fatal("Spark connector profile is missing")
+	}
+	if profile.Capabilities["sql.connector_overwrite"] != CapabilityPartial {
+		t.Fatalf("static overwrite capability = %s, want partial", profile.Capabilities["sql.connector_overwrite"])
+	}
+	flow := profile.Flows["direct-overwrite-static"]
+	if len(flow) != 3 {
+		t.Fatalf("static overwrite flow has %d calls, want jobs.insert, jobs.get, tables.delete", len(flow))
+	}
+	if flow[0].Target != "/bigquery/v2/projects/{project}/jobs" ||
+		flow[1].Target != "/bigquery/v2/projects/{project}/jobs/{job}" ||
+		flow[2].Method != "DELETE" {
+		t.Fatalf("unexpected static overwrite flow: %#v", flow)
+	}
+}
+
 func TestEveryGoldenTraceSatisfiesItsProfile(t *testing.T) {
 	traces, err := GoldenTraces()
 	if err != nil {

@@ -1,0 +1,47 @@
+{
+  "profileId": "spark-bigquery-connector-0.44.2",
+  "consumerKind": "connector",
+  "consumerName": "spark-bigquery-connector",
+  "consumerVersion": "0.44.2",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java",
+    "https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement",
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert"
+  ],
+  "flow": "direct-overwrite-static",
+  "events": [
+    {
+      "stage": "insert_static_overwrite_job",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.jobReference.jobId": "connector_generated_stable_retry_id",
+        "request.configuration.query.query": "MERGE destination USING (SELECT * FROM temporary) ON FALSE WHEN NOT MATCHED THEN INSERT ROW WHEN NOT MATCHED BY SOURCE THEN DELETE",
+        "request.configuration.query.useLegacySql": false,
+        "response.jobReference.jobId": "request_job_id",
+        "response.status.state": "PENDING_or_RUNNING_or_DONE"
+      }
+    },
+    {
+      "stage": "poll_static_overwrite_job",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+      "fields": {
+        "response.status.state": "DONE_terminal",
+        "response.status.errorResult": "absent_on_success"
+      }
+    },
+    {
+      "stage": "delete_temporary_table",
+      "protocol": "REST",
+      "method": "DELETE",
+      "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{temporary_table}",
+      "fields": {
+        "response.status": 204
+      }
+    }
+  ]
+}

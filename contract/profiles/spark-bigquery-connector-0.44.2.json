@@ -23,7 +23,7 @@
     "grpc.storage_write": "partial",
     "gcs.indirect_stage": "planned",
     "jobs.load": "partial",
-    "sql.connector_overwrite": "planned"
+    "sql.connector_overwrite": "partial"
   },
   "flows": {
     "read-arrow": [
@@ -114,6 +114,29 @@
         "method": "BIDI_STREAM",
         "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/AppendRows",
         "requiredFields": ["request.first.write_stream", "request.first.offset", "request.first.proto_rows.writer_schema", "request.first.proto_rows.rows", "request.continuation.write_stream", "request.continuation.proto_rows.writer_schema", "response.append_result.offset"]
+      }
+    ],
+    "direct-overwrite-static": [
+      {
+        "stage": "insert_static_overwrite_job",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.jobReference.jobId", "request.configuration.query.query", "request.configuration.query.useLegacySql", "response.jobReference.jobId", "response.status.state"]
+      },
+      {
+        "stage": "poll_static_overwrite_job",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["response.status.state", "response.status.errorResult"]
+      },
+      {
+        "stage": "delete_temporary_table",
+        "protocol": "REST",
+        "method": "DELETE",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{temporary_table}",
+        "requiredFields": ["response.status"]
       }
     ],
     "indirect-load-parquet": [
