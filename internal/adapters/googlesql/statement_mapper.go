@@ -17,11 +17,11 @@ func (mapper *statementMapper) mapStatement(node gsql.ASTStatementNode) (queryas
 	case *gsql.ASTInsertStatement:
 		return mapper.mapInsertStatement(statement)
 	case *gsql.ASTUpdateStatement:
-		return nil, unsupportedNode(queryast.StatementUpdate, "update-statement", statement)
+		return mapper.mapUpdateStatement(statement)
 	case *gsql.ASTDeleteStatement:
-		return nil, unsupportedNode(queryast.StatementDelete, "delete-statement", statement)
+		return mapper.mapDeleteStatement(statement)
 	case *gsql.ASTMergeStatement:
-		return nil, unsupportedNode(queryast.StatementMerge, "merge-statement", statement)
+		return mapper.mapMergeStatement(statement)
 	case *gsql.ASTCreateTableStatement:
 		return mapper.mapCreateTableStatement(statement)
 	case *gsql.ASTDropStatement:
@@ -31,9 +31,9 @@ func (mapper *statementMapper) mapStatement(node gsql.ASTStatementNode) (queryas
 	case *gsql.ASTTruncateStatement:
 		return mapper.mapTruncateStatement(statement)
 	case *gsql.ASTVariableDeclaration:
-		return nil, unsupportedNode(queryast.StatementDeclare, "declare-statement", statement)
+		return mapper.mapDeclareStatement(statement)
 	case *gsql.ASTSingleAssignment:
-		return nil, unsupportedNode(queryast.StatementSet, "set-statement", statement)
+		return mapper.mapSetStatement(statement)
 	default:
 		return nil, unsupportedNode("UNKNOWN", "statement", node)
 	}
@@ -352,6 +352,10 @@ func (mapper *statementMapper) mapSetOperation(statementKind queryast.StatementK
 		input, ok := child.(gsql.ASTQueryExpressionNode)
 		if ok {
 			inputs = append(inputs, input)
+			continue
+		}
+		if _, ok := child.(*gsql.ASTSetOperationMetadataList); !ok {
+			return nil, unsupportedNode(statementKind, "set-operation-child", child)
 		}
 	}
 	if len(inputs) < 2 {
@@ -515,7 +519,34 @@ func (mapper *statementMapper) mapRelation(statementKind queryast.StatementKind,
 	case *gsql.ASTJoin:
 		return nil, unsupportedNode(statementKind, "join-relation", relation)
 	case *gsql.ASTTableSubquery:
-		return nil, unsupportedNode(statementKind, "subquery-relation", relation)
+		lateral, err := relation.IsLateral()
+		if err != nil {
+			return nil, parserFailure()
+		}
+		if lateral {
+			return nil, unsupportedNode(statementKind, "lateral-subquery", relation)
+		}
+		queryNode, err := relation.Subquery()
+		if err != nil || queryNode == nil {
+			return nil, parserFailure()
+		}
+		query, err := mapper.mapQuery(statementKind, queryNode)
+		if err != nil {
+			return nil, err
+		}
+		aliasNode, err := relation.Alias()
+		if err != nil {
+			return nil, parserFailure()
+		}
+		alias, err := mapAlias(aliasNode)
+		if err != nil {
+			return nil, err
+		}
+		key, err := mapper.key(relation, "subquery-relation")
+		if err != nil {
+			return nil, err
+		}
+		return queryast.NewSubqueryRelation(key, query, alias)
 	default:
 		return nil, unsupportedNode(statementKind, "table-expression", node)
 	}

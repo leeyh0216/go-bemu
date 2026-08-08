@@ -118,7 +118,7 @@ func (mapper *statementMapper) mapStructType(statementKind queryast.StatementKin
 	for _, child := range children {
 		fieldNode, ok := child.(*gsql.ASTStructField)
 		if !ok {
-			continue
+			return nil, unsupportedNode(statementKind, "struct-type-child", child)
 		}
 		nameNode, inspectErr := fieldNode.Name()
 		if inspectErr != nil {

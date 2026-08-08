@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"runtime"
 
 	gsql "github.com/goccy/go-googlesql"
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -48,6 +49,7 @@ func (*Parser) Parse(ctx context.Context, request ports.QueryRequest) (queryast.
 	if err != nil {
 		return nil, err
 	}
+	defer func() { runtime.KeepAlive(document.owner) }()
 	mapper := statementMapper{sourceDigest: document.source.Digest()}
 	statements := make([]queryast.Statement, 0, len(document.statements))
 	for _, external := range document.statements {

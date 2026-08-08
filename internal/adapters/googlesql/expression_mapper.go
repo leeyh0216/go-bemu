@@ -240,7 +240,12 @@ func (mapper *statementMapper) mapArrayLiteral(statementKind queryast.StatementK
 	for _, child := range children {
 		expressionNode, ok := child.(gsql.ASTExpressionNode)
 		if !ok {
-			continue
+			if externalType != nil {
+				if _, typeChild := child.(*gsql.ASTArrayType); typeChild {
+					continue
+				}
+			}
+			return nil, unsupportedNode(statementKind, "array-literal-child", child)
 		}
 		element, mapErr := mapper.mapExpression(statementKind, expressionNode)
 		if mapErr != nil {
@@ -275,7 +280,12 @@ func (mapper *statementMapper) mapStructLiteral(statementKind queryast.Statement
 	for _, child := range children {
 		argument, ok := child.(*gsql.ASTStructConstructorArg)
 		if !ok {
-			continue
+			if externalType != nil {
+				if _, typeChild := child.(*gsql.ASTStructType); typeChild {
+					continue
+				}
+			}
+			return nil, unsupportedNode(statementKind, "struct-literal-child", child)
 		}
 		expressionNode, inspectErr := argument.Expression()
 		if inspectErr != nil || expressionNode == nil {
@@ -346,11 +356,17 @@ func (mapper *statementMapper) mapFunctionCall(statementKind queryast.StatementK
 	if err != nil {
 		return nil, err
 	}
-	arguments := make([]queryast.Expression, 0, len(children))
-	for _, child := range children {
+	if len(children) == 0 {
+		return nil, parserFailure()
+	}
+	if _, ok := children[0].(*gsql.ASTPathExpression); !ok {
+		return nil, unsupportedNode(statementKind, "function-name", children[0])
+	}
+	arguments := make([]queryast.Expression, 0, len(children)-1)
+	for _, child := range children[1:] {
 		argumentNode, ok := child.(gsql.ASTExpressionNode)
 		if !ok {
-			continue
+			return nil, unsupportedNode(statementKind, "function-child", child)
 		}
 		argument, mapErr := mapper.mapExpression(statementKind, argumentNode)
 		if mapErr != nil {
