@@ -813,7 +813,7 @@ def test_direct_pending_exact_append(
     result = query(
         public_edge,
         test_timeout,
-        f"SELECT COUNT(*) AS rows FROM `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}`",
+        f"SELECT COUNT(*) AS row_count FROM `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}`",
     )
     if result["rows"][0]["f"][0]["v"] != "8":
         pytest.fail("committed row count mismatch shape=single-count")
@@ -1095,7 +1095,7 @@ def test_direct_default_stream_at_least_once(
     result = query(
         public_edge,
         test_timeout,
-        f"SELECT COUNT(*) AS rows FROM `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}`",
+        f"SELECT COUNT(*) AS row_count FROM `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}`",
     )
     if result["rows"][0]["f"][0]["v"] != "2":
         pytest.fail("default stream row count mismatch shape=single-count")
