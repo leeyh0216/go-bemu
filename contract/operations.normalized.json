@@ -842,7 +842,7 @@
           "effect": "operation-exposure",
           "verification": "transport",
           "tests": [
-            "go:internal/admin/server:TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential"
+            "go:internal/admin/server:TestAdminTokenProtectsEveryEndpointAndLogsRejectedCredential"
           ],
           "en": "The separate admin listener is started.",
           "ko": "별도 관리용 리스너를 시작합니다."
@@ -859,7 +859,7 @@
         "bqemu-public-api"
       ],
       "tests": [
-        "go:internal/admin/server:TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential"
+        "go:internal/admin/server:TestAdminTokenProtectsEveryEndpointAndLogsRejectedCredential"
       ]
     },
     {

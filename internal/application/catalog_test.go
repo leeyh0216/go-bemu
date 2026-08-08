@@ -204,7 +204,7 @@ func TestCatalogRejectsReplaceableEngineSchemaBoundsBeforeMutation(t *testing.T)
 		ProjectID: "test-project", DatasetID: "analytics", ID: "planner_rejected",
 		Schema: []domain.Field{{Name: "value", Type: "STRING"}},
 	})
-	if !errors.Is(err, domain.ErrUnsupported) || strings.Contains(err.Error(), "cannot plan") {
+	if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), "cannot plan") {
 		t.Fatalf("planner error = %v", err)
 	}
 	if len(warehouse.tables) != 0 || warehouse.plannerCalls != 1 {

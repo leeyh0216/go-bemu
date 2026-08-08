@@ -433,11 +433,11 @@ operations:
     rest: {method: GET, path: /healthz, discovery: false}
     supportedInput: {en: An optional admin bearer token is checked when configured., ko: 설정한 경우 관리용 Bearer 토큰을 검사합니다.}
     conditions:
-      - {setting: admin.enabled, equals: true, effect: operation-exposure, verification: transport, tests: [go:internal/admin/server:TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential], en: The separate admin listener is started., ko: 별도 관리용 리스너를 시작합니다.}
+      - {setting: admin.enabled, equals: true, effect: operation-exposure, verification: transport, tests: [go:internal/admin/server:TestAdminTokenProtectsEveryEndpointAndLogsRejectedCredential], en: The separate admin listener is started., ko: 별도 관리용 리스너를 시작합니다.}
     limitations: {policy: none, byDesign: [], en: The admin server listens on a separate endpoint., ko: 관리 서버는 별도 엔드포인트에서 수신합니다.}
     issues: []
     sources: [bqemu-public-api]
-    tests: [go:internal/admin/server:TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential]
+    tests: [go:internal/admin/server:TestAdminTokenProtectsEveryEndpointAndLogsRejectedCredential]
 
   - id: bqemu.admin.runtime.get
     protocol: rest

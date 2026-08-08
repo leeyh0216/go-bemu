@@ -605,11 +605,13 @@ func TestTLSServerSupportsOfficialOAuthAndSTSFlows(t *testing.T) {
 		issuer.user.RefreshToken,
 		issuer.subjectToken,
 		issuedTokens[len(issuedTokens)-1],
-		string(body),
 	} {
 		if !strings.Contains(logOutput.String(), value) {
 			t.Fatalf("credential endpoint log omitted raw diagnostic %q", value)
 		}
+	}
+	if !strings.Contains(logOutput.String(), strconv.Quote(string(body))) {
+		t.Fatalf("credential endpoint log omitted structured response body %q", string(body))
 	}
 }
 
