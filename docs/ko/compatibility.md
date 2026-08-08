@@ -111,7 +111,7 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 | 의미 기반 SQL DDL | 부분 지원 | GoogleSQL AST 계획으로 `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, 최상위 `ADD`, `RENAME`, `DROP COLUMN`, `ALTER COLUMN SET DATA TYPE`을 실행합니다. 지원하지 않는 절은 변경 전에 `query.ddl.catalog-sync-v1`로 거부하며 SQLite와 엔진 사이의 중단 복구는 #26에 남아 있습니다. |
 | 여러 문장으로 된 쿼리 | 미지원 | 문자열과 주석을 구분하여 마지막 세미콜론 하나만 허용합니다. 스크립트는 실행 전에 거부합니다. 미지원 ID는 `query.scripts.unsupported-v1`이며 공식 [여러 문장 쿼리 계약](https://cloud.google.com/bigquery/docs/multi-statement-queries)을 참고합니다. |
 | 취소 | 부분 지원 | 종료 과정에서는 새 작업을 거부하고 실행 중인 작업을 취소한 뒤 Storage와 DuckDB를 닫습니다. 공개 [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel)과 취소 상태는 지원하지 않습니다. |
-| Parquet 로드 `jobs.insert`, `jobs.get`, `jobs.list` | 부분 지원 | 별도로 활성화해야 합니다. 구성, 상태, 오류, 시각, 통계는 SQLite에 저장합니다. |
+| Parquet 로드 `jobs.insert`, `jobs.get`, `jobs.list` | 부분 지원 | 항상 사용할 수 있습니다. 구성, 상태, 오류, 시각, 통계는 SQLite에 저장합니다. |
 | 복사와 추출 | 미지원 | 해당 설정을 거부합니다. |
 | 작업과 결과의 영속 상태 | 부분 지원 | 쿼리와 로드 작업 메타데이터는 재시작 후 복구합니다. 쿼리 결과 행은 저장하지 않으며, 재시작한 비어 있지 않은 결과는 빈 성공 대신 명시적인 `backendError`를 반환합니다. |
 | 쿼리 결과 보관 크기 제한 | 미지원 | 모든 결과 행을 Go 메모리에 보관합니다. 미지원 ID는 `query.results.unbounded-memory-v1`입니다. |
@@ -334,12 +334,11 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 
 | 기능 | 상태 |
 | --- | --- |
-| 파일 시스템 객체 저장소 어댑터 | 로컬에서 별도로 활성화한 경우만 검증했습니다. |
-| 내장 GCS 서버 | 제공하지 않습니다. 외부 GCS 호환 JSON endpoint를 설정해야 합니다. |
+| 허용하는 로드 원본 URI | `gs://`만 허용합니다. 로컬 경로와 다른 scheme은 작업 저장 전에 거부합니다. |
+| 내장 GCS 서버 | 바이너리에는 포함하지 않습니다. 기본 Compose 프로젝트는 fake-GCS 호환 서비스를 필수로 실행합니다. |
 | GCS 및 fake GCS JSON 어댑터 | 목록, 조회, 미디어 요청의 크기에 상한을 둡니다. URI 글로브 확장은 부분 지원입니다. |
 | 기존 테이블로 Parquet 로드 | 스칼라 필드만 부분 지원합니다. 명시한 스키마와 형 변환을 검사합니다. 중첩 또는 반복 필드는 객체를 읽기 전에 `load.parquet.nested-repeated.unsupported-v1`로 거부하며, 10진수 자릿수 축소는 대상을 변경하기 전에 `load.decimal-rounding.unsupported-v1`로 거부합니다. |
-| Python `load_table_from_uri`와 bq `load --source_format=PARQUET` | 공개 REST endpoint와 외부 fake GCS 하나를 사용해 검증했습니다. |
-| Spark 간접 Parquet 쓰기 | PySpark와 Scala Spark를 별도 진입점으로 실행하고 비어 있지 않은 파티션 4개 및 Storage Write RPC 0회를 검증했습니다. |
+| 공개 로드 전송 | 공개 REST endpoint와 필수 fake-GCS 호환 서비스를 사용해 검증했습니다. |
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
 | 대상 생성, 자동 감지, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
@@ -352,14 +351,13 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 
 로드 동작은
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad)를
-기준으로 합니다. 별도로 활성화한 경로는 크기가 정해져 있고 변경할 수 없는 객체를
+기준으로 합니다. 로드 경로는 크기가 정해져 있고 변경할 수 없는 객체를
 전용 임시 작업 공간에 내려받습니다. 이후 선택한 쓰기 방식을 원자적으로 적용합니다.
 다운로드는 대상 테이블 트랜잭션 밖에서 실행합니다. 로드 작업과 중복 방지 기록은
 프로세스 메모리에 저장합니다.
 
-Spark의 Hadoop GCS Connector 설정과 BQEMU의 `load.gcsEndpoint`는 서로
-독립적입니다. 두 설정은 같은 객체 저장소 서비스를 가리켜야 합니다. Compose와
-클라이언트 설정은 [시작하기](getting-started.md)를 참고해 주십시오.
+호스트, Compose 네트워크, 개발 컨테이너에서 사용할 주소는
+[시작하기](getting-started.md)를 참고해 주십시오.
 
 공개 API 경계는 `Authorization` 헤더와 메타데이터 값을 해석하거나 검증하지
 않습니다. 클라이언트 인증 정보 요구 사항, TLS, 별도의 진단용 관리 토큰, IAM은 서로

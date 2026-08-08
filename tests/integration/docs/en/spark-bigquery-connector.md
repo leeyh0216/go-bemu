@@ -1,7 +1,7 @@
 <!-- doc-id: clients/spark-bigquery-connector -->
 <!-- lang: en -->
 
-[English](spark-bigquery-connector.md) | [한국어](../../ko/clients/spark-bigquery-connector.md)
+[English](spark-bigquery-connector.md) | [한국어](../ko/spark-bigquery-connector.md)
 
 # PySpark And Scala Spark
 
@@ -46,7 +46,7 @@ export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=$AUTH_DIR/truststore.p12 -D
 
 Use HTTPS on `localhost` port `9050` for REST and keep `localhost:9060` for the
 gRPC option. JSON credentials that exchange a token also need the issuer and proxy
-from [Client credentials and TLS](../client-credentials-and-tls.md).
+from [Client credentials and TLS](../../../../docs/en/client-credentials-and-tls.md).
 
 <!-- section: pyspark -->
 ## PySpark Read
@@ -97,7 +97,7 @@ val rows = spark.read
 ```
 
 Create the project, dataset, and table by following [Getting
-started](../getting-started.md).
+started](../../../../docs/en/getting-started.md).
 
 <!-- section: direct -->
 ## Direct Read And Write Calls
@@ -122,10 +122,10 @@ inspect committed stream state.
 <!-- section: indirect -->
 ## Indirect Parquet Write
 
-Start the optional fake GCS Compose profile:
+Start the required fake-GCS service with the default Compose project:
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 ```
 
 Include the Spark BigQuery Connector and Hadoop GCS Connector JARs, then add the
@@ -154,9 +154,10 @@ spark = (
 ```
 
 The Compose configuration passes `http://fake-gcs:4443` to BQEMU through
-`BQEMU_LOAD_GCS_ENDPOINT`. Spark uses `http://localhost:4443` because it runs in
-the host network namespace. These values address the same fake GCS service from
-different callers.
+`BQEMU_LOAD_GCS_ENDPOINT`. A host-side test process uses
+`http://localhost:4443`; a development container attached to the same Compose
+network uses `http://fake-gcs:4443`. These values address the same service from
+different network namespaces.
 
 The `spark-pyspark-indirect-load` and `spark-scala-indirect-load` scenarios run
 this sequence:
@@ -189,8 +190,8 @@ flow. It is not embedded in BQEMU.
 | `bigquery.jobs.insert` for indirect load | Job with Parquet `configuration.load`, source URIs, destination, and write disposition | Job resource and reference |
 
 The exact accepted fields and support level are maintained in
-[Compatibility](../compatibility.md). Runtime versions, artifacts, and scenario
-selectors are generated in [Consumer compatibility](../consumer-compatibility.md).
+[Compatibility](../../../../docs/en/compatibility.md). Runtime versions, artifacts, and scenario
+selectors are generated in [Consumer compatibility](../../../../docs/en/consumer-compatibility.md).
 
 <!-- section: related -->
 ## Related Work

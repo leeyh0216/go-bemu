@@ -67,8 +67,8 @@ RPC는 대량의 행 데이터를 이동합니다.
 결정합니다. 자세한 내용은 [Storage Write
 API](https://cloud.google.com/bigquery/docs/write-api)에 설명되어 있습니다.
 
-**현재 구현:** 공개 제어 영역은 REST 메타데이터와 쿼리, 선택적으로 활성화하는
-Parquet 적재 작업으로 구성됩니다.
+**현재 구현:** 공개 제어 영역은 REST 메타데이터와 쿼리, Parquet 적재 작업으로
+구성됩니다.
 
 공개 Storage Read는 크기 제한을 둔 DuckDB 스냅샷 하나를 구체화합니다. 결과는
 Arrow 또는 Avro로 인코딩합니다. 각 스트림은 정해진 논리 범위와 재개 가능한

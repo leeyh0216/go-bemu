@@ -18,17 +18,12 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
   service-account, authorized-user, WIF, direct-token, certificate, and
   truststore fixtures.
 
-<!-- section: clients -->
-## Client Guides
+<!-- section: integration -->
+## Integration Evidence
 
-- [Python BigQuery client 3.43.0](clients/python-bigquery.md)
-- [`bq` CLI 2.1.31](clients/bq-cli.md)
-- [PySpark and Scala Spark 3.5.8 with connector
-  0.44.2](clients/spark-bigquery-connector.md), bound to the reviewed [connector
-  revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)
-
-Each guide identifies the tested scenario IDs, public operation IDs, request
-order, and request/response shapes.
+Version-pinned external consumer setup and scenario evidence live with the
+[integration tests](../../tests/integration/docs/en/index.md). They are test
+harness contracts, not product modules or additional support claims.
 
 <!-- section: compatibility -->
 ## Compatibility References

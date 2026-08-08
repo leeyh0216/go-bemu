@@ -52,9 +52,8 @@ ports and changes the REST scheme to HTTPS.
 
 - [Getting started](docs/en/getting-started.md): create a dataset and table,
   run the first query, enable TLS, and connect from a development container.
-- [Python BigQuery client](docs/en/clients/python-bigquery.md)
-- [`bq` CLI](docs/en/clients/bq-cli.md)
-- [PySpark and Scala Spark](docs/en/clients/spark-bigquery-connector.md)
 - [Client credentials and TLS](docs/en/client-credentials-and-tls.md)
 - [Compatibility](docs/en/compatibility.md): API/RPC support by operation ID.
+- [Integration test profiles](tests/integration/docs/en/index.md): version-pinned
+  external consumer setup and evidence.
 - [Documentation index](docs/en/index.md)

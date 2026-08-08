@@ -57,7 +57,7 @@ into streams, as defined by
 Write stream type controls visibility and commit behavior, as described by the
 [Storage Write API](https://cloud.google.com/bigquery/docs/write-api).
 
-**Current implementation:** REST metadata/query plus opt-in Parquet load jobs
+**Current implementation:** REST metadata/query plus Parquet load jobs
 form the public control plane. Public Storage Read materializes one bounded
 DuckDB snapshot, encodes Arrow or Avro, and exposes deterministic logical ranges
 with offset resume. Public Storage Write accepts ProtoRows on PENDING and default

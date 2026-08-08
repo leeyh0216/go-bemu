@@ -22,8 +22,8 @@ Spark 커넥터는 서로 다른 공개 경계 세 곳을 사용합니다.
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest)와 [Storage RPC
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)입니다.
 
-`go-bemu`는 REST 메타데이터와 쿼리를 공개합니다. Parquet 적재 작업은 선택적으로
-활성화할 수 있습니다. Storage Read/Write 공개 범위는 부분 지원(`Partial`)입니다.
+`go-bemu`는 REST 메타데이터와 쿼리, Parquet 적재 작업을 공개합니다. Storage
+Read/Write 공개 범위는 부분 지원(`Partial`)입니다.
 아래 설명은 현재 제한을 둔 실행 절차와 아직 남은 BigQuery 요구사항을 구분합니다.
 
 <!-- section: read-planning -->
@@ -181,13 +181,13 @@ BigQuery는 REST 요청 구조를
 열 수 있다는 사실만으로 BigQuery 적재 의미, 작업 오류, 와일드카드 URI, 원자적인
 공개 시점을 검증할 수는 없습니다.
 
-선택적으로 활성화하는 공개 범위는 가짜 GCS 호환 JSON 어댑터를 사용합니다. 개수와
+공개 로드 범위는 가짜 GCS 호환 JSON 어댑터를 사용합니다. 개수와
 크기 제한을 적용하면서 `gs://` 목록·조회·미디어 요청을 해석합니다. 객체는 비공개
 임시 작업 디렉터리에 내려받습니다.
 
 기존 테이블을 기준으로 Parquet 열과 유형 변환을 검증합니다. `WRITE_APPEND`,
-`WRITE_EMPTY`, `WRITE_TRUNCATE`는 DuckDB 트랜잭션 하나에서 적용합니다. 파일 원본을
-사용하려면 로컬 전용 옵션을 명시해야 합니다.
+`WRITE_EMPTY`, `WRITE_TRUNCATE`는 DuckDB 트랜잭션 하나에서 적용합니다. 다른 URI
+scheme은 작업을 저장하기 전에 거부합니다.
 
 대상 생성, 자동 감지, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, 멀티파트·재개 가능
 다운로드는 지원하지 않습니다. 작업과 멱등성 상태는 프로세스 내부에만 보관합니다.
@@ -258,7 +258,7 @@ gRPC는 인증 정보가 없는 요청을 허용하며 `Authorization` 값이 �
 | 쿼리 작업 | 작업 저장소와 쿼리 엔진 포트 | 공식 Python 동기·비동기 절차 검증 완료, 프로세스 내부 상태는 부분 구현 |
 | `CreateReadSession`/`ReadRows` | 스냅샷·세션 원장과 Arrow/Avro 인코더 | 공개 API 부분 지원: 크기 제한이 있는 DuckDB 스냅샷, 논리 스트림, 안정된 오프셋 지원. 분할, 압축, 과거 스냅샷, 중첩 필드 선택은 미지원 |
 | `AppendRows`/확정/커밋 | 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋 지원. 고급 스트림 유형과 영속성은 미지원 |
-| 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 선택형 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 대상 Parquet 지원. 다른 형식, 생성, 스키마 변경, 다운로드 방식은 미지원 |
+| 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 공개 API 부분 지원: 필수 가짜 GCS JSON과 기존 테이블 대상 Parquet 지원. 다른 형식, 생성, 스키마 변경, 다운로드 방식은 미지원 |
 | 직접 덮어쓰기 `MERGE` | 구조 기반 커넥터 SQL 어댑터 | 정적 비파티션 커넥터 `0.44.2` 공개 API 검증 완료. 동적 시간·범위 파티션과 일반 `MERGE` 호환성은 미지원 |
 | BigQuery 호환 요청 인증 | REST/gRPC 전송 동작 | 의도적으로 제공하지 않으며 인증 정보 값을 무시함 |
 | ADC/WIF 획득 | 클라이언트 인증 정보 라이브러리 | 공개 BQEMU 실행 환경의 범위 밖 |

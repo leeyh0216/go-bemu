@@ -1,7 +1,7 @@
 <!-- doc-id: clients/bq-cli -->
 <!-- lang: ko -->
 
-[English](../../en/clients/bq-cli.md) | [한국어](bq-cli.md)
+[English](../en/bq-cli.md) | [한국어](bq-cli.md)
 
 # bq CLI
 
@@ -48,7 +48,7 @@ export REQUESTS_CA_BUNDLE="$AUTH_DIR/ca.pem"
 
 그다음 `localhost`의 `9050` 포트에 HTTPS로 접속하고
 `--ca_certificates_file="$AUTH_DIR/ca.pem"`을 추가합니다. Authorized user와 WIF
-파일에는 [클라이언트 인증 파일과 TLS](../client-credentials-and-tls.md)에 설명된 발급
+파일에는 [클라이언트 인증 파일과 TLS](../../../../docs/ko/client-credentials-and-tls.md)에 설명된 발급
 서버와 제한형 프록시 설정도 필요합니다. 직접 access token은 발급 서버를 사용하지
 않습니다.
 
@@ -71,7 +71,7 @@ bq --api=http://localhost:9050 --project_id=test-project \
   --format=json query --use_legacy_sql=false 'SELECT 1 AS answer'
 ```
 
-프로젝트 생성 명령은 [시작하기](../getting-started.md)에 있습니다.
+프로젝트 생성 명령은 [시작하기](../../../../docs/ko/getting-started.md)에 있습니다.
 
 <!-- section: operations -->
 ## API 호출 순서
@@ -102,8 +102,8 @@ bq --api=http://localhost:9050 --project_id=test-project \
 CLI는 BigQuery JSON 리소스를 명령별 출력으로 변환합니다. 테스트에서 기계가 읽을 수
 있는 결과가 필요하다면 `--format=json`을 사용합니다.
 
-필드별 처리 범위와 지원 수준은 [호환성](../compatibility.md)에 정리되어 있습니다.
-CLI와 Cloud SDK 버전은 [소비자 호환성](../consumer-compatibility.md)에서 자동으로
+필드별 처리 범위와 지원 수준은 [호환성](../../../../docs/ko/compatibility.md)에 정리되어 있습니다.
+CLI와 Cloud SDK 버전은 [소비자 호환성](../../../../docs/ko/consumer-compatibility.md)에서 자동으로
 생성합니다.
 
 <!-- section: related -->

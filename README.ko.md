@@ -52,9 +52,8 @@ Compose 프로젝트는 `bqemu-data` 볼륨에 데이터를 보관합니다. 테
 
 - [시작하기](docs/ko/getting-started.md): 데이터 세트와 테이블을 만들고 첫 쿼리를
   실행하는 방법, TLS 설정, 개발 컨테이너 연결 방법을 설명합니다.
-- [Python BigQuery 클라이언트](docs/ko/clients/python-bigquery.md)
-- [`bq` CLI](docs/ko/clients/bq-cli.md)
-- [PySpark와 Scala Spark](docs/ko/clients/spark-bigquery-connector.md)
 - [클라이언트 인증 파일과 TLS](docs/ko/client-credentials-and-tls.md)
 - [호환성](docs/ko/compatibility.md): operation ID별 API와 RPC 지원 범위입니다.
+- [통합 테스트 프로필](tests/integration/docs/ko/index.md): 버전을 고정한 외부 소비자
+  설정과 검증 근거입니다.
 - [문서 색인](docs/ko/index.md)

@@ -74,41 +74,38 @@ This calls `bigquery.jobs.query`. The response is a BigQuery `QueryResponse`
 shape with a job reference, schema, completion state, and encoded rows.
 
 <!-- section: clients -->
-## Configure A Client
+## Connect Another Process
 
-Use the guide for the process that sends the request:
-
-- [Python BigQuery client 3.43.0](clients/python-bigquery.md)
-- [`bq` CLI 2.1.31](clients/bq-cli.md)
-- [PySpark and Scala Spark 3.5.8 with connector
-  0.44.2](clients/spark-bigquery-connector.md), bound to the reviewed [connector
-  revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)
-
-Each guide contains endpoint, TLS trust, credentials, examples, operation IDs,
-and the request sequence exercised by that client.
+Select REST and Storage gRPC addresses from the endpoint table above. For TLS,
+configure the process trust store with the generated CA and use the server name
+covered by the certificate. Version-pinned external consumer procedures are
+kept with the [integration tests](../../tests/integration/docs/en/index.md).
 
 <!-- section: external-gcs -->
-## Enable Parquet Load
+## Use Parquet Load
 
-BQEMU does not include a GCS server. The optional load profile starts an
-external fake GCS service and enables BQEMU's outbound GCS JSON adapter:
+The BQEMU binary does not embed an object-store server. The required fake-GCS
+service is part of the default Compose project and BQEMU resolves every load
+source through that service:
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 curl --fail http://localhost:4443/storage/v1/b
 ```
 
-The two endpoint settings serve different callers:
+Choose the endpoint from the process that runs BQEMU:
 
-| Caller | Setting | Compose value |
-| --- | --- | --- |
-| BQEMU load worker | `BQEMU_LOAD_GCS_ENDPOINT` / `load.gcsEndpoint` | `http://fake-gcs:4443` |
-| Spark Hadoop GCS Connector | `fs.gs.storage.root.url` | `http://localhost:4443` |
+| BQEMU process location | `load.gcsEndpoint` value |
+| --- | --- |
+| Host running Compose | `http://127.0.0.1:4443` |
+| `bqemu` service in the supplied Compose project | `http://fake-gcs:4443` |
+| Development container attached to the same Compose network | `http://fake-gcs:4443` |
+| Development container reaching Compose through its host | `http://host.docker.internal:4443` |
 
-Spark uploads temporary objects through the Hadoop GCS Connector. BQEMU lists
-matching objects when necessary, downloads object media, and commits the load.
-Direct Storage Write does not use GCS. The complete connector configuration and
-call sequence are in the [Spark guide](clients/spark-bigquery-connector.md).
+The checked-in host configuration uses the loopback endpoint; Compose overrides
+it with the `fake-gcs` service DNS name. Load requests accept only `gs://`
+object URIs. Local paths, `file://`, and other URI schemes are rejected before a
+job is stored or an object-store request is made.
 
 <!-- section: tls -->
 ## Enable TLS And Credential Fixtures

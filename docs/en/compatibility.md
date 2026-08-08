@@ -93,7 +93,7 @@ not implied.
 | semantic SQL DDL | Partial | GoogleSQL AST plans execute `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, top-level `ADD`/`RENAME`/`DROP COLUMN`, and `ALTER COLUMN SET DATA TYPE`; unsupported clauses fail before mutation under `query.ddl.catalog-sync-v1`, while crash recovery between SQLite and the engine remains #26 |
 | multi-statement queries | Unsupported | literal/comment-aware scanning permits one optional trailing semicolon and rejects scripts before job or engine side effects; gap `query.scripts.unsupported-v1`; see the official [multi-statement query contract](https://cloud.google.com/bigquery/docs/multi-statement-queries) |
 | cancellation | Partial | runtime shutdown rejects new work, cancels and drains admitted sync/async work before closing Storage or DuckDB; public [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel) and cancellation state remain unsupported |
-| Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in; configuration, status, errors, timestamps, and statistics are SQLite-durable |
+| Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | always available; configuration, status, errors, timestamps, and statistics are SQLite-durable |
 | copy/extract | Unsupported | configuration rejected |
 | durable job/result state | Partial | query/load job metadata survives restart; query row payloads do not, and a restarted non-empty result returns an explicit `backendError` instead of an empty success |
 | bounded query result retention | Unsupported | all result rows remain in Go memory; gap `query.results.unbounded-memory-v1` |
@@ -306,12 +306,11 @@ service and connector
 
 | Capability | Status |
 | --- | --- |
-| filesystem object-store adapter | Verified only behind explicit local opt-in |
-| embedded GCS server | Not provided; configure an external GCS-compatible JSON endpoint |
+| accepted load source URI | `gs://` only; local paths and other schemes fail before job persistence |
+| embedded GCS server | Not provided by the binary; the default Compose project requires a fake-GCS-compatible service |
 | GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
 | Parquet load into an existing table | Partial; scalar fields only, with explicit schema/cast validation; nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1`, and decimal narrowing fails before destination mutation with `load.decimal-rounding.unsupported-v1` |
-| Python `load_table_from_uri` and bq `load --source_format=PARQUET` | Verified against the public REST endpoint and one external fake GCS service |
-| Spark indirect Parquet write | Verified with separate PySpark and Scala Spark entrypoints, four non-empty partitions, and zero Storage Write RPCs |
+| public load transport | Verified against the public REST endpoint and the required fake-GCS-compatible service |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
@@ -324,13 +323,12 @@ service and connector
 
 The load target is
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad).
-The opt-in path downloads bounded immutable objects into a private temporary
+The load path downloads bounded immutable objects into a private temporary
 workspace, then applies the selected disposition atomically. Download is outside
 the destination transaction, and load jobs and idempotency records are
 process-local.
-Spark configures the Hadoop GCS Connector independently from BQEMU's
-`load.gcsEndpoint`; both must resolve to the same object-store service. See
-[Getting started](getting-started.md) for the Compose and client settings.
+See [Getting started](getting-started.md) for host, Compose-network, and
+development-container endpoint selection.
 The public edge does not parse or validate `Authorization` header or metadata
 values. Client credential requirements, TLS, the separate diagnostics admin
 token, and IAM are distinct compatibility claims. See [Local client credentials
