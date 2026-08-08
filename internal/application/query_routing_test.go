@@ -1,7 +1,6 @@
 package application
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -12,20 +11,14 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
-type staticQueryAnalyzer struct{ analysis ports.QueryAnalysis }
-
-func (analyzer staticQueryAnalyzer) AnalyzeQuery(context.Context, ports.QueryRequest) (ports.QueryAnalysis, error) {
-	return analyzer.analysis, nil
-}
-
 func TestQueryCatalogDDLIsRejectedBeforeJobAndEngineSideEffects(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	repository := memory.NewJobRepository()
-	engine := &countingQueryEngine{}
+	executor := &countingStatementExecutor{}
 	service := newTestQueryService(
-		repository, engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("ddl"),
-		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{RequiresCatalogMutation: true}}),
+		repository, executor, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("ddl"),
+		withTestQueryAnalysis(ports.QueryAnalysis{RequiresCatalogMutation: true}),
 	)
 
 	_, err := service.RunSync(ctx, QueryInput{ProjectID: "test-project", SQL: "DROP TABLE hidden"})
@@ -35,8 +28,8 @@ func TestQueryCatalogDDLIsRejectedBeforeJobAndEngineSideEffects(t *testing.T) {
 	if jobs, listErr := repository.List(ctx, "test-project", ""); listErr != nil || len(jobs) != 0 {
 		t.Fatalf("DDL created jobs = %#v, error=%v", jobs, listErr)
 	}
-	if engine.calls.Load() != 0 {
-		t.Fatalf("DDL reached query engine %d times", engine.calls.Load())
+	if executor.calls.Load() != 0 {
+		t.Fatalf("DDL reached statement executor %d times", executor.calls.Load())
 	}
 }
 
@@ -113,8 +106,8 @@ func TestQueryLocationIsInferredBeforeJobInsertion(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := newTestQueryService(
-				memory.NewJobRepository(), &countingQueryEngine{}, clock, fixedQueryID("generated"),
-				WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ReferencedTables: test.references}}),
+				memory.NewJobRepository(), &countingStatementExecutor{}, clock, fixedQueryID("generated"),
+				withTestQueryAnalysis(ports.QueryAnalysis{ReferencedTables: test.references}),
 				WithQueryDestinationCatalog(catalog),
 			)
 			job, _, created, err := service.newJob(ctx, test.input)
@@ -150,10 +143,10 @@ func TestDMLCannotTargetAnonymousCachedResultTable(t *testing.T) {
 	}
 	repository := memory.NewJobRepository()
 	service := newTestQueryService(
-		repository, &countingQueryEngine{}, clock, fixedQueryID("generated"),
-		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{
+		repository, &countingStatementExecutor{}, clock, fixedQueryID("generated"),
+		withTestQueryAnalysis(ports.QueryAnalysis{
 			ReferencedTables: []domain.TableReference{reference}, MutationTargets: []domain.TableReference{reference},
-		}}),
+		}),
 		WithQueryDestinationCatalog(catalog),
 	)
 	if _, _, _, err := service.newJob(ctx, QueryInput{
@@ -210,8 +203,8 @@ func TestQueryLocationMismatchIsRejectedBeforeJobInsertion(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			repository := memory.NewJobRepository()
 			service := newTestQueryService(
-				repository, &countingQueryEngine{}, clock, fixedQueryID("generated"),
-				WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ReferencedTables: test.references}}),
+				repository, &countingStatementExecutor{}, clock, fixedQueryID("generated"),
+				withTestQueryAnalysis(ports.QueryAnalysis{ReferencedTables: test.references}),
 				WithQueryDestinationCatalog(catalog),
 			)
 			_, _, _, err := service.newJob(ctx, QueryInput{
@@ -254,10 +247,10 @@ func TestQueryReferenceAppliesTableExpirationBeforeJobInsertion(t *testing.T) {
 	clock.Set(expires)
 	repository := memory.NewJobRepository()
 	service := newTestQueryService(
-		repository, &countingQueryEngine{}, clock, fixedQueryID("generated"),
-		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ReferencedTables: []domain.TableReference{{
+		repository, &countingStatementExecutor{}, clock, fixedQueryID("generated"),
+		withTestQueryAnalysis(ports.QueryAnalysis{ReferencedTables: []domain.TableReference{{
 			ProjectID: "test-project", DatasetID: "analytics", TableID: "events",
-		}}}}),
+		}}}),
 		WithQueryDestinationCatalog(catalog),
 	)
 	if _, _, _, err := service.newJob(ctx, QueryInput{
@@ -285,9 +278,9 @@ func TestAnonymousDestinationIdentityIsGeneratedBeforeJobInsertion(t *testing.T)
 	defer cancel()
 	clock := fixedClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	service := newTestQueryService(
-		memory.NewJobRepository(), &countingQueryEngine{}, clock, fixedQueryID("generated"),
-		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
-		WithQueryMaterializer(&compensatingMaterializer{}), WithQueryDestinationCatalog(failedPublicationCatalog{}),
+		memory.NewJobRepository(), &countingStatementExecutor{}, clock, fixedQueryID("generated"),
+		withTestQueryAnalysis(ports.QueryAnalysis{ProducesRows: true}),
+		WithStatementMaterializer(&compensatingMaterializer{}), WithQueryDestinationCatalog(failedPublicationCatalog{}),
 	)
 	job, _, created, err := service.newJob(ctx, QueryInput{ProjectID: "test-project", JobID: "anonymous-job", SQL: "SELECT 1"})
 	if err != nil {
@@ -311,9 +304,9 @@ func TestAnonymousMaterializationPublicationFailureIsCompensated(t *testing.T) {
 	defer cancel()
 	materializer := &compensatingMaterializer{}
 	service := newTestQueryService(
-		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"),
-		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
-		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
+		memory.NewJobRepository(), &countingStatementExecutor{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"),
+		withTestQueryAnalysis(ports.QueryAnalysis{ProducesRows: true}),
+		WithStatementMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
 	)
 	job, err := service.RunSync(ctx, QueryInput{ProjectID: "test-project", JobID: "anonymous-publish-fails", SQL: "SELECT 1 AS id"})
 	if err != nil {

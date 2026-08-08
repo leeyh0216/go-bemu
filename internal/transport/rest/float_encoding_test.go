@@ -14,13 +14,14 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
-type specialFloatQueryEngine struct{}
+type specialFloatStatementExecutor struct{}
 
-func (specialFloatQueryEngine) Ping(context.Context) error { return nil }
+func (specialFloatStatementExecutor) Ping(context.Context) error { return nil }
 
-func (specialFloatQueryEngine) Query(context.Context, ports.QueryRequest) (domain.QueryResult, error) {
+func (specialFloatStatementExecutor) ExecuteStatement(context.Context, semantic.Statement) (domain.QueryResult, error) {
 	return domain.QueryResult{
 		Columns: []domain.Column{
 			{Name: "finite", Type: "FLOAT64"},
@@ -50,12 +51,12 @@ func (specialFloatTableData) ListTableData(context.Context, string, string, stri
 func TestQueryResponseEncodesNonFiniteFloatTokensAcrossPublicRESTEdge(t *testing.T) {
 	ctx, cancel := staticOverwriteRESTTestContext(t)
 	defer cancel()
-	engine := specialFloatQueryEngine{}
+	executor := specialFloatStatementExecutor{}
 	queries := newRESTTestQueryService(
-		memory.NewJobRepository(), engine,
+		memory.NewJobRepository(), executor,
 		testClock{value: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}, &testIDs{},
 	)
-	server := httptest.NewServer(NewServer(nil, queries, engine, "").Handler())
+	server := httptest.NewServer(NewServer(nil, queries, executor, "").Handler())
 	t.Cleanup(server.Close)
 
 	response := staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodPost,
@@ -68,7 +69,7 @@ func TestTableDataListEncodesNonFiniteFloatTokensAcrossPublicRESTEdge(t *testing
 	ctx, cancel := staticOverwriteRESTTestContext(t)
 	defer cancel()
 	server := httptest.NewServer(NewCatalogServer(
-		nil, specialFloatQueryEngine{}, "", WithTableDataAPI(specialFloatTableData{}),
+		nil, specialFloatStatementExecutor{}, "", WithTableDataAPI(specialFloatTableData{}),
 	).Handler())
 	t.Cleanup(server.Close)
 

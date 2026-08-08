@@ -318,9 +318,9 @@ func (binding SymbolBinding) Kind() SymbolBindingKind { return binding.kind }
 func (binding SymbolBinding) Name() string { return binding.name }
 
 // StatementDescriptor is mutable construction input for a Statement.
-// ResolvedKind is supplied by the official analyzer and must agree with the
-// syntax kind. It deliberately reuses ast.StatementKind instead of defining a
-// second enum that could drift.
+// ResolvedKind is supplied by the official analyzer or the canonical catalog
+// binder and must agree with the syntax kind. It deliberately reuses
+// ast.StatementKind instead of defining a second enum that could drift.
 type StatementDescriptor struct {
 	Syntax              queryast.Statement
 	ResolvedKind        queryast.StatementKind

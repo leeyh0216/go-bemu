@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/config"
 	"github.com/leeyh0216/go-bemu/internal/contracttest"
+	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 func TestComposeStorageReadSupportsExplicitDisableAndCleanClose(t *testing.T) {
@@ -49,11 +51,17 @@ func TestComposeStorageReadSupportsExplicitDisableAndCleanClose(t *testing.T) {
 	}
 }
 
-func newStorageReadPredicateParser(t testing.TB) *googlesqladapter.Parser {
+func newStorageReadPredicateParser(t testing.TB) *googlesqladapter.Gateway {
 	t.Helper()
-	parser, err := googlesqladapter.NewParser()
+	parser, err := googlesqladapter.NewGateway(emptyGoogleSQLCatalogReader{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return parser
+}
+
+type emptyGoogleSQLCatalogReader struct{}
+
+func (emptyGoogleSQLCatalogReader) GoogleSQLCatalogSnapshot(context.Context) (ports.GoogleSQLCatalogSnapshot, error) {
+	return ports.GoogleSQLCatalogSnapshot{}, nil
 }

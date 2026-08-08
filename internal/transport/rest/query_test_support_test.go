@@ -2,17 +2,27 @@ package rest
 
 import (
 	"context"
-	"fmt"
 
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantictest"
 )
 
-type unavailableRESTQueryEngine struct{}
+func newRESTGoogleSQLGateway(catalog ports.GoogleSQLCatalogReader) ports.GoogleSQLGateway {
+	gateway, err := googlesqladapter.NewGateway(catalog)
+	if err != nil {
+		panic(err)
+	}
+	return gateway
+}
 
-func (unavailableRESTQueryEngine) Query(context.Context, ports.QueryRequest) (domain.QueryResult, error) {
-	return domain.QueryResult{}, fmt.Errorf("%w: query execution is not configured for this transport test", domain.ErrPrecondition)
+type noopRESTStatementExecutor struct{}
+
+func (noopRESTStatementExecutor) ExecuteStatement(context.Context, semantic.Statement) (domain.QueryResult, error) {
+	return domain.QueryResult{}, nil
 }
 
 func newRESTTestQueryService(
@@ -22,13 +32,18 @@ func newRESTTestQueryService(
 	ids ports.IDGenerator,
 	options ...application.QueryOption,
 ) *application.QueryService {
-	var warehouse ports.QueryEngine
-	if candidate, ok := backend.(ports.QueryEngine); ok {
-		warehouse = candidate
-	} else {
-		warehouse = unavailableRESTQueryEngine{}
+	gateway, err := semantictest.NewGateway(semantictest.Analysis{})
+	if err != nil {
+		panic(err)
 	}
-	service, err := application.NewQueryService(jobs, warehouse, clock, ids, options...)
+	var executor ports.StatementExecutor = noopRESTStatementExecutor{}
+	if candidate, ok := backend.(ports.StatementExecutor); ok {
+		executor = candidate
+	}
+	defaults := []application.QueryOption{
+		application.WithGoogleSQLGateway(gateway), application.WithStatementExecutor(executor),
+	}
+	service, err := application.NewQueryService(jobs, clock, ids, append(defaults, options...)...)
 	if err != nil {
 		panic(err)
 	}

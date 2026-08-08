@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -185,40 +184,7 @@ func jobFromDomain(job *domain.Job) jobResource {
 }
 
 func queryStatementType(query domain.QueryConfiguration) string {
-	if query.StatementType != "" {
-		return query.StatementType
-	}
-	return legacyStatementType(query.SQL)
-}
-
-func legacyStatementType(sql string) string {
-	fields := strings.Fields(strings.ToUpper(strings.TrimSpace(sql)))
-	if len(fields) == 0 {
-		return "SELECT"
-	}
-	if fields[0] == "WITH" {
-		return "SELECT"
-	}
-	// DECLARE is a procedural statement and can only run as part of a script.
-	// The currently accepted connector-owned multi-statement operation begins
-	// with DECLARE, so jobs.get must expose SCRIPT rather than DECLARE.
-	// https://cloud.google.com/bigquery/docs/multi-statement-queries#enumerate_child_jobs
-	if fields[0] == "DECLARE" {
-		return "SCRIPT"
-	}
-	if fields[0] == "CREATE" && len(fields) > 1 {
-		return "CREATE_" + fields[1]
-	}
-	if fields[0] == "ALTER" && len(fields) > 1 {
-		return "ALTER_" + fields[1]
-	}
-	if fields[0] == "DROP" && len(fields) > 1 {
-		return "DROP_" + fields[1]
-	}
-	if fields[0] == "TRUNCATE" && len(fields) > 1 {
-		return "TRUNCATE_" + fields[1]
-	}
-	return fields[0]
+	return query.StatementType
 }
 
 func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPageToken string) (queryResponse, error) {

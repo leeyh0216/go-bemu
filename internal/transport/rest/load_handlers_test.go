@@ -83,7 +83,12 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	queries := newRESTTestQueryService(memory.NewJobRepository(), warehouse, clock, ids)
+	queries := newRESTTestQueryService(
+		memory.NewJobRepository(), warehouse, clock, ids,
+		application.WithGoogleSQLGateway(newRESTGoogleSQLGateway(catalog)),
+		application.WithQueryDestinationCatalog(catalog),
+		application.WithStatementMaterializer(warehouse),
+	)
 	server := httptest.NewServer(NewServerWithLoadJobs(catalog, queries, loads, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 
@@ -115,7 +120,7 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 		t.Fatalf("idempotent retry did not return existing job: %#v", retry)
 	}
 	query := restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/queries",
-		`{"query":"SELECT count(*) AS rows FROM `+"`test-project.analytics.events`"+`","useLegacySql":false}`, http.StatusOK)
+		`{"query":"SELECT count(*) AS row_count FROM `+"`test-project.analytics.events`"+`","useLegacySql":false}`, http.StatusOK)
 	if query["totalRows"] != "1" || query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "2" {
 		t.Fatalf("unexpected query result after load: %#v", query)
 	}
@@ -144,7 +149,12 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	queries := newRESTTestQueryService(memory.NewJobRepository(), warehouse, clock, ids)
+	queries := newRESTTestQueryService(
+		memory.NewJobRepository(), warehouse, clock, ids,
+		application.WithGoogleSQLGateway(newRESTGoogleSQLGateway(catalog)),
+		application.WithQueryDestinationCatalog(catalog),
+		application.WithStatementMaterializer(warehouse),
+	)
 	server := httptest.NewServer(NewServerWithLoadJobs(catalog, queries, loads, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 

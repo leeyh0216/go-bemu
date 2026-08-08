@@ -1,7 +1,7 @@
 package application
 
 // Query jobs follow the BigQuery REST lifecycle while execution is delegated
-// through the replaceable QueryEngine port.
+// through the analyzed statement ports.
 //
 // Official sources:
 //   - jobs.insert: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert
@@ -9,8 +9,8 @@ package application
 //   - jobs.query: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query
 //
 // The application owns PENDING -> RUNNING -> DONE transitions and persists each
-// observable state through JobRepository. SQL execution remains behind the
-// replaceable QueryEngine outbound port.
+// observable state through JobRepository. SQL crosses one GoogleSQL analysis
+// boundary before an engine-neutral statement reaches an execution adapter.
 
 import (
 	"context"
@@ -45,14 +45,10 @@ type QueryInput struct {
 
 type QueryService struct {
 	jobs                  ports.JobRepository
-	warehouse             ports.QueryEngine
-	analyzer              ports.QueryAnalyzer
 	googleSQLGateway      ports.GoogleSQLGateway
 	statementExecutor     ports.StatementExecutor
 	statementMaterializer ports.StatementMaterializer
-	ddlParser             ports.DDLParser
 	ddlExecutor           ports.DDLExecutor
-	materializer          ports.QueryMaterializer
 	destinations          ports.QueryDestinationCatalog
 	clock                 ports.Clock
 	ids                   ports.IDGenerator
@@ -77,7 +73,6 @@ type QueryOption func(*QueryService)
 type preparedQuery struct {
 	statement semantic.Statement
 	analysis  ports.QueryAnalysis
-	valid     bool
 }
 
 // WithQueryDefaultLocation supplies the configured location when callers omit
@@ -97,21 +92,6 @@ func WithQueryDefaultLocation(location string) QueryOption {
 // table that tables.get cannot observe.
 func WithQueryDestinationCatalog(catalog ports.QueryDestinationCatalog) QueryOption {
 	return func(service *QueryService) { service.destinations = catalog }
-}
-
-// WithQueryMaterializer makes the physical destination capability explicit at
-// composition time. Backends that only implement QueryEngine therefore cannot
-// accidentally advertise destination-table support through a type assertion.
-func WithQueryMaterializer(materializer ports.QueryMaterializer) QueryOption {
-	return func(service *QueryService) { service.materializer = materializer }
-}
-
-// WithQueryAnalyzer enables structural source-dataset routing and anonymous
-// result materialization. The port is explicit so a future parser/backend can
-// replace DuckDB without an implicit adapter type assertion.
-// https://cloud.google.com/bigquery/docs/locations#specify_locations
-func WithQueryAnalyzer(analyzer ports.QueryAnalyzer) QueryOption {
-	return func(service *QueryService) { service.analyzer = analyzer }
 }
 
 // WithGoogleSQLGateway installs the single official parse/analyze boundary.
@@ -166,7 +146,6 @@ func WithQueryCompensationTimeout(timeout time.Duration) QueryOption {
 // execution are installed explicitly through options at the composition root.
 func NewQueryService(
 	jobs ports.JobRepository,
-	warehouse ports.QueryEngine,
 	clock ports.Clock,
 	ids ports.IDGenerator,
 	options ...QueryOption,
@@ -192,7 +171,7 @@ func NewQueryService(
 	idle := make(chan struct{})
 	close(idle)
 	service := &QueryService{
-		jobs: jobs, warehouse: warehouse,
+		jobs:  jobs,
 		clock: clock, ids: ids,
 		defaultLocation: "US", anonymousTTL: 24 * time.Hour,
 		operationTimeout: 2 * time.Minute, compensationTimeout: 30 * time.Second,
@@ -201,20 +180,13 @@ func NewQueryService(
 	for _, option := range options {
 		option(service)
 	}
-	if !queryServiceDependencyIsNil(service.googleSQLGateway) {
-		if queryServiceDependencyIsNil(service.statementExecutor) {
-			cancelRuntime()
-			return nil, fmt.Errorf("%w: analyzed statement executor is required with the GoogleSQL gateway", domain.ErrPrecondition)
-		}
-	} else {
-		if queryServiceDependencyIsNil(service.warehouse) {
-			cancelRuntime()
-			return nil, fmt.Errorf("%w: query service requires the GoogleSQL gateway", domain.ErrPrecondition)
-		}
-		if !queryServiceDependencyIsNil(service.statementExecutor) || !queryServiceDependencyIsNil(service.statementMaterializer) {
-			cancelRuntime()
-			return nil, fmt.Errorf("%w: analyzed statement ports require the GoogleSQL gateway", domain.ErrPrecondition)
-		}
+	if queryServiceDependencyIsNil(service.googleSQLGateway) {
+		cancelRuntime()
+		return nil, fmt.Errorf("%w: query service requires the GoogleSQL gateway", domain.ErrPrecondition)
+	}
+	if queryServiceDependencyIsNil(service.statementExecutor) {
+		cancelRuntime()
+		return nil, fmt.Errorf("%w: analyzed statement executor is required with the GoogleSQL gateway", domain.ErrPrecondition)
 	}
 	return service, nil
 }
@@ -379,11 +351,9 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 	}
 	input.Location = location
 	anonymousDestination := false
-	if (s.analyzer != nil || prepared.valid) && analysis.ProducesRows && input.Destination == nil {
-		legacyMissing := !prepared.valid && s.materializer == nil
-		semanticMissing := prepared.valid && s.statementMaterializer == nil
-		if legacyMissing || semanticMissing || s.destinations == nil {
-			return nil, preparedQuery{}, false, fmt.Errorf("%w: anonymous query results require analyzer, materializer, and destination catalog ports", domain.ErrPrecondition)
+	if analysis.ProducesRows && input.Destination == nil {
+		if s.statementMaterializer == nil || s.destinations == nil {
+			return nil, preparedQuery{}, false, fmt.Errorf("%w: anonymous query results require statement materializer and destination catalog ports", domain.ErrPrecondition)
 		}
 		destination := anonymousQueryDestination(input.ProjectID, input.Location, input.JobID)
 		input.Destination = &destination
@@ -498,21 +468,11 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job, prepared pr
 
 func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job, prepared preparedQuery) (domain.QueryResult, error) {
 	configuration := job.Configuration
-	request := ports.QueryRequest{
-		ProjectID: job.Reference.ProjectID, DefaultProjectID: configuration.DefaultProjectID,
-		DefaultDataset: configuration.DefaultDataset, SQL: configuration.SQL,
-	}
 	if configuration.Destination == nil {
-		if prepared.valid {
-			return s.executeAnalyzedStatement(ctx, prepared.statement, job.Reference.JobID)
-		}
-		return s.executeQueryWithoutDestinationForJob(ctx, request, job.Reference.JobID)
+		return s.executeAnalyzedStatement(ctx, prepared.statement, job.Reference.JobID)
 	}
-	if prepared.valid && (s.statementMaterializer == nil || s.destinations == nil) {
+	if s.statementMaterializer == nil || s.destinations == nil {
 		return domain.QueryResult{}, fmt.Errorf("%w: query destination requires analyzed statement materializer and destination catalog ports", domain.ErrPrecondition)
-	}
-	if !prepared.valid && (s.materializer == nil || s.destinations == nil) {
-		return domain.QueryResult{}, fmt.Errorf("%w: query destination requires query materializer and destination catalog ports; fix_hint=compose WithQueryDestinationCatalog", domain.ErrPrecondition)
 	}
 
 	destination := *configuration.Destination
@@ -538,24 +498,11 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job, prepar
 		return domain.QueryResult{}, fmt.Errorf("%w: destination table does not exist and createDisposition is CREATE_NEVER", domain.ErrNotFound)
 	}
 
-	var materialized ports.QueryMaterializationResult
-	if prepared.valid {
-		result, materializeErr := s.statementMaterializer.MaterializeAnalyzedStatement(ctx, prepared.statement, ports.StatementMaterializationRequest{
-			Destination: destination, DestinationExists: destinationExists,
-			DestinationSchema: existing.Schema, WriteDisposition: configuration.WriteDisposition,
-			CreateDisposition: configuration.CreateDisposition,
-		})
-		materialized = ports.QueryMaterializationResult{
-			QueryResult: result.QueryResult, DestinationCreated: result.DestinationCreated,
-		}
-		err = materializeErr
-	} else {
-		materialized, err = s.materializer.MaterializeQuery(ctx, ports.QueryMaterializationRequest{
-			Query: request, Destination: destination, DestinationExists: destinationExists,
-			DestinationSchema: existing.Schema, WriteDisposition: configuration.WriteDisposition,
-			CreateDisposition: configuration.CreateDisposition,
-		})
-	}
+	materialized, err := s.statementMaterializer.MaterializeAnalyzedStatement(ctx, prepared.statement, ports.StatementMaterializationRequest{
+		Destination: destination, DestinationExists: destinationExists,
+		DestinationSchema: existing.Schema, WriteDisposition: configuration.WriteDisposition,
+		CreateDisposition: configuration.CreateDisposition,
+	})
 	if err != nil {
 		return domain.QueryResult{}, err
 	}
@@ -603,12 +550,7 @@ func (s *QueryService) compensateMaterializedDestination(ctx context.Context, de
 	defer cancelCleanupBase()
 	cleanupCtx, cancelCleanup := context.WithTimeout(cleanupBase, s.compensationTimeout)
 	defer cancelCleanup()
-	var err error
-	if s.googleSQLGateway != nil {
-		err = s.statementMaterializer.DropMaterializedDestination(cleanupCtx, destination)
-	} else {
-		err = s.materializer.DropMaterializedDestination(cleanupCtx, destination)
-	}
+	err := s.statementMaterializer.DropMaterializedDestination(cleanupCtx, destination)
 	if err != nil {
 		return fmt.Errorf("compensate unpublished destination: %w", err)
 	}

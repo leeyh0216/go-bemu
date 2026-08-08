@@ -12,6 +12,7 @@ import (
 	gsql "github.com/goccy/go-googlesql"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
@@ -84,6 +85,14 @@ func (gateway *Gateway) analyzeSingleStatement(
 	snapshot *catalogSnapshot,
 	options *gsql.AnalyzerOptions,
 ) (semantic.Statement, error) {
+	mapper := statementMapper{sourceDigest: document.source.Digest()}
+	syntax, err := mapper.mapStatement(document.statements[0])
+	if err != nil {
+		return semantic.Statement{}, err
+	}
+	if isCatalogStatement(syntax.Kind()) {
+		return projectCatalogStatement(request, syntax, snapshot)
+	}
 	output, err := gsql.AnalyzeStatementFromParserAST(
 		document.statements[0], options, request.SQL, snapshot.root, snapshot.typeFactory,
 	)
@@ -101,12 +110,33 @@ func (gateway *Gateway) analyzeSingleStatement(
 	if err := ctx.Err(); err != nil {
 		return semantic.Statement{}, err
 	}
-	mapper := statementMapper{sourceDigest: document.source.Digest()}
-	syntax, err := mapper.mapStatement(document.statements[0])
+	return projectResolvedStatement(ctx, request, syntax, snapshot, resolved)
+}
+
+func isCatalogStatement(kind queryast.StatementKind) bool {
+	switch kind {
+	case queryast.StatementCreateTable, queryast.StatementAlterTable,
+		queryast.StatementDropTable, queryast.StatementTruncateTable:
+		return true
+	default:
+		return false
+	}
+}
+
+func projectCatalogStatement(
+	request ports.QueryRequest,
+	syntax queryast.Statement,
+	snapshot *catalogSnapshot,
+) (semantic.Statement, error) {
+	projection := &resolvedProjection{snapshot: snapshot}
+	bindings, err := projection.relationBindings(request, syntax)
 	if err != nil {
 		return semantic.Statement{}, err
 	}
-	return projectResolvedStatement(ctx, request, syntax, snapshot, resolved)
+	return semantic.NewStatement(semantic.StatementDescriptor{
+		Syntax: syntax, ResolvedKind: syntax.Kind(), RelationBindings: bindings,
+		ExpressionsComplete: true,
+	})
 }
 
 type catalogSnapshot struct {

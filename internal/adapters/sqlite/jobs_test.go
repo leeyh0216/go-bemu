@@ -25,7 +25,7 @@ func TestJobMetadataSurvivesRepositoryRestartWithoutQueryRows(t *testing.T) {
 	queryJob, err := domain.NewConfiguredQueryJob(domain.JobReference{
 		ProjectID: "test-project", Location: "asia-northeast3", JobID: "query-restart",
 	}, domain.QueryConfiguration{
-		SQL: "SELECT 1 AS value", DefaultProjectID: "test-project", DefaultDataset: "analytics",
+		SQL: "SELECT 1 AS value", StatementType: "SELECT", DefaultProjectID: "test-project", DefaultDataset: "analytics",
 		Destination:      &domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "query_output"},
 		WriteDisposition: domain.WriteTruncate, CreateDisposition: domain.CreateIfNeeded,
 		Priority: domain.QueryPriorityBatch, Labels: map[string]string{"purpose": "restart"},

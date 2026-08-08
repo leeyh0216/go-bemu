@@ -502,7 +502,7 @@ func (s *CatalogService) getTableLocked(ctx context.Context, projectID, datasetI
 }
 
 // PublishMaterializedTable publishes metadata for physical storage that a
-// QueryMaterializer has already committed. It intentionally does not call
+// StatementMaterializer has already committed. It intentionally does not call
 // WarehouseAdmin.CreateTable: query destination creation is a CTAS transaction,
 // and publishing metadata before that transaction succeeds would expose a table
 // clients cannot read.

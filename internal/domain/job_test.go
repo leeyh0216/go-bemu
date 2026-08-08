@@ -127,17 +127,17 @@ func TestQueryConfigurationDigestNormalizesLocationCase(t *testing.T) {
 
 func TestQueryPriorityAndLabelsAreValidatedAndFingerprintBound(t *testing.T) {
 	reference := JobReference{ProjectID: "test-project", Location: "US", JobID: "job"}
-	base := QueryConfiguration{SQL: "SELECT 1", Priority: QueryPriorityInteractive, Labels: map[string]string{}}
+	base := QueryConfiguration{SQL: "SELECT 1", StatementType: "SELECT", Priority: QueryPriorityInteractive, Labels: map[string]string{}}
 	job, err := NewConfiguredQueryJob(reference, base, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if job.Configuration.Priority != QueryPriorityInteractive || job.Configuration.Labels == nil || len(job.Configuration.Labels) != 0 {
-		t.Fatalf("connector metadata was not preserved: %#v", job.Configuration)
+		t.Fatalf("query metadata was not preserved: %#v", job.Configuration)
 	}
 	batch := base
 	batch.Priority = QueryPriorityBatch
-	batch.Labels = map[string]string{"spark_connector": "copy"}
+	batch.Labels = map[string]string{"query_component": "copy"}
 	batchDigest, err := QueryConfigurationDigest(reference, batch)
 	if err != nil {
 		t.Fatal(err)
@@ -146,9 +146,10 @@ func TestQueryPriorityAndLabelsAreValidatedAndFingerprintBound(t *testing.T) {
 		t.Fatal("priority/labels did not change query configuration fingerprint")
 	}
 	for name, configuration := range map[string]QueryConfiguration{
-		"priority":    {SQL: "SELECT 1", Priority: "URGENT"},
-		"label key":   {SQL: "SELECT 1", Labels: map[string]string{"Uppercase": "value"}},
-		"label value": {SQL: "SELECT 1", Labels: map[string]string{"valid": "UPPERCASE"}},
+		"statement type": {SQL: "SELECT 1"},
+		"priority":       {SQL: "SELECT 1", StatementType: "SELECT", Priority: "URGENT"},
+		"label key":      {SQL: "SELECT 1", StatementType: "SELECT", Labels: map[string]string{"Uppercase": "value"}},
+		"label value":    {SQL: "SELECT 1", StatementType: "SELECT", Labels: map[string]string{"valid": "UPPERCASE"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewConfiguredQueryJob(reference, configuration, time.Unix(1, 0)); !errors.Is(err, ErrInvalid) {

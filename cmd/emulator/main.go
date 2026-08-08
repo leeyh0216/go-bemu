@@ -134,7 +134,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("configure GoogleSQL analyzer gateway: %w", err)
 	}
 	queryService, err := application.NewQueryService(
-		jobRepository, nil, clock, system.IDGenerator{},
+		jobRepository, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
 		application.WithGoogleSQLGateway(googleSQLGateway),
 		application.WithStatementExecutor(statementExecutor),

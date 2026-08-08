@@ -1,15 +1,12 @@
 package googlesql
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"runtime"
 
 	gsql "github.com/goccy/go-googlesql"
 	"github.com/leeyh0216/go-bemu/internal/domain"
-	"github.com/leeyh0216/go-bemu/internal/ports"
 	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 )
 
@@ -35,36 +32,6 @@ type parsedDocument struct {
 	statements []gsql.ASTStatementNode
 	source     queryast.Source
 	owner      *gsql.ParserOutput
-}
-
-// Parse is the single GoogleSQL syntax entrypoint. It uses the official script
-// parser for both one statement and ordered multi-statement input, so statement
-// classification never depends on a keyword scanner or backend parser.
-func (*Parser) Parse(ctx context.Context, request ports.QueryRequest) (queryast.Statement, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	document, err := parseExternal(request.SQL)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { runtime.KeepAlive(document.owner) }()
-	mapper := statementMapper{sourceDigest: document.source.Digest()}
-	statements := make([]queryast.Statement, 0, len(document.statements))
-	for _, external := range document.statements {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		statement, err := mapper.mapStatement(external)
-		if err != nil {
-			return nil, err
-		}
-		statements = append(statements, statement)
-	}
-	if len(statements) == 1 {
-		return statements[0], nil
-	}
-	return queryast.NewScriptStatement(document.source, statements)
 }
 
 // parseExternal remains package-private so a later gateway can pass the same

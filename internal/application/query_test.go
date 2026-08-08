@@ -16,17 +16,34 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
 type fixedQueryID string
 
 func (id fixedQueryID) NewID() string { return string(id) }
 
+func TestQueryServiceRequiresAnalyzedStatementPortsAtComposition(t *testing.T) {
+	clock := fixedClock{now: time.Unix(1, 0)}
+	ids := fixedQueryID("composition")
+	for name, options := range map[string][]QueryOption{
+		"gateway":  {WithStatementExecutor(&countingStatementExecutor{})},
+		"executor": {withTestQueryAnalysis(ports.QueryAnalysis{})},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, err := NewQueryService(memory.NewJobRepository(), clock, ids, options...)
+			if service != nil || !errors.Is(err, domain.ErrPrecondition) {
+				t.Fatalf("NewQueryService() = (%v, %v), want nil precondition error", service, err)
+			}
+		})
+	}
+}
+
 func TestQueryServiceUsesConfiguredDefaultLocation(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	service := newTestQueryService(
-		memory.NewJobRepository(), &fakeWarehouse{},
+		memory.NewJobRepository(), &countingStatementExecutor{},
 		fixedClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}, fixedQueryID("one"),
 		WithQueryDefaultLocation("EU"),
 	)
@@ -50,7 +67,7 @@ func TestQueryJobLogsLabelValuesWithShape(t *testing.T) {
 	})
 
 	service := newTestQueryService(
-		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("safe-log"),
+		memory.NewJobRepository(), &countingStatementExecutor{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("safe-log"),
 	)
 	const secretValue = "secret-label-value-42"
 	if _, err := service.RunSync(ctx, QueryInput{
@@ -69,47 +86,47 @@ func TestQueryJobLogsLabelValuesWithShape(t *testing.T) {
 	}
 }
 
-type countingQueryEngine struct{ calls atomic.Int64 }
+type countingStatementExecutor struct{ calls atomic.Int64 }
 
-func (engine *countingQueryEngine) Query(context.Context, ports.QueryRequest) (domain.QueryResult, error) {
-	engine.calls.Add(1)
+func (executor *countingStatementExecutor) ExecuteStatement(context.Context, semantic.Statement) (domain.QueryResult, error) {
+	executor.calls.Add(1)
 	return domain.QueryResult{Columns: []domain.Column{{Name: "value", Type: "INTEGER"}}, Rows: [][]any{{int64(1)}}}, nil
 }
 
-type deadlineAwareQueryEngine struct {
+type deadlineAwareStatementExecutor struct {
 	deadlines chan time.Time
 }
 
-func (engine *deadlineAwareQueryEngine) Query(ctx context.Context, _ ports.QueryRequest) (domain.QueryResult, error) {
+func (executor *deadlineAwareStatementExecutor) ExecuteStatement(ctx context.Context, _ semantic.Statement) (domain.QueryResult, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		return domain.QueryResult{}, errors.New("query execution context has no deadline")
 	}
-	engine.deadlines <- deadline
+	executor.deadlines <- deadline
 	<-ctx.Done()
 	return domain.QueryResult{}, ctx.Err()
 }
 
-type closeControlledQueryEngine struct {
+type closeControlledStatementExecutor struct {
 	started  chan struct{}
 	canceled chan struct{}
 	release  chan struct{}
 	finished chan struct{}
 }
 
-func newCloseControlledQueryEngine() *closeControlledQueryEngine {
-	return &closeControlledQueryEngine{
+func newCloseControlledStatementExecutor() *closeControlledStatementExecutor {
+	return &closeControlledStatementExecutor{
 		started: make(chan struct{}), canceled: make(chan struct{}),
 		release: make(chan struct{}), finished: make(chan struct{}),
 	}
 }
 
-func (engine *closeControlledQueryEngine) Query(ctx context.Context, _ ports.QueryRequest) (domain.QueryResult, error) {
-	close(engine.started)
+func (executor *closeControlledStatementExecutor) ExecuteStatement(ctx context.Context, _ semantic.Statement) (domain.QueryResult, error) {
+	close(executor.started)
 	<-ctx.Done()
-	close(engine.canceled)
-	<-engine.release
-	close(engine.finished)
+	close(executor.canceled)
+	<-executor.release
+	close(executor.finished)
 	return domain.QueryResult{}, ctx.Err()
 }
 
@@ -122,9 +139,9 @@ func TestQueryServiceCloseCancelsWaitsRejectsAndIsIdempotent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := queryApplicationTestContext(t)
 			defer cancel()
-			engine := newCloseControlledQueryEngine()
+			executor := newCloseControlledStatementExecutor()
 			service := newTestQueryService(
-				memory.NewJobRepository(), engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID(name),
+				memory.NewJobRepository(), executor, fixedClock{now: time.Unix(1, 0)}, fixedQueryID(name),
 				WithQueryOperationTimeout(time.Minute),
 			)
 			input := QueryInput{ProjectID: "test-project", JobID: name, SQL: "SELECT 1"}
@@ -139,11 +156,11 @@ func TestQueryServiceCloseCancelsWaitsRejectsAndIsIdempotent(t *testing.T) {
 					workResult <- err
 				}()
 			}
-			waitForQueryLifecycleSignal(t, ctx, engine.started, "query start")
+			waitForQueryLifecycleSignal(t, ctx, executor.started, "query start")
 
 			closeResult := make(chan error, 1)
 			go func() { closeResult <- service.Close(ctx) }()
-			waitForQueryLifecycleSignal(t, ctx, engine.canceled, "query cancellation")
+			waitForQueryLifecycleSignal(t, ctx, executor.canceled, "query cancellation")
 			select {
 			case err := <-closeResult:
 				t.Fatalf("Close returned before active query released: %v", err)
@@ -161,8 +178,8 @@ func TestQueryServiceCloseCancelsWaitsRejectsAndIsIdempotent(t *testing.T) {
 				t.Fatalf("bounded Close error = %v, want context canceled", err)
 			}
 
-			close(engine.release)
-			waitForQueryLifecycleSignal(t, ctx, engine.finished, "query finish")
+			close(executor.release)
+			waitForQueryLifecycleSignal(t, ctx, executor.finished, "query finish")
 			select {
 			case err := <-closeResult:
 				if err != nil {
@@ -206,9 +223,9 @@ func TestQueryOperationTimeoutBoundsSyncAndAsyncExecution(t *testing.T) {
 			name = "async"
 		}
 		t.Run(name, func(t *testing.T) {
-			engine := &deadlineAwareQueryEngine{deadlines: make(chan time.Time, 1)}
+			executor := &deadlineAwareStatementExecutor{deadlines: make(chan time.Time, 1)}
 			service := newTestQueryService(
-				memory.NewJobRepository(), engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID(name),
+				memory.NewJobRepository(), executor, fixedClock{now: time.Unix(1, 0)}, fixedQueryID(name),
 				WithQueryOperationTimeout(20*time.Millisecond),
 			)
 			input := QueryInput{ProjectID: "test-project", JobID: name, SQL: "SELECT 1"}
@@ -223,7 +240,7 @@ func TestQueryOperationTimeoutBoundsSyncAndAsyncExecution(t *testing.T) {
 				t.Fatal(err)
 			}
 			select {
-			case deadline := <-engine.deadlines:
+			case deadline := <-executor.deadlines:
 				if deadline.IsZero() {
 					t.Fatal("query execution deadline is zero")
 				}
@@ -244,8 +261,8 @@ func TestQueryJobIdentityIncludesLocationAndConfigurationFingerprint(t *testing.
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	repository := memory.NewJobRepository()
-	engine := &countingQueryEngine{}
-	service := newTestQueryService(repository, engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"))
+	executor := &countingStatementExecutor{}
+	service := newTestQueryService(repository, executor, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"))
 	input := QueryInput{ProjectID: "test-project", Location: "US", JobID: "stable", SQL: "SELECT 1"}
 
 	const callers = 16
@@ -276,7 +293,7 @@ func TestQueryJobIdentityIncludesLocationAndConfigurationFingerprint(t *testing.
 		t.Fatalf("concurrent duplicate results: successes=%d conflicts=%d", successes, conflicts)
 	}
 	waitForQueryJobDone(t, ctx, service, domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "stable"})
-	if got := engine.calls.Load(); got != 1 {
+	if got := executor.calls.Load(); got != 1 {
 		t.Fatalf("same identity/configuration executed %d times, want 1", got)
 	}
 	if _, err := service.Submit(ctx, input); !errors.Is(err, domain.ErrConflict) {
@@ -293,7 +310,7 @@ func TestQueryJobIdentityIncludesLocationAndConfigurationFingerprint(t *testing.
 		t.Fatal(err)
 	}
 	waitForQueryJobDone(t, ctx, service, domain.JobReference{ProjectID: "test-project", Location: "EU", JobID: "stable"})
-	if got := engine.calls.Load(); got != 2 {
+	if got := executor.calls.Load(); got != 2 {
 		t.Fatalf("same jobId in a second location executed calls=%d, want 2", got)
 	}
 	if _, err := service.Get(ctx, domain.JobReference{ProjectID: "test-project", Location: "asia-northeast3", JobID: "stable"}); !errors.Is(err, domain.ErrNotFound) {
@@ -318,8 +335,8 @@ func (failedPublicationCatalog) PublishMaterializedTable(context.Context, domain
 
 type compensatingMaterializer struct{ drops atomic.Int64 }
 
-func (*compensatingMaterializer) MaterializeQuery(context.Context, ports.QueryMaterializationRequest) (ports.QueryMaterializationResult, error) {
-	return ports.QueryMaterializationResult{
+func (*compensatingMaterializer) MaterializeAnalyzedStatement(context.Context, semantic.Statement, ports.StatementMaterializationRequest) (ports.StatementMaterializationResult, error) {
+	return ports.StatementMaterializationResult{
 		QueryResult:        domain.QueryResult{Columns: []domain.Column{{Name: "id", Type: "INTEGER"}}, Rows: [][]any{{int64(1)}}},
 		DestinationCreated: true,
 	}, nil
@@ -332,8 +349,8 @@ type deadlineCompensatingMaterializer struct {
 
 type complexResultMaterializer struct{ drops atomic.Int64 }
 
-func (*complexResultMaterializer) MaterializeQuery(context.Context, ports.QueryMaterializationRequest) (ports.QueryMaterializationResult, error) {
-	return ports.QueryMaterializationResult{
+func (*complexResultMaterializer) MaterializeAnalyzedStatement(context.Context, semantic.Statement, ports.StatementMaterializationRequest) (ports.StatementMaterializationResult, error) {
+	return ports.StatementMaterializationResult{
 		QueryResult: domain.QueryResult{
 			Columns: []domain.Column{{Name: "values", Type: "ARRAY"}}, Rows: [][]any{{[]any{int64(1)}}},
 		},
@@ -364,8 +381,8 @@ func TestMaterializedTablePublicationFailureIsCompensated(t *testing.T) {
 	defer cancel()
 	materializer := &compensatingMaterializer{}
 	service := newTestQueryService(
-		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"),
-		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
+		memory.NewJobRepository(), &countingStatementExecutor{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"),
+		WithStatementMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
 	)
 	job, err := service.RunSync(ctx, QueryInput{
 		ProjectID: "test-project", Location: "US", JobID: "publish-fails", SQL: "SELECT 1 AS id",
@@ -387,8 +404,8 @@ func TestMaterializedTableCompensationHasDetachedDeadline(t *testing.T) {
 	defer cancel()
 	materializer := &deadlineCompensatingMaterializer{}
 	service := newTestQueryService(
-		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("bounded-cleanup"),
-		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
+		memory.NewJobRepository(), &countingStatementExecutor{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("bounded-cleanup"),
+		WithStatementMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
 		WithQueryCompensationTimeout(20*time.Millisecond),
 	)
 	job, err := service.RunSync(ctx, QueryInput{
@@ -408,9 +425,9 @@ func TestComplexAnonymousResultFailsWithStableGapAndCompensates(t *testing.T) {
 	defer cancel()
 	materializer := &complexResultMaterializer{}
 	service := newTestQueryService(
-		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("complex-result"),
-		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
-		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
+		memory.NewJobRepository(), &countingStatementExecutor{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("complex-result"),
+		withTestQueryAnalysis(ports.QueryAnalysis{ProducesRows: true}),
+		WithStatementMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
 	)
 	job, err := service.RunSync(ctx, QueryInput{ProjectID: "test-project", JobID: "complex-result", SQL: "SELECT [1] AS values"})
 	if err != nil {

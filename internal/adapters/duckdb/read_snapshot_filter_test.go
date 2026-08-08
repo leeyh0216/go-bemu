@@ -8,6 +8,7 @@ import (
 
 	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
+	coreports "github.com/leeyh0216/go-bemu/internal/ports"
 	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	readdomain "github.com/leeyh0216/go-bemu/internal/storageread/domain"
 	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
@@ -99,11 +100,17 @@ func (resolver *countingRowRestrictionResolver) GetTable(context.Context, string
 
 func newReadRestrictionParser(t testing.TB) readports.RowRestrictionParser {
 	t.Helper()
-	parser, err := googlesqladapter.NewParser()
+	parser, err := googlesqladapter.NewGateway(emptyGoogleSQLCatalogReader{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return parser
+}
+
+type emptyGoogleSQLCatalogReader struct{}
+
+func (emptyGoogleSQLCatalogReader) GoogleSQLCatalogSnapshot(context.Context) (coreports.GoogleSQLCatalogSnapshot, error) {
+	return coreports.GoogleSQLCatalogSnapshot{}, nil
 }
 
 func mustParseReadRestriction(t testing.TB, input string) queryast.Expression {

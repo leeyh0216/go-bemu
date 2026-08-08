@@ -121,6 +121,7 @@ func TestGatewayUsesOneEntrypointForInsertAndDDL(t *testing.T) {
 		{name: "insert", sql: "INSERT INTO analytics.events (id) VALUES (1)", kind: queryast.StatementInsert, target: true},
 		{name: "create", sql: "CREATE TABLE analytics.created (id INT64, amount NUMERIC(12))", kind: queryast.StatementCreateTable, target: true},
 		{name: "alter", sql: "ALTER TABLE analytics.events ADD COLUMN extra STRING", kind: queryast.StatementAlterTable, target: true},
+		{name: "alter type", sql: "ALTER TABLE analytics.events ALTER COLUMN id SET DATA TYPE STRING", kind: queryast.StatementAlterTable, target: true},
 		{name: "drop", sql: "DROP TABLE analytics.events", kind: queryast.StatementDropTable, target: true},
 		{name: "truncate", sql: "TRUNCATE TABLE analytics.events", kind: queryast.StatementTruncateTable, target: true},
 	}

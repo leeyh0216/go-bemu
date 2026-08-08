@@ -120,32 +120,9 @@ type TableDataPage struct {
 	MaxRowBytes      int64
 }
 
-// QueryEngine executes GoogleSQL-shaped requests against a replaceable backend.
-type QueryEngine interface {
-	Query(context.Context, QueryRequest) (domain.QueryResult, error)
-}
-
-// QueryAnalyzer exposes backend-specific structural query analysis without
-// leaking DuckDB parsing into the application layer. Location routing uses the
-// referenced datasets and anonymous destinations are created only for
-// row-producing statements.
-// https://cloud.google.com/bigquery/docs/locations#specify_locations
-type QueryAnalyzer interface {
-	AnalyzeQuery(context.Context, QueryRequest) (QueryAnalysis, error)
-}
-
-// QueryMaterializer owns the atomic physical side of a query destination. The
-// application publishes canonical table metadata only after this transaction
-// succeeds. A compensating drop is available when metadata publication fails.
-// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
-type QueryMaterializer interface {
-	MaterializeQuery(context.Context, QueryMaterializationRequest) (QueryMaterializationResult, error)
-	DropMaterializedDestination(context.Context, domain.TableReference) error
-}
-
 // QueryDestinationCatalog is deliberately narrower than CatalogService. It
 // lets query jobs validate location/existence and publish metadata for a table
-// whose physical storage was already created by QueryMaterializer.
+// whose physical storage was already created by StatementMaterializer.
 type QueryDestinationCatalog interface {
 	GetDataset(context.Context, string, string) (domain.Dataset, error)
 	GetTable(context.Context, string, string, string) (domain.Table, error)
@@ -158,7 +135,6 @@ type QueryDestinationCatalog interface {
 type Warehouse interface {
 	HealthChecker
 	CatalogStorage
-	QueryEngine
 }
 
 type QueryRequest struct {
@@ -173,18 +149,4 @@ type QueryAnalysis struct {
 	MutationTargets         []domain.TableReference
 	ProducesRows            bool
 	RequiresCatalogMutation bool
-}
-
-type QueryMaterializationRequest struct {
-	Query             QueryRequest
-	Destination       domain.TableReference
-	DestinationExists bool
-	DestinationSchema []domain.Field
-	WriteDisposition  domain.WriteDisposition
-	CreateDisposition domain.CreateDisposition
-}
-
-type QueryMaterializationResult struct {
-	QueryResult        domain.QueryResult
-	DestinationCreated bool
 }

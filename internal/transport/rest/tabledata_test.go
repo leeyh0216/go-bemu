@@ -154,7 +154,7 @@ func TestTableDataWireBudgetsAcrossPublicRESTEdge(t *testing.T) {
 	request := func(t *testing.T, page ports.TableDataPage, requestPath string) (*http.Response, []byte) {
 		t.Helper()
 		server := httptest.NewServer(NewCatalogServer(
-			nil, specialFloatQueryEngine{}, "", WithTableDataAPI(fixedTableDataPage{page: page, honorOffset: true}),
+			nil, specialFloatStatementExecutor{}, "", WithTableDataAPI(fixedTableDataPage{page: page, honorOffset: true}),
 		).Handler())
 		t.Cleanup(server.Close)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+requestPath, nil)
@@ -251,7 +251,7 @@ func TestTableDataWireBudgetsAcrossPublicRESTEdge(t *testing.T) {
 
 	t.Run("operation deadline", func(t *testing.T) {
 		server := httptest.NewServer(NewCatalogServer(
-			nil, specialFloatQueryEngine{}, "", WithTableDataAPI(fixedTableDataPage{err: context.DeadlineExceeded}),
+			nil, specialFloatStatementExecutor{}, "", WithTableDataAPI(fixedTableDataPage{err: context.DeadlineExceeded}),
 		).Handler())
 		t.Cleanup(server.Close)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+path, nil)

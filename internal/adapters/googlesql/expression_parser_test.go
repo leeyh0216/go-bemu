@@ -1,4 +1,4 @@
-package googlesql_test
+package googlesql
 
 import (
 	"context"
@@ -11,8 +11,7 @@ import (
 )
 
 func TestExpressionParserMapsStorageReadPredicate(t *testing.T) {
-	parser := newParser(t)
-	expression, err := parser.ParseExpression(context.Background(), "`payload`.`score` >= 1 AND active = TRUE")
+	expression, err := parseExpression(context.Background(), "`payload`.`score` >= 1 AND active = TRUE")
 	if err != nil {
 		t.Fatalf("ParseExpression() error = %v", err)
 	}
@@ -32,7 +31,7 @@ func TestExpressionParserMapsStorageReadPredicate(t *testing.T) {
 		t.Fatal("expression omitted stable node identity")
 	}
 
-	expression, err = parser.ParseExpression(context.Background(), "BIGNUMERIC '001.2500'")
+	expression, err = parseExpression(context.Background(), "BIGNUMERIC '001.2500'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +40,7 @@ func TestExpressionParserMapsStorageReadPredicate(t *testing.T) {
 		t.Fatalf("decimal = (%q, %q)", decimal.Type(), decimal.CanonicalValue())
 	}
 
-	expression, err = parser.ParseExpression(context.Background(), "id BETWEEN 2 AND 4")
+	expression, err = parseExpression(context.Background(), "id BETWEEN 2 AND 4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +52,6 @@ func TestExpressionParserMapsStorageReadPredicate(t *testing.T) {
 }
 
 func TestExpressionParserFailsClosedAndRetainsInvalidPredicate(t *testing.T) {
-	parser := newParser(t)
 	tests := []struct {
 		input string
 		kind  error
@@ -62,7 +60,7 @@ func TestExpressionParserFailsClosedAndRetainsInvalidPredicate(t *testing.T) {
 		{input: "customer_secret = 1; DELETE FROM dataset.table", kind: domain.ErrInvalid},
 	}
 	for _, tt := range tests {
-		expression, err := parser.ParseExpression(context.Background(), tt.input)
+		expression, err := parseExpression(context.Background(), tt.input)
 		if !errors.Is(err, tt.kind) {
 			t.Fatalf("ParseExpression(%q) = (%#v, %v), want %v", tt.input, expression, err, tt.kind)
 		}

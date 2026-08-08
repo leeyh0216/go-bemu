@@ -10,7 +10,7 @@ import (
 )
 
 func (prepared preparedQuery) statementType() string {
-	if !prepared.valid || prepared.statement.Syntax() == nil {
+	if prepared.statement.Syntax() == nil {
 		return ""
 	}
 	return string(prepared.statement.Kind())
@@ -20,10 +20,6 @@ func (s *QueryService) prepareQueryAdmission(
 	ctx context.Context,
 	request ports.QueryRequest,
 ) (preparedQuery, error) {
-	if s.googleSQLGateway == nil {
-		analysis, err := s.analyzeQueryAdmission(ctx, request)
-		return preparedQuery{analysis: analysis}, err
-	}
 	statement, err := s.googleSQLGateway.Analyze(ctx, request)
 	if err != nil {
 		return preparedQuery{}, err
@@ -32,7 +28,7 @@ func (s *QueryService) prepareQueryAdmission(
 	if analysis.RequiresCatalogMutation && s.ddlExecutor == nil {
 		return preparedQuery{}, unsupportedDDL("catalog DDL executor is not configured")
 	}
-	return preparedQuery{statement: statement, analysis: analysis, valid: true}, nil
+	return preparedQuery{statement: statement, analysis: analysis}, nil
 }
 
 func queryAnalysisFromStatement(statement semantic.Statement) ports.QueryAnalysis {

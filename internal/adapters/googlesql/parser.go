@@ -1,7 +1,6 @@
 package googlesql
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -10,7 +9,6 @@ import (
 
 	gsql "github.com/goccy/go-googlesql"
 	"github.com/leeyh0216/go-bemu/internal/domain"
-	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 const ddlCapability = "query.ddl.catalog-sync-v1"
@@ -20,20 +18,6 @@ var (
 	initializeErr  error
 )
 
-// Parser is safe for concurrent use. go-googlesql serializes access to its
-// process-global transpiled module internally.
-type Parser struct{}
-
-var _ ports.DDLParser = (*Parser)(nil)
-
-// NewParser initializes the pinned GoogleSQL module once per process.
-func NewParser() (*Parser, error) {
-	if err := initialize(); err != nil {
-		return nil, err
-	}
-	return &Parser{}, nil
-}
-
 func initialize() error {
 	initializeOnce.Do(func() {
 		if err := gsql.Init(); err != nil {
@@ -41,147 +25,6 @@ func initialize() error {
 		}
 	})
 	return initializeErr
-}
-
-// ParseDDL parses exactly one statement and retains parser diagnostics.
-func (*Parser) ParseDDL(ctx context.Context, request ports.QueryRequest) (domain.DDLCommand, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.DDLCommand{}, false, err
-	}
-	if !isDDLCandidate(request.SQL) {
-		return domain.DDLCommand{}, false, nil
-	}
-	if err := initialize(); err != nil {
-		return domain.DDLCommand{}, false, err
-	}
-	options, err := parserOptions()
-	if err != nil {
-		return domain.DDLCommand{}, false, parserFailure(err)
-	}
-	output, err := gsql.ParseStatement(request.SQL, options)
-	if err != nil || output == nil {
-		if isMultiStatementScript(request.SQL, options) {
-			return domain.DDLCommand{}, false, fmt.Errorf(
-				"%w: multi-statement queries are not implemented; capability=%s",
-				domain.ErrUnsupported, domain.GapQueryScriptsUnsupportedV1,
-			)
-		}
-		return domain.DDLCommand{}, false, invalidInput("invalid GoogleSQL statement syntax", request.SQL, err)
-	}
-	statement, err := output.Statement()
-	if err != nil || statement == nil {
-		return domain.DDLCommand{}, false, parserFailure(err)
-	}
-	if err := ctx.Err(); err != nil {
-		return domain.DDLCommand{}, false, err
-	}
-
-	switch node := statement.(type) {
-	case *gsql.ASTCreateTableStatement:
-		command, err := parseCreateTable(node, request)
-		return command, true, err
-	case *gsql.ASTDropStatement:
-		command, err := parseDropTable(node, request)
-		return command, true, err
-	case *gsql.ASTAlterTableStatement:
-		command, err := parseAlterTable(node, request)
-		return command, true, err
-	case *gsql.ASTTruncateStatement:
-		command, err := parseTruncateTable(node, request)
-		return command, true, err
-	default:
-		isDDL, inspectErr := statement.IsDdlStatement()
-		if inspectErr != nil {
-			return domain.DDLCommand{}, false, parserFailure()
-		}
-		if isDDL {
-			return domain.DDLCommand{}, true, unsupported("DDL statement kind is not supported")
-		}
-		return domain.DDLCommand{}, false, nil
-	}
-}
-
-// isDDLCandidate keeps this adapter from becoming the syntax authority for
-// queries and DML. The execution engine owns those statement classes and may
-// accept expressions that are outside GoogleSQL. Once a statement is
-// classified as DDL, the GoogleSQL AST parser remains authoritative.
-func isDDLCandidate(sql string) bool {
-	keyword := leadingKeyword(sql)
-	switch keyword {
-	case "CREATE", "ALTER", "DROP", "TRUNCATE":
-		return true
-	default:
-		return false
-	}
-}
-
-func leadingKeyword(sql string) string {
-	for index := 0; index < len(sql); {
-		switch {
-		case isSpace(sql[index]):
-			index++
-		case sql[index] == '#':
-			index = skipLineComment(sql, index)
-		case sql[index] == '-' && index+1 < len(sql) && sql[index+1] == '-':
-			index = skipLineComment(sql, index)
-		case sql[index] == '/' && index+1 < len(sql) && sql[index+1] == '*':
-			end := strings.Index(sql[index+2:], "*/")
-			if end < 0 {
-				return ""
-			}
-			index += end + 4
-		case isIdentifierStart(sql[index]):
-			end := index + 1
-			for end < len(sql) && isIdentifierPart(sql[end]) {
-				end++
-			}
-			return strings.ToUpper(sql[index:end])
-		default:
-			return ""
-		}
-	}
-	return ""
-}
-
-func skipLineComment(sql string, index int) int {
-	for index < len(sql) && sql[index] != '\n' {
-		index++
-	}
-	return index
-}
-
-func isSpace(value byte) bool {
-	switch value {
-	case ' ', '\t', '\r', '\n', '\f':
-		return true
-	default:
-		return false
-	}
-}
-
-func isIdentifierStart(value byte) bool {
-	return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
-}
-
-func isIdentifierPart(value byte) bool {
-	return isIdentifierStart(value) || value >= '0' && value <= '9'
-}
-
-func isMultiStatementScript(sql string, options *gsql.ParserOptions) bool {
-	output, err := gsql.ParseScript(sql, options, nil)
-	if err != nil || output == nil {
-		return false
-	}
-	script, err := output.Script()
-	if err != nil || script == nil {
-		return false
-	}
-	statements, err := script.StatementListNode()
-	if err != nil || statements == nil {
-		return false
-	}
-	count, err := statements.NumChildren()
-	return err == nil && count > 1
 }
 
 func parserOptions() (*gsql.ParserOptions, error) {
@@ -200,79 +43,6 @@ func parserOptions() (*gsql.ParserOptions, error) {
 		return nil, err
 	}
 	return options, nil
-}
-
-func parseCreateTable(node *gsql.ASTCreateTableStatement, request ports.QueryRequest) (domain.DDLCommand, error) {
-	if enabled, err := node.IsIfNotExists(); err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	} else if enabled {
-		return domain.DDLCommand{}, unsupported("CREATE TABLE IF NOT EXISTS is not supported")
-	}
-	if enabled, err := node.IsOrReplace(); err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	} else if enabled {
-		return domain.DDLCommand{}, unsupported("CREATE OR REPLACE TABLE is not supported")
-	}
-	if unsupportedScope, err := hasUnsupportedCreateScope(node); err != nil {
-		return domain.DDLCommand{}, err
-	} else if unsupportedScope {
-		return domain.DDLCommand{}, unsupported("temporary, public, and private tables are not supported")
-	}
-
-	name, err := node.Name()
-	if err != nil || name == nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	reference, err := resolveTableReference(name, request)
-	if err != nil {
-		return domain.DDLCommand{}, err
-	}
-	if err := rejectCreateTableClauses(node); err != nil {
-		return domain.DDLCommand{}, err
-	}
-
-	elements, err := node.TableElementList()
-	if err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	if elements == nil {
-		return domain.DDLCommand{}, invalid("CREATE TABLE requires a column list")
-	}
-	hasConstraints, err := elements.HasConstraints()
-	if err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	if hasConstraints {
-		return domain.DDLCommand{}, unsupported("table constraints are not supported")
-	}
-	children, err := astChildren(elements)
-	if err != nil {
-		return domain.DDLCommand{}, err
-	}
-	if len(children) == 0 {
-		return domain.DDLCommand{}, invalid("CREATE TABLE requires at least one column")
-	}
-
-	fields := make([]domain.Field, 0, len(children))
-	for _, child := range children {
-		definition, ok := child.(*gsql.ASTColumnDefinition)
-		if !ok {
-			return domain.DDLCommand{}, unsupported("table constraints are not supported")
-		}
-		field, err := parseColumnDefinition(definition)
-		if err != nil {
-			return domain.DDLCommand{}, err
-		}
-		fields = append(fields, field)
-	}
-	table := domain.Table{
-		ProjectID: reference.ProjectID, DatasetID: reference.DatasetID,
-		ID: reference.TableID, Type: "TABLE", Schema: fields,
-	}
-	if err := table.Validate(); err != nil {
-		return domain.DDLCommand{}, normalizeDomainError(err)
-	}
-	return newCommand(domain.DDLCommandDescriptor{Kind: domain.DDLCreateTable, Table: reference, Schema: fields})
 }
 
 func hasUnsupportedCreateScope(node *gsql.ASTCreateTableStatement) (bool, error) {
@@ -315,100 +85,6 @@ func rejectCreateTableClauses(node *gsql.ASTCreateTableStatement) error {
 		}
 	}
 	return nil
-}
-
-func parseDropTable(node *gsql.ASTDropStatement, request ports.QueryRequest) (domain.DDLCommand, error) {
-	kind, err := node.SchemaObjectKind()
-	if err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	if kind != gsql.SchemaObjectKindKTable {
-		return domain.DDLCommand{}, unsupported("only DROP TABLE is supported")
-	}
-	ifExists, err := node.IsIfExists()
-	if err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	if ifExists {
-		return domain.DDLCommand{}, unsupported("DROP TABLE IF EXISTS is not supported")
-	}
-	mode, err := node.DropMode()
-	if err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	if mode != gsql.ASTDropStatementEnums_DropModeDropModeUnspecified {
-		return domain.DDLCommand{}, unsupported("DROP TABLE modes are not supported")
-	}
-	name, err := node.Name()
-	if err != nil || name == nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	reference, err := resolveTableReference(name, request)
-	if err != nil {
-		return domain.DDLCommand{}, err
-	}
-	return newCommand(domain.DDLCommandDescriptor{Kind: domain.DDLDropTable, Table: reference})
-}
-
-func parseTruncateTable(node *gsql.ASTTruncateStatement, request ports.QueryRequest) (domain.DDLCommand, error) {
-	path, err := node.TargetPath()
-	if err != nil || path == nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	where, err := node.Where()
-	if err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	if where != nil {
-		return domain.DDLCommand{}, unsupported("TRUNCATE TABLE WHERE is not supported")
-	}
-	reference, err := resolveTableReference(path, request)
-	if err != nil {
-		return domain.DDLCommand{}, err
-	}
-	return newCommand(domain.DDLCommandDescriptor{Kind: domain.DDLTruncateTable, Table: reference})
-}
-
-func parseAlterTable(node *gsql.ASTAlterTableStatement, request ports.QueryRequest) (domain.DDLCommand, error) {
-	ifExists, err := node.IsIfExists()
-	if err != nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	if ifExists {
-		return domain.DDLCommand{}, unsupported("ALTER TABLE IF EXISTS is not supported")
-	}
-	path, err := node.Path()
-	if err != nil || path == nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	reference, err := resolveTableReference(path, request)
-	if err != nil {
-		return domain.DDLCommand{}, err
-	}
-	actions, err := node.ActionList()
-	if err != nil || actions == nil {
-		return domain.DDLCommand{}, parserFailure()
-	}
-	children, err := astChildren(actions)
-	if err != nil {
-		return domain.DDLCommand{}, err
-	}
-	if len(children) != 1 {
-		return domain.DDLCommand{}, unsupported("ALTER TABLE requires exactly one supported action")
-	}
-
-	switch action := children[0].(type) {
-	case *gsql.ASTAddColumnAction:
-		return parseAddColumn(action, reference)
-	case *gsql.ASTDropColumnAction:
-		return parseDropColumn(action, reference)
-	case *gsql.ASTRenameColumnAction:
-		return parseRenameColumn(action, reference)
-	case *gsql.ASTAlterColumnTypeAction:
-		return parseAlterColumnType(action, reference)
-	default:
-		return domain.DDLCommand{}, unsupported("ALTER TABLE action is not supported")
-	}
 }
 
 func parseAddColumn(action *gsql.ASTAddColumnAction, reference domain.TableReference) (domain.DDLCommand, error) {
@@ -741,43 +417,6 @@ func integerTypeParameters(parameters *gsql.ASTTypeParameterList) ([]int64, erro
 		values = append(values, value)
 	}
 	return values, nil
-}
-
-func resolveTableReference(path *gsql.ASTPathExpression, request ports.QueryRequest) (domain.TableReference, error) {
-	parts, err := path.ToIdentifierVector()
-	if err != nil {
-		return domain.TableReference{}, parserFailure()
-	}
-	if len(parts) == 1 {
-		quotedParts := strings.Split(parts[0], ".")
-		if len(quotedParts) == 2 || len(quotedParts) == 3 {
-			parts = quotedParts
-		}
-	}
-	var reference domain.TableReference
-	switch len(parts) {
-	case 1:
-		reference.ProjectID = request.DefaultProjectID
-		if reference.ProjectID == "" {
-			reference.ProjectID = request.ProjectID
-		}
-		reference.DatasetID = request.DefaultDataset
-		reference.TableID = parts[0]
-	case 2:
-		reference.ProjectID = request.ProjectID
-		reference.DatasetID = parts[0]
-		reference.TableID = parts[1]
-	case 3:
-		reference.ProjectID = parts[0]
-		reference.DatasetID = parts[1]
-		reference.TableID = parts[2]
-	default:
-		return domain.TableReference{}, invalid("table reference must have one, two, or three parts")
-	}
-	if reference.ProjectID == "" || reference.DatasetID == "" || reference.TableID == "" {
-		return domain.TableReference{}, invalid("table reference requires a project and dataset")
-	}
-	return reference, nil
 }
 
 func identifier(value *gsql.ASTIdentifier, err error) (string, error) {

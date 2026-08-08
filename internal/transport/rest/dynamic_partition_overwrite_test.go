@@ -38,7 +38,7 @@ func TestPartitionMergeScriptCrossesRESTJobLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	queries, err := application.NewQueryService(
-		memory.NewJobRepository(), nil, clock, &testIDs{},
+		memory.NewJobRepository(), clock, &testIDs{},
 		application.WithGoogleSQLGateway(gateway),
 		application.WithStatementExecutor(warehouse),
 		application.WithStatementMaterializer(warehouse),

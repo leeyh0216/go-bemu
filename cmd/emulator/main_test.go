@@ -19,6 +19,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
 func TestRunPrintEffectiveConfigDoesNotStartListeners(t *testing.T) {
@@ -190,22 +191,22 @@ tableData:
 	}
 }
 
-type shutdownQueryEngine struct {
+type shutdownStatementExecutor struct {
 	started  chan struct{}
 	canceled chan struct{}
 	release  <-chan struct{}
 	active   atomic.Bool
 }
 
-func (engine *shutdownQueryEngine) Query(ctx context.Context, _ ports.QueryRequest) (domain.QueryResult, error) {
-	engine.active.Store(true)
-	close(engine.started)
+func (executor *shutdownStatementExecutor) ExecuteStatement(ctx context.Context, _ semantic.Statement) (domain.QueryResult, error) {
+	executor.active.Store(true)
+	close(executor.started)
 	<-ctx.Done()
-	close(engine.canceled)
-	if engine.release != nil {
-		<-engine.release
+	close(executor.canceled)
+	if executor.release != nil {
+		<-executor.release
 	}
-	engine.active.Store(false)
+	executor.active.Store(false)
 	return domain.QueryResult{}, ctx.Err()
 }
 
@@ -218,14 +219,14 @@ type shutdownIDs struct{}
 func (shutdownIDs) NewID() string { return "shutdown-query" }
 
 type shutdownStorageCloser struct {
-	engine *shutdownQueryEngine
-	order  *atomic.Int64
-	want   int64
-	called atomic.Bool
+	executor *shutdownStatementExecutor
+	order    *atomic.Int64
+	want     int64
+	called   atomic.Bool
 }
 
 func (closer *shutdownStorageCloser) Close(context.Context) error {
-	if closer.engine.active.Load() {
+	if closer.executor.active.Load() {
 		return errors.New("storage close raced active query")
 	}
 	if got := closer.order.Add(1); got != closer.want {
@@ -238,9 +239,9 @@ func (closer *shutdownStorageCloser) Close(context.Context) error {
 func TestShutdownCancelsOpenQueryBeforeStorageClose(t *testing.T) {
 	ctx, cancel := shutdownTestContext(t)
 	defer cancel()
-	engine := &shutdownQueryEngine{started: make(chan struct{}), canceled: make(chan struct{})}
+	executor := &shutdownStatementExecutor{started: make(chan struct{}), canceled: make(chan struct{})}
 	queries := newMainTestQueryService(
-		memory.NewJobRepository(), engine, shutdownClock{}, shutdownIDs{},
+		memory.NewJobRepository(), executor, shutdownClock{}, shutdownIDs{},
 		application.WithQueryOperationTimeout(time.Minute),
 	)
 	if _, err := queries.Submit(ctx, application.QueryInput{
@@ -249,19 +250,19 @@ func TestShutdownCancelsOpenQueryBeforeStorageClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-engine.started:
+	case <-executor.started:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
 	var order atomic.Int64
-	read := &shutdownStorageCloser{engine: engine, order: &order, want: 1}
-	write := &shutdownStorageCloser{engine: engine, order: &order, want: 2}
+	read := &shutdownStorageCloser{executor: executor, order: &order, want: 1}
+	write := &shutdownStorageCloser{executor: executor, order: &order, want: 2}
 	queryErr, readErr, writeErr := shutdownQueryAndStorage(ctx, queries, read, write)
 	if err := errors.Join(queryErr, readErr, writeErr); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case <-engine.canceled:
+	case <-executor.canceled:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
@@ -279,11 +280,11 @@ func TestShutdownSkipsStorageWhenOpenQueryExceedsCloseBudget(t *testing.T) {
 	ctx, cancel := shutdownTestContext(t)
 	defer cancel()
 	release := make(chan struct{})
-	engine := &shutdownQueryEngine{
+	executor := &shutdownStatementExecutor{
 		started: make(chan struct{}), canceled: make(chan struct{}), release: release,
 	}
 	queries := newMainTestQueryService(
-		memory.NewJobRepository(), engine, shutdownClock{}, shutdownIDs{},
+		memory.NewJobRepository(), executor, shutdownClock{}, shutdownIDs{},
 		application.WithQueryOperationTimeout(time.Minute),
 	)
 	if _, err := queries.Submit(ctx, application.QueryInput{
@@ -292,13 +293,13 @@ func TestShutdownSkipsStorageWhenOpenQueryExceedsCloseBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-engine.started:
+	case <-executor.started:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
 	var order atomic.Int64
-	read := &shutdownStorageCloser{engine: engine, order: &order, want: 1}
-	write := &shutdownStorageCloser{engine: engine, order: &order, want: 2}
+	read := &shutdownStorageCloser{executor: executor, order: &order, want: 1}
+	write := &shutdownStorageCloser{executor: executor, order: &order, want: 2}
 	expiredCtx, cancelClose := context.WithCancel(ctx)
 	cancelClose()
 	queryErr, readErr, writeErr := shutdownQueryAndStorage(expiredCtx, queries, read, write)
@@ -306,7 +307,7 @@ func TestShutdownSkipsStorageWhenOpenQueryExceedsCloseBudget(t *testing.T) {
 		t.Fatalf("bounded shutdown errors: query=%v read=%v write=%v", queryErr, readErr, writeErr)
 	}
 	select {
-	case <-engine.canceled:
+	case <-executor.canceled:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}

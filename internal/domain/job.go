@@ -118,8 +118,8 @@ type TableReference struct {
 // https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 type QueryConfiguration struct {
 	SQL string
-	// StatementType is analyzer-derived metadata. It is omitted for legacy
-	// persisted jobs and is never accepted from the public REST request.
+	// StatementType is analyzer-derived metadata and is never accepted from the
+	// public REST request.
 	StatementType     string `json:",omitempty"`
 	DefaultProjectID  string
 	DefaultDataset    string
@@ -166,7 +166,7 @@ type Job struct {
 }
 
 func NewQueryJob(reference JobReference, query string, now time.Time) (*Job, error) {
-	return NewConfiguredQueryJob(reference, QueryConfiguration{SQL: query}, now)
+	return NewConfiguredQueryJob(reference, QueryConfiguration{SQL: query, StatementType: "SELECT"}, now)
 }
 
 func NewConfiguredQueryJob(reference JobReference, configuration QueryConfiguration, now time.Time) (*Job, error) {
@@ -230,7 +230,7 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 	if configuration.SQL == "" {
 		return fmt.Errorf("%w: query is required", ErrInvalid)
 	}
-	if configuration.StatementType != "" && !validQueryStatementType(configuration.StatementType) {
+	if !validQueryStatementType(configuration.StatementType) {
 		return fmt.Errorf("%w: analyzed query statement type is invalid", ErrInvalid)
 	}
 	if configuration.Priority != QueryPriorityInteractive && configuration.Priority != QueryPriorityBatch {

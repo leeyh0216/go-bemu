@@ -16,7 +16,7 @@ func TestJobRepositoryReturnsDefensiveDeepCopies(t *testing.T) {
 	repository := NewJobRepository()
 	now := time.Date(2026, 8, 8, 2, 0, 0, 0, time.UTC)
 	job, err := domain.NewConfiguredQueryJob(domain.JobReference{ProjectID: "test-project", JobID: "j"}, domain.QueryConfiguration{
-		SQL: "SELECT 1", Labels: map[string]string{"component": "query"},
+		SQL: "SELECT 1", StatementType: "SELECT", Labels: map[string]string{"component": "query"},
 	}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestJobRepositoryListUsesLocationAsFinalStableTieBreak(t *testing.T) {
 	for _, location := range []string{"US", "EU"} {
 		job, err := domain.NewConfiguredQueryJob(domain.JobReference{
 			ProjectID: "test-project", Location: location, JobID: "same",
-		}, domain.QueryConfiguration{SQL: "SELECT 1"}, now)
+		}, domain.QueryConfiguration{SQL: "SELECT 1", StatementType: "SELECT"}, now)
 		if err != nil {
 			t.Fatal(err)
 		}

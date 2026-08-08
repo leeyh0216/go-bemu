@@ -1,4 +1,4 @@
-package googlesql_test
+package googlesql
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 )
 
 func TestStatementParserMapsPublicGoogleSQLCorpus(t *testing.T) {
-	parser := newParser(t)
+	parser := newSyntaxMapper(t)
 	tests := []struct {
 		name string
 		sql  string
@@ -122,7 +122,7 @@ func TestStatementParserMapsPublicGoogleSQLCorpus(t *testing.T) {
 }
 
 func TestStatementParserMapsQueryAndDMLStructure(t *testing.T) {
-	parser := newParser(t)
+	parser := newSyntaxMapper(t)
 	statement, err := parser.Parse(context.Background(), ports.QueryRequest{SQL: "SELECT COUNT(*) AS total FROM `p.d.t` WHERE id >= 1 ORDER BY id DESC LIMIT 2"})
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestStatementParserMapsQueryAndDMLStructure(t *testing.T) {
 }
 
 func TestStatementParserRejectsBackendSyntaxAndRetainsSQL(t *testing.T) {
-	parser := newParser(t)
+	parser := newSyntaxMapper(t)
 	for _, sql := range []string{
 		"SELECT TIMESTAMPTZ '2042-01-02 03:04:05+00' AS customer_secret",
 		"SELECT {'name': 'customer_secret'} AS payload",
@@ -203,7 +203,7 @@ func TestStatementParserRejectsBackendSyntaxAndRetainsSQL(t *testing.T) {
 }
 
 func TestStatementParserKeepsExternalASTOwnerAliveDuringMapping(t *testing.T) {
-	parser := newParser(t)
+	parser := newSyntaxMapper(t)
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -227,4 +227,38 @@ func TestStatementParserKeepsExternalASTOwnerAliveDuringMapping(t *testing.T) {
 	}
 	close(stop)
 	<-done
+}
+
+type syntaxMapper struct{}
+
+func newSyntaxMapper(t testing.TB) syntaxMapper {
+	t.Helper()
+	if err := initialize(); err != nil {
+		t.Fatal(err)
+	}
+	return syntaxMapper{}
+}
+
+func (syntaxMapper) Parse(ctx context.Context, request ports.QueryRequest) (queryast.Statement, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	document, err := parseExternal(request.SQL)
+	if err != nil {
+		return nil, err
+	}
+	defer runtime.KeepAlive(document.owner)
+	mapper := statementMapper{sourceDigest: document.source.Digest()}
+	statements := make([]queryast.Statement, 0, len(document.statements))
+	for _, external := range document.statements {
+		statement, err := mapper.mapStatement(external)
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements, statement)
+	}
+	if len(statements) == 1 {
+		return statements[0], nil
+	}
+	return queryast.NewScriptStatement(document.source, statements)
 }
