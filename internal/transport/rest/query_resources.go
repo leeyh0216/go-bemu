@@ -225,6 +225,9 @@ func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPage
 	if job.Result == nil {
 		return response, nil
 	}
+	if job.Result.RowsUnavailable {
+		return queryResponse{}, queryResultPayloadUnavailableError()
+	}
 	fields := fieldsFromDomain(job.Result.Columns)
 	if len(fields) > 0 {
 		response.Schema = &tableSchema{Fields: fields}
@@ -250,12 +253,21 @@ func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPage
 		}
 		response.Rows = append(response.Rows, tableRow{Fields: cells})
 	}
-	response.TotalRows = strconv.Itoa(len(job.Result.Rows))
+	totalRows := job.Result.TotalRows
+	if totalRows == 0 {
+		totalRows = int64(len(job.Result.Rows))
+	}
+	response.TotalRows = strconv.FormatInt(totalRows, 10)
 	response.PageToken = nextPageToken
 	if job.Result.AffectedRows != 0 {
 		response.NumDMLAffectedRows = strconv.FormatInt(job.Result.AffectedRows, 10)
 	}
 	return response, nil
+}
+
+func queryResultPayloadUnavailableError() error {
+	return fmt.Errorf("%w: query result row payload is unavailable after emulator restart; capability=%s",
+		domain.ErrBackend, domain.GapQueryRestartResultPayloadV1)
 }
 
 func encodeCell(value any) any {

@@ -44,6 +44,7 @@ const (
 	GapQueryUnsupportedOptionsV1            = "query.options.unsupported-v1"
 	GapQueryDDLCatalogSyncV1                = "query.ddl.catalog-sync-v1"
 	GapQueryScriptsUnsupportedV1            = "query.scripts.unsupported-v1"
+	GapQueryRestartResultPayloadV1          = "query.results.restart-payload-unavailable-v1"
 )
 
 type JobReference struct {
@@ -141,9 +142,11 @@ type JobError struct {
 type Column = Field
 
 type QueryResult struct {
-	Columns      []Column
-	Rows         [][]any
-	AffectedRows int64
+	Columns         []Column
+	Rows            [][]any
+	AffectedRows    int64
+	TotalRows       int64
+	RowsUnavailable bool
 }
 
 type Job struct {

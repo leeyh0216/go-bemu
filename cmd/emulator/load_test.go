@@ -8,6 +8,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/config"
+	loadapplication "github.com/leeyh0216/go-bemu/internal/loadjob/application"
 )
 
 func TestComposeLoadJobsIsExplicitAndUsesConfiguredAdapters(t *testing.T) {
@@ -20,14 +21,15 @@ func TestComposeLoadJobsIsExplicitAndUsesConfiguredAdapters(t *testing.T) {
 	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
 	cfg := config.Defaults()
 
-	service, err := composeLoadJobs(cfg, catalog, warehouse, clock, system.IDGenerator{})
+	jobs := loadapplication.NewMemoryJobRepository()
+	service, err := composeLoadJobs(cfg, jobs, catalog, warehouse, clock, system.IDGenerator{})
 	if err != nil || service != nil {
 		t.Fatalf("disabled load composition = %#v, %v", service, err)
 	}
 
 	cfg.Load.Enabled = true
 	cfg.Load.GCSEndpoint = "http://127.0.0.1:4443"
-	service, err = composeLoadJobs(cfg, catalog, warehouse, clock, system.IDGenerator{})
+	service, err = composeLoadJobs(cfg, jobs, catalog, warehouse, clock, system.IDGenerator{})
 	if err != nil || service == nil {
 		t.Fatalf("enabled load composition = %#v, %v", service, err)
 	}

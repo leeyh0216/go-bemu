@@ -21,6 +21,7 @@ import (
 
 func composeLoadJobs(
 	cfg config.Config,
+	jobs loadports.JobRepository,
 	catalog rest.CatalogUseCases,
 	loader loadports.Loader,
 	clock loadports.Clock,
@@ -55,7 +56,7 @@ func composeLoadJobs(
 		MaxTotalBytes: cfg.Load.MaxTotalBytes, TempDirectory: cfg.Database.TempDirectory,
 	}
 	service, err := loadapplication.NewService(
-		loadapplication.NewMemoryJobRepository(), objects, rest.NewLoadTableCatalog(catalog),
+		jobs, objects, rest.NewLoadTableCatalog(catalog),
 		loader, clock, ids, loadConfig,
 	)
 	if err != nil {

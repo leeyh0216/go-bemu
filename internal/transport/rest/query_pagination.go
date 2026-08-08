@@ -59,6 +59,9 @@ func queryPageTokenChecksum(token queryPageToken) string {
 func queryResultPageBounds(r *http.Request, job *domain.Job) (start, end int, next string, err error) {
 	total := 0
 	if job.Result != nil {
+		if job.Result.RowsUnavailable {
+			return 0, 0, "", queryResultPayloadUnavailableError()
+		}
 		total = len(job.Result.Rows)
 	}
 	scope := queryResultPageScope(job)
@@ -105,6 +108,9 @@ func queryResultPageScope(job *domain.Job) string {
 	columns := []domain.Column(nil)
 	if job.Result != nil {
 		rowCount = len(job.Result.Rows)
+		if job.Result.TotalRows > 0 {
+			rowCount = int(job.Result.TotalRows)
+		}
 		columns = job.Result.Columns
 	}
 	shape := fmt.Sprintf("%v", columns)

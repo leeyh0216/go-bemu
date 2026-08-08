@@ -270,8 +270,8 @@
         "discovery": true
       },
       "supportedInput": {
-        "en": "Project, job, and location identifiers are supported.",
-        "ko": "프로젝트와 작업, 위치 식별자를 지원합니다."
+        "en": "Project, job, and location identifiers are supported; query and load metadata survive restart when state.dsn is retained.",
+        "ko": "프로젝트와 작업, 위치 식별자를 지원합니다. state.dsn을 유지하면 쿼리와 로드 작업 메타데이터를 재시작 후에도 조회할 수 있습니다."
       },
       "conditions": [],
       "limitations": {
@@ -281,6 +281,7 @@
         "ko": "현재 구현된 에뮬레이터 작업 유형과 메타데이터만 반환합니다."
       },
       "issues": [
+        "#26",
         "#3"
       ],
       "sources": [
@@ -288,6 +289,7 @@
       ],
       "tests": [
         "bq:tests/bqcli/extended_contract.py:run_extended_contract",
+        "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "python:tests/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
       ]
     },
@@ -314,10 +316,11 @@
       "limitations": {
         "policy": "tracked",
         "byDesign": [],
-        "en": "Results follow the current emulator result lifecycle and limits.",
-        "ko": "결과는 현재 에뮬레이터의 결과 수명 주기와 크기 제한을 따릅니다."
+        "en": "Row payloads are process-local; after restart, a non-empty result fails with backendError instead of returning a false empty result.",
+        "ko": "결과 행은 프로세스 안에서만 유지합니다. 재시작 후 비어 있지 않은 결과를 조회하면 잘못된 빈 결과 대신 backendError를 반환합니다."
       },
       "issues": [
+        "#26",
         "#3"
       ],
       "sources": [
@@ -326,6 +329,7 @@
       "tests": [
         "bq:tests/bqcli/extended_contract.py:run_extended_contract",
         "bq:tests/bqcli/run_contract.py:main",
+        "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "python:tests/python/test_query_contract.py:test_synchronous_and_polled_query_jobs"
       ]
     },
@@ -368,6 +372,7 @@
         "ko": "bq 2.1.31에 필요한 media-body 메타데이터는 Discovery에 유지하지만 미디어 업로드 엔드포인트는 등록하지 않습니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."
       },
       "issues": [
+        "#26",
         "#5"
       ],
       "sources": [
@@ -376,6 +381,7 @@
       "tests": [
         "bq:tests/bqcli/extended_contract.py:run_extended_contract",
         "bq:tests/bqcli/run_contract.py:main",
+        "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs",
         "python:tests/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
       ]

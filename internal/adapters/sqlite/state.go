@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 	_ "modernc.org/sqlite"
 )
@@ -20,7 +21,8 @@ const (
 	// This value is deliberately independent from SQLite's user_version. The
 	// ledger is checked before a repository is exposed, so changing an applied
 	// migration requires a new version rather than editing history in place.
-	baselineChecksum = "ca3040ec8a716e9acafc71179d924902c9d4cac608a779143864fe3de2d9fce3"
+	baselineChecksum    = "ca3040ec8a716e9acafc71179d924902c9d4cac608a779143864fe3de2d9fce3"
+	jobMetadataChecksum = "4e0c30c547b0b23ca5a6e134e89e2679fa2cac71d0913dd6b061091c6b3c3dce"
 )
 
 const migrationLedgerDDL = `CREATE TABLE IF NOT EXISTS bqemu_schema_migrations (
@@ -43,19 +45,20 @@ type appliedMigration struct {
 	checksum string
 }
 
-var migrations = []migration{{
-	version:  1,
-	name:     "catalog_baseline",
-	checksum: baselineChecksum,
-	statements: []string{
-		`CREATE TABLE bqemu_projects (
+var migrations = []migration{
+	{
+		version:  1,
+		name:     "catalog_baseline",
+		checksum: baselineChecksum,
+		statements: []string{
+			`CREATE TABLE bqemu_projects (
     project_id TEXT PRIMARY KEY,
     friendly_name TEXT NOT NULL,
     description TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 ) STRICT`,
-		`CREATE TABLE bqemu_datasets (
+			`CREATE TABLE bqemu_datasets (
     project_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
     friendly_name TEXT NOT NULL,
@@ -70,7 +73,7 @@ var migrations = []migration{{
     PRIMARY KEY (project_id, dataset_id),
     FOREIGN KEY (project_id) REFERENCES bqemu_projects(project_id) ON DELETE CASCADE
 ) STRICT`,
-		`CREATE TABLE bqemu_dataset_labels (
+			`CREATE TABLE bqemu_dataset_labels (
     project_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
     label_key TEXT NOT NULL,
@@ -79,7 +82,7 @@ var migrations = []migration{{
     FOREIGN KEY (project_id, dataset_id)
         REFERENCES bqemu_datasets(project_id, dataset_id) ON DELETE CASCADE
 ) STRICT`,
-		`CREATE TABLE bqemu_tables (
+			`CREATE TABLE bqemu_tables (
     project_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
     table_id TEXT NOT NULL,
@@ -114,7 +117,7 @@ var migrations = []migration{{
         OR (range_partitioning_present = 1 AND range_partitioning_field IS NOT NULL
             AND range_start IS NOT NULL AND range_end IS NOT NULL AND range_interval IS NOT NULL))
 ) STRICT`,
-		`CREATE TABLE bqemu_table_labels (
+			`CREATE TABLE bqemu_table_labels (
     project_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
     table_id TEXT NOT NULL,
@@ -124,7 +127,7 @@ var migrations = []migration{{
     FOREIGN KEY (project_id, dataset_id, table_id)
         REFERENCES bqemu_tables(project_id, dataset_id, table_id) ON DELETE CASCADE
 ) STRICT`,
-		`CREATE TABLE bqemu_table_clustering_fields (
+			`CREATE TABLE bqemu_table_clustering_fields (
     project_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
     table_id TEXT NOT NULL,
@@ -134,7 +137,7 @@ var migrations = []migration{{
     FOREIGN KEY (project_id, dataset_id, table_id)
         REFERENCES bqemu_tables(project_id, dataset_id, table_id) ON DELETE CASCADE
 ) STRICT`,
-		`CREATE TABLE bqemu_table_fields (
+			`CREATE TABLE bqemu_table_fields (
     project_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
     table_id TEXT NOT NULL,
@@ -160,11 +163,11 @@ var migrations = []migration{{
     CHECK (rounding_mode IN ('', 'ROUNDING_MODE_UNSPECIFIED',
         'ROUND_HALF_AWAY_FROM_ZERO', 'ROUND_HALF_EVEN'))
 ) STRICT`,
-		`CREATE UNIQUE INDEX bqemu_table_fields_sibling_ordinal
+			`CREATE UNIQUE INDEX bqemu_table_fields_sibling_ordinal
 ON bqemu_table_fields (
     project_id, dataset_id, table_id, ifnull(parent_path, ''), ordinal
 )`,
-		`CREATE TRIGGER bqemu_table_fields_parent_insert
+			`CREATE TRIGGER bqemu_table_fields_parent_insert
 BEFORE INSERT ON bqemu_table_fields
 WHEN NEW.parent_path IS NOT NULL
 BEGIN
@@ -177,8 +180,74 @@ BEGIN
           AND upper(parent.field_type) IN ('RECORD', 'STRUCT')
     ) THEN RAISE(ABORT, 'nested field requires a RECORD or STRUCT parent') END;
 END`,
+		},
 	},
-}}
+	{
+		version:  2,
+		name:     "job_metadata",
+		checksum: jobMetadataChecksum,
+		statements: []string{
+			`CREATE TABLE bqemu_query_jobs (
+    project_id TEXT NOT NULL,
+    location_key TEXT NOT NULL,
+    location TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    configuration_version INTEGER NOT NULL CHECK (configuration_version = 1),
+    configuration_json TEXT NOT NULL CHECK (json_valid(configuration_json)),
+    configuration_digest TEXT NOT NULL CHECK (length(configuration_digest) = 64),
+    state TEXT NOT NULL CHECK (state IN ('PENDING', 'RUNNING', 'DONE')),
+    error_reason TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    ended_at TEXT,
+    result_present INTEGER NOT NULL CHECK (result_present IN (0, 1)),
+    result_schema_json TEXT,
+    result_row_count INTEGER NOT NULL CHECK (result_row_count >= 0),
+    affected_rows INTEGER NOT NULL,
+    PRIMARY KEY (project_id, location_key, job_id),
+    CHECK (length(location_key) > 0 AND length(location) > 0 AND length(job_id) > 0),
+    CHECK ((error_reason IS NULL) = (error_message IS NULL)),
+    CHECK (result_schema_json IS NULL OR json_valid(result_schema_json)),
+    CHECK ((result_present = 0 AND result_schema_json IS NULL
+            AND result_row_count = 0 AND affected_rows = 0)
+        OR (result_present = 1 AND result_schema_json IS NOT NULL)),
+    CHECK ((state = 'PENDING' AND started_at IS NULL AND ended_at IS NULL)
+        OR (state = 'RUNNING' AND started_at IS NOT NULL AND ended_at IS NULL)
+        OR (state = 'DONE' AND ended_at IS NOT NULL))
+) STRICT`,
+			`CREATE INDEX bqemu_query_jobs_list
+ON bqemu_query_jobs (project_id, location_key, created_at DESC, job_id)`,
+			`CREATE TABLE bqemu_load_jobs (
+    project_id TEXT NOT NULL,
+    location_key TEXT NOT NULL,
+    location TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    configuration_version INTEGER NOT NULL CHECK (configuration_version = 1),
+    configuration_json TEXT NOT NULL CHECK (json_valid(configuration_json)),
+    configuration_digest TEXT NOT NULL CHECK (length(configuration_digest) = 64),
+    state TEXT NOT NULL CHECK (state IN ('PENDING', 'RUNNING', 'DONE')),
+    error_reason TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    ended_at TEXT,
+    input_files INTEGER NOT NULL CHECK (input_files >= 0),
+    input_bytes INTEGER NOT NULL CHECK (input_bytes >= 0),
+    output_rows INTEGER NOT NULL CHECK (output_rows >= 0),
+    output_bytes INTEGER NOT NULL CHECK (output_bytes >= 0),
+    PRIMARY KEY (project_id, location_key, job_id),
+    CHECK (length(location_key) > 0 AND length(location) > 0 AND length(job_id) > 0),
+    CHECK ((error_reason IS NULL) = (error_message IS NULL)),
+    CHECK ((state = 'PENDING' AND started_at IS NULL AND ended_at IS NULL)
+        OR (state = 'RUNNING' AND started_at IS NOT NULL AND ended_at IS NULL)
+        OR (state = 'DONE' AND ended_at IS NOT NULL))
+) STRICT`,
+			`CREATE INDEX bqemu_load_jobs_list
+ON bqemu_load_jobs (project_id, location_key, created_at DESC, job_id)`,
+		},
+	},
+}
 
 var requiredSchemaObjects = map[string]string{
 	"bqemu_schema_migrations":            "table",
@@ -191,18 +260,24 @@ var requiredSchemaObjects = map[string]string{
 	"bqemu_table_fields":                 "table",
 	"bqemu_table_fields_sibling_ordinal": "index",
 	"bqemu_table_fields_parent_insert":   "trigger",
+	"bqemu_query_jobs":                   "table",
+	"bqemu_query_jobs_list":              "index",
+	"bqemu_load_jobs":                    "table",
+	"bqemu_load_jobs_list":               "index",
 }
 
 // Repositories owns the SQLite connection but exposes only context-specific
-// repository ports. Application services receive Catalog(), never the storage
+// repository ports. Application services never receive the storage
 // implementation or its transaction primitives.
 type Repositories struct {
-	db      *sql.DB
-	catalog ports.CatalogRepository
+	db        *sql.DB
+	catalog   ports.CatalogRepository
+	queryJobs ports.JobRepository
+	loadJobs  loadports.JobRepository
 }
 
-// Open creates or verifies BQEMU state at path. The returned catalog facade is
-// safe for concurrent use; callers must Close the owning repository bundle.
+// Open creates or verifies BQEMU state at path. The returned facades are safe
+// for concurrent use; callers must Close the owning repository bundle.
 func Open(ctx context.Context, path string) (*Repositories, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("SQLite state path is required")
@@ -232,11 +307,48 @@ func Open(ctx context.Context, path string) (*Repositories, error) {
 	if err := checkIntegrity(ctx, db); err != nil {
 		return closeWithError(err)
 	}
+	if err := reconcileInterruptedJobs(ctx, db, time.Now().UTC()); err != nil {
+		return closeWithError(err)
+	}
 
-	return &Repositories{db: db, catalog: &catalogRepository{db: db}}, nil
+	return &Repositories{
+		db: db, catalog: &catalogRepository{db: db},
+		queryJobs: newQueryJobRepository(db), loadJobs: &loadJobRepository{db: db},
+	}, nil
 }
 
-func (r *Repositories) Catalog() ports.CatalogRepository { return r.catalog }
+func (r *Repositories) Catalog() ports.CatalogRepository  { return r.catalog }
+func (r *Repositories) QueryJobs() ports.JobRepository    { return r.queryJobs }
+func (r *Repositories) LoadJobs() loadports.JobRepository { return r.loadJobs }
+
+func reconcileInterruptedJobs(ctx context.Context, db *sql.DB, now time.Time) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin interrupted job reconciliation: %w", err)
+	}
+	defer tx.Rollback()
+	endedAt := encodeTime(now)
+	updates := []struct {
+		statement string
+		message   string
+	}{
+		{`UPDATE bqemu_query_jobs SET state = 'DONE', error_reason = 'stopped',
+    error_message = ?, ended_at = ? WHERE state IN ('PENDING', 'RUNNING')`,
+			"query job was interrupted by emulator restart"},
+		{`UPDATE bqemu_load_jobs SET state = 'DONE', error_reason = 'backendError',
+    error_message = ?, ended_at = ? WHERE state IN ('PENDING', 'RUNNING')`,
+			"load job was interrupted by emulator restart"},
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, update.statement, update.message, endedAt); err != nil {
+			return fmt.Errorf("reconcile interrupted BQEMU jobs: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit interrupted job reconciliation: %w", err)
+	}
+	return nil
+}
 
 func (r *Repositories) Check(ctx context.Context) error {
 	if r == nil || r.db == nil {

@@ -5,14 +5,17 @@ import (
 	"fmt"
 
 	sqlitestate "github.com/leeyh0216/go-bemu/internal/adapters/sqlite"
+	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 // stateRuntime is composition-owned. Application services receive only the
 // catalog port and cannot access SQLite lifecycle or transaction internals.
 type stateRuntime struct {
-	catalog ports.CatalogRepository
-	close   func() error
+	catalog   ports.CatalogRepository
+	queryJobs ports.JobRepository
+	loadJobs  loadports.JobRepository
+	close     func() error
 }
 
 func composeStateRuntime(ctx context.Context, dsn string) (*stateRuntime, error) {
@@ -20,7 +23,10 @@ func composeStateRuntime(ctx context.Context, dsn string) (*stateRuntime, error)
 	if err != nil {
 		return nil, fmt.Errorf("open BQEMU state: %w", err)
 	}
-	return &stateRuntime{catalog: repositories.Catalog(), close: repositories.Close}, nil
+	return &stateRuntime{
+		catalog: repositories.Catalog(), queryJobs: repositories.QueryJobs(),
+		loadJobs: repositories.LoadJobs(), close: repositories.Close,
+	}, nil
 }
 
 func (runtime *stateRuntime) Close() error {

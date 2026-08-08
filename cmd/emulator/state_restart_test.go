@@ -111,6 +111,131 @@ logging:
 	}
 }
 
+func TestRuntimeJobMetadataSurvivesRestart(t *testing.T) {
+	previousLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	contracttest.Operation(t, "bigquery.jobs.insert")
+	contracttest.Operation(t, "bigquery.jobs.get")
+	contracttest.Operation(t, "bigquery.jobs.getQueryResults")
+
+	directory := t.TempDir()
+	httpAddress := unusedLoopbackAddress(t)
+	grpcAddress := unusedLoopbackAddress(t)
+	baseURL := "http://" + httpAddress
+	configPath := filepath.Join(directory, "bqemu.yaml")
+	configBody := fmt.Sprintf(`
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+defaults:
+  projectId: test-project
+  location: US
+server:
+  http:
+    address: %q
+    publicUrl: %q
+  grpc:
+    address: %q
+database:
+  adapter: duckdb
+  dsn: %q
+  tempDirectory: %q
+state:
+  dsn: %q
+runtime:
+  shutdownTimeout: "5s"
+  serverDrainTimeout: "2s"
+  storageCloseTimeout: "2s"
+storage:
+  read:
+    enabled: false
+  write:
+    enabled: false
+load:
+  enabled: true
+  gcsEndpoint: "http://127.0.0.1:1"
+logging:
+  level: error
+  format: text
+`, httpAddress, baseURL, grpcAddress,
+		filepath.Join(directory, "engine.duckdb"), filepath.Join(directory, "tmp"),
+		filepath.Join(directory, "state.sqlite"))
+	if err := os.WriteFile(configPath, []byte(strings.TrimSpace(configBody)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := startRuntimeForRestartTest(t, configPath, baseURL)
+	runtimeRequest(t, baseURL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", `{
+  "jobReference":{"projectId":"test-project","jobId":"persisted-query","location":"US"},
+  "configuration":{"labels":{"purpose":"restart"},"query":{"query":"SELECT 42 AS answer","useLegacySql":false,"priority":"BATCH"}}
+}`, http.StatusOK)
+	queryBeforeRestart := waitForRuntimeJob(t, baseURL, "persisted-query")
+	if queryBeforeRestart["status"].(map[string]any)["state"] != "DONE" {
+		t.Fatalf("query job did not complete: %#v", queryBeforeRestart)
+	}
+	runtimeRequest(t, baseURL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", `{
+  "jobReference":{"projectId":"test-project","jobId":"persisted-load","location":"US"},
+  "configuration":{"load":{
+    "sourceUris":["gs://restart-fixtures/input.csv"],
+    "destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},
+    "sourceFormat":"CSV","writeDisposition":"WRITE_TRUNCATE","createDisposition":"CREATE_IF_NEEDED"
+  }}
+}`, http.StatusOK)
+	loadBeforeRestart := waitForRuntimeJob(t, baseURL, "persisted-load")
+	if loadBeforeRestart["status"].(map[string]any)["state"] != "DONE" {
+		t.Fatalf("load job did not complete: %#v", loadBeforeRestart)
+	}
+	stop()
+
+	stop = startRuntimeForRestartTest(t, configPath, baseURL)
+	t.Cleanup(stop)
+	restartedQuery := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/test-project/jobs/persisted-query?location=US", "", http.StatusOK)
+	queryConfiguration := restartedQuery["configuration"].(map[string]any)["query"].(map[string]any)
+	queryLabels := restartedQuery["configuration"].(map[string]any)["labels"].(map[string]any)
+	if restartedQuery["status"].(map[string]any)["state"] != "DONE" ||
+		queryConfiguration["query"] != "SELECT 42 AS answer" || queryConfiguration["priority"] != "BATCH" ||
+		queryLabels["purpose"] != "restart" {
+		t.Fatalf("restarted query job = %#v", restartedQuery)
+	}
+	missingRows := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/test-project/queries/persisted-query?location=US", "", http.StatusInternalServerError)
+	queryError := missingRows["error"].(map[string]any)
+	queryErrors := queryError["errors"].([]any)
+	if queryErrors[0].(map[string]any)["reason"] != "backendError" ||
+		!strings.Contains(queryError["message"].(string), "capability=query.results.restart-payload-unavailable-v1") {
+		t.Fatalf("restarted query result error = %#v", missingRows)
+	}
+
+	restartedLoad := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/test-project/jobs/persisted-load?location=US", "", http.StatusOK)
+	loadConfiguration := restartedLoad["configuration"].(map[string]any)["load"].(map[string]any)
+	destination := loadConfiguration["destinationTable"].(map[string]any)
+	loadStatus := restartedLoad["status"].(map[string]any)
+	loadStatistics := restartedLoad["statistics"].(map[string]any)["load"].(map[string]any)
+	if loadStatus["state"] != "DONE" || loadStatus["errorResult"].(map[string]any)["reason"] != "notImplemented" ||
+		destination["tableId"] != "events" || loadConfiguration["writeDisposition"] != "WRITE_TRUNCATE" ||
+		loadStatistics["inputFiles"] != "0" || loadStatistics["outputRows"] != "0" {
+		t.Fatalf("restarted load job = %#v", restartedLoad)
+	}
+}
+
+func waitForRuntimeJob(t *testing.T, baseURL, jobID string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		job := runtimeRequest(t, baseURL, http.MethodGet,
+			"/bigquery/v2/projects/test-project/jobs/"+jobID+"?location=US", "", http.StatusOK)
+		if job["status"].(map[string]any)["state"] == "DONE" {
+			return job
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job %s did not reach DONE: %#v", jobID, job)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func startRuntimeForRestartTest(t *testing.T, configPath, baseURL string) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

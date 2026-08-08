@@ -25,7 +25,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/admin"
@@ -126,7 +125,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}()
 	catalogRepository := state.catalog
-	jobRepository := memory.NewJobRepository()
+	jobRepository := state.queryJobs
 	clock := system.Clock{}
 	catalogService := composeCatalogService(cfg, catalogRepository, catalogStorage, tableDataReader, clock)
 	if err := ensureDefaultProject(ctx, catalogService, cfg.Defaults.ProjectID); err != nil {
@@ -149,7 +148,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure query service: %w", err)
 	}
-	loadService, err := composeLoadJobs(cfg, catalogService, loader, clock, system.IDGenerator{})
+	loadService, err := composeLoadJobs(cfg, state.loadJobs, catalogService, loader, clock, system.IDGenerator{})
 	if err != nil {
 		return err
 	}
