@@ -108,6 +108,47 @@ type Session struct {
 	TraceID               string
 }
 
+// SessionLifecycle describes whether a persisted read stream can still be
+// served by this process. Snapshot bytes are deliberately not durable.
+type SessionLifecycle string
+
+const (
+	SessionActive      SessionLifecycle = "ACTIVE"
+	SessionExpired     SessionLifecycle = "EXPIRED"
+	SessionUnavailable SessionLifecycle = "UNAVAILABLE"
+)
+
+// SessionRecord is the payload-free durable representation of a read session.
+// RowRestrictionDigest is SHA-256 over the restriction text; the text itself
+// never crosses the state repository boundary.
+type SessionRecord struct {
+	Name                  string
+	Table                 string
+	Format                Format
+	SelectedFields        []string
+	RowRestrictionDigest  string
+	RowRestrictionBytes   int
+	Streams               []Stream
+	CreatedAt             time.Time
+	ExpireTime            time.Time
+	SnapshotTime          *time.Time
+	RetainedRowCount      int64
+	RetainedBytes         int64
+	EstimatedBytesScanned int64
+	SchemaFingerprint     string
+	Lifecycle             SessionLifecycle
+	LifecycleUpdatedAt    time.Time
+}
+
+// PersistedStream is enough to return a stable status for a stream whose
+// in-process snapshot no longer exists.
+type PersistedStream struct {
+	Name      string
+	Session   string
+	Lifecycle SessionLifecycle
+	ExpiresAt time.Time
+}
+
 type ReadRowsRequest struct {
 	StreamName string
 	Offset     int64

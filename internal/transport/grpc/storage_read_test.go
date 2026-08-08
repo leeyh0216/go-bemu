@@ -205,6 +205,11 @@ func TestStorageReadGeneratedClientReceivesClassifiedMaterializerStatus(t *testi
 			want: codes.ResourceExhausted,
 		},
 		{
+			name: "snapshot unavailable after restart",
+			err:  domain.NewError(domain.ErrorUnavailable, "storage_read.read_rows", errors.New("private lifecycle state")),
+			want: codes.Unavailable,
+		},
+		{
 			name: "backend internal",
 			err:  errors.New("private DuckDB query"),
 			want: codes.Internal,

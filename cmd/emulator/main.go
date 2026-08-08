@@ -160,7 +160,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	readRuntime, err := composeStorageRead(cfg, readFactory, catalogService, clock, system.IDGenerator{}, logger)
+	readRuntime, err := composeStorageRead(
+		cfg, readFactory, catalogService, clock, system.IDGenerator{}, logger, state.readSessions,
+	)
 	if err != nil {
 		return fmt.Errorf("configure Storage Read: %w", err)
 	}

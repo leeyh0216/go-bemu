@@ -20,6 +20,7 @@ const (
 	ErrorNotFound           ErrorCode = "NOT_FOUND"
 	ErrorFailedPrecondition ErrorCode = "FAILED_PRECONDITION"
 	ErrorResourceExhausted  ErrorCode = "RESOURCE_EXHAUSTED"
+	ErrorUnavailable        ErrorCode = "UNAVAILABLE"
 	ErrorUnimplemented      ErrorCode = "UNIMPLEMENTED"
 	ErrorInternal           ErrorCode = "INTERNAL"
 )

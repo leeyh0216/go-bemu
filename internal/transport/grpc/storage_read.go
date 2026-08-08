@@ -271,6 +271,8 @@ func storageReadStatus(err error) error {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case domain.ErrorResourceExhausted:
 		return status.Error(codes.ResourceExhausted, err.Error())
+	case domain.ErrorUnavailable:
+		return status.Error(codes.Unavailable, err.Error())
 	case domain.ErrorUnimplemented:
 		return status.Error(codes.Unimplemented, err.Error())
 	default:

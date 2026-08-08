@@ -217,7 +217,7 @@ func TestMissingSchemaObjectStopsOpen(t *testing.T) {
 }
 
 func TestCompiledMigrationChecksumIsImmutable(t *testing.T) {
-	if len(migrations) != 2 {
+	if len(migrations) != 3 {
 		t.Fatalf("migration count = %d, update the prefix contract test", len(migrations))
 	}
 	if got := checksumMigration(migrations[0]); got != baselineChecksum {
@@ -225,6 +225,9 @@ func TestCompiledMigrationChecksumIsImmutable(t *testing.T) {
 	}
 	if got := checksumMigration(migrations[1]); got != jobMetadataChecksum {
 		t.Fatalf("job metadata checksum = %s, want %s", got, jobMetadataChecksum)
+	}
+	if got := checksumMigration(migrations[2]); got != readSessionChecksum {
+		t.Fatalf("Storage Read checksum = %s, want %s", got, readSessionChecksum)
 	}
 }
 
