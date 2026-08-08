@@ -33,6 +33,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 MAX_LOCK_BYTES = 1 << 20
 MAX_HTTP_RESPONSE_BYTES = 4 << 20
+MAX_DIAGNOSTIC_FILE_BYTES = 256 << 10
 LOAD_MODEL_VERSION = "bqemu-load-public-process/v1"
 
 
