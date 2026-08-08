@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
@@ -34,6 +35,14 @@ type GoogleSQLDatasetSnapshot struct {
 // owned engine-neutral statement without retaining SQL or foreign handles.
 type GoogleSQLGateway interface {
 	Analyze(context.Context, QueryRequest) (semantic.Statement, error)
+}
+
+// GoogleSQLAnalysisError identifies a user statement whose official syntax
+// tree was classified but whose semantic analysis failed. Query jobs persist
+// these failures as terminal job status instead of rejecting jobs.insert.
+type GoogleSQLAnalysisError interface {
+	error
+	StatementKind() queryast.StatementKind
 }
 
 // StatementExecutor is the engine-neutral execution boundary. Implementations

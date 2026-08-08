@@ -16,6 +16,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
@@ -36,6 +37,52 @@ func TestQueryServiceRequiresAnalyzedStatementPortsAtComposition(t *testing.T) {
 				t.Fatalf("NewQueryService() = (%v, %v), want nil precondition error", service, err)
 			}
 		})
+	}
+}
+
+type testGoogleSQLAnalysisError struct {
+	kind  queryast.StatementKind
+	cause error
+}
+
+func (err *testGoogleSQLAnalysisError) Error() string                         { return err.cause.Error() }
+func (err *testGoogleSQLAnalysisError) Unwrap() error                         { return err.cause }
+func (err *testGoogleSQLAnalysisError) StatementKind() queryast.StatementKind { return err.kind }
+
+type failingGoogleSQLGateway struct{ err error }
+
+func (gateway failingGoogleSQLGateway) Analyze(context.Context, ports.QueryRequest) (semantic.Statement, error) {
+	return semantic.Statement{}, gateway.err
+}
+
+func TestQueryAnalysisFailurePersistsTerminalJob(t *testing.T) {
+	ctx, cancel := queryApplicationTestContext(t)
+	defer cancel()
+	repository := memory.NewJobRepository()
+	executor := &countingStatementExecutor{}
+	analysisErr := &testGoogleSQLAnalysisError{
+		kind:  queryast.StatementSelect,
+		cause: fmt.Errorf("%w: missing_column", domain.ErrInvalidQuery),
+	}
+	service := newTestQueryService(
+		repository, executor, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("analysis-failure"),
+		WithGoogleSQLGateway(failingGoogleSQLGateway{err: analysisErr}),
+	)
+
+	job, err := service.RunSync(ctx, QueryInput{
+		ProjectID: "test-project", JobID: "analysis-failure", Location: "US", SQL: "SELECT missing_column",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != domain.JobDone || job.Error == nil || job.Error.Reason != "invalidQuery" {
+		t.Fatalf("job state=%s error=%#v", job.State, job.Error)
+	}
+	if job.Configuration.StatementType != string(queryast.StatementSelect) {
+		t.Fatalf("statement type=%q", job.Configuration.StatementType)
+	}
+	if executor.calls.Load() != 0 {
+		t.Fatalf("analysis failure reached statement executor %d times", executor.calls.Load())
 	}
 }
 

@@ -33,6 +33,17 @@ type Gateway struct {
 
 var _ ports.GoogleSQLGateway = (*Gateway)(nil)
 
+type statementAnalysisError struct {
+	kind  queryast.StatementKind
+	cause error
+}
+
+var _ ports.GoogleSQLAnalysisError = (*statementAnalysisError)(nil)
+
+func (err *statementAnalysisError) Error() string                         { return err.cause.Error() }
+func (err *statementAnalysisError) Unwrap() error                         { return err.cause }
+func (err *statementAnalysisError) StatementKind() queryast.StatementKind { return err.kind }
+
 func NewGateway(catalog ports.GoogleSQLCatalogReader) (*Gateway, error) {
 	if catalog == nil || isNilCatalogReader(catalog) {
 		return nil, fmt.Errorf("%w: canonical catalog is required by the GoogleSQL analyzer", domain.ErrPrecondition)
@@ -85,19 +96,27 @@ func (gateway *Gateway) analyzeSingleStatement(
 	snapshot *catalogSnapshot,
 	options *gsql.AnalyzerOptions,
 ) (semantic.Statement, error) {
-	mapper := statementMapper{sourceDigest: document.source.Digest()}
-	syntax, err := mapper.mapStatement(document.statements[0])
-	if err != nil {
-		return semantic.Statement{}, err
+	external := document.statements[0]
+	kind, classified := externalStatementKind(external)
+	statementFailure := func(err error) error {
+		if err == nil || !classified {
+			return err
+		}
+		return &statementAnalysisError{kind: kind, cause: err}
 	}
-	if isCatalogStatement(syntax.Kind()) {
+	mapper := statementMapper{sourceDigest: document.source.Digest()}
+	if _, requiresCatalogBinding := external.(*gsql.ASTAlterTableStatement); requiresCatalogBinding {
+		syntax, err := mapper.mapStatement(external)
+		if err != nil {
+			return semantic.Statement{}, statementFailure(err)
+		}
 		return projectCatalogStatement(request, syntax, snapshot)
 	}
 	output, err := gsql.AnalyzeStatementFromParserAST(
-		document.statements[0], options, request.SQL, snapshot.root, snapshot.typeFactory,
+		external, options, request.SQL, snapshot.root, snapshot.typeFactory,
 	)
 	if err != nil {
-		return semantic.Statement{}, fmt.Errorf("%w; input=%q", classifyAnalysisError(err), request.SQL)
+		return semantic.Statement{}, statementFailure(fmt.Errorf("%w; input=%q", classifyAnalysisError(err), request.SQL))
 	}
 	if output == nil {
 		return semantic.Statement{}, analyzerBoundaryFailure()
@@ -110,16 +129,39 @@ func (gateway *Gateway) analyzeSingleStatement(
 	if err := ctx.Err(); err != nil {
 		return semantic.Statement{}, err
 	}
+	syntax, err := mapper.mapStatement(external)
+	if err != nil {
+		return semantic.Statement{}, statementFailure(err)
+	}
 	return projectResolvedStatement(ctx, request, syntax, snapshot, resolved)
 }
 
-func isCatalogStatement(kind queryast.StatementKind) bool {
-	switch kind {
-	case queryast.StatementCreateTable, queryast.StatementAlterTable,
-		queryast.StatementDropTable, queryast.StatementTruncateTable:
-		return true
+func externalStatementKind(node gsql.ASTStatementNode) (queryast.StatementKind, bool) {
+	switch node.(type) {
+	case *gsql.ASTQueryStatement:
+		return queryast.StatementSelect, true
+	case *gsql.ASTInsertStatement:
+		return queryast.StatementInsert, true
+	case *gsql.ASTUpdateStatement:
+		return queryast.StatementUpdate, true
+	case *gsql.ASTDeleteStatement:
+		return queryast.StatementDelete, true
+	case *gsql.ASTMergeStatement:
+		return queryast.StatementMerge, true
+	case *gsql.ASTCreateTableStatement:
+		return queryast.StatementCreateTable, true
+	case *gsql.ASTDropStatement:
+		return queryast.StatementDropTable, true
+	case *gsql.ASTAlterTableStatement:
+		return queryast.StatementAlterTable, true
+	case *gsql.ASTTruncateStatement:
+		return queryast.StatementTruncateTable, true
+	case *gsql.ASTVariableDeclaration:
+		return queryast.StatementDeclare, true
+	case *gsql.ASTSingleAssignment:
+		return queryast.StatementSet, true
 	default:
-		return false
+		return "", false
 	}
 }
 

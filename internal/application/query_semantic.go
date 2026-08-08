@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
@@ -10,6 +11,9 @@ import (
 )
 
 func (prepared preparedQuery) statementType() string {
+	if prepared.statementKind != "" {
+		return prepared.statementKind
+	}
 	if prepared.statement.Syntax() == nil {
 		return ""
 	}
@@ -22,6 +26,10 @@ func (s *QueryService) prepareQueryAdmission(
 ) (preparedQuery, error) {
 	statement, err := s.googleSQLGateway.Analyze(ctx, request)
 	if err != nil {
+		var analysisError ports.GoogleSQLAnalysisError
+		if errors.As(err, &analysisError) {
+			return preparedQuery{analysisError: err, statementKind: string(analysisError.StatementKind())}, nil
+		}
 		return preparedQuery{}, err
 	}
 	analysis := queryAnalysisFromStatement(statement)

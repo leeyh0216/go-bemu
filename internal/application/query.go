@@ -71,8 +71,10 @@ var ErrQueryServiceClosed = errors.New("query service is closing")
 type QueryOption func(*QueryService)
 
 type preparedQuery struct {
-	statement semantic.Statement
-	analysis  ports.QueryAnalysis
+	statement     semantic.Statement
+	analysis      ports.QueryAnalysis
+	analysisError error
+	statementKind string
 }
 
 // WithQueryDefaultLocation supplies the configured location when callers omit
@@ -467,6 +469,9 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job, prepared pr
 }
 
 func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job, prepared preparedQuery) (domain.QueryResult, error) {
+	if prepared.analysisError != nil {
+		return domain.QueryResult{}, prepared.analysisError
+	}
 	configuration := job.Configuration
 	if configuration.Destination == nil {
 		return s.executeAnalyzedStatement(ctx, prepared.statement, job.Reference.JobID)
