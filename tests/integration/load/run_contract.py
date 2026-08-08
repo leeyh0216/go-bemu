@@ -866,7 +866,8 @@ def assert_flow(result: CaseResult) -> None:
             operations.count("bigquery.tables.insert") == 1
             and operations.count("bigquery.jobs.insert") == 2
             and operations.count("bigquery.jobs.get") >= 2
-            and operations.count("bigquery.jobs.getQueryResults") >= 1,
+            and operations.count("bigquery.jobs.getQueryResults") >= 1
+            and operations.count("bigquery.tables.delete") == 1,
             case=result.case,
             operation="dynamic-partition-flow",
             shape="temporary-load-then-script",

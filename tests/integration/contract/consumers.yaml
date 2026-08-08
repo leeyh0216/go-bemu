@@ -243,6 +243,7 @@ scenarios:
       - bigquery.jobs.insert
       - bigquery.jobs.get
       - bigquery.jobs.getQueryResults
+      - bigquery.tables.delete
     operationExpectations:
       - operationId: bigquery.tables.get
         min: 1
@@ -264,6 +265,10 @@ scenarios:
         min: 1
         max: 0
         after: [bigquery.jobs.insert]
+      - operationId: bigquery.tables.delete
+        min: 1
+        max: 1
+        after: [bigquery.jobs.get]
   - id: spark-scala-indirect-load
     selectors: [load:scala-spark]
     testEvidence: []
@@ -273,6 +278,7 @@ scenarios:
       - bigquery.jobs.insert
       - bigquery.jobs.get
       - bigquery.jobs.getQueryResults
+      - bigquery.tables.delete
     operationExpectations:
       - operationId: bigquery.tables.get
         min: 1
@@ -294,6 +300,10 @@ scenarios:
         min: 1
         max: 0
         after: [bigquery.jobs.insert]
+      - operationId: bigquery.tables.delete
+        min: 1
+        max: 1
+        after: [bigquery.jobs.get]
 scenarioSets:
   - id: python-public-contract
     scenarioIds: [python-metadata, python-query, python-tabledata]
