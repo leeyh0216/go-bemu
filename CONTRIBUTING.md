@@ -64,14 +64,18 @@ identical even when link text is translated. Every page must retain its English
 ## Tests
 
 ```bash
-gofmt -w docs/documentation_test.go
-go test ./...
-go vet ./...
+make ci-static
+make ci-test-all
 ```
 
 Add domain state tests, application tests with fake outbound adapters, public
 REST/gRPC contract tests, and malformed/boundary cases. A test that only proves
 DuckDB accepts SQL is not proof that BigQuery semantics are reproduced.
+
+Run the narrow package or consumer test while developing, then run the required
+repository checks before committing. Generated manifests, documentation, and
+evidence belong in the same commit as their source. CI rejects stale generated
+artifacts.
 
 <!-- section: evolution-pipeline -->
 ## Compatibility Evolution Pipeline
@@ -89,18 +93,42 @@ released client reaches the public edge. Drift reports must include
 `version`, `operation`, `shape`, `fingerprint`, and `fix_hint`. This does not
 replace comparison with the [BigQuery API contract](https://cloud.google.com/bigquery/docs/reference).
 
-<!-- section: issues -->
-## Bilingual Issues
+<!-- section: issue-workflow -->
+## Issue-Scoped Workflow
 
-Every issue body, including maintenance issues, has equivalent `## English` and
-`## 한국어` sections. Keep scope, acceptance criteria, exclusions, dependencies,
-and primary sources in parity; titles may remain English. When editing an
-existing issue, update both sections in the same operation. Connector evidence
-must point to the exact [`0.44.2` source](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2).
+Every implementation or refactoring change starts from one open issue with a
+Korean title, a concrete scope, acceptance criteria, exclusions, and
+dependencies. Keep one issue in one branch and worktree, for example
+`issue/32-contribution-process`. Do not combine unrelated issue work to make a
+test pass.
+
+1. Confirm the issue and its acceptance criteria before editing files.
+2. Create an issue-owned branch and worktree from the latest validated base.
+3. Record ownership before editing a shared file. Rebase after a dependency is
+   committed instead of copying its uncommitted implementation.
+4. Implement one coherent change and its tests, generated artifacts, and
+   maintainer documentation.
+5. Run focused checks followed by the required repository checks.
+6. Review the exact staged diff. In a dirty worktree, never use `git add .` or
+   `git add -A`; stage only the issue-owned paths or patch hunks.
+7. Commit with the issue number, push promptly, and link the commit and CI run
+   from the issue.
+8. Close the issue only after the commit is on the target branch and the
+   required `validation-complete` job has succeeded.
+
+Use `refs #N` while any acceptance criterion remains. Use `closes #N` only when
+the commit completes the issue. If implementation uncovers more work, update
+the open issue or create a separately scoped Korean issue. Do not publish
+temporary progress or planned behavior in user documentation.
+
+Parallel agents follow the same ownership rules. An agent reports its exact
+files and verification results, does not commit another issue's work, and stops
+editing shared files before another issue rebases onto its commit.
 
 <!-- section: change-description -->
 ## Change Description
 
 State the supported connector/client version, capability ID, authoritative
 source, observed difference, chosen boundary, failure behavior, and remaining
-limitations. Use `refs #N` until every acceptance criterion is actually met.
+limitations. A pull request must identify one primary issue and explain any
+dependency commits without absorbing their scope.
