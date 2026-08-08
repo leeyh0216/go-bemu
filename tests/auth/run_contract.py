@@ -105,6 +105,25 @@ def digest_bytes(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
+def error_digest(error: BaseException) -> str:
+    encoded = f"{type(error).__name__}:{error}".encode(
+        "utf-8", errors="replace"
+    )
+    return digest_bytes(encoded)
+
+
+def combined_contract_error(
+    stage: str,
+    errors: list[BaseException],
+) -> ContractError:
+    fingerprints = "\x00".join(error_digest(error) for error in errors)
+    return ContractError(
+        f"stage={stage} operation=background-processes shape=failed "
+        f"failure_count={len(errors)} failure_digest={digest_bytes(fingerprints.encode())} "
+        "fix_hint=inspect-digest-only-diagnostics"
+    )
+
+
 def junit_document(
     case: str,
     elapsed_seconds: float,
@@ -327,12 +346,76 @@ def verify_diagnostic_capture() -> None:
             for artifact in artifact_dir.iterdir()
         )
 
+    cleanup_trace: list[str] = []
+
+    class ProbeCapture:
+        def __init__(self, name: str, total: int, disclosed: bool) -> None:
+            self.name = name
+            self._total = total
+            self._disclosed = disclosed
+
+        @property
+        def total(self) -> int:
+            cleanup_trace.append(f"{self.name}-total")
+            return self._total
+
+        @property
+        def disclosed(self) -> bool:
+            cleanup_trace.append(f"{self.name}-disclosed")
+            return self._disclosed
+
+        @property
+        def fingerprint(self) -> str:
+            cleanup_trace.append(f"{self.name}-fingerprint")
+            return digest_bytes(self.name.encode("ascii"))
+
+    class ProbeBackground:
+        def __init__(
+            self,
+            name: str,
+            capture: ProbeCapture,
+            fail_stop: bool,
+        ) -> None:
+            self.operation = name
+            self.capture = capture
+            self.fail_stop = fail_stop
+
+        def stop(self) -> None:
+            cleanup_trace.append(f"{self.operation}-stop")
+            if self.fail_stop:
+                raise RuntimeError(secret_marker.decode("ascii"))
+
+    cleanup_error = stop_and_validate_backgrounds(
+        (
+            ProbeBackground("first", ProbeCapture("first", 1, True), True),
+            ProbeBackground(
+                "second",
+                ProbeCapture("second", MAX_BACKGROUND_LOG_BYTES + 1, False),
+                False,
+            ),
+        ),
+        report=False,
+    )
+    expected_cleanup_trace = [
+        "first-stop",
+        "second-stop",
+        "first-total",
+        "first-disclosed",
+        "first-fingerprint",
+        "second-total",
+        "second-disclosed",
+        "second-fingerprint",
+    ]
+
     if (
         not capture.disclosed
         or len(capture.retained) > 8
         or injected_error is None
         or secret_marker in str(injected_error).encode("utf-8", errors="replace")
         or disclosed_artifact
+        or cleanup_error is None
+        or secret_marker in str(cleanup_error).encode("utf-8", errors="replace")
+        or cleanup_trace != expected_cleanup_trace
     ):
         raise ContractError(
             "stage=security operation=diagnostic-capture shape=regression "
@@ -420,20 +503,111 @@ class BackgroundProcess:
     reader: threading.Thread
 
     def stop(self) -> None:
-        if self.process.poll() is None:
-            self.process.terminate()
+        failures: list[BaseException] = []
+        try:
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+        except Exception as error:
+            failures.append(error)
             try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
-        self.reader.join(timeout=5)
-        self.output.close()
-        if self.reader.is_alive():
-            raise ContractError(
-                f"stage=diagnostics operation={self.operation} shape=reader-timeout "
-                "fix_hint=inspect-background-process-shutdown"
+            except Exception as force_error:
+                failures.append(force_error)
+        try:
+            self.reader.join(timeout=5)
+        except Exception as error:
+            failures.append(error)
+        try:
+            self.output.close()
+        except Exception as error:
+            failures.append(error)
+        try:
+            if self.reader.is_alive():
+                failures.append(
+                    ContractError(
+                        "stage=diagnostics operation=background-reader "
+                        "shape=reader-timeout fix_hint=inspect-background-process-shutdown"
+                    )
+                )
+        except Exception as error:
+            failures.append(error)
+        if failures:
+            raise combined_contract_error("shutdown", failures)
+
+
+def stop_and_validate_backgrounds(
+    backgrounds: tuple[Any, ...],
+    *,
+    report: bool = True,
+) -> ContractError | None:
+    failures: list[BaseException] = []
+    for background in backgrounds:
+        try:
+            background.stop()
+        except Exception as error:
+            failures.append(error)
+
+    for background in backgrounds:
+        operation: str | None = None
+        total: int | None = None
+        disclosed: bool | None = None
+        fingerprint: str | None = None
+        try:
+            operation = background.operation
+        except Exception as error:
+            failures.append(error)
+        try:
+            total = background.capture.total
+        except Exception as error:
+            failures.append(error)
+        try:
+            disclosed = background.capture.disclosed
+        except Exception as error:
+            failures.append(error)
+        try:
+            fingerprint = background.capture.fingerprint
+        except Exception as error:
+            failures.append(error)
+
+        if total is not None and total > MAX_BACKGROUND_LOG_BYTES:
+            failures.append(
+                ContractError(
+                    "stage=diagnostics operation=background-process "
+                    "shape=log-size-limit fix_hint=reduce-test-log-volume"
+                )
             )
+        if disclosed is True:
+            failures.append(
+                ContractError(
+                    "stage=security operation=background-process "
+                    "shape=credential-disclosure fix_hint=redact-runtime-log"
+                )
+            )
+        if (
+            report
+            and operation is not None
+            and total is not None
+            and fingerprint is not None
+        ):
+            try:
+                event(
+                    boundary="background-process",
+                    operation=operation,
+                    output_bytes=total,
+                    output_digest=fingerprint,
+                )
+            except Exception as error:
+                failures.append(error)
+
+    if failures:
+        return combined_contract_error("cleanup", failures)
+    return None
 
 
 def start_background(
@@ -974,36 +1148,40 @@ def main(case: str) -> int:
         table = "one_row"
         table_name = f"{project}.{dataset}.{table}"
 
-        issuer = start_background(
-            [
-                str(fixture_binary),
-                "serve",
-                "--manifest",
-                str(fixture_dir / "manifest.json"),
-            ],
-            "credential-issuer",
-            secrets,
-        )
-        emulator_environment = os.environ.copy()
-        emulator_environment.update(
-            {
-                "BQEMU_HTTP_ADDRESS": f"127.0.0.1:{http_port}",
-                "BQEMU_GRPC_ADDRESS": f"127.0.0.1:{grpc_port}",
-                "BQEMU_PUBLIC_URL": endpoint,
-                "BQEMU_DATABASE_DSN": str(work / "contract.duckdb"),
-                "BQEMU_TEMP_DIRECTORY": str(work / "tmp"),
-                "BQEMU_TLS_CERT_FILE": manifest["server_certificate"],
-                "BQEMU_TLS_KEY_FILE": manifest["server_key"],
-                "BQEMU_UI_ENABLED": "false",
-            }
-        )
-        emulator = start_background(
-            [str(emulator_binary)],
-            "emulator",
-            secrets,
-            emulator_environment,
-        )
+        backgrounds: list[BackgroundProcess] = []
+        execution_error: Exception | None = None
         try:
+            issuer = start_background(
+                [
+                    str(fixture_binary),
+                    "serve",
+                    "--manifest",
+                    str(fixture_dir / "manifest.json"),
+                ],
+                "credential-issuer",
+                secrets,
+            )
+            backgrounds.append(issuer)
+            emulator_environment = os.environ.copy()
+            emulator_environment.update(
+                {
+                    "BQEMU_HTTP_ADDRESS": f"127.0.0.1:{http_port}",
+                    "BQEMU_GRPC_ADDRESS": f"127.0.0.1:{grpc_port}",
+                    "BQEMU_PUBLIC_URL": endpoint,
+                    "BQEMU_DATABASE_DSN": str(work / "contract.duckdb"),
+                    "BQEMU_TEMP_DIRECTORY": str(work / "tmp"),
+                    "BQEMU_TLS_CERT_FILE": manifest["server_certificate"],
+                    "BQEMU_TLS_KEY_FILE": manifest["server_key"],
+                    "BQEMU_UI_ENABLED": "false",
+                }
+            )
+            emulator = start_background(
+                [str(emulator_binary)],
+                "emulator",
+                secrets,
+                emulator_environment,
+            )
+            backgrounds.append(emulator)
             wait_ready(issuer, context, manifest["base_url"], "/healthz")
             wait_ready(emulator, context, endpoint, "/readyz")
             bootstrap(context, endpoint, project, dataset, table)
@@ -1066,27 +1244,19 @@ def main(case: str) -> int:
                     manifest,
                     secrets,
                 )
-        finally:
-            emulator.stop()
-            issuer.stop()
+        except Exception as error:
+            execution_error = error
 
-        for background in (issuer, emulator):
-            if background.capture.total > MAX_BACKGROUND_LOG_BYTES:
-                raise ContractError(
-                    f"stage=diagnostics operation={background.operation} "
-                    "shape=log-size-limit fix_hint=reduce-test-log-volume"
-                )
-            if background.capture.disclosed:
-                raise ContractError(
-                    f"stage=security operation={background.operation} "
-                    "shape=credential-disclosure fix_hint=redact-runtime-log"
-                )
-            event(
-                boundary="background-process",
-                operation=background.operation,
-                output_bytes=background.capture.total,
-                output_digest=background.capture.fingerprint,
-            )
+        cleanup_error = stop_and_validate_backgrounds(tuple(backgrounds))
+        if execution_error is not None and cleanup_error is not None:
+            raise combined_contract_error(
+                "execution-and-cleanup",
+                [execution_error, cleanup_error],
+            ) from None
+        if execution_error is not None:
+            raise execution_error from None
+        if cleanup_error is not None:
+            raise cleanup_error from None
 
     event(
         suite="client-credentials-and-tls",
@@ -1109,28 +1279,22 @@ if __name__ == "__main__":
         main(selected_case())
     except Exception as error:
         failure = error
-        encoded = f"{type(error).__name__}:{error}".encode(
-            "utf-8", errors="replace"
-        )
         event(
             suite="client-credentials-and-tls",
             consumer_case=case_label,
             status="failed",
             error_type=type(error).__name__,
-            error_digest=digest_bytes(encoded),
+            error_digest=error_digest(error),
         )
     try:
         write_junit(case_label, time.monotonic() - started, failure)
     except Exception as error:
-        encoded = f"{type(error).__name__}:{error}".encode(
-            "utf-8", errors="replace"
-        )
         event(
             suite="client-credentials-and-tls",
             consumer_case=case_label,
             status="failed",
             error_type=type(error).__name__,
-            error_digest=digest_bytes(encoded),
+            error_digest=error_digest(error),
             stage="junit",
         )
         failure = error
