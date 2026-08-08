@@ -80,6 +80,35 @@ func TestLoadFSRejectsMalformedAmbiguousAndDuplicateCases(t *testing.T) {
 	}
 }
 
+func TestValidateTablePartitioning(t *testing.T) {
+	schema := []Field{
+		{Name: "event_date", Type: "DATE", Mode: "NULLABLE"},
+		{Name: "bucket", Type: "INT64", Mode: "NULLABLE"},
+		{Name: "label", Type: "STRING", Mode: "NULLABLE"},
+	}
+	tests := []struct {
+		name  string
+		table Table
+		ok    bool
+	}{
+		{name: "time", table: Table{Schema: schema, TimePartitioning: &TimePartitioning{Type: "DAY", Field: "event_date"}}, ok: true},
+		{name: "range", table: Table{Schema: schema, RangePartitioning: &RangePartitioning{Field: "bucket", Range: IntegerRange{Start: 0, End: 100, Interval: 10}}}, ok: true},
+		{name: "both", table: Table{Schema: schema, TimePartitioning: &TimePartitioning{Type: "DAY", Field: "event_date"}, RangePartitioning: &RangePartitioning{Field: "bucket", Range: IntegerRange{Start: 0, End: 100, Interval: 10}}}},
+		{name: "missing field", table: Table{Schema: schema, TimePartitioning: &TimePartitioning{Type: "DAY", Field: "missing"}}},
+		{name: "wrong time type", table: Table{Schema: schema, TimePartitioning: &TimePartitioning{Type: "DAY", Field: "label"}}},
+		{name: "wrong range type", table: Table{Schema: schema, RangePartitioning: &RangePartitioning{Field: "label", Range: IntegerRange{Start: 0, End: 100, Interval: 10}}}},
+		{name: "invalid range", table: Table{Schema: schema, RangePartitioning: &RangePartitioning{Field: "bucket", Range: IntegerRange{Start: 100, End: 0, Interval: 0}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateTablePartitioning(test.table)
+			if (err == nil) != test.ok {
+				t.Fatalf("validateTablePartitioning() error = %v, ok = %t", err, test.ok)
+			}
+		})
+	}
+}
+
 func validCaseFiles(caseID, order string) fstest.MapFS {
 	return fstest.MapFS{
 		"z/case.json":     mapFile(`{"schemaVersion":1,"caseId":"` + caseID + `","defaultProject":"p","defaultDataset":"d","rowOrder":"` + order + `"}`),

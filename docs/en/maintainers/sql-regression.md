@@ -32,6 +32,11 @@ Use `rowOrder: ordered` only when the statement defines a deterministic order.
 Use `unordered` when row membership matters but order does not, and `none` for
 outcomes without rows.
 
+A fixture table may declare either `timePartitioning` (`type`, `field`, and
+optional `expirationMs`) or `rangePartitioning` (`field` plus `range.start`,
+`range.end`, and `range.interval`). The loader rejects missing or incompatible
+partition fields and does not allow both partitioning modes on one table.
+
 <!-- section: values -->
 ## Typed Values
 

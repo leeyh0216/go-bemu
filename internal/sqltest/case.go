@@ -54,9 +54,28 @@ type Field struct {
 }
 
 type Table struct {
-	TableID string  `json:"tableId"`
-	Schema  []Field `json:"schema"`
-	Rows    [][]any `json:"rows"`
+	TableID           string             `json:"tableId"`
+	Schema            []Field            `json:"schema"`
+	TimePartitioning  *TimePartitioning  `json:"timePartitioning,omitempty"`
+	RangePartitioning *RangePartitioning `json:"rangePartitioning,omitempty"`
+	Rows              [][]any            `json:"rows"`
+}
+
+type TimePartitioning struct {
+	Type         string `json:"type"`
+	Field        string `json:"field"`
+	ExpirationMs int64  `json:"expirationMs,omitempty"`
+}
+
+type IntegerRange struct {
+	Start    int64 `json:"start"`
+	End      int64 `json:"end"`
+	Interval int64 `json:"interval"`
+}
+
+type RangePartitioning struct {
+	Field string       `json:"field"`
+	Range IntegerRange `json:"range"`
 }
 
 type Dataset struct {
@@ -314,6 +333,9 @@ func validateDataset(dataset FixtureDataset) error {
 				if err := validateFields(table.Schema, "table "+table.TableID); err != nil {
 					return err
 				}
+				if err := validateTablePartitioning(table); err != nil {
+					return fmt.Errorf("table %q: %w", table.TableID, err)
+				}
 				for rowIndex, row := range table.Rows {
 					if len(row) != len(table.Schema) {
 						return fmt.Errorf("table %q row %d has %d values, want %d", table.TableID, rowIndex, len(row), len(table.Schema))
@@ -323,6 +345,56 @@ func validateDataset(dataset FixtureDataset) error {
 		}
 	}
 	return nil
+}
+
+func validateTablePartitioning(table Table) error {
+	if table.TimePartitioning != nil && table.RangePartitioning != nil {
+		return errors.New("timePartitioning and rangePartitioning are mutually exclusive")
+	}
+	if partitioning := table.TimePartitioning; partitioning != nil {
+		switch strings.ToUpper(partitioning.Type) {
+		case "DAY", "HOUR", "MONTH", "YEAR":
+		default:
+			return fmt.Errorf("timePartitioning type %q is invalid", partitioning.Type)
+		}
+		field, found := fixtureTopLevelField(table.Schema, partitioning.Field)
+		if !found {
+			return fmt.Errorf("timePartitioning field %q does not exist", partitioning.Field)
+		}
+		switch canonicalType(field.Type) {
+		case "DATE", "DATETIME", "TIMESTAMP":
+		default:
+			return fmt.Errorf("timePartitioning field %q has type %q", partitioning.Field, field.Type)
+		}
+		if partitioning.ExpirationMs < 0 {
+			return errors.New("timePartitioning expirationMs must be non-negative")
+		}
+	}
+	if partitioning := table.RangePartitioning; partitioning != nil {
+		field, found := fixtureTopLevelField(table.Schema, partitioning.Field)
+		if !found {
+			return fmt.Errorf("rangePartitioning field %q does not exist", partitioning.Field)
+		}
+		if canonicalType(field.Type) != "INT64" {
+			return fmt.Errorf("rangePartitioning field %q has type %q", partitioning.Field, field.Type)
+		}
+		if partitioning.Range.End <= partitioning.Range.Start || partitioning.Range.Interval <= 0 {
+			return errors.New("rangePartitioning requires end > start and interval > 0")
+		}
+	}
+	return nil
+}
+
+func fixtureTopLevelField(fields []Field, name string) (Field, bool) {
+	if name == "" {
+		return Field{}, false
+	}
+	for _, field := range fields {
+		if strings.EqualFold(field.Name, name) {
+			return field, true
+		}
+	}
+	return Field{}, false
 }
 
 func validateFields(fields []Field, owner string) error {

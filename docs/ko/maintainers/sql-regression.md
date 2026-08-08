@@ -31,6 +31,11 @@
 실행문이 결정적인 순서를 정의할 때만 `rowOrder: ordered`를 사용합니다. 행 구성은
 중요하지만 순서는 중요하지 않으면 `unordered`, 행 결과가 없으면 `none`을 사용합니다.
 
+픽스처 테이블에는 `timePartitioning`(`type`, `field`, 선택적인 `expirationMs`) 또는
+`rangePartitioning`(`field`, `range.start`, `range.end`, `range.interval`) 중 하나를
+선언할 수 있습니다. 로더는 없거나 호환되지 않는 파티션 필드를 거부하며 한 테이블에
+두 파티션 방식을 함께 허용하지 않습니다.
+
 <!-- section: values -->
 ## 자료형이 있는 값
 

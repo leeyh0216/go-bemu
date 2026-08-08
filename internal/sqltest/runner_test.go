@@ -148,10 +148,26 @@ func createFixtureCatalog(ctx context.Context, catalog *application.CatalogServi
 				return fmt.Errorf("create dataset %s.%s: %w", project.ProjectID, dataset.DatasetID, err)
 			}
 			for _, table := range dataset.Tables {
-				if _, err := catalog.CreateTable(ctx, domain.Table{
+				resource := domain.Table{
 					ProjectID: project.ProjectID, DatasetID: dataset.DatasetID, ID: table.TableID,
 					Type: "TABLE", Location: dataset.Location, Schema: fixtureFieldsToDomain(table.Schema),
-				}); err != nil {
+				}
+				if table.TimePartitioning != nil {
+					resource.TimePartitioning = &domain.TimePartitioning{
+						Type: table.TimePartitioning.Type, Field: table.TimePartitioning.Field,
+						ExpirationMs: table.TimePartitioning.ExpirationMs,
+					}
+				}
+				if table.RangePartitioning != nil {
+					resource.RangePartitioning = &domain.RangePartitioning{
+						Field: table.RangePartitioning.Field,
+						Range: domain.Range{
+							Start: table.RangePartitioning.Range.Start, End: table.RangePartitioning.Range.End,
+							Interval: table.RangePartitioning.Range.Interval,
+						},
+					}
+				}
+				if _, err := catalog.CreateTable(ctx, resource); err != nil {
 					return fmt.Errorf("create table %s.%s.%s: %w", project.ProjectID, dataset.DatasetID, table.TableID, err)
 				}
 			}

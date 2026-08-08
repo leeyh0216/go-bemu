@@ -1,0 +1,11 @@
+{
+  "kind": "rows",
+  "schema": [
+    {"name": "id", "type": "INT64", "mode": "NULLABLE"},
+    {"name": "name", "type": "STRING", "mode": "NULLABLE"}
+  ],
+  "rows": [
+    [2, "prefix-match"],
+    [3, "prefix-other"]
+  ]
+}
