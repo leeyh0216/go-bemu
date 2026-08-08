@@ -19,7 +19,7 @@ services:
       BQEMU_LOAD_GCS_ENDPOINT: http://fake-gcs:4443
     depends_on:
       fake-gcs:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "${BQEMU_HTTP_PORT:-9050}:9050"
       - "${BQEMU_GRPC_PORT:-9060}:9060"
@@ -62,6 +62,11 @@ services:
     tmpfs:
       - /storage:mode=0700
       - /tmp:mode=0700
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:4443/storage/v1/b"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
 
 volumes:
   bqemu-data:

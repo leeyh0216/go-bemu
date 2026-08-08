@@ -38,7 +38,7 @@ func TestDefaultComposeRequiresFakeGCSForLoadJobs(t *testing.T) {
 	if bqemu.Environment["BQEMU_LOAD_GCS_ENDPOINT"] != "http://fake-gcs:4443" {
 		t.Fatalf("load endpoint = %q", bqemu.Environment["BQEMU_LOAD_GCS_ENDPOINT"])
 	}
-	if dependency, ok := bqemu.DependsOn["fake-gcs"]; !ok || dependency.Condition != "service_started" {
+	if dependency, ok := bqemu.DependsOn["fake-gcs"]; !ok || dependency.Condition != "service_healthy" {
 		t.Fatalf("fake-gcs dependency = %#v", dependency)
 	}
 	if _, err := os.Stat(filepath.Join(root, "compose.load.yaml")); !errors.Is(err, os.ErrNotExist) {
