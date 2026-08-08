@@ -97,15 +97,11 @@ func createSessionRequestFromProto(request *storagepb.CreateReadSessionRequest) 
 			return domain.CreateSessionRequest{}, unsupportedStorageReadOption("response compression is not implemented")
 		}
 		if arrow := options.GetArrowSerializationOptions(); arrow != nil {
-			// Connector 0.44.2 sends a present-but-default Arrow options message
-			// while requesting AVRO. BigQuery treats that message like an absent
-			// option because proto3 scalar defaults carry no requested behavior.
-			// Only a non-default Arrow option is format-specific and incompatible
-			// with AVRO.
+			// A present message whose proto3 scalar fields all have default values
+			// requests no Arrow-specific behavior. Only a non-default Arrow option
+			// is format-specific and incompatible with AVRO.
 			//
-			// Sources:
-			//   - TableReadOptions: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
-			//   - connector 0.44.2 ReadSessionCreator: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java
+			// Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
 			nonDefault := arrow.GetBufferCompression() != storagepb.ArrowSerializationOptions_COMPRESSION_UNSPECIFIED ||
 				arrow.GetPicosTimestampPrecision() != storagepb.ArrowSerializationOptions_PICOS_TIMESTAMP_PRECISION_UNSPECIFIED
 			if nonDefault && format != domain.FormatArrow {

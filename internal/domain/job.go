@@ -297,7 +297,7 @@ func validQueryStatementType(value string) bool {
 
 // Query-job labels use the same key/value constraints as BigQuery resource
 // labels. An empty, non-nil map is valid and remains distinguishable from an
-// omitted labels field for connector request/response round trips.
+// omitted labels field for request/response round trips.
 // https://cloud.google.com/bigquery/docs/adding-labels#requirements
 func validateQueryLabels(labels map[string]string) error {
 	if len(labels) > 64 {

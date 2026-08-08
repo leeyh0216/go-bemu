@@ -3,8 +3,8 @@ package main
 // Storage Write composition preserves many logical streams while serializing
 // DuckDB work through a bounded single-worker coordinator. Request bytes use
 // weighted admission, while PENDING rows spill to hidden DuckDB staging tables
-// until atomic commit. This allows Spark task parallelism without claiming that
-// the embedded engine has BigQuery's distributed write backend.
+// until atomic commit. This allows concurrent writers without claiming that the
+// embedded engine has BigQuery's distributed write backend.
 //
 // Official lifecycle:
 // https://cloud.google.com/bigquery/docs/write-api-batch

@@ -160,7 +160,7 @@ func TestStorageWritePublicGRPCRetainsInvalidDecimalAndReturnsInvalidArgument(t 
 	slog.SetDefault(logger)
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 	service, err := writeapp.New(writeapp.Config{
-		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		Location: "US", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
 		MaxStreams: 2, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 2,
 		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
 	}, coordinator, storageWriteRetryClock{}, storageWriteRetryIDs{}, logger)
@@ -947,7 +947,7 @@ func TestStorageWriteLostStageAcknowledgementRecoversOnNewBidiCall(t *testing.T)
 	defer cancel()
 	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "id", Type: "INT64"}})
 	service, err := writeapp.New(writeapp.Config{
-		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		Location: "US", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
 		MaxStreams: 2, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 2,
 		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
 	}, coordinator, storageWriteRetryClock{}, storageWriteRetryIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -1091,7 +1091,7 @@ func TestStorageWriteLostStageAcknowledgementRecoversOnNewBidiCall(t *testing.T)
 	}
 }
 
-func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
+func TestStorageWriteDecodesNestedAndRepeatedProtoRows(t *testing.T) {
 	ctx, cancel := duckDBStorageWriteTestContext(t)
 	defer cancel()
 	precision10, precision6, scale2 := int64(10), int64(6), int64(2)

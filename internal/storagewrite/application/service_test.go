@@ -122,7 +122,7 @@ func newTestService(t *testing.T, maxStreams int) (*Service, *fakeCoordinator, *
 	coordinator := newFakeCoordinator()
 	clock := &fakeClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	service, err := New(Config{
-		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		Location: "US", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
 		MaxStreams: maxStreams, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 4,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}, coordinator, clock, &sequenceIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -132,18 +132,18 @@ func newTestService(t *testing.T, maxStreams int) (*Service, *fakeCoordinator, *
 	return service, coordinator, clock
 }
 
-func TestConfigAcceptsPinnedConnectorClientRequestLimit(t *testing.T) {
+func TestConfigEnforcesOfficialAppendRequestLimit(t *testing.T) {
 	config := Config{
-		Location: "US", ProtocolModelVersion: "spark-0.44.2",
-		MaxStreams: 1, MaxAppendBytes: ProtocolMaxAppendBytes, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 1,
+		Location: "US", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
+		MaxStreams: 1, MaxAppendBytes: ProtocolMaxAppendRequestBytes - 64*1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 1,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}
 	if err := validateConfig(config); err != nil {
-		t.Fatalf("20 MiB client limit must be accepted: %v", err)
+		t.Fatalf("20 MiB request limit must be accepted: %v", err)
 	}
 	config.MaxAppendBytes++
 	if err := validateConfig(config); err == nil {
-		t.Fatal("request limit above the pinned client maximum must be rejected")
+		t.Fatal("request limit above the official maximum must be rejected")
 	}
 }
 
@@ -395,7 +395,7 @@ func TestStorageWriteLogsFingerprintAndRawStreamAndRows(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	var output bytes.Buffer
 	service, err := New(Config{
-		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		Location: "US", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
 		MaxStreams: 1, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 1,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}, coordinator, clock, &sequenceIDs{}, slog.New(slog.NewJSONHandler(&output, nil)))
@@ -502,13 +502,13 @@ func TestBatchValidationMakesZeroCoordinatorCalls(t *testing.T) {
 	}
 }
 
-func TestDefaultAliasesShareImmediateStream(t *testing.T) {
+func TestDefaultStreamAppendsAreImmediatelyVisible(t *testing.T) {
 	ctx, cancel := storageWriteTestContext(t)
 	defer cancel()
 	service, coordinator, _ := newTestService(t, 2)
 	parent := testParent().Name()
-	for _, alias := range []string{parent + "/_default", parent + "/streams/_default"} {
-		request := appendRequest(alias, 0)
+	for range 2 {
+		request := appendRequest(parent+"/streams/_default", 0)
 		request.Offset = nil
 		result, err := service.Append(ctx, request)
 		if err != nil {
@@ -518,7 +518,7 @@ func TestDefaultAliasesShareImmediateStream(t *testing.T) {
 			t.Fatal("default append must not return an offset")
 		}
 	}
-	stream, err := service.GetStream(ctx, parent+"/_default")
+	stream, err := service.GetStream(ctx, parent+"/streams/_default")
 	if err != nil {
 		t.Fatal(err)
 	}

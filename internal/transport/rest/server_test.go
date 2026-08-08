@@ -16,7 +16,6 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/application"
-	"github.com/leeyh0216/go-bemu/internal/capabilityspec"
 	"github.com/leeyh0216/go-bemu/internal/contractspec"
 	"github.com/leeyh0216/go-bemu/internal/contracttest"
 )
@@ -45,9 +44,7 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 		application.WithQueryDestinationCatalog(catalog),
 		application.WithStatementMaterializer(warehouse),
 	)
-	server := httptest.NewServer(NewServer(
-		catalog, queries, warehouse, "", WithCapabilityProfiles(capabilityspec.Profiles()),
-	).Handler())
+	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 
 	request := func(method, path, body string, expectedStatus int) map[string]any {
@@ -89,18 +86,18 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 	jobMethods := resources["jobs"].(map[string]any)["methods"].(map[string]any)
 	jobInsert := jobMethods["insert"].(map[string]any)
 	if jobInsert["supportsMediaUpload"] != true || jobInsert["mediaUpload"] == nil {
-		t.Fatal("jobs.insert discovery must retain media_body compatibility for bq CLI")
+		t.Fatal("jobs.insert discovery must retain media_body metadata")
 	}
 	jobListParameters := jobMethods["list"].(map[string]any)["parameters"].(map[string]any)
 	for _, parameter := range []string{"allUsers", "stateFilter", "projection", "minCreationTime", "maxCreationTime", "parentJobId"} {
 		if jobListParameters[parameter] == nil {
-			t.Fatalf("jobs.list discovery is missing bq CLI parameter %q", parameter)
+			t.Fatalf("jobs.list discovery is missing parameter %q", parameter)
 		}
 	}
 	if capabilities := request(http.MethodGet, "/bqemu/v1/capabilities", "", http.StatusOK); capabilities["kind"] != "bqemu#capabilityRegistry" {
 		t.Fatalf("unexpected capabilities: %#v", capabilities)
-	} else if profiles, ok := capabilities["profiles"].([]any); !ok || len(profiles) == 0 {
-		t.Fatalf("capability profile snapshot is absent: %#v", capabilities)
+	} else if operations, ok := capabilities["operations"].([]any); !ok || !containsOperation(operations, "bqemu.capabilities.get") {
+		t.Fatalf("registered operation snapshot is absent: %#v", capabilities)
 	}
 	if console := request(http.MethodGet, "/bqemu/v1/console", "", http.StatusOK); console["kind"] != "bqemu#consoleAPI" {
 		t.Fatalf("unexpected console metadata: %#v", console)
@@ -163,6 +160,15 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 	}
 }
 
+func containsOperation(operations []any, operationID string) bool {
+	for _, operation := range operations {
+		if operation == operationID {
+			return true
+		}
+	}
+	return false
+}
+
 func TestOptionalConsoleSPAHandler(t *testing.T) {
 	contracttest.Operation(t, "bqemu.console.assets")
 	contracttest.Operation(t, "bqemu.console.redirect")
@@ -221,7 +227,7 @@ func TestDiscoveryMethodsMatchOperationManifest(t *testing.T) {
 			}
 			actual[operationID] = method["httpMethod"].(string) + " /bigquery/v2/" + method["path"].(string)
 			if operationID == "bigquery.jobs.insert" && (method["supportsMediaUpload"] != true || method["mediaUpload"] == nil) {
-				t.Fatal("jobs.insert discovery is missing bq CLI media_body compatibility metadata")
+				t.Fatal("jobs.insert discovery is missing media_body metadata")
 			}
 		}
 	}

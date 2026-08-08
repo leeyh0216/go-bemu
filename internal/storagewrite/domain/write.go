@@ -58,22 +58,10 @@ func ParseTableName(name string) (TableReference, error) {
 	return TableReference{ProjectID: parts[1], DatasetID: parts[3], TableID: parts[5]}, nil
 }
 
-// ParseStreamName accepts the official default resource as well as the legacy
-// table/_default spelling emitted by spark-bigquery-connector 0.44.2. It always
-// returns the official canonical form so both aliases share one ledger.
-//
-// Official spelling: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#appendrowsrequest
-// Connector spelling: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java
+// ParseStreamName accepts only the current v1 resource form documented by the
+// Storage Write API, including /streams/_default for the default stream.
+// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#appendrowsrequest
 func ParseStreamName(name string) (TableReference, string, bool, error) {
-	if strings.HasSuffix(name, "/_default") {
-		prefix := strings.TrimSuffix(name, "/_default")
-		prefix = strings.TrimSuffix(prefix, "/streams")
-		table, err := ParseTableName(prefix)
-		if err != nil {
-			return TableReference{}, "", false, err
-		}
-		return table, table.Name() + "/streams/_default", true, nil
-	}
 	parts := strings.Split(name, "/")
 	if len(parts) != 8 || parts[6] != "streams" || !resourceSegmentPattern.MatchString(parts[7]) {
 		return TableReference{}, "", false, fmt.Errorf("invalid write stream resource %q", name)
@@ -82,7 +70,7 @@ func ParseStreamName(name string) (TableReference, string, bool, error) {
 	if err != nil {
 		return TableReference{}, "", false, err
 	}
-	return table, name, false, nil
+	return table, name, parts[7] == "_default", nil
 }
 
 type WriteStream struct {

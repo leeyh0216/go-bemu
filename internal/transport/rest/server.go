@@ -9,7 +9,6 @@ package rest
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -54,7 +53,6 @@ type Server struct {
 	requestBodyLimits   requestBodyLimits
 	operationRoutes     []operationRouteRegistration
 	discoveryExtensions []discoveryExtension
-	capabilityProfiles  json.RawMessage
 }
 
 type Option func(*Server)
@@ -140,7 +138,7 @@ func methodOverrideMiddleware(next http.Handler) http.Handler {
 func (s *Server) coreRouteBindings() []routeBinding {
 	// Projects are normally provisioned outside BigQuery. The emulator-only
 	// create/get/delete edge provides that missing local lifecycle while project
-	// listing remains on the official BigQuery v2 path used by bq and SDKs.
+	// listing remains on the official BigQuery v2 path.
 	return []routeBinding{
 		handlerBinding("bqemu.discovery.get", s.discovery),
 		handlerBinding("bqemu.discovery.googleapis.get", s.discovery),

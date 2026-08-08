@@ -31,7 +31,7 @@ func TestComposeDuckDBEngineBuildsValidatedNarrowRuntime(t *testing.T) {
 
 	descriptor := runtime.capabilities.Descriptor()
 	descriptor.Decimal.MaxPrecision = 1
-	if runtime.capabilities.Decimal().MaxPrecision != domain.SparkDecimalMaxPrecision {
+	if runtime.capabilities.Decimal().MaxPrecision != domain.SupportedDecimalMaxPrecision {
 		t.Fatal("runtime exposed mutable capabilities")
 	}
 }

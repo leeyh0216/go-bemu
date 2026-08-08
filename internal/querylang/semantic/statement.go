@@ -98,7 +98,7 @@ func NewType(descriptor TypeDescriptor) (Type, error) {
 		parameters, err := canonical.EffectiveDecimalParameters()
 		if err != nil {
 			if errors.Is(err, domain.ErrUnsupported) {
-				return Type{}, fmt.Errorf("%w: capability=%s semantic decimal precision exceeds the supported boundary", domain.ErrUnsupported, domain.CapabilitySparkDecimal38V1)
+				return Type{}, fmt.Errorf("%w: capability=%s semantic decimal precision exceeds the supported boundary", domain.ErrUnsupported, domain.CapabilityDecimalPrecision38V1)
 			}
 			return Type{}, invalidType()
 		}
@@ -163,7 +163,7 @@ func (typ Type) Precision() (int64, bool) { return typ.precision, typ.hasPrecisi
 
 func (typ Type) Scale() (int64, bool) { return typ.scale, typ.hasScale }
 
-// EffectiveDecimalParameters returns the Spark-compatible shape selected by
+// EffectiveDecimalParameters returns the engine-compatible shape selected by
 // the canonical BQEMU decimal policy.
 func (typ Type) EffectiveDecimalParameters() (domain.DecimalParameters, bool) {
 	if typ.kind != TypeNumeric && typ.kind != TypeBigNumeric {

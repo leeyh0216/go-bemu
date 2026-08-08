@@ -91,7 +91,7 @@ func TestQueryCapabilityAndGapIDsAreStable(t *testing.T) {
 }
 
 func TestJobReferenceRejectsControlCharactersAndOversizedComponents(t *testing.T) {
-	valid := JobReference{ProjectID: "test-project", Location: "us-central1", JobID: "spark_job-1"}
+	valid := JobReference{ProjectID: "test-project", Location: "us-central1", JobID: "query_job-1"}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid job reference: %v", err)
 	}

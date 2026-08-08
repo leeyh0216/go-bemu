@@ -56,9 +56,9 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 		switch {
 		case r.URL.Path == "/storage/v1/b/load-bucket/o":
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
-				"name": "spark/part-00000.parquet", "size": fmt.Sprint(len(parquetPayload)), "generation": "1",
+				"name": "input/part-00000.parquet", "size": fmt.Sprint(len(parquetPayload)), "generation": "1",
 			}}})
-		case strings.HasSuffix(r.URL.Path, "/o/spark/part-00000.parquet") && r.URL.Query().Get("alt") == "media":
+		case strings.HasSuffix(r.URL.Path, "/o/input/part-00000.parquet") && r.URL.Query().Get("alt") == "media":
 			_, _ = w.Write(parquetPayload)
 		default:
 			http.NotFound(w, r)
@@ -101,7 +101,7 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 			"parquetOptions":{},"decimalTargetTypes":null,"nullMarkers":[],
 			"projectionFields":[],"timestampTargetPrecision":[]
 		}}
-	}`, "gs://load-bucket/spark/*.parquet")
+	}`, "gs://load-bucket/input/*.parquet")
 	job := restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", body, http.StatusOK)
 	job = waitForRESTLoad(t, server.URL, "load-one")
 	status := job["status"].(map[string]any)
@@ -195,7 +195,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
 	accepted := map[string]string{
 		"absent":          `{}`,
-		"spark empty":     `{"parquetOptions":{}}`,
+		"empty options":   `{"parquetOptions":{}}`,
 		"explicit false":  `{"parquetOptions":{"enableListInference":false,"enumAsString":false}}`,
 		"bq cli defaults": `{"decimalTargetTypes":null,"nullMarkers":[],"projectionFields":[],"timestampTargetPrecision":[]}`,
 	}

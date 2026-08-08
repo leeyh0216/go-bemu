@@ -11,7 +11,6 @@ package rest
 //   - bounded server request bodies: https://pkg.go.dev/net/http#MaxBytesReader
 //   - gzip reader behavior: https://pkg.go.dev/compress/gzip#NewReader
 //   - BigQuery tables.insert: https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert
-//   - connector 0.44.2 BigQuery client adapter: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java
 
 import (
 	"bytes"

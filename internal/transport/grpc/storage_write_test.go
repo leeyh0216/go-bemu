@@ -31,7 +31,7 @@ import (
 	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
 )
 
-func TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance(t *testing.T) {
+func TestStorageWriteProtoRowsLifecycleAndConnectionInheritance(t *testing.T) {
 	contracttest.Operation(t, "grpc.bigquery-write.create-write-stream")
 	contracttest.Operation(t, "grpc.bigquery-write.append-rows")
 	contracttest.Operation(t, "grpc.bigquery-write.get-write-stream")
@@ -61,7 +61,7 @@ func TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance(t *testing.
 		t.Fatal(err)
 	}
 	if err := appendClient.Send(&storagepb.AppendRowsRequest{
-		WriteStream: created.GetName(), Offset: wrapperspb.Int64(0), TraceId: "spark-stage-7",
+		WriteStream: created.GetName(), Offset: wrapperspb.Int64(0), TraceId: "writer-stage-7",
 		Rows: &storagepb.AppendRowsRequest_ProtoRows{ProtoRows: &storagepb.AppendRowsRequest_ProtoData{
 			WriterSchema: &storagepb.ProtoSchema{ProtoDescriptor: descriptor},
 			Rows:         &storagepb.ProtoRows{SerializedRows: [][]byte{rows[0]}},
@@ -86,8 +86,8 @@ func TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance(t *testing.
 	if err != nil || second.GetAppendResult().GetOffset().GetValue() != 1 {
 		t.Fatalf("inherited append: %#v, %v", second, err)
 	}
-	// Offset errors are embedded responses, not terminal RPC statuses. Spark
-	// 0.44.2 treats ALREADY_EXISTS as a successful retry signal.
+	// Offset errors are embedded responses, not terminal RPC statuses. This
+	// permits a writer to classify ALREADY_EXISTS as an idempotent retry signal.
 	if err := appendClient.Send(&storagepb.AppendRowsRequest{
 		Offset: wrapperspb.Int64(0),
 		Rows: &storagepb.AppendRowsRequest_ProtoRows{ProtoRows: &storagepb.AppendRowsRequest_ProtoData{
@@ -152,12 +152,12 @@ func TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance(t *testing.
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
-	if coordinator.visibleRows != 3 || coordinator.traceID != "spark-stage-7" {
+	if coordinator.visibleRows != 3 || coordinator.traceID != "writer-stage-7" {
 		t.Fatalf("coordinator visible=%d trace=%q", coordinator.visibleRows, coordinator.traceID)
 	}
 }
 
-func TestStorageWriteLegacyDefaultAliasHasNoResponseOffset(t *testing.T) {
+func TestStorageWriteRejectsDeprecatedDefaultStreamAlias(t *testing.T) {
 	ctx, cancel := grpcStorageWriteTestContext(t)
 	defer cancel()
 	coordinator := newWireWriteCoordinator()
@@ -181,13 +181,13 @@ func TestStorageWriteLegacyDefaultAliasHasNoResponseOffset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.GetWriteStream() != parent+"/streams/_default" || response.GetAppendResult().GetOffset() != nil {
-		t.Fatalf("unexpected default append response: %#v", response)
+	if response.GetWriteStream() != parent+"/_default" || response.GetError().GetCode() != int32(codes.InvalidArgument) {
+		t.Fatalf("unexpected deprecated alias response: %#v", response)
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
-	if coordinator.visibleRows != 1 {
-		t.Fatalf("got %d visible rows, want 1", coordinator.visibleRows)
+	if coordinator.visibleRows != 0 {
+		t.Fatalf("got %d visible rows, want 0", coordinator.visibleRows)
 	}
 }
 
@@ -265,7 +265,7 @@ func TestFieldTypeToProtoDoesNotAdvertiseGeography(t *testing.T) {
 func newWireWriteService(t *testing.T, coordinator writeports.Coordinator) *writeapp.Service {
 	t.Helper()
 	service, err := writeapp.New(writeapp.Config{
-		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		Location: "US", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
 		MaxStreams: 16, MaxAppendBytes: 9 * 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 4,
 		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
 	}, coordinator, wireClock{}, &wireIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -306,7 +306,7 @@ func wireProtoRows(t *testing.T, values ...int64) (*descriptorpb.DescriptorProto
 			Name: &fieldName, Number: &fieldNumber, Type: &fieldType, Label: &fieldLabel,
 		}},
 	}
-	fileName, syntax := "spark.proto", "proto2"
+	fileName, syntax := "rows.proto", "proto2"
 	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
 		Name: &fileName, Syntax: &syntax, MessageType: []*descriptorpb.DescriptorProto{descriptor},
 	}, nil)
@@ -382,7 +382,7 @@ func TestAppendConnectionSeparatesProtoDataLimitFromWireAdmission(t *testing.T) 
 	}
 	request := &storagepb.AppendRowsRequest{
 		WriteStream: "projects/test-project/datasets/analytics/tables/events/streams/pending-a",
-		TraceId:     "connector-trace-envelope",
+		TraceId:     "writer-trace-envelope",
 		Rows:        &storagepb.AppendRowsRequest_ProtoRows{ProtoRows: protoData},
 	}
 	converted, _, err := (appendConnection{}).convert(request)

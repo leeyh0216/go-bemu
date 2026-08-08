@@ -67,7 +67,7 @@ func TestStorageReadWireFormatsAndOffsetResume(t *testing.T) {
 				ReadSession: &storagepb.ReadSession{
 					Table:      "projects/data-project/datasets/analytics/tables/events",
 					DataFormat: testCase.wire,
-					TraceId:    "spark-stage-42",
+					TraceId:    "reader-stage-42",
 				},
 			})
 			if err != nil {

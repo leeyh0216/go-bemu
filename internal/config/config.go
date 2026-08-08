@@ -26,6 +26,7 @@ const (
 	maxConfigFileSize              = 1 << 20
 	storageReadSystemMaxStreams    = 1_000
 	storageReadGRPCEnvelopeReserve = 64 << 10
+	storageWriteMaxAppendRequest   = 20 << 20
 )
 
 // The generated CreateReadSession contract documents a default system maximum
@@ -34,15 +35,13 @@ const (
 // independently configurable and are checked against the gRPC send ceiling.
 // Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#createreadsessionrequest
 //
-// The official API limits the complete AppendRowsRequest. The Java Storage
-// client 3.22.1 pinned by connector 0.44.2 separately measures ProtoData when
-// batching, while grpc-go receives the enclosing request. BQEMU therefore
-// models the pinned client's payload bound and a configurable envelope bound;
-// this split is a compatibility profile, not a redefinition of the API limit.
+// The official API limits the complete AppendRowsRequest to 20 MB. BQEMU
+// reserves a configurable part of that request for the protobuf envelope and
+// applies the remainder to ProtoData. grpc-go still receives the complete
+// request, so both configured budgets must fit within the official limit.
 // Sources:
 //   - https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#appendrowsrequest
-//   - https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java
-//   - https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar
+//   - https://cloud.google.com/bigquery/quotas#write-api-limits
 
 // Duration uses Go duration strings on the wire, for example "5s" or "6h".
 // Numeric values are rejected because their unit would be ambiguous.
@@ -81,7 +80,6 @@ type Config struct {
 	Logging    LoggingConfig   `yaml:"logging" json:"logging"`
 	Admin      AdminConfig     `yaml:"admin" json:"admin"`
 	UI         UIConfig        `yaml:"ui" json:"ui"`
-	Contracts  ContractsConfig `yaml:"contracts" json:"contracts"`
 }
 
 type DefaultsConfig struct {
@@ -279,10 +277,6 @@ type UIConfig struct {
 	Directory string `yaml:"directory" json:"directory"`
 }
 
-type ContractsConfig struct {
-	ProfileDirectory string `yaml:"profileDirectory" json:"profileDirectory"`
-}
-
 type Result struct {
 	Config               Config
 	ConfigPath           string
@@ -347,16 +341,16 @@ func Defaults() Config {
 				SpillThresholdBytes: 64 << 20, MaxRowBytes: 8 << 20,
 				MaxSnapshotBytes: 512 << 20, MaxTotalSnapshotBytes: 4 << 30, MaxSnapshotRows: 10_000_000,
 				TempFilePattern:      "bqemu-storage-read-*",
-				ProtocolModelVersion: "google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2",
+				ProtocolModelVersion: "google.cloud.bigquery.storage.v1",
 			},
 			Write: StorageWriteConfig{
-				Enabled: true, MaxStreams: 1_024, MaxAppendRequestBytes: 20 << 20, MaxAppendEnvelopeBytes: 64 << 10,
+				Enabled: true, MaxStreams: 1_024, MaxAppendRequestBytes: (20 << 20) - (64 << 10), MaxAppendEnvelopeBytes: 64 << 10,
 				MaxConcurrentAppendRequests: 16, QueueCapacity: 256,
 				QueueWaitTimeout: Duration(5 * time.Second), OperationTimeout: Duration(30 * time.Second),
 				MaxInFlightBytes: 256 << 20, MaxInFlightBytesPerStream: 32 << 20,
 				MaxStagedBytes: 4 << 30, MaxStagedBytesPerStream: 512 << 20,
 				OrphanTTL: Duration(6 * time.Hour), CleanupInterval: Duration(time.Minute),
-				ProtocolModelVersion: "google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2",
+				ProtocolModelVersion: "google.cloud.bigquery.storage.v1",
 			},
 		},
 		Load: LoadConfig{
@@ -368,7 +362,6 @@ func Defaults() Config {
 		Admin: AdminConfig{
 			Address: "127.0.0.1:9051", ReadHeaderTimeout: Duration(5 * time.Second), MaxStackBytes: 4 << 20,
 		},
-		Contracts: ContractsConfig{ProfileDirectory: "contract/profiles"},
 	}
 }
 
@@ -732,8 +725,6 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setBool(&cfg.UI.Enabled)
 	case "ui.directory":
 		return setString(&cfg.UI.Directory)
-	case "contracts.profileDirectory":
-		return setString(&cfg.Contracts.ProfileDirectory)
 	default:
 		return fmt.Errorf("unknown configuration path %q", path)
 	}
@@ -848,9 +839,8 @@ func (cfg Config) Validate() error {
 		return errors.New("storage.read.protocolModelVersion is required")
 	}
 	if cfg.Storage.Write.MaxStreams < 1 || cfg.Storage.Write.QueueCapacity < 1 || cfg.Storage.Write.MaxAppendEnvelopeBytes < 1 ||
-		cfg.Storage.Write.MaxConcurrentAppendRequests < 1 ||
-		cfg.Storage.Write.MaxAppendRequestBytes < 1<<20 || cfg.Storage.Write.MaxAppendRequestBytes > 20<<20 {
-		return errors.New("storage.write stream, queue, and envelope limits must be positive and maxAppendRequestBytes between 1 MiB and 20 MiB")
+		cfg.Storage.Write.MaxConcurrentAppendRequests < 1 || cfg.Storage.Write.MaxAppendRequestBytes < 1<<20 {
+		return errors.New("storage.write stream, queue, and envelope limits must be positive and maxAppendRequestBytes at least 1 MiB")
 	}
 	if cfg.Storage.Write.QueueWaitTimeout.Value() <= 0 || cfg.Storage.Write.OperationTimeout.Value() <= 0 {
 		return errors.New("storage.write queueWaitTimeout and operationTimeout must be positive")
@@ -861,6 +851,9 @@ func (cfg Config) Validate() error {
 		return errors.New("storage.write append payload and envelope byte limits overflow int64")
 	}
 	minimumReceiveBytes := appendBytes + envelopeBytes
+	if minimumReceiveBytes > int64(storageWriteMaxAppendRequest) {
+		return fmt.Errorf("storage.write maxAppendRequestBytes + maxAppendEnvelopeBytes must not exceed the official AppendRows request limit %d", storageWriteMaxAppendRequest)
+	}
 	if int64(cfg.Server.GRPC.MaxReceiveMessageBytes) < minimumReceiveBytes {
 		return fmt.Errorf("server.grpc.maxReceiveMessageBytes must be at least %d for the configured Storage Write ProtoData payload and envelope maximum", minimumReceiveBytes)
 	}
@@ -916,9 +909,6 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.UI.Enabled && strings.TrimSpace(cfg.UI.Directory) == "" {
 		return errors.New("ui.directory is required when UI is enabled")
-	}
-	if strings.TrimSpace(cfg.Contracts.ProfileDirectory) == "" {
-		return errors.New("contracts.profileDirectory is required")
 	}
 	return nil
 }

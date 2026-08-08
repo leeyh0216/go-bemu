@@ -1,11 +1,9 @@
 package application
 
-// Operational limits are injected so connector matrices can exercise stream
-// negotiation without recompiling the emulator. The BigQuery Storage client
-// 3.22.1 used by spark-bigquery-connector 0.44.2 measures ProtoData against a
-// 20 MiB client maximum; the connector batches at 95 percent of that value.
-// https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar
-// https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java#L50-L55
+// Operational limits are injected so deployments can bound memory without
+// changing the official Storage Write request contract. ProtoData and envelope
+// budgets must fit within the complete 20 MB AppendRowsRequest limit.
+// https://cloud.google.com/bigquery/quotas#write-api-limits
 
 import (
 	"fmt"
@@ -13,7 +11,7 @@ import (
 	"time"
 )
 
-const ProtocolMaxAppendBytes = 20 * 1024 * 1024
+const ProtocolMaxAppendRequestBytes = 20 * 1024 * 1024
 
 type Config struct {
 	Location                    string
@@ -36,11 +34,14 @@ func validateConfig(config Config) error {
 	if config.MaxStreams <= 0 {
 		return fmt.Errorf("maximum logical stream count must be positive")
 	}
-	if config.MaxAppendBytes <= 0 || config.MaxAppendBytes > ProtocolMaxAppendBytes {
-		return fmt.Errorf("maximum append bytes must be positive and at most %d", ProtocolMaxAppendBytes)
+	if config.MaxAppendBytes <= 0 {
+		return fmt.Errorf("maximum append bytes must be positive")
 	}
 	if config.MaxAppendEnvelopeBytes <= 0 {
 		return fmt.Errorf("maximum append envelope bytes must be positive")
+	}
+	if config.MaxAppendBytes > ProtocolMaxAppendRequestBytes-config.MaxAppendEnvelopeBytes {
+		return fmt.Errorf("append payload and envelope budgets must fit within the maximum request size %d", ProtocolMaxAppendRequestBytes)
 	}
 	if config.MaxConcurrentAppendRequests <= 0 {
 		return fmt.Errorf("maximum concurrent append requests must be positive")

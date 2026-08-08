@@ -65,7 +65,7 @@ func TestDuckDBReadSnapshotSupportsConfiguredStreamMatrixForArrowAndAvro(t *test
 					Table:          readTestTableResource(table),
 					Format:         format,
 					MaxStreamCount: streamCount,
-					TraceID:        "spark-stage-matrix",
+					TraceID:        "reader-stage-matrix",
 				})
 				if err != nil {
 					t.Fatal(err)

@@ -30,7 +30,7 @@ func RunPlanningConformance(t *testing.T, factory Factory) {
 		capabilities := adapter.Capabilities()
 		descriptor := capabilities.Descriptor()
 		descriptor.Decimal.MaxPrecision = 1
-		if adapter.Capabilities().Decimal().MaxPrecision != catalogdomain.SparkDecimalMaxPrecision {
+		if adapter.Capabilities().Decimal().MaxPrecision != catalogdomain.SupportedDecimalMaxPrecision {
 			t.Fatal("adapter exposed mutable capabilities")
 		}
 		intent := mustSchemaIntent(t, nestedSchema(capabilities.Composite().MaxStructDepth+1))

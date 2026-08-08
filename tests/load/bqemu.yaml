@@ -62,6 +62,3 @@ admin:
 
 ui:
   enabled: false
-
-contracts:
-  profileDirectory: contract/profiles

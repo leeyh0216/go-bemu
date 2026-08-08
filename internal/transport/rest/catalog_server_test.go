@@ -45,7 +45,7 @@ func (*catalogTestWarehouse) PlanSchema(ctx context.Context, intent engine.Schem
 	identity, _ := engine.NewIdentity("catalog-test", "1")
 	capabilities, err := engine.NewCapabilities(engine.CapabilitiesDescriptor{
 		Identity:  identity,
-		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: domain.SparkDecimalMaxPrecision, MaxScale: domain.SparkDecimalMaxScale},
+		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: domain.SupportedDecimalMaxPrecision, MaxScale: domain.SupportedDecimalMaxScale},
 		Composite: engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
 		DDL: map[engine.DDLOperation]engine.DDLCapability{
 			engine.DDLCreateTable: {Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement},
@@ -399,7 +399,7 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 		actual := datasetMethods[method].(map[string]any)["parameters"].(map[string]any)
 		for _, parameter := range parameters {
 			if actual[parameter] == nil {
-				t.Fatalf("datasets.%s discovery is missing bq CLI parameter %q", method, parameter)
+				t.Fatalf("datasets.%s discovery is missing parameter %q", method, parameter)
 			}
 		}
 	}
@@ -412,7 +412,7 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	tableMethods := resources["tables"].(map[string]any)["methods"].(map[string]any)
 	tablePatchParameters := tableMethods["patch"].(map[string]any)["parameters"].(map[string]any)
 	if tablePatchParameters["autodetect_schema"] == nil {
-		t.Fatal("tables.patch discovery is missing the bq CLI autodetect_schema parameter")
+		t.Fatal("tables.patch discovery is missing the autodetect_schema parameter")
 	}
 	if tableMethods["get"].(map[string]any)["parameters"].(map[string]any)["autodetect_schema"] != nil {
 		t.Fatal("tables.get must not advertise the mutation-only autodetect_schema parameter")

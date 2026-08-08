@@ -1,11 +1,11 @@
 package rest
 
 import (
-	"encoding/json"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
+	"sort"
 	"strings"
 )
 
@@ -20,24 +20,13 @@ func withCapabilitiesAPI() Option {
 	return func(server *Server) {
 		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
 			return []routeBinding{handlerBinding("bqemu.capabilities.get", func(w http.ResponseWriter, _ *http.Request) {
-				profiles := server.capabilityProfiles
-				if len(profiles) == 0 {
-					profiles = json.RawMessage("[]")
-				}
+				operations := server.operationIDs()
+				sort.Strings(operations)
 				writeJSON(w, http.StatusOK, map[string]any{
-					"kind": "bqemu#capabilityRegistry", "profiles": profiles,
+					"kind": "bqemu#capabilityRegistry", "operations": operations,
 				})
 			})}
 		})
-	}
-}
-
-// WithCapabilityProfiles injects the immutable profile snapshot exposed by the
-// emulator-only capability endpoint. The contract compiler owns the snapshot;
-// the transport only owns its HTTP representation.
-func WithCapabilityProfiles(profiles json.RawMessage) Option {
-	return func(server *Server) {
-		server.capabilityProfiles = append(json.RawMessage(nil), profiles...)
 	}
 }
 

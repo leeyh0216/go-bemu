@@ -913,8 +913,8 @@
       "protocol": "rest",
       "component": "public-query",
       "summary": {
-        "en": "Return versioned consumer capability profiles",
-        "ko": "버전별 소비자 기능 프로필을 반환합니다."
+        "en": "Return the registered REST operation identifiers",
+        "ko": "등록된 REST operation ID를 반환합니다."
       },
       "support": "implemented",
       "verification": "transport",
@@ -924,8 +924,8 @@
         "discovery": false
       },
       "supportedInput": {
-        "en": "No request body is accepted.",
-        "ko": "요청 본문을 받지 않습니다."
+        "en": "No request body is accepted; the response lists operations active in this process.",
+        "ko": "요청 본문을 받지 않으며 응답에는 현재 프로세스에서 활성화된 operation을 나열합니다."
       },
       "conditions": [],
       "limitations": {
@@ -1528,7 +1528,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance",
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
         "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
         "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
@@ -1578,7 +1578,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance",
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
         "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
         "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
@@ -1629,7 +1629,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance",
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
         "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
         "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
@@ -1679,7 +1679,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance",
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
         "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
         "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
@@ -1764,7 +1764,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance"
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
     {

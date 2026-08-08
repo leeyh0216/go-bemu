@@ -371,11 +371,11 @@ operations:
   - id: bqemu.capabilities.get
     protocol: rest
     component: public-query
-    summary: {en: Return versioned consumer capability profiles, ko: 버전별 소비자 기능 프로필을 반환합니다.}
+    summary: {en: Return the registered REST operation identifiers, ko: 등록된 REST operation ID를 반환합니다.}
     support: implemented
     verification: transport
     rest: {method: GET, path: /bqemu/v1/capabilities, discovery: false}
-    supportedInput: {en: No request body is accepted., ko: 요청 본문을 받지 않습니다.}
+    supportedInput: {en: No request body is accepted; the response lists operations active in this process., ko: 요청 본문을 받지 않으며 응답에는 현재 프로세스에서 활성화된 operation을 나열합니다.}
     limitations: {policy: none, byDesign: [], en: This is an emulator extension., ko: 에뮬레이터 확장 기능입니다.}
     issues: []
     sources: [bqemu-public-api]
@@ -525,7 +525,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Explicit COMMITTED and BUFFERED streams and CDC mode are not implemented., ko: 명시적 COMMITTED 및 BUFFERED 스트림과 CDC 모드는 지원하지 않습니다.}
     issues: ['#7', '#20']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
 
   - id: grpc.bigquery-write.append-rows
     protocol: grpc
@@ -540,7 +540,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: ArrowRows and missing-value default expressions are not implemented., ko: ArrowRows와 누락 값의 기본 표현식은 지원하지 않습니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
 
   - id: grpc.bigquery-write.get-write-stream
     protocol: grpc
@@ -555,7 +555,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Only stream metadata held by the configured coordinator is returned., ko: 설정된 조정자가 관리하는 스트림 메타데이터만 반환합니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.finalize-write-stream
     protocol: grpc
@@ -570,7 +570,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Finalization follows the local coordinator state machine while remaining state-machine work is tracked., ko: 로컬 조정자의 상태 전이 규칙을 따르며 나머지 상태 머신 작업은 이슈에서 관리합니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
 
   - id: grpc.bigquery-write.batch-commit-write-streams
     protocol: grpc
@@ -585,7 +585,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Distributed concurrency and cloud throughput guarantees are not implemented., ko: 분산 동시성과 Cloud 처리량 보장은 지원하지 않습니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
 
   - id: grpc.bigquery-write.flush-rows
     protocol: grpc

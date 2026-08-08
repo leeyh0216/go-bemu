@@ -44,14 +44,14 @@ func TestRESTGzipChunkedTablesInsertUsesDecodedJSON(t *testing.T) {
 
 	logs, restoreLogs := captureRequestBodyLogs()
 	defer restoreLogs()
-	body := []byte(`{"tableReference":{"tableId":"connector_temporary"},"description":"private-body-value","schema":{"fields":[{"name":"id","type":"INT64"}]}}`)
+	body := []byte(`{"tableReference":{"tableId":"temporary_input"},"description":"private-body-value","schema":{"fields":[{"name":"id","type":"INT64"}]}}`)
 	response := doEncodedRequest(t, ctx, server.URL+"/bigquery/v2/projects/test-project/datasets/temporary/tables", body, "gzip", true)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		payload, _ := io.ReadAll(response.Body)
 		t.Fatalf("gzip chunked tables.insert status = %d, want 200: %s", response.StatusCode, payload)
 	}
-	if len(warehouse.tables) != 1 || warehouse.tables[0] != "test-project/temporary/connector_temporary" {
+	if len(warehouse.tables) != 1 || warehouse.tables[0] != "test-project/temporary/temporary_input" {
 		t.Fatalf("created physical tables = %#v", warehouse.tables)
 	}
 
@@ -76,7 +76,7 @@ func TestRESTGzipMethodOverrideReachesTablesPatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := catalog.CreateTable(ctx, domain.Table{
-		ProjectID: "test-project", DatasetID: "temporary", ID: "connector_temporary",
+		ProjectID: "test-project", DatasetID: "temporary", ID: "temporary_input",
 		Schema: []domain.Field{{Name: "id", Type: "INT64"}},
 	}); err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestRESTGzipMethodOverrideReachesTablesPatch(t *testing.T) {
 
 	body := gzipPayload(t, []byte(`{"expirationTime":"1800000000000"}`))
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		server.URL+"/bigquery/v2/projects/test-project/datasets/temporary/tables/connector_temporary",
+		server.URL+"/bigquery/v2/projects/test-project/datasets/temporary/tables/temporary_input",
 		io.NopCloser(bytes.NewReader(body)))
 	if err != nil {
 		t.Fatal(err)

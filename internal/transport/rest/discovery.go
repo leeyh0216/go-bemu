@@ -127,7 +127,7 @@ func discoveryQueryParameter(valueType string) map[string]any {
 }
 
 func discoveryMethod(id, httpMethod, path, requestRef, responseRef string, parameters map[string]any, order ...string) map[string]any {
-	// Discovery clients such as bq 2.1.31 iterate parameterOrder without a
+	// Discovery consumers iterate parameterOrder without a
 	// nil check. The official discovery schema defines this as an array, so a
 	// method with no required path parameters must encode [] rather than null.
 	// https://developers.google.com/discovery/v1/reference/apis/getRest

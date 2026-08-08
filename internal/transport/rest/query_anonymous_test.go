@@ -132,7 +132,7 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/eu_source/tables/created_by_script", "", http.StatusNotFound)
 
 	inserted := request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", `{
-		"jobReference":{"projectId":"test-project","jobId":"connector-anonymous"},
+		"jobReference":{"projectId":"test-project","jobId":"anonymous-result"},
 		"configuration":{"labels":{},"query":{
 			"query":"SELECT id FROM `+"`test-project.eu_source.events`"+` ORDER BY id",
 			"useLegacySql":false,"priority":"INTERACTIVE"
@@ -146,7 +146,7 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 	insertDestination := insertQuery["destinationTable"].(map[string]any)
 	assertAnonymousDestinationReference(t, insertDestination)
 
-	completed := waitForRESTQueryJob(t, ctx, request, "connector-anonymous", "EU")
+	completed := waitForRESTQueryJob(t, ctx, request, "anonymous-result", "EU")
 	completedQuery := completed["configuration"].(map[string]any)["query"].(map[string]any)
 	completedDestination := completedQuery["destinationTable"].(map[string]any)
 	if fmt.Sprint(completedDestination) != fmt.Sprint(insertDestination) {

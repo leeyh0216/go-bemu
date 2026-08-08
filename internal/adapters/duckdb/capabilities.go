@@ -33,7 +33,7 @@ func newDuckDBCapabilities(db *sql.DB) (engine.Capabilities, error) {
 	capabilities, err := engine.NewCapabilities(engine.CapabilitiesDescriptor{
 		Identity: identity,
 		Decimal: engine.DecimalCapabilities{
-			Supported: true, MaxPrecision: domain.SparkDecimalMaxPrecision, MaxScale: domain.SparkDecimalMaxScale,
+			Supported: true, MaxPrecision: domain.SupportedDecimalMaxPrecision, MaxScale: domain.SupportedDecimalMaxScale,
 		},
 		Composite: engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
 		Transactions: map[engine.TransactionScope]bool{

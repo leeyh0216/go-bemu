@@ -32,7 +32,7 @@ func TestStatementParserMapsPublicGoogleSQLCorpus(t *testing.T) {
 			kind: queryast.StatementSelect,
 		},
 		{
-			name: "public Spark query source between predicate",
+			name: "public query source between predicate",
 			sql:  "SELECT id, label, score, active FROM `test-project.analytics.events` WHERE id BETWEEN 2 AND 4",
 			kind: queryast.StatementSelect,
 		},
@@ -59,7 +59,7 @@ func TestStatementParserMapsPublicGoogleSQLCorpus(t *testing.T) {
 			kind: queryast.StatementDelete,
 		},
 		{
-			name: "static connector merge",
+			name: "constant-false merge",
 			sql: "MERGE `test-project.analytics.destination` " +
 				"USING (SELECT * FROM `test-project.analytics.temporary`) ON FALSE " +
 				"WHEN NOT MATCHED THEN INSERT ROW WHEN NOT MATCHED BY SOURCE THEN DELETE",
@@ -74,7 +74,7 @@ func TestStatementParserMapsPublicGoogleSQLCorpus(t *testing.T) {
 			kind: queryast.StatementMerge,
 		},
 		{
-			name: "dynamic connector script",
+			name: "partition merge script",
 			sql: "DECLARE partitions_to_delete DEFAULT " +
 				"(SELECT ARRAY_AGG(DISTINCT(date_trunc(`partition_date`, DAY)) IGNORE NULLS) " +
 				"FROM `test-project.analytics.temporary`); " +

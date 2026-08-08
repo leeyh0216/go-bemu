@@ -13,8 +13,8 @@ func extendQueryDiscovery(document map[string]any) {
 		"location": discoveryQueryParameter("string"),
 	}
 	jobInsert := discoveryMethod("bigquery.jobs.insert", "POST", "projects/{projectId}/jobs", "Job", "Job", project, "projectId")
-	// bq 2.1.31 always supplies the generated client's media_body argument,
-	// including nil for ordinary query jobs. googleapiclient exposes that
+	// Media-upload callers can supply the generated media_body argument,
+	// including nil for ordinary query jobs. Generated callers expose that
 	// argument only when Discovery contains mediaUpload metadata. The upload
 	// endpoints remain deliberately unregistered and are documented as a gap.
 	jobInsert["supportsMediaUpload"] = true

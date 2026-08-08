@@ -162,7 +162,7 @@ func newDurableTestService(
 ) *Service {
 	t.Helper()
 	service, err := New(Config{
-		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		Location: "US", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
 		MaxStreams: 8, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024,
 		MaxConcurrentAppendRequests: 4, OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}, coordinator, clock, ids, slog.New(slog.NewTextHandler(io.Discard, nil)), WithStateRepository(repository))

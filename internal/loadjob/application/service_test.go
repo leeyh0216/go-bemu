@@ -168,7 +168,7 @@ func testLoaderCapabilities() engine.Capabilities {
 	}
 	capabilities, err := engine.NewCapabilities(engine.CapabilitiesDescriptor{
 		Identity:  identity,
-		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: catalogdomain.SparkDecimalMaxPrecision, MaxScale: catalogdomain.SparkDecimalMaxScale},
+		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: catalogdomain.SupportedDecimalMaxPrecision, MaxScale: catalogdomain.SupportedDecimalMaxScale},
 		Composite: engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
 		Transactions: map[engine.TransactionScope]bool{
 			engine.TransactionScopeSingleTable: true,

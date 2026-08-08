@@ -283,10 +283,9 @@ func buildCatalogSnapshot(
 				if err := datasetCatalog.AddTable2(table.ID, tableNode); err != nil {
 					return nil, catalogShapeFailure()
 				}
-				// BigQuery clients conventionally quote the entire
-				// project.dataset.table path with one backtick pair. The official
-				// AST represents that as one identifier, so register the canonical
-				// dotted name as a root table alias in addition to nested catalogs.
+				// The official AST represents a fully quoted three-part path as one
+				// identifier. Register the canonical dotted name as a root table
+				// alias in addition to the nested catalogs.
 				if err := root.AddTable2(tableFullName(registered.reference), tableNode); err != nil {
 					return nil, catalogShapeFailure()
 				}
@@ -600,8 +599,8 @@ func canonicalSchemaFailure(err error) error {
 		capability := domain.CapabilityEngineSchemaV1
 		diagnostic := err.Error()
 		switch {
-		case strings.Contains(diagnostic, domain.CapabilitySparkDecimal38V1):
-			capability = domain.CapabilitySparkDecimal38V1
+		case strings.Contains(diagnostic, domain.CapabilityDecimalPrecision38V1):
+			capability = domain.CapabilityDecimalPrecision38V1
 		case strings.Contains(diagnostic, domain.GapGeographyUnsupportedV1):
 			capability = domain.GapGeographyUnsupportedV1
 		}

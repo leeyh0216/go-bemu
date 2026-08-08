@@ -54,7 +54,7 @@ func TestWarehousePublishesPortableSchemaCapabilities(t *testing.T) {
 		_, err = warehouse.PlanSchema(context.Background(), intent)
 	}
 	if err == nil {
-		t.Fatal("schema planner accepted precision above the Spark DecimalType maximum")
+		t.Fatal("schema planner accepted precision above the engine maximum")
 	}
 }
 
@@ -69,8 +69,8 @@ func TestWarehousePublishesImmutableEngineCapabilities(t *testing.T) {
 	if capabilities.Identity().ID() != "duckdb" || capabilities.Identity().Version() == "" {
 		t.Fatalf("engine identity = %s@%s", capabilities.Identity().ID(), capabilities.Identity().Version())
 	}
-	if decimal := capabilities.Decimal(); !decimal.Supported || decimal.MaxPrecision != domain.SparkDecimalMaxPrecision ||
-		decimal.MaxScale != domain.SparkDecimalMaxScale {
+	if decimal := capabilities.Decimal(); !decimal.Supported || decimal.MaxPrecision != domain.SupportedDecimalMaxPrecision ||
+		decimal.MaxScale != domain.SupportedDecimalMaxScale {
 		t.Fatalf("decimal capabilities = %#v", decimal)
 	}
 	if !capabilities.SupportsTransaction(engine.TransactionScopeSingleTable) ||
@@ -94,7 +94,7 @@ func TestWarehousePublishesImmutableEngineCapabilities(t *testing.T) {
 	descriptor := capabilities.Descriptor()
 	descriptor.Decimal.MaxPrecision = 1
 	descriptor.Transactions[engine.TransactionScopeSingleTable] = false
-	if again := warehouse.Capabilities(); again.Decimal().MaxPrecision != domain.SparkDecimalMaxPrecision ||
+	if again := warehouse.Capabilities(); again.Decimal().MaxPrecision != domain.SupportedDecimalMaxPrecision ||
 		!again.SupportsTransaction(engine.TransactionScopeSingleTable) {
 		t.Fatal("published capabilities retained a mutable descriptor")
 	}

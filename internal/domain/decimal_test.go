@@ -8,7 +8,7 @@ import (
 
 func decimalPointer(value int64) *int64 { return &value }
 
-func TestEffectiveDecimalParametersUsesSparkCompatiblePolicy(t *testing.T) {
+func TestEffectiveDecimalParametersUsesEngineCompatiblePolicy(t *testing.T) {
 	tests := []struct {
 		name  string
 		field Field
@@ -18,7 +18,7 @@ func TestEffectiveDecimalParametersUsesSparkCompatiblePolicy(t *testing.T) {
 		{name: "bignumeric default", field: Field{Name: "amount", Type: "BIGNUMERIC"}, want: DecimalParameters{Precision: 38, Scale: 18}},
 		{name: "precision without scale", field: Field{Name: "amount", Type: "NUMERIC", Precision: decimalPointer(20)}, want: DecimalParameters{Precision: 20, Scale: 0}},
 		{name: "numeric explicit", field: Field{Name: "amount", Type: "NUMERIC", Precision: decimalPointer(38), Scale: decimalPointer(9)}, want: DecimalParameters{Precision: 38, Scale: 9}},
-		{name: "bignumeric Spark boundary", field: Field{Name: "amount", Type: "BIGNUMERIC", Precision: decimalPointer(38), Scale: decimalPointer(38)}, want: DecimalParameters{Precision: 38, Scale: 38}},
+		{name: "bignumeric engine boundary", field: Field{Name: "amount", Type: "BIGNUMERIC", Precision: decimalPointer(38), Scale: decimalPointer(38)}, want: DecimalParameters{Precision: 38, Scale: 38}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestFieldValidationRejectsUnsupportedDecimalParameters(t *testing.T) {
 
 func TestFieldValidationClassifiesDecimalPrecisionAndGeographyAsUnsupported(t *testing.T) {
 	tooWide := (Field{Name: "amount", Type: "BIGNUMERIC", Precision: decimalPointer(39)}).Validate()
-	if !errors.Is(tooWide, ErrUnsupported) || !strings.Contains(tooWide.Error(), CapabilitySparkDecimal38V1) {
+	if !errors.Is(tooWide, ErrUnsupported) || !strings.Contains(tooWide.Error(), CapabilityDecimalPrecision38V1) {
 		t.Fatalf("precision error = %v, want stable unsupported capability", tooWide)
 	}
 	geography := (Field{Name: "location", Type: "GEOGRAPHY"}).Validate()

@@ -37,7 +37,7 @@ func newCleanupTestService(
 	t.Helper()
 	clock := &fakeClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	service, err := New(Config{
-		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		Location: "US", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@test",
 		MaxStreams: maxStreams, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 4,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
 	}, coordinator, clock, &sequenceIDs{}, logger)

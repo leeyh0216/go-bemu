@@ -65,9 +65,8 @@ func applyExistingQueryDestination(ctx context.Context, tx *sql.Tx, destination,
 	return nil
 }
 
-// validateExistingQueryDestinationShape pins the currently verified Spark
-// connector path: SELECT * from its temporary table into an existing table with
-// the same ordered scalar schema. BigQuery WRITE_TRUNCATE can replace the schema,
+// validateExistingQueryDestinationShape requires the analyzed query output to
+// match the existing table's ordered schema. BigQuery WRITE_TRUNCATE can replace the schema,
 // but that broader behavior is intentionally rejected until physical and catalog
 // schema replacement can be committed as one recoverable operation.
 // https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
@@ -78,14 +77,14 @@ func validateExistingQueryDestinationShape(columns []domain.Column, fields []dom
 	for index := range fields {
 		field := fields[index]
 		if !strings.EqualFold(columns[index].Name, field.Name) {
-			return fmt.Errorf("%w: query output and destination schemas differ; capability=%s field_index=%d writeDisposition=%s fix_hint=use the Spark 0.44.2 SELECT-star copyData shape or pre-create an exact schema", domain.ErrPrecondition, domain.CapabilityQueryDestinationExactSchemaV1, index, disposition)
+			return fmt.Errorf("%w: query output and destination schemas differ; capability=%s field_index=%d writeDisposition=%s fix_hint=select an exact destination schema or pre-create a matching table", domain.ErrPrecondition, domain.CapabilityQueryDestinationExactSchemaV1, index, disposition)
 		}
 		compatible, requiresRounding := queryDestinationFieldsCompatible(columns[index], field)
 		if requiresRounding {
 			return fmt.Errorf("%w: capability=%s field_index=%d writeDisposition=%s decimal narrowing or rounding is not implemented", domain.ErrUnsupported, domain.CapabilityQueryDecimalRoundingV1, index, disposition)
 		}
 		if !compatible {
-			return fmt.Errorf("%w: query output and destination schemas differ; capability=%s field_index=%d writeDisposition=%s fix_hint=use the Spark 0.44.2 SELECT-star copyData shape or pre-create an exact schema", domain.ErrPrecondition, domain.CapabilityQueryDestinationExactSchemaV1, index, disposition)
+			return fmt.Errorf("%w: query output and destination schemas differ; capability=%s field_index=%d writeDisposition=%s fix_hint=select an exact destination schema or pre-create a matching table", domain.ErrPrecondition, domain.CapabilityQueryDestinationExactSchemaV1, index, disposition)
 		}
 	}
 	return nil

@@ -224,7 +224,7 @@ func TestGatewayUsesOneEntrypointForUpdateDeleteAndMerge(t *testing.T) {
 	}
 }
 
-func TestGatewayAnalyzesConnectorDeclareMergeScript(t *testing.T) {
+func TestGatewayAnalyzesDeclareMergeScript(t *testing.T) {
 	snapshot := analyzerSnapshot()
 	fields := []domain.Field{
 		{Name: "id", Type: "INT64", Mode: "NULLABLE"},
@@ -423,7 +423,7 @@ func TestAnalyzerRejectsUnsupportedCanonicalTypesBeforeAnalysis(t *testing.T) {
 		code  string
 	}{
 		{name: "geography", field: domain.Field{Name: "secret", Type: "GEOGRAPHY", Mode: "NULLABLE"}, code: domain.GapGeographyUnsupportedV1},
-		{name: "wide decimal", field: decimalField("secret", "BIGNUMERIC", pointer(39), pointer(18), ""), code: domain.CapabilitySparkDecimal38V1},
+		{name: "wide decimal", field: decimalField("secret", "BIGNUMERIC", pointer(39), pointer(18), ""), code: domain.CapabilityDecimalPrecision38V1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

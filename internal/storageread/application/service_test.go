@@ -338,7 +338,7 @@ func createRequest(format domain.Format, streams int32) domain.CreateSessionRequ
 		Table:          "projects/data-project/datasets/analytics/tables/events",
 		Format:         format,
 		MaxStreamCount: streams,
-		TraceID:        "spark-stage-7",
+		TraceID:        "reader-stage-7",
 	}
 }
 

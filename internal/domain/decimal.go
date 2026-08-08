@@ -8,16 +8,16 @@ import (
 )
 
 const (
-	SparkDecimalMaxPrecision int64 = 38
-	SparkDecimalMaxScale     int64 = 38
+	SupportedDecimalMaxPrecision int64 = 38
+	SupportedDecimalMaxScale     int64 = 38
 
-	CapabilitySparkDecimal38V1 = "schema.decimal.spark-precision-38-v1"
-	CapabilityEngineSchemaV1   = "schema.engine-capabilities-v1"
-	GapQueryDecimalLineageV1   = "query.results.decimal-lineage-v1"
-	GapGeographyUnsupportedV1  = "schema.geography.unsupported-v1"
-	DecimalValueInvalidV1      = "decimal.value.invalid-v1"
-	DecimalValueOverflowV1     = "decimal.value.overflow-v1"
-	GapTableDefaultRoundingV1  = "schema.table-default-rounding-mode.unsupported-v1"
+	CapabilityDecimalPrecision38V1 = "schema.decimal.precision-38-v1"
+	CapabilityEngineSchemaV1       = "schema.engine-capabilities-v1"
+	GapQueryDecimalLineageV1       = "query.results.decimal-lineage-v1"
+	GapGeographyUnsupportedV1      = "schema.geography.unsupported-v1"
+	DecimalValueInvalidV1          = "decimal.value.invalid-v1"
+	DecimalValueOverflowV1         = "decimal.value.overflow-v1"
+	GapTableDefaultRoundingV1      = "schema.table-default-rounding-mode.unsupported-v1"
 )
 
 // RoundingMode is the canonical BigQuery roundingMode enum. Its zero value is
@@ -128,7 +128,7 @@ func formatScaledDecimal(value *big.Int, scale int64) string {
 }
 
 // EffectiveDecimalParameters applies BigQuery's parameter omission rules and
-// then narrows BIGNUMERIC to Spark DecimalType's precision-38 boundary.
+// then enforces the current implementation's precision-38 boundary.
 func (f Field) EffectiveDecimalParameters() (DecimalParameters, error) {
 	fieldType := strings.ToUpper(f.Type)
 	if fieldType != "NUMERIC" && fieldType != "BIGNUMERIC" {
@@ -152,14 +152,14 @@ func (f Field) EffectiveDecimalParameters() (DecimalParameters, error) {
 	if precision < 1 {
 		return DecimalParameters{}, fmt.Errorf("%w: decimal field %q precision must be positive", ErrInvalid, f.Name)
 	}
-	if precision > SparkDecimalMaxPrecision {
+	if precision > SupportedDecimalMaxPrecision {
 		return DecimalParameters{}, fmt.Errorf(
-			"%w: capability=%s decimal field %q precision %d exceeds Spark maximum %d",
-			ErrUnsupported, CapabilitySparkDecimal38V1, f.Name, precision, SparkDecimalMaxPrecision,
+			"%w: capability=%s decimal field %q precision %d exceeds supported maximum %d",
+			ErrUnsupported, CapabilityDecimalPrecision38V1, f.Name, precision, SupportedDecimalMaxPrecision,
 		)
 	}
-	if scale < 0 || scale > SparkDecimalMaxScale {
-		return DecimalParameters{}, fmt.Errorf("%w: decimal field %q scale must be between 0 and %d", ErrInvalid, f.Name, SparkDecimalMaxScale)
+	if scale < 0 || scale > SupportedDecimalMaxScale {
+		return DecimalParameters{}, fmt.Errorf("%w: decimal field %q scale must be between 0 and %d", ErrInvalid, f.Name, SupportedDecimalMaxScale)
 	}
 	if scale > precision {
 		return DecimalParameters{}, fmt.Errorf("%w: decimal field %q scale must not exceed precision", ErrInvalid, f.Name)

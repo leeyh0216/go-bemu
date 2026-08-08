@@ -252,8 +252,6 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		// the emulator deliberately uses the bounded input byte total. Keeping
 		// the approximation in the application layer makes the REST contract
 		// non-null without coupling the domain to a particular warehouse.
-		// Connector 0.44.2 reads this value as a primitive long after polling:
-		// https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/BigQueryWriteHelper.java#L194-L200
 		// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatistics3
 		statistics.OutputBytes = downloaded
 	}

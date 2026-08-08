@@ -10,8 +10,6 @@ package duckdb
 // https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#protoschema
 // Atomic PENDING stream commit contract:
 // https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#batchcommitwritestreamsresponse
-// Spark 0.44.2 descriptor mapping:
-// https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/ProtobufUtils.java
 
 import (
 	"context"
@@ -811,7 +809,7 @@ func signedProtoInteger(kind protoreflect.Kind, value protoreflect.Value) (int64
 }
 
 // decodePackedDateTimeMicros mirrors the bit layout used by Google's
-// CivilTimeEncoder and Spark's DATETIME ProtoRows mapping.
+// CivilTimeEncoder for DATETIME ProtoRows.
 // Source: https://github.com/googleapis/java-bigquerystorage/blob/main/google-cloud-bigquerystorage/src/main/java/com/google/cloud/bigquery/storage/v1/CivilTimeEncoder.java
 func decodePackedDateTimeMicros(packed int64) (time.Time, error) {
 	if packed < 0 || uint64(packed) > 0x0fffffffffffffff {

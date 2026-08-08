@@ -61,7 +61,7 @@ func fakeWarehouseCapabilities() engine.Capabilities {
 	}
 	capabilities, err := engine.NewCapabilities(engine.CapabilitiesDescriptor{
 		Identity:  identity,
-		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: domain.SparkDecimalMaxPrecision, MaxScale: domain.SparkDecimalMaxScale},
+		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: domain.SupportedDecimalMaxPrecision, MaxScale: domain.SupportedDecimalMaxScale},
 		Composite: engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
 		DDL: map[engine.DDLOperation]engine.DDLCapability{
 			engine.DDLCreateTable: {Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement},

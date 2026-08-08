@@ -173,7 +173,6 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"logging.level=debug", "logging.format=text",
 		"admin.enabled=true", "admin.address=0.0.0.0:19051", "admin.tokenFile=admin-token", "admin.readHeaderTimeout=2s", "admin.maxStackBytes=65536",
 		"ui.enabled=true", "ui.directory=web/dist",
-		"contracts.profileDirectory=contract/profiles",
 	}
 	args := make([]string, 0, len(overrides)*2)
 	for _, item := range overrides {
@@ -181,6 +180,17 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 	}
 	if _, err := load(args, lookup(nil)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConsumerProfilesAreNotRuntimeConfiguration(t *testing.T) {
+	if _, err := load([]string{"--set", "contracts.profileDirectory=profiles"}, lookup(nil)); err == nil ||
+		!strings.Contains(err.Error(), `unknown configuration path "contracts.profileDirectory"`) {
+		t.Fatalf("removed profile setting error = %v", err)
+	}
+	path := writeConfig(t, "apiVersion: config.bqemu.dev/v1alpha1\nkind: BQEMUConfig\ncontracts:\n  profileDirectory: profiles\n")
+	if _, err := load([]string{"--config", path}, lookup(nil)); err == nil || !strings.Contains(err.Error(), "decode-yaml") {
+		t.Fatalf("removed profile YAML error = %v", err)
 	}
 }
 
@@ -327,6 +337,7 @@ func TestStorageWriteByteLimitsLoadFromEnvironment(t *testing.T) {
 	result, err := load(nil, lookup(map[string]string{
 		"BQEMU_STORAGE_WRITE_QUEUE_WAIT_TIMEOUT":             "3s",
 		"BQEMU_STORAGE_WRITE_OPERATION_TIMEOUT":              "45s",
+		"BQEMU_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES":       "20840448",
 		"BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES":      "131072",
 		"BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS": "8",
 		"BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES":            "67108864",
@@ -348,13 +359,13 @@ func TestStorageWriteByteLimitsLoadFromEnvironment(t *testing.T) {
 
 func TestStorageWriteByteLimitRelationshipsAreValidated(t *testing.T) {
 	for name, override := range map[string][]string{
-		"grpc-receive-below-append-envelope": {"--set", "server.grpc.maxReceiveMessageBytes=20971520"},
+		"grpc-receive-below-append-envelope": {"--set", "server.grpc.maxReceiveMessageBytes=20971519"},
 		"zero-append-envelope":               {"--set", "storage.write.maxAppendEnvelopeBytes=0"},
 		"zero-concurrent-appends":            {"--set", "storage.write.maxConcurrentAppendRequests=0"},
 		"zero-queue-wait":                    {"--set", "storage.write.queueWaitTimeout=0s"},
 		"zero-operation-timeout":             {"--set", "storage.write.operationTimeout=0s"},
 		"in-flight-per-stream-below-append":  {"--set", "storage.write.maxInFlightBytesPerStream=1048576"},
-		"in-flight-per-stream-below-wire":    {"--set", "storage.write.maxInFlightBytesPerStream=20971520"},
+		"in-flight-per-stream-below-wire":    {"--set", "storage.write.maxInFlightBytesPerStream=20971519"},
 		"in-flight-global-below-per-stream":  {"--set", "storage.write.maxInFlightBytes=16777216"},
 		"staged-per-stream-below-append":     {"--set", "storage.write.maxStagedBytesPerStream=1048576"},
 		"staged-global-below-per-stream":     {"--set", "storage.write.maxStagedBytes=268435456"},

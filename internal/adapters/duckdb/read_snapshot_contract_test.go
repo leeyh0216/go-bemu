@@ -1,7 +1,7 @@
 package duckdb
 
 // This file freezes protocol mappings separately from DuckDB materialization.
-// A connector/protobuf/Arrow dependency upgrade should fail at the exact field
+// A protobuf or Arrow dependency upgrade should fail at the exact field
 // whose reference schema or row framing changed.
 //
 // Protocol sources:
