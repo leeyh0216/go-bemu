@@ -32,8 +32,8 @@ that volume across restarts is the user's responsibility.
 | Sibling Compose service | `http://bqemu:9050` | `bqemu:9060` |
 | Development container, BQEMU on host | `http://host.docker.internal:9050` | `host.docker.internal:9060` |
 
-REST clients use only the REST endpoint. Spark reads and direct writes require
-both endpoints.
+REST callers use only the REST endpoint. Storage Read and Storage Write callers
+also use the gRPC endpoint.
 
 <!-- section: resources -->
 ## Create A Project, Dataset, And Table
@@ -73,19 +73,13 @@ curl --fail -X POST \
 This calls `bigquery.jobs.query`. The response is a BigQuery `QueryResponse`
 shape with a job reference, schema, completion state, and encoded rows.
 
-<!-- section: clients -->
-## Configure A Client
+<!-- section: integrations -->
+## Configure A Calling Process
 
-Use the guide for the process that sends the request:
-
-- [Python BigQuery client 3.43.0](clients/python-bigquery.md)
-- [`bq` CLI 2.1.31](clients/bq-cli.md)
-- [PySpark and Scala Spark 3.5.8 with connector
-  0.44.2](clients/spark-bigquery-connector.md), bound to the reviewed [connector
-  revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)
-
-Each guide contains endpoint, TLS trust, credentials, examples, operation IDs,
-and the request sequence exercised by that client.
+Choose the REST and gRPC addresses from the endpoint table according to where
+the calling process runs. Version-pinned setup examples, TLS settings,
+operation IDs, and observed request sequences are maintained in the [integration
+test guides](../../tests/integration/docs/en/index.md).
 
 <!-- section: external-gcs -->
 ## Enable Parquet Load
@@ -103,12 +97,12 @@ The two endpoint settings serve different callers:
 | Caller | Setting | Compose value |
 | --- | --- | --- |
 | BQEMU load worker | `BQEMU_LOAD_GCS_ENDPOINT` / `load.gcsEndpoint` | `http://fake-gcs:4443` |
-| Spark Hadoop GCS Connector | `fs.gs.storage.root.url` | `http://localhost:4443` |
+| Process uploading Parquet objects | Uploader-specific endpoint | `http://localhost:4443` |
 
-Spark uploads temporary objects through the Hadoop GCS Connector. BQEMU lists
-matching objects when necessary, downloads object media, and commits the load.
-Direct Storage Write does not use GCS. The complete connector configuration and
-call sequence are in the [Spark guide](clients/spark-bigquery-connector.md).
+The producing process uploads temporary Parquet objects to fake GCS. BQEMU
+lists matching objects when necessary, downloads object media, and commits the
+load. Direct Storage Write does not use GCS. Tested uploader configurations are
+kept in the [integration test guides](../../tests/integration/docs/en/index.md).
 
 <!-- section: tls -->
 ## Enable TLS And Credential Fixtures

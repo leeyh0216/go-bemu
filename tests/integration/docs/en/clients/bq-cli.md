@@ -47,7 +47,7 @@ export REQUESTS_CA_BUNDLE="$AUTH_DIR/ca.pem"
 Then use HTTPS on `localhost` port `9050` and add
 `--ca_certificates_file="$AUTH_DIR/ca.pem"`. Authorized-user and WIF files need
 the issuer and restricted proxy settings from [Client credentials and
-TLS](../client-credentials-and-tls.md). A direct access token does not need the
+TLS](../../../../../docs/en/client-credentials-and-tls.md). A direct access token does not need the
 issuer.
 
 <!-- section: example -->
@@ -69,7 +69,7 @@ bq --api=http://localhost:9050 --project_id=test-project \
   --format=json query --use_legacy_sql=false 'SELECT 1 AS answer'
 ```
 
-The project creation command is in [Getting started](../getting-started.md).
+The project creation command is in [Getting started](../../../../../docs/en/getting-started.md).
 
 <!-- section: operations -->
 ## API Call Order
@@ -101,8 +101,8 @@ The CLI renders BigQuery JSON resources into command-specific output. Use
 `--format=json` when tests need a stable machine-readable result.
 
 The exact accepted fields and support level are maintained in
-[Compatibility](../compatibility.md). The selected CLI and Cloud SDK versions
-are generated in [Consumer compatibility](../../../tests/integration/docs/en/consumer-compatibility.md).
+[Compatibility](../../../../../docs/en/compatibility.md). The selected CLI and Cloud SDK versions
+are generated in [Consumer compatibility](../consumer-compatibility.md).
 
 <!-- section: related -->
 ## Related Work

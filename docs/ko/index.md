@@ -18,18 +18,11 @@ BigQuery 리소스는 공개 [BigQuery REST API
   authorized user, WIF, direct token, 인증서, truststore 자료를 생성하는 방법을
   설명합니다.
 
-<!-- section: clients -->
-## 클라이언트별 안내
+<!-- section: integrations -->
+## 통합 예제
 
-- [Python BigQuery 클라이언트 3.43.0](clients/python-bigquery.md)
-- [`bq` CLI 2.1.31](clients/bq-cli.md)
-- [Spark BigQuery 커넥터 0.44.2를 사용하는 PySpark와 Scala Spark
-  3.5.8](clients/spark-bigquery-connector.md). 검토한 [커넥터 소스
-  리비전](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)을
-  기준으로 합니다.
-
-각 문서에는 시험한 scenario ID, 공개 operation ID, 요청 순서, 요청과 응답 형식이
-정리되어 있습니다.
+버전 고정 프로세스 설정, scenario ID, 요청 순서와 CI 증거는 [통합 테스트
+안내](../../tests/integration/docs/ko/index.md)에서 관리합니다.
 
 <!-- section: compatibility -->
 ## 호환성 자료

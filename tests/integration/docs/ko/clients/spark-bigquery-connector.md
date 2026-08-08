@@ -47,7 +47,7 @@ export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=$AUTH_DIR/truststore.p12 -D
 
 REST에는 `localhost`의 `9050` 포트로 HTTPS 연결을 사용하고 gRPC 옵션에는
 `localhost:9060`을 그대로 사용합니다. Token을 교환하는 JSON 인증 정보에는
-[클라이언트 인증 파일과 TLS](../client-credentials-and-tls.md)에 설명된 발급 서버와
+[클라이언트 인증 파일과 TLS](../../../../../docs/ko/client-credentials-and-tls.md)에 설명된 발급 서버와
 프록시도 필요합니다.
 
 <!-- section: pyspark -->
@@ -98,7 +98,7 @@ val rows = spark.read
   .collect()
 ```
 
-프로젝트, 데이터 세트, 테이블은 [시작하기](../getting-started.md)의 절차로 만듭니다.
+프로젝트, 데이터 세트, 테이블은 [시작하기](../../../../../docs/ko/getting-started.md)의 절차로 만듭니다.
 
 <!-- section: direct -->
 ## 직접 읽기와 쓰기 호출
@@ -189,9 +189,9 @@ BQEMU에 GCS 서버가 내장된 것은 아닙니다.
 | `grpc.bigquery-write.batch-commit-write-streams` | 상위 테이블과 종료한 스트림 이름 | 반영 시각과 스트림 오류 |
 | 간접 로드의 `bigquery.jobs.insert` | Parquet `configuration.load`, 원본 URI, 대상, 쓰기 방식을 포함한 Job | Job 리소스와 참조 |
 
-필드별 처리 범위와 지원 수준은 [호환성](../compatibility.md)에 정리되어 있습니다.
+필드별 처리 범위와 지원 수준은 [호환성](../../../../../docs/ko/compatibility.md)에 정리되어 있습니다.
 실행 환경 버전, 아티팩트, scenario selector는 [소비자
-호환성](../../../tests/integration/docs/ko/consumer-compatibility.md)에서 자동으로 생성합니다.
+호환성](../consumer-compatibility.md)에서 자동으로 생성합니다.
 
 <!-- section: related -->
 ## 관련 작업

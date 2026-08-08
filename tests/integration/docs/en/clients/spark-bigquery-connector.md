@@ -46,7 +46,7 @@ export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=$AUTH_DIR/truststore.p12 -D
 
 Use HTTPS on `localhost` port `9050` for REST and keep `localhost:9060` for the
 gRPC option. JSON credentials that exchange a token also need the issuer and proxy
-from [Client credentials and TLS](../client-credentials-and-tls.md).
+from [Client credentials and TLS](../../../../../docs/en/client-credentials-and-tls.md).
 
 <!-- section: pyspark -->
 ## PySpark Read
@@ -97,7 +97,7 @@ val rows = spark.read
 ```
 
 Create the project, dataset, and table by following [Getting
-started](../getting-started.md).
+started](../../../../../docs/en/getting-started.md).
 
 <!-- section: direct -->
 ## Direct Read And Write Calls
@@ -189,8 +189,8 @@ flow. It is not embedded in BQEMU.
 | `bigquery.jobs.insert` for indirect load | Job with Parquet `configuration.load`, source URIs, destination, and write disposition | Job resource and reference |
 
 The exact accepted fields and support level are maintained in
-[Compatibility](../compatibility.md). Runtime versions, artifacts, and scenario
-selectors are generated in [Consumer compatibility](../../../tests/integration/docs/en/consumer-compatibility.md).
+[Compatibility](../../../../../docs/en/compatibility.md). Runtime versions, artifacts, and scenario
+selectors are generated in [Consumer compatibility](../consumer-compatibility.md).
 
 <!-- section: related -->
 ## Related Work
