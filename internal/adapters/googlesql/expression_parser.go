@@ -13,7 +13,18 @@ const expressionContextKind queryast.StatementKind = "EXPRESSION"
 // ParseExpression is the GoogleSQL predicate entrypoint used by APIs such as
 // Storage Read row_restriction. It never delegates syntax recognition to an
 // execution backend.
+func (*Gateway) ParseExpression(ctx context.Context, input string) (queryast.Expression, error) {
+	return parseExpression(ctx, input)
+}
+
+// ParseExpression remains on Parser while transport/application tests migrate
+// to Gateway. Production composition uses Gateway for statements and
+// expressions so both entrypoints share one official boundary.
 func (*Parser) ParseExpression(ctx context.Context, input string) (queryast.Expression, error) {
+	return parseExpression(ctx, input)
+}
+
+func parseExpression(ctx context.Context, input string) (queryast.Expression, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
