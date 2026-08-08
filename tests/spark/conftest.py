@@ -608,10 +608,15 @@ def observe_direct_overwrite_flow(
         if (
             event.get("event") == "side_effect.pre"
             and event.get("component") == "duckdb"
-            and event.get("operation") == "query"
-            and event.get("model_version")
-            == "spark-bigquery-connector-0.44.2/static-overwrite"
+            and event.get("operation") == "static_overwrite"
         ):
+            binding = event.get("semantic_binding_fingerprint")
+            if not isinstance(binding, str) or re.fullmatch(
+                r"sha256:[0-9a-f]{64}", binding
+            ) is None:
+                raise AssertionError(
+                    "static overwrite observation omitted its semantic binding"
+                )
             static_adapter_matches += 1
 
     return {
