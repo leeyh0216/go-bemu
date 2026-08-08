@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 )
 
 func TestWarehouseMapsNestedAndRepeatedTypes(t *testing.T) {
@@ -42,6 +43,43 @@ func TestWarehousePublishesPortableSchemaCapabilities(t *testing.T) {
 	}
 	if err := warehouse.ValidateSchema([]domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: int64Pointer(39)}}); err == nil {
 		t.Fatal("schema planner accepted precision above the Spark DecimalType maximum")
+	}
+}
+
+func TestWarehousePublishesImmutableEngineCapabilities(t *testing.T) {
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+
+	capabilities := warehouse.Capabilities()
+	if capabilities.Identity().ID() != "duckdb" || capabilities.Identity().Version() == "" {
+		t.Fatalf("engine identity = %s@%s", capabilities.Identity().ID(), capabilities.Identity().Version())
+	}
+	if decimal := capabilities.Decimal(); !decimal.Supported || decimal.MaxPrecision != domain.SparkDecimalMaxPrecision ||
+		decimal.MaxScale != domain.SparkDecimalMaxScale {
+		t.Fatalf("decimal capabilities = %#v", decimal)
+	}
+	if !capabilities.SupportsTransaction(engine.TransactionScopeSingleTable) ||
+		!capabilities.SupportsTransaction(engine.TransactionScopeMultiTable) ||
+		!capabilities.SupportsAtomicReplacement(engine.AtomicReplacementTable) ||
+		!capabilities.SupportsAtomicReplacement(engine.AtomicReplacementPartition) {
+		t.Fatal("DuckDB runtime omitted implemented transaction or replacement capabilities")
+	}
+	if capabilities.SupportsInspection(engine.InspectionTableShape) {
+		t.Fatal("DuckDB runtime advertised unimplemented engine-SPI inspection")
+	}
+	if _, supported := capabilities.DDL(engine.DDLChangeColumnType); supported {
+		t.Fatal("DuckDB runtime advertised unimplemented type-change planning")
+	}
+
+	descriptor := capabilities.Descriptor()
+	descriptor.Decimal.MaxPrecision = 1
+	descriptor.Transactions[engine.TransactionScopeSingleTable] = false
+	if again := warehouse.Capabilities(); again.Decimal().MaxPrecision != domain.SparkDecimalMaxPrecision ||
+		!again.SupportsTransaction(engine.TransactionScopeSingleTable) {
+		t.Fatal("published capabilities retained a mutable descriptor")
 	}
 }
 

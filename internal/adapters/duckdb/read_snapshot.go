@@ -31,10 +31,6 @@ import (
 	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
 
-type ReadTableSchemaResolver interface {
-	GetTable(context.Context, string, string, string) (catalogdomain.Table, error)
-}
-
 const storageReadMaterializeOperation = "storage_read.snapshot.materialize"
 
 var errNestedReadProjectionUnsupported = errors.New("nested Storage Read projection is not implemented")
@@ -54,27 +50,19 @@ func classifiedReadSnapshotError(code readdomain.ErrorCode, cause error) error {
 	return readdomain.NewError(code, storageReadMaterializeOperation, cause)
 }
 
-type ReadSnapshotConfig struct {
-	TempDir              string
-	TempFilePattern      string
-	SpillThresholdBytes  int64
-	MaxRowBytes          int64
-	MaxBatchBytes        int
-	MaxSchemaBytes       int
-	MaxSnapshotBytes     int64
-	MaxSnapshotRows      int64
-	ProtocolModelVersion string
-}
-
 type DuckDBReadSnapshotMaterializer struct {
 	warehouse *Warehouse
-	resolver  ReadTableSchemaResolver
-	config    ReadSnapshotConfig
+	resolver  readports.TableSchemaResolver
+	config    readports.SnapshotMaterializerConfig
 }
 
 var _ readports.SnapshotMaterializer = (*DuckDBReadSnapshotMaterializer)(nil)
 
-func NewReadSnapshotMaterializer(warehouse *Warehouse, resolver ReadTableSchemaResolver, config ReadSnapshotConfig) (*DuckDBReadSnapshotMaterializer, error) {
+func NewReadSnapshotMaterializer(
+	warehouse *Warehouse,
+	resolver readports.TableSchemaResolver,
+	config readports.SnapshotMaterializerConfig,
+) (*DuckDBReadSnapshotMaterializer, error) {
 	if warehouse == nil || warehouse.db == nil || resolver == nil {
 		return nil, fmt.Errorf("DuckDB warehouse and read schema resolver are required")
 	}
@@ -340,7 +328,7 @@ func (s snapshotStorage) rowCount() int {
 }
 
 type snapshotStager struct {
-	config        ReadSnapshotConfig
+	config        readports.SnapshotMaterializerConfig
 	memoryRows    [][]byte
 	spillFile     *os.File
 	spillPath     string
@@ -349,7 +337,7 @@ type snapshotStager struct {
 	retainedBytes int64
 }
 
-func newSnapshotStager(config ReadSnapshotConfig) *snapshotStager {
+func newSnapshotStager(config readports.SnapshotMaterializerConfig) *snapshotStager {
 	return &snapshotStager{config: config}
 }
 

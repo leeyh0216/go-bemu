@@ -7,8 +7,10 @@ package ports
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 )
 
@@ -30,6 +32,41 @@ type Clock interface {
 
 type IDGenerator interface {
 	NewID() string
+}
+
+// TableSchemaResolver supplies canonical BQEMU metadata. A coordinator must
+// not reconstruct NUMERIC, BIGNUMERIC, STRUCT, or LIST identity from physical
+// engine type names.
+type TableSchemaResolver interface {
+	GetTable(context.Context, string, string, string) (catalogdomain.Table, error)
+}
+
+// CoordinatorConfig contains consumer-owned scheduling and byte budgets. It
+// carries no engine connection, SQL, or physical type information.
+type CoordinatorConfig struct {
+	QueueCapacity             int
+	QueueWaitTimeout          time.Duration
+	OperationTimeout          time.Duration
+	MaxInFlightBytes          int64
+	MaxInFlightBytesPerStream int64
+	MaxStagedBytes            int64
+	MaxStagedBytesPerStream   int64
+}
+
+func (config CoordinatorConfig) Validate() error {
+	if config.QueueCapacity <= 0 {
+		return fmt.Errorf("Storage Write operation queue capacity must be positive")
+	}
+	if config.QueueWaitTimeout <= 0 || config.OperationTimeout <= 0 {
+		return fmt.Errorf("Storage Write queue wait and operation timeouts must be positive")
+	}
+	if config.MaxInFlightBytesPerStream <= 0 || config.MaxInFlightBytes < config.MaxInFlightBytesPerStream {
+		return fmt.Errorf("Storage Write in-flight byte limits must satisfy 0 < per-stream <= global")
+	}
+	if config.MaxStagedBytesPerStream <= 0 || config.MaxStagedBytes < config.MaxStagedBytesPerStream {
+		return fmt.Errorf("Storage Write staged byte limits must satisfy 0 < per-stream <= global")
+	}
+	return nil
 }
 
 // AppendBatch contains opaque ProtoRows bytes. The application records their
@@ -67,4 +104,15 @@ type Coordinator interface {
 	StagePending(context.Context, AppendBatch) error
 	CommitPending(context.Context, CommitRequest) error
 	DiscardPending(context.Context, string) error
+}
+
+// CoordinatorRuntime adds the lifecycle needed only by the composition root.
+// The Storage Write application continues to depend on Coordinator alone.
+type CoordinatorRuntime interface {
+	Coordinator
+	Close(context.Context) error
+}
+
+type CoordinatorFactory interface {
+	NewCoordinator(context.Context, TableSchemaResolver, CoordinatorConfig) (CoordinatorRuntime, error)
 }

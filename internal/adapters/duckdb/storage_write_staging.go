@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	writedomain "github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
@@ -32,35 +31,6 @@ const (
 	storageWriteReceiptTable   = "pending_receipts"
 )
 
-// StorageWriteCoordinatorConfig keeps operation-count queueing independent
-// from byte admission. QueueCapacity alone cannot cap memory because one queued
-// AppendRows operation can be close to the protocol's 20 MiB request limit.
-type StorageWriteCoordinatorConfig struct {
-	QueueCapacity             int
-	QueueWaitTimeout          time.Duration
-	OperationTimeout          time.Duration
-	MaxInFlightBytes          int64
-	MaxInFlightBytesPerStream int64
-	MaxStagedBytes            int64
-	MaxStagedBytesPerStream   int64
-}
-
-func (c StorageWriteCoordinatorConfig) validate() error {
-	if c.QueueCapacity <= 0 {
-		return fmt.Errorf("Storage Write operation queue capacity must be positive")
-	}
-	if c.QueueWaitTimeout <= 0 || c.OperationTimeout <= 0 {
-		return fmt.Errorf("Storage Write queue wait and operation timeouts must be positive")
-	}
-	if c.MaxInFlightBytesPerStream <= 0 || c.MaxInFlightBytes < c.MaxInFlightBytesPerStream {
-		return fmt.Errorf("Storage Write in-flight byte limits must satisfy 0 < per-stream <= global")
-	}
-	if c.MaxStagedBytesPerStream <= 0 || c.MaxStagedBytes < c.MaxStagedBytesPerStream {
-		return fmt.Errorf("Storage Write staged byte limits must satisfy 0 < per-stream <= global")
-	}
-	return nil
-}
-
 type storageWriteByteAdmission struct {
 	mu           sync.Mutex
 	maxGlobal    int64
@@ -69,7 +39,7 @@ type storageWriteByteAdmission struct {
 	byStream     map[string]int64
 }
 
-func newStorageWriteByteAdmission(config StorageWriteCoordinatorConfig) *storageWriteByteAdmission {
+func newStorageWriteByteAdmission(config writeports.CoordinatorConfig) *storageWriteByteAdmission {
 	return &storageWriteByteAdmission{
 		maxGlobal: config.MaxInFlightBytes, maxPerStream: config.MaxInFlightBytesPerStream,
 		byStream: make(map[string]int64),

@@ -28,6 +28,7 @@ import (
 
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	readdomain "github.com/leeyh0216/go-bemu/internal/storageread/domain"
+	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
 
 const readSnapshotTestModelVersion = "google.cloud.bigquery.storage.v1@duckdb-adapter-test"
@@ -240,7 +241,12 @@ func insertReadTestRows(t *testing.T, ctx context.Context, warehouse *Warehouse,
 	}
 }
 
-func newReadTestMaterializer(t *testing.T, warehouse *Warehouse, resolver ReadTableSchemaResolver, config ReadSnapshotConfig) *DuckDBReadSnapshotMaterializer {
+func newReadTestMaterializer(
+	t *testing.T,
+	warehouse *Warehouse,
+	resolver readports.TableSchemaResolver,
+	config readports.SnapshotMaterializerConfig,
+) *DuckDBReadSnapshotMaterializer {
 	t.Helper()
 	materializer, err := NewReadSnapshotMaterializer(warehouse, resolver, config)
 	if err != nil {
@@ -249,8 +255,8 @@ func newReadTestMaterializer(t *testing.T, warehouse *Warehouse, resolver ReadTa
 	return materializer
 }
 
-func readSnapshotTestConfig(tempDir string, spillThreshold int64) ReadSnapshotConfig {
-	return ReadSnapshotConfig{
+func readSnapshotTestConfig(tempDir string, spillThreshold int64) readports.SnapshotMaterializerConfig {
+	return readports.SnapshotMaterializerConfig{
 		TempDir:              tempDir,
 		TempFilePattern:      "bqemu-storage-read-*",
 		SpillThresholdBytes:  spillThreshold,
@@ -474,17 +480,17 @@ func TestReadSnapshotConfigRequiresExplicitPortableSettings(t *testing.T) {
 	base := readSnapshotTestConfig(t.TempDir(), 1)
 	tests := []struct {
 		name   string
-		mutate func(*ReadSnapshotConfig)
+		mutate func(*readports.SnapshotMaterializerConfig)
 	}{
-		{name: "temp directory", mutate: func(config *ReadSnapshotConfig) { config.TempDir = "" }},
-		{name: "temp pattern", mutate: func(config *ReadSnapshotConfig) { config.TempFilePattern = "" }},
-		{name: "spill threshold", mutate: func(config *ReadSnapshotConfig) { config.SpillThresholdBytes = -1 }},
-		{name: "row limit", mutate: func(config *ReadSnapshotConfig) { config.MaxRowBytes = 0 }},
-		{name: "batch limit", mutate: func(config *ReadSnapshotConfig) { config.MaxBatchBytes = 0 }},
-		{name: "schema limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSchemaBytes = 0 }},
-		{name: "snapshot byte limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSnapshotBytes = 0 }},
-		{name: "snapshot limit", mutate: func(config *ReadSnapshotConfig) { config.MaxSnapshotRows = 0 }},
-		{name: "model version", mutate: func(config *ReadSnapshotConfig) { config.ProtocolModelVersion = "" }},
+		{name: "temp directory", mutate: func(config *readports.SnapshotMaterializerConfig) { config.TempDir = "" }},
+		{name: "temp pattern", mutate: func(config *readports.SnapshotMaterializerConfig) { config.TempFilePattern = "" }},
+		{name: "spill threshold", mutate: func(config *readports.SnapshotMaterializerConfig) { config.SpillThresholdBytes = -1 }},
+		{name: "row limit", mutate: func(config *readports.SnapshotMaterializerConfig) { config.MaxRowBytes = 0 }},
+		{name: "batch limit", mutate: func(config *readports.SnapshotMaterializerConfig) { config.MaxBatchBytes = 0 }},
+		{name: "schema limit", mutate: func(config *readports.SnapshotMaterializerConfig) { config.MaxSchemaBytes = 0 }},
+		{name: "snapshot byte limit", mutate: func(config *readports.SnapshotMaterializerConfig) { config.MaxSnapshotBytes = 0 }},
+		{name: "snapshot limit", mutate: func(config *readports.SnapshotMaterializerConfig) { config.MaxSnapshotRows = 0 }},
+		{name: "model version", mutate: func(config *readports.SnapshotMaterializerConfig) { config.ProtocolModelVersion = "" }},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

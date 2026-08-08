@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/objectstore"
 	"github.com/leeyh0216/go-bemu/internal/config"
 	loadapplication "github.com/leeyh0216/go-bemu/internal/loadjob/application"
@@ -23,7 +22,7 @@ import (
 func composeLoadJobs(
 	cfg config.Config,
 	catalog rest.CatalogUseCases,
-	warehouse *duckdb.Warehouse,
+	loader loadports.Loader,
 	clock loadports.Clock,
 	ids loadports.IDGenerator,
 ) (rest.LoadJobUseCases, error) {
@@ -57,7 +56,7 @@ func composeLoadJobs(
 	}
 	service, err := loadapplication.NewService(
 		loadapplication.NewMemoryJobRepository(), objects, rest.NewLoadTableCatalog(catalog),
-		warehouse, clock, ids, loadConfig,
+		loader, clock, ids, loadConfig,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configure load job service: %w", err)

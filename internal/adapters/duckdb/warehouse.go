@@ -17,12 +17,14 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 type Warehouse struct {
-	db *sql.DB
+	db           *sql.DB
+	capabilities engine.Capabilities
 }
 
 var (
@@ -57,7 +59,12 @@ func New(dsn string) (*Warehouse, error) {
 	// A single connection keeps an in-memory DuckDB catalog coherent and avoids
 	// concurrent DDL races. Storage stream work will introduce a write scheduler.
 	db.SetMaxOpenConns(1)
-	warehouse := &Warehouse{db: db}
+	capabilities, err := newDuckDBCapabilities(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	warehouse := &Warehouse{db: db, capabilities: capabilities}
 	if err := warehouse.Ping(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err

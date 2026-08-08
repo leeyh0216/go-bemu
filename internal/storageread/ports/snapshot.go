@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
 )
 
@@ -13,6 +14,32 @@ type Clock interface {
 
 type IDGenerator interface {
 	NewID() string
+}
+
+// TableSchemaResolver supplies canonical BQEMU metadata to a physical snapshot
+// adapter. Implementations must not infer logical types from engine catalogs.
+type TableSchemaResolver interface {
+	GetTable(context.Context, string, string, string) (catalogdomain.Table, error)
+}
+
+// SnapshotMaterializerConfig contains consumer-owned resource and protocol
+// limits. It deliberately contains no engine connection or SQL settings.
+type SnapshotMaterializerConfig struct {
+	TempDir              string
+	TempFilePattern      string
+	SpillThresholdBytes  int64
+	MaxRowBytes          int64
+	MaxBatchBytes        int
+	MaxSchemaBytes       int
+	MaxSnapshotBytes     int64
+	MaxSnapshotRows      int64
+	ProtocolModelVersion string
+}
+
+// SnapshotMaterializerFactory lets the composition root construct a Storage
+// Read adapter without passing a concrete engine into another module boundary.
+type SnapshotMaterializerFactory interface {
+	NewSnapshotMaterializer(TableSchemaResolver, SnapshotMaterializerConfig) (SnapshotMaterializer, error)
 }
 
 // SnapshotMaterializer applies projection/filter/snapshot-time once and fixes

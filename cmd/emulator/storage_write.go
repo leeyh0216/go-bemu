@@ -14,7 +14,6 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/config"
 	writeapplication "github.com/leeyh0216/go-bemu/internal/storagewrite/application"
 	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
@@ -22,7 +21,7 @@ import (
 
 type storageWriteRuntime struct {
 	Service     *writeapplication.Service
-	coordinator *duckdb.StorageWriteCoordinator
+	coordinator writeports.CoordinatorRuntime
 	cancel      context.CancelFunc
 	cleanupDone chan error
 }
@@ -30,8 +29,8 @@ type storageWriteRuntime struct {
 func composeStorageWrite(
 	ctx context.Context,
 	cfg config.Config,
-	warehouse *duckdb.Warehouse,
-	resolver duckdb.StorageWriteTableSchemaResolver,
+	factory writeports.CoordinatorFactory,
+	resolver writeports.TableSchemaResolver,
 	clock writeports.Clock,
 	ids writeports.IDGenerator,
 	logger *slog.Logger,
@@ -39,7 +38,7 @@ func composeStorageWrite(
 	if !cfg.Storage.Write.Enabled {
 		return &storageWriteRuntime{}, nil
 	}
-	coordinator, err := duckdb.NewStorageWriteCoordinator(ctx, warehouse, resolver, duckdb.StorageWriteCoordinatorConfig{
+	coordinator, err := factory.NewCoordinator(ctx, resolver, writeports.CoordinatorConfig{
 		QueueCapacity:             cfg.Storage.Write.QueueCapacity,
 		QueueWaitTimeout:          cfg.Storage.Write.QueueWaitTimeout.Value(),
 		OperationTimeout:          cfg.Storage.Write.OperationTimeout.Value(),

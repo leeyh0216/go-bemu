@@ -25,7 +25,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
@@ -88,35 +87,52 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := prepareDirectory(ctx, cfg.Database.TempDirectory); err != nil {
 		return err
 	}
-	warehouse, err := duckdb.New(cfg.Database.DSN)
+	storageEngine, err := composeDuckDBEngine(cfg.Database.DSN)
 	if err != nil {
 		return err
 	}
-	closeWarehouse := true
+	closeEngine := true
 	defer func() {
-		if closeWarehouse {
-			_ = warehouse.Close()
+		if closeEngine {
+			_ = storageEngine.Close()
 		}
 	}()
+	engineCapabilities := storageEngine.capabilities
+	health := storageEngine.health
+	catalogStorage := storageEngine.catalog
+	queryEngine := storageEngine.query
+	queryFallbackAnalyzer := storageEngine.queryAnalyzer
+	queryOperationEngine := storageEngine.queryOperations
+	queryMaterializer := storageEngine.queryMaterializer
+	tableDataReader := storageEngine.tableData
+	loader := storageEngine.loader
+	readFactory := storageEngine.readFactory
+	writeFactory := storageEngine.writeFactory
+	logger.InfoContext(ctx, "storage engine composed",
+		"event", "runtime.engine.composed",
+		"engine_id", engineCapabilities.Identity().ID(),
+		"engine_version", engineCapabilities.Identity().Version(),
+		"capability_fingerprint", engineCapabilities.Fingerprint(),
+	)
 
 	catalogRepository := memory.NewCatalogRepository()
 	jobRepository := memory.NewJobRepository()
 	clock := system.Clock{}
-	catalogService := composeCatalogService(cfg, catalogRepository, warehouse, clock)
+	catalogService := composeCatalogService(cfg, catalogRepository, catalogStorage, tableDataReader, clock)
 	if _, err := catalogService.CreateProject(ctx, domain.Project{
 		ID: cfg.Defaults.ProjectID, FriendlyName: "BQEMU default project",
 	}); err != nil {
 		return fmt.Errorf("initialize default project: %w", err)
 	}
-	queryAnalyzer, err := v0442.NewAnalyzer(warehouse)
+	queryAnalyzer, err := v0442.NewAnalyzer(queryFallbackAnalyzer)
 	if err != nil {
 		return fmt.Errorf("configure Spark BigQuery query profiles: %w", err)
 	}
 	queryService, err := application.NewQueryService(
-		jobRepository, warehouse, queryAnalyzer, warehouse, catalogService, clock, system.IDGenerator{},
+		jobRepository, queryEngine, queryAnalyzer, queryOperationEngine, catalogService, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
 		application.WithQueryAnalyzer(queryAnalyzer),
-		application.WithQueryMaterializer(warehouse),
+		application.WithQueryMaterializer(queryMaterializer),
 		application.WithQueryDestinationCatalog(catalogService),
 		application.WithQueryOperationTimeout(cfg.Query.OperationTimeout.Value()),
 		application.WithQueryCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
@@ -125,11 +141,11 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure query service: %w", err)
 	}
-	loadService, err := composeLoadJobs(cfg, catalogService, warehouse, clock, system.IDGenerator{})
+	loadService, err := composeLoadJobs(cfg, catalogService, loader, clock, system.IDGenerator{})
 	if err != nil {
 		return err
 	}
-	readRuntime, err := composeStorageRead(cfg, warehouse, catalogService, clock, system.IDGenerator{}, logger)
+	readRuntime, err := composeStorageRead(cfg, readFactory, catalogService, clock, system.IDGenerator{}, logger)
 	if err != nil {
 		return fmt.Errorf("configure Storage Read: %w", err)
 	}
@@ -140,7 +156,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			_ = readRuntime.Close(closeContext)
 		}
 	}()
-	writeRuntime, err := composeStorageWrite(ctx, cfg, warehouse, catalogService, clock, system.IDGenerator{}, logger)
+	writeRuntime, err := composeStorageWrite(ctx, cfg, writeFactory, catalogService, clock, system.IDGenerator{}, logger)
 	if err != nil {
 		return fmt.Errorf("configure Storage Write: %w", err)
 	}
@@ -163,10 +179,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	var restServer *rest.Server
 	if loadService == nil {
-		restServer = rest.NewServer(catalogService, queryService, warehouse, cfg.Server.HTTP.PublicURL, restOptions...)
+		restServer = rest.NewServer(catalogService, queryService, health, cfg.Server.HTTP.PublicURL, restOptions...)
 	} else {
 		restServer = rest.NewServerWithLoadJobs(
-			catalogService, queryService, loadService, warehouse, cfg.Server.HTTP.PublicURL, restOptions...,
+			catalogService, queryService, loadService, health, cfg.Server.HTTP.PublicURL, restOptions...,
 		)
 	}
 	publicHTTP := &http.Server{
@@ -294,7 +310,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	// race in the adapter. On a bounded query-drain failure, leave process-owned
 	// resources to OS teardown rather than crossing the still-active boundary.
 	if queryCloseErr != nil {
-		closeWarehouse = false
+		closeEngine = false
 	}
 	if servingFailure != nil {
 		return errors.Join(servingFailure, shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
@@ -302,16 +318,17 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	return errors.Join(shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
 }
 
-type catalogWarehouse interface {
-	ports.CatalogStorage
-	ports.TableDataReader
-}
-
-func composeCatalogService(cfg config.Config, repository ports.CatalogRepository, warehouse catalogWarehouse, clock ports.Clock) *application.CatalogService {
+func composeCatalogService(
+	cfg config.Config,
+	repository ports.CatalogRepository,
+	storage ports.CatalogStorage,
+	tableData ports.TableDataReader,
+	clock ports.Clock,
+) *application.CatalogService {
 	return application.NewCatalogService(
-		repository, warehouse, clock, application.WithDefaultLocation(cfg.Defaults.Location),
+		repository, storage, clock, application.WithDefaultLocation(cfg.Defaults.Location),
 		application.WithCatalogCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
-		application.WithTableDataReader(warehouse),
+		application.WithTableDataReader(tableData),
 		application.WithTableDataOperationTimeout(cfg.TableData.OperationTimeout.Value()),
 		application.WithMaxTableDataPageRows(cfg.TableData.MaxPageRows),
 		application.WithMaxTableDataResponseBytes(cfg.TableData.MaxResponseBytes),

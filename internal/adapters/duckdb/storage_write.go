@@ -42,21 +42,14 @@ var (
 
 var errStorageWriteCoordinatorClosed = errors.New("DuckDB Storage Write coordinator is closed")
 
-// StorageWriteTableSchemaResolver supplies canonical BigQuery metadata. The
-// physical adapter verifies DuckDB against it and never reconstructs logical
-// NUMERIC/BIGNUMERIC identity from engine type names.
-type StorageWriteTableSchemaResolver interface {
-	GetTable(context.Context, string, string, string) (catalogdomain.Table, error)
-}
-
 // StorageWriteCoordinator presents concurrent logical operations to callers but
 // executes all DuckDB work on one queue. This is an implementation constraint,
 // not a stream-count constraint: 2, 8, or 16 task streams may negotiate in
 // parallel while database transactions remain serialized.
 type StorageWriteCoordinator struct {
 	warehouse   *Warehouse
-	resolver    StorageWriteTableSchemaResolver
-	config      StorageWriteCoordinatorConfig
+	resolver    writeports.TableSchemaResolver
+	config      writeports.CoordinatorConfig
 	admission   *storageWriteByteAdmission
 	queue       chan coordinatorOperation
 	stop        context.CancelFunc
@@ -111,7 +104,12 @@ type columnLayout struct {
 	isNullable bool
 }
 
-func NewStorageWriteCoordinator(ctx context.Context, warehouse *Warehouse, resolver StorageWriteTableSchemaResolver, config StorageWriteCoordinatorConfig) (*StorageWriteCoordinator, error) {
+func NewStorageWriteCoordinator(
+	ctx context.Context,
+	warehouse *Warehouse,
+	resolver writeports.TableSchemaResolver,
+	config writeports.CoordinatorConfig,
+) (*StorageWriteCoordinator, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("initialization context is required")
 	}
@@ -121,7 +119,7 @@ func NewStorageWriteCoordinator(ctx context.Context, warehouse *Warehouse, resol
 	if resolver == nil {
 		return nil, fmt.Errorf("Storage Write table schema resolver is required")
 	}
-	if err := config.validate(); err != nil {
+	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 	workerContext, cancel := context.WithCancel(context.Background())

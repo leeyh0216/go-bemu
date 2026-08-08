@@ -1215,7 +1215,11 @@ func newStorageWriteFixture(t *testing.T, fields []domain.Field) (*Warehouse, *S
 	return newStorageWriteFixtureWithConfig(t, fields, storageWriteCoordinatorTestConfig())
 }
 
-func newStorageWriteFixtureWithConfig(t *testing.T, fields []domain.Field, config StorageWriteCoordinatorConfig) (*Warehouse, *StorageWriteCoordinator, writedomain.TableReference) {
+func newStorageWriteFixtureWithConfig(
+	t *testing.T,
+	fields []domain.Field,
+	config writeports.CoordinatorConfig,
+) (*Warehouse, *StorageWriteCoordinator, writedomain.TableReference) {
 	t.Helper()
 	warehouse, err := New("")
 	if err != nil {
@@ -1348,8 +1352,8 @@ func storageWriteInternalTableCount(t *testing.T, ctx context.Context, warehouse
 	return count
 }
 
-func storageWriteCoordinatorTestConfig() StorageWriteCoordinatorConfig {
-	return StorageWriteCoordinatorConfig{
+func storageWriteCoordinatorTestConfig() writeports.CoordinatorConfig {
+	return writeports.CoordinatorConfig{
 		QueueCapacity: 32, QueueWaitTimeout: time.Second, OperationTimeout: 5 * time.Second,
 		MaxInFlightBytes: 64 << 20, MaxInFlightBytesPerStream: 32 << 20,
 		MaxStagedBytes: 1 << 30, MaxStagedBytesPerStream: 512 << 20,
