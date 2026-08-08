@@ -162,7 +162,7 @@ func jobFromDomain(job *domain.Job) jobResource {
 		Statistics: jobStatistics{
 			CreationTime: millis(job.CreatedAt),
 			Query: jobQueryStatistics{
-				StatementType: statementType(query.SQL), TotalBytesProcessed: "0", TotalBytesBilled: "0",
+				StatementType: queryStatementType(query), TotalBytesProcessed: "0", TotalBytesBilled: "0",
 			},
 		},
 	}
@@ -184,7 +184,14 @@ func jobFromDomain(job *domain.Job) jobResource {
 	return resource
 }
 
-func statementType(sql string) string {
+func queryStatementType(query domain.QueryConfiguration) string {
+	if query.StatementType != "" {
+		return query.StatementType
+	}
+	return legacyStatementType(query.SQL)
+}
+
+func legacyStatementType(sql string) string {
 	fields := strings.Fields(strings.ToUpper(strings.TrimSpace(sql)))
 	if len(fields) == 0 {
 		return "SELECT"

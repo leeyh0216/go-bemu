@@ -401,7 +401,7 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		JobID:     input.JobID,
 		Location:  input.Location,
 	}, domain.QueryConfiguration{
-		SQL: input.SQL, DefaultProjectID: input.DefaultProjectID,
+		SQL: input.SQL, StatementType: prepared.statementType(), DefaultProjectID: input.DefaultProjectID,
 		DefaultDataset: input.DefaultDataset, Destination: input.Destination,
 		WriteDisposition: input.WriteDisposition, CreateDisposition: input.CreateDisposition,
 		Priority: input.Priority, Labels: input.Labels, AnonymousDestination: anonymousDestination,
