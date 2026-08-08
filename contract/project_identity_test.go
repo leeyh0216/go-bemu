@@ -76,6 +76,36 @@ func TestProductSourceDoesNotOwnIntegrationProfiles(t *testing.T) {
 	}
 }
 
+func TestProductDocumentationDoesNotOwnIntegrationProfiles(t *testing.T) {
+	root := filepath.Clean("..")
+	forbidden := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b` + "sp" + `ark\b`),
+		regexp.MustCompile(`(?i)\b` + "py" + "sp" + `ark\b`),
+		regexp.MustCompile(`(?i)\b` + "fl" + `ink\b`),
+		regexp.MustCompile(`(?i)\b` + "b" + `q\b`),
+		regexp.MustCompile(`(?i)` + "google-cloud-" + `bigquery`),
+		regexp.MustCompile(`(?i)` + "spark-" + `bigquery`),
+		regexp.MustCompile(regexp.QuoteMeta("0." + "44.2")),
+		regexp.MustCompile(regexp.QuoteMeta("1." + "2.0")),
+		regexp.MustCompile(regexp.QuoteMeta("2." + "1.31")),
+		regexp.MustCompile(regexp.QuoteMeta("3." + "5.8")),
+	}
+	for _, relative := range trackedProjectFiles(t, root) {
+		if !isProductDocumentation(relative) {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
+		if err != nil {
+			t.Fatalf("read product documentation %s: %v", relative, err)
+		}
+		for _, pattern := range forbidden {
+			if pattern.Match(contents) {
+				t.Errorf("%s contains integration-profile content matched by %q", relative, pattern.String())
+			}
+		}
+	}
+}
+
 func TestProjectIdentityEntrypointsRemainPinned(t *testing.T) {
 	root := filepath.Clean("..")
 	required := map[string][]string{
@@ -149,4 +179,13 @@ func hasAnyPrefix(value string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+func isProductDocumentation(relative string) bool {
+	switch relative {
+	case "README.md", "README.ko.md", "CONTRIBUTING.md", "CONTRIBUTING.ko.md":
+		return true
+	default:
+		return strings.HasPrefix(relative, "docs/en/") || strings.HasPrefix(relative, "docs/ko/")
+	}
 }
