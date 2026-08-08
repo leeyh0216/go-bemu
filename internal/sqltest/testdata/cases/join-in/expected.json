@@ -1,0 +1,8 @@
+{
+  "kind": "rows",
+  "schema": [
+    {"name": "name", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "amount", "type": "INT64", "mode": "NULLABLE"}
+  ],
+  "rows": [["alpha", 30], ["beta", 20]]
+}

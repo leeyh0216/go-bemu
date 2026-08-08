@@ -1,0 +1,31 @@
+{
+  "projects": [
+    {
+      "projectId": "test-project",
+      "datasets": [
+        {
+          "datasetId": "analytics",
+          "location": "US",
+          "tables": [
+            {
+              "tableId": "customers",
+              "schema": [
+                {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "name", "type": "STRING", "mode": "REQUIRED"}
+              ],
+              "rows": [[1, "alpha"], [2, "beta"], [3, "gamma"]]
+            },
+            {
+              "tableId": "orders",
+              "schema": [
+                {"name": "customer_id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "amount", "type": "INT64", "mode": "REQUIRED"}
+              ],
+              "rows": [[1, 10], [1, 30], [2, 20], [3, 40]]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

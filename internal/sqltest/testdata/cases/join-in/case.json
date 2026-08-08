@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "join-in",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "ordered"
+}

@@ -611,7 +611,7 @@ func (mapper *statementMapper) mapRelation(statementKind queryast.StatementKind,
 		}
 		return queryast.NewTableRelation(key, path, alias)
 	case *gsql.ASTJoin:
-		return nil, unsupportedNode(statementKind, "join-relation", relation)
+		return mapper.mapJoinRelation(statementKind, relation)
 	case *gsql.ASTTableSubquery:
 		lateral, err := relation.IsLateral()
 		if err != nil {
@@ -644,6 +644,148 @@ func (mapper *statementMapper) mapRelation(statementKind queryast.StatementKind,
 	default:
 		return nil, unsupportedNode(statementKind, "table-expression", node)
 	}
+}
+
+func (mapper *statementMapper) mapJoinRelation(
+	statementKind queryast.StatementKind,
+	node *gsql.ASTJoin,
+) (queryast.Relation, error) {
+	if node == nil {
+		return nil, parserFailure()
+	}
+	if natural, err := node.Natural(); err != nil {
+		return nil, parserFailure()
+	} else if natural {
+		return nil, unsupportedNode(statementKind, "natural-join", node)
+	}
+	if hint, err := node.Hint(); err != nil {
+		return nil, parserFailure()
+	} else if hint != nil {
+		return nil, unsupportedNode(statementKind, "join-hint", hint)
+	}
+	if hint, err := node.JoinHint(); err != nil {
+		return nil, parserFailure()
+	} else if hint != gsql.ASTJoinEnums_JoinHintNoJoinHint {
+		return nil, unsupportedNode(statementKind, "join-method", node)
+	}
+	if transformed, err := node.TransformationNeeded(); err != nil {
+		return nil, parserFailure()
+	} else if transformed {
+		return nil, parserFailure()
+	}
+	if unmatched, err := node.UnmatchedJoinCount(); err != nil {
+		return nil, parserFailure()
+	} else if unmatched != 0 {
+		return nil, parserFailure()
+	}
+
+	leftNode, err := node.Lhs()
+	if err != nil || leftNode == nil {
+		return nil, parserFailure()
+	}
+	left, err := mapper.mapRelation(statementKind, leftNode)
+	if err != nil {
+		return nil, err
+	}
+	rightNode, err := node.Rhs()
+	if err != nil || rightNode == nil {
+		return nil, parserFailure()
+	}
+	right, err := mapper.mapRelation(statementKind, rightNode)
+	if err != nil {
+		return nil, err
+	}
+
+	typeValue, err := node.JoinType()
+	if err != nil {
+		return nil, parserFailure()
+	}
+	var joinType queryast.JoinType
+	switch typeValue {
+	case gsql.ASTJoinEnums_JoinTypeDefaultJoinType, gsql.ASTJoinEnums_JoinTypeInner:
+		joinType = queryast.JoinInner
+	case gsql.ASTJoinEnums_JoinTypeComma:
+		joinType = queryast.JoinComma
+	case gsql.ASTJoinEnums_JoinTypeCross:
+		joinType = queryast.JoinCross
+	case gsql.ASTJoinEnums_JoinTypeLeft:
+		joinType = queryast.JoinLeft
+	case gsql.ASTJoinEnums_JoinTypeRight:
+		joinType = queryast.JoinRight
+	case gsql.ASTJoinEnums_JoinTypeFull:
+		joinType = queryast.JoinFull
+	default:
+		return nil, unsupportedNode(statementKind, "join-type", node)
+	}
+	condition, err := mapper.mapJoinCondition(statementKind, node, joinType)
+	if err != nil {
+		return nil, err
+	}
+	key, err := mapper.key(node, "join-relation")
+	if err != nil {
+		return nil, err
+	}
+	joined, err := queryast.NewJoinRelation(key, joinType, left, right, condition)
+	if err != nil {
+		return nil, parserFailure()
+	}
+	return joined, nil
+}
+
+func (mapper *statementMapper) mapJoinCondition(
+	statementKind queryast.StatementKind,
+	node *gsql.ASTJoin,
+	joinType queryast.JoinType,
+) (queryast.JoinCondition, error) {
+	on, err := node.OnClause()
+	if err != nil {
+		return queryast.JoinCondition{}, parserFailure()
+	}
+	using, err := node.UsingClause()
+	if err != nil {
+		return queryast.JoinCondition{}, parserFailure()
+	}
+	if on != nil && using != nil {
+		return queryast.JoinCondition{}, parserFailure()
+	}
+	if on != nil {
+		expressionNode, err := on.Expression()
+		if err != nil || expressionNode == nil {
+			return queryast.JoinCondition{}, parserFailure()
+		}
+		expression, err := mapper.mapExpression(statementKind, expressionNode)
+		if err != nil {
+			return queryast.JoinCondition{}, err
+		}
+		return queryast.NewJoinOn(expression)
+	}
+	if using != nil {
+		children, err := astChildren(using)
+		if err != nil {
+			return queryast.JoinCondition{}, err
+		}
+		columns := make([]queryast.Identifier, 0, len(children))
+		for _, child := range children {
+			identifierNode, ok := child.(*gsql.ASTIdentifier)
+			if !ok {
+				return queryast.JoinCondition{}, unsupportedNode(statementKind, "join-using-key", child)
+			}
+			identifier, err := mapIdentifier(identifierNode)
+			if err != nil {
+				return queryast.JoinCondition{}, err
+			}
+			columns = append(columns, identifier)
+		}
+		condition, err := queryast.NewJoinUsing(columns)
+		if err != nil {
+			return queryast.JoinCondition{}, parserFailure()
+		}
+		return condition, nil
+	}
+	if joinType != queryast.JoinComma && joinType != queryast.JoinCross {
+		return queryast.JoinCondition{}, parserFailure()
+	}
+	return queryast.NewJoinWithoutCondition(), nil
 }
 
 func (mapper *statementMapper) mapOrderBy(statementKind queryast.StatementKind, node *gsql.ASTOrderBy) ([]queryast.OrderItem, error) {
