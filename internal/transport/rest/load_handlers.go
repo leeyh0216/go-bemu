@@ -127,7 +127,7 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		writeLoadError(w, fmt.Errorf("%w: invalid load configuration JSON", loadDomain.ErrInvalid))
 		return
 	}
-	unsupported, err := unsupportedLoadOptions(loadPayload)
+	unsupported, err := unsupportedLoadOptions(loadPayload, wire)
 	if err != nil {
 		writeLoadError(w, err)
 		return
@@ -218,7 +218,16 @@ func rawPresent(value json.RawMessage) bool {
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
-func unsupportedLoadOptions(payload []byte) ([]string, error) {
+// The pinned Spark connector selects FormatOptions.parquet(), and the pinned
+// Java client consequently serializes parquetOptions even when every option is
+// at its default. The bq CLI likewise serializes several neutral load fields.
+// Keep those shapes explicit here: accepting arbitrary fields would hide a
+// future client contract change and could silently change loaded data.
+//   - https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/SparkBigQueryConfig.java#L1312-L1318
+//   - https://github.com/googleapis/java-bigquery/blob/v2.60.0/google-cloud-bigquery/src/main/java/com/google/cloud/bigquery/LoadJobConfiguration.java#L922-L925
+//   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad
+//   - https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_load
+func unsupportedLoadOptions(payload []byte, wire loadConfigurationResource) ([]string, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil {
 		return nil, fmt.Errorf("%w: load configuration must be an object", loadDomain.ErrInvalid)
@@ -227,16 +236,69 @@ func unsupportedLoadOptions(payload []byte) ([]string, error) {
 		"sourceUris": {}, "destinationTable": {}, "schema": {}, "sourceFormat": {},
 		"writeDisposition": {}, "createDisposition": {}, "autodetect": {},
 		"schemaUpdateOptions": {}, "ignoreUnknownValues": {}, "maxBadRecords": {},
+		"parquetOptions": {}, "decimalTargetTypes": {}, "nullMarkers": {},
+		"projectionFields": {}, "timestampTargetPrecision": {},
 	}
 	unsupported := make([]string, 0)
-	for field := range fields {
+	for field, value := range fields {
 		if _, ok := allowed[field]; !ok {
-			digest := sha256.Sum256(fields[field])
-			unsupported = append(unsupported, fmt.Sprintf("%s:%x", field, digest))
+			unsupported = append(unsupported, unsupportedLoadOption(field, value))
+		}
+	}
+	if value, ok := fields["parquetOptions"]; ok && rawJSONNull(value) {
+		unsupported = append(unsupported, unsupportedLoadOption("parquetOptions", value))
+	} else if ok {
+		var parquetFields map[string]json.RawMessage
+		if err := json.Unmarshal(value, &parquetFields); err != nil {
+			return nil, fmt.Errorf("%w: parquetOptions must be an object", loadDomain.ErrInvalid)
+		}
+		for field, fieldValue := range parquetFields {
+			switch field {
+			case "enableListInference":
+				if wire.ParquetOptions == nil || wire.ParquetOptions.EnableListInference == nil || *wire.ParquetOptions.EnableListInference {
+					unsupported = append(unsupported, unsupportedLoadOption("parquetOptions."+field, fieldValue))
+				}
+			case "enumAsString":
+				if wire.ParquetOptions == nil || wire.ParquetOptions.EnumAsString == nil || *wire.ParquetOptions.EnumAsString {
+					unsupported = append(unsupported, unsupportedLoadOption("parquetOptions."+field, fieldValue))
+				}
+			case "mapTargetType":
+				unsupported = append(unsupported, unsupportedLoadOption("parquetOptions."+field, fieldValue))
+			default:
+				unsupported = append(unsupported, unsupportedLoadOption("parquetOptions."+field, fieldValue))
+			}
+		}
+	}
+	// decimalTargetTypes has a data-dependent default, so only the CLI's
+	// explicit JSON null is equivalent to omission for the supported slice.
+	if value, ok := fields["decimalTargetTypes"]; ok && !rawJSONNull(value) {
+		unsupported = append(unsupported, unsupportedLoadOption("decimalTargetTypes", value))
+	}
+	// These CLI defaults are accepted only as typed empty arrays. JSON null and
+	// non-empty arrays are intentionally visible unsupported capabilities.
+	for _, option := range []struct {
+		name   string
+		length int
+	}{
+		{name: "nullMarkers", length: len(wire.NullMarkers)},
+		{name: "projectionFields", length: len(wire.ProjectionFields)},
+		{name: "timestampTargetPrecision", length: len(wire.TimestampTargetPrecision)},
+	} {
+		if value, ok := fields[option.name]; ok && (rawJSONNull(value) || option.length != 0) {
+			unsupported = append(unsupported, unsupportedLoadOption(option.name, value))
 		}
 	}
 	sort.Strings(unsupported)
 	return unsupported, nil
+}
+
+func rawJSONNull(value json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(value), []byte("null"))
+}
+
+func unsupportedLoadOption(name string, value json.RawMessage) string {
+	digest := sha256.Sum256(value)
+	return fmt.Sprintf("%s:%x", name, digest)
 }
 
 func writeLoadError(w http.ResponseWriter, err error) {

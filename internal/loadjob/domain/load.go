@@ -93,7 +93,11 @@ type JobError struct {
 type Statistics struct {
 	InputFiles int64
 	InputBytes int64
-	OutputRows int64
+	// OutputBytes is the REST statistics.load.outputBytes value. The current
+	// local loader approximates it with the successful job's input byte total.
+	// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatistics3
+	OutputBytes int64
+	OutputRows  int64
 }
 
 type Job struct {

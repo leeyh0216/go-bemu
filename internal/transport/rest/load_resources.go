@@ -18,16 +18,31 @@ type combinedJobProbe struct {
 }
 
 type loadConfigurationResource struct {
-	SourceURIs          []string       `json:"sourceUris"`
-	DestinationTable    tableReference `json:"destinationTable"`
-	Schema              *tableSchema   `json:"schema,omitempty"`
-	SourceFormat        string         `json:"sourceFormat,omitempty"`
-	WriteDisposition    string         `json:"writeDisposition,omitempty"`
-	CreateDisposition   string         `json:"createDisposition,omitempty"`
-	Autodetect          bool           `json:"autodetect,omitempty"`
-	SchemaUpdateOptions []string       `json:"schemaUpdateOptions,omitempty"`
-	IgnoreUnknownValues bool           `json:"ignoreUnknownValues,omitempty"`
-	MaxBadRecords       int64          `json:"maxBadRecords,omitempty"`
+	SourceURIs               []string                `json:"sourceUris"`
+	DestinationTable         tableReference          `json:"destinationTable"`
+	Schema                   *tableSchema            `json:"schema,omitempty"`
+	SourceFormat             string                  `json:"sourceFormat,omitempty"`
+	WriteDisposition         string                  `json:"writeDisposition,omitempty"`
+	CreateDisposition        string                  `json:"createDisposition,omitempty"`
+	Autodetect               bool                    `json:"autodetect,omitempty"`
+	SchemaUpdateOptions      []string                `json:"schemaUpdateOptions,omitempty"`
+	IgnoreUnknownValues      bool                    `json:"ignoreUnknownValues,omitempty"`
+	MaxBadRecords            int64                   `json:"maxBadRecords,omitempty"`
+	ParquetOptions           *parquetOptionsResource `json:"parquetOptions,omitempty"`
+	DecimalTargetTypes       []string                `json:"decimalTargetTypes,omitempty"`
+	NullMarkers              []string                `json:"nullMarkers,omitempty"`
+	ProjectionFields         []string                `json:"projectionFields,omitempty"`
+	TimestampTargetPrecision []int32                 `json:"timestampTargetPrecision,omitempty"`
+}
+
+// ParquetOptions is an optional, typed part of JobConfigurationLoad. The
+// emulator accepts only the empty/default shape until the DuckDB load adapter
+// implements the non-default inference behavior.
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#ParquetOptions
+type parquetOptionsResource struct {
+	EnableListInference *bool   `json:"enableListInference,omitempty"`
+	EnumAsString        *bool   `json:"enumAsString,omitempty"`
+	MapTargetType       *string `json:"mapTargetType,omitempty"`
 }
 
 type loadJobRequest struct {
@@ -57,6 +72,7 @@ type loadJobStatisticsResource struct {
 type loadJobStatisticsLoad struct {
 	InputFiles     string `json:"inputFiles"`
 	InputFileBytes string `json:"inputFileBytes"`
+	OutputBytes    string `json:"outputBytes,omitempty"`
 	OutputRows     string `json:"outputRows"`
 	BadRecords     string `json:"badRecords"`
 }
@@ -101,6 +117,13 @@ func loadJobFromDomain(job *loadDomain.Job) loadJobResource {
 				OutputRows:     strconv.FormatInt(job.Statistics.OutputRows, 10), BadRecords: "0",
 			},
 		},
+	}
+	// BQEMU publishes its approximated JobStatistics3.outputBytes only for a
+	// successful terminal job. Avoid presenting a synthetic zero while a job is
+	// pending/running or after a failed load.
+	// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatistics3
+	if job.State == loadDomain.JobDone && job.Error == nil {
+		resource.Statistics.Load.OutputBytes = strconv.FormatInt(job.Statistics.OutputBytes, 10)
 	}
 	if job.StartedAt != nil {
 		resource.Statistics.StartTime = millis(*job.StartedAt)

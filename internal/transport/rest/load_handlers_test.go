@@ -90,7 +90,9 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 		"configuration":{"load":{
 			"sourceUris":[%q],
 			"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},
-			"sourceFormat":"PARQUET","writeDisposition":"WRITE_APPEND"
+			"sourceFormat":"PARQUET","writeDisposition":"WRITE_APPEND",
+			"parquetOptions":{},"decimalTargetTypes":null,"nullMarkers":[],
+			"projectionFields":[],"timestampTargetPrecision":[]
 		}}
 	}`, "gs://load-bucket/spark/*.parquet")
 	job := restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", body, http.StatusOK)
@@ -100,7 +102,8 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 		t.Fatalf("load job failed: %#v", job)
 	}
 	statistics := job["statistics"].(map[string]any)["load"].(map[string]any)
-	if statistics["inputFiles"] != "1" || statistics["outputRows"] != "2" {
+	if statistics["inputFiles"] != "1" || statistics["inputFileBytes"] != fmt.Sprint(len(parquetPayload)) ||
+		statistics["outputBytes"] != fmt.Sprint(len(parquetPayload)) || statistics["outputRows"] != "2" {
 		t.Fatalf("unexpected load statistics: %#v", statistics)
 	}
 
@@ -150,9 +153,98 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	if errorResult["reason"] != "notImplemented" {
 		t.Fatalf("unexpected gap job: %#v", job)
 	}
+	if _, present := job["statistics"].(map[string]any)["load"].(map[string]any)["outputBytes"]; present {
+		t.Fatalf("failed load exposed successful outputBytes: %#v", job)
+	}
+
+	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["file:///does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enableListInference":true}}}}`
+	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", activeOption, http.StatusOK)
+	job = waitForRESTLoad(t, server.URL, "parquet-option-gap")
+	errorResult = job["status"].(map[string]any)["errorResult"].(map[string]any)
+	if errorResult["reason"] != "notImplemented" {
+		t.Fatalf("active Parquet option did not remain an explicit gap: %#v", job)
+	}
+
+	malformedOption := `{"configuration":{"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":[]}}}`
+	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", malformedOption, http.StatusBadRequest)
 
 	both := `{"configuration":{"query":{"query":"SELECT 1"},"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", both, http.StatusBadRequest)
+}
+
+func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
+	accepted := map[string]string{
+		"absent":          `{}`,
+		"spark empty":     `{"parquetOptions":{}}`,
+		"explicit false":  `{"parquetOptions":{"enableListInference":false,"enumAsString":false}}`,
+		"bq cli defaults": `{"decimalTargetTypes":null,"nullMarkers":[],"projectionFields":[],"timestampTargetPrecision":[]}`,
+	}
+	for name, payload := range accepted {
+		t.Run("accept "+name, func(t *testing.T) {
+			var wire loadConfigurationResource
+			if err := json.Unmarshal([]byte(payload), &wire); err != nil {
+				t.Fatal(err)
+			}
+			unsupported, err := unsupportedLoadOptions([]byte(payload), wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(unsupported) != 0 {
+				t.Fatalf("unsupported options = %v", unsupported)
+			}
+		})
+	}
+
+	rejected := map[string]struct {
+		payload string
+		field   string
+	}{
+		"null parquet object":  {payload: `{"parquetOptions":null}`, field: "parquetOptions:"},
+		"list inference":       {payload: `{"parquetOptions":{"enableListInference":true}}`, field: "parquetOptions.enableListInference:"},
+		"enum as string":       {payload: `{"parquetOptions":{"enumAsString":true}}`, field: "parquetOptions.enumAsString:"},
+		"null parquet flag":    {payload: `{"parquetOptions":{"enumAsString":null}}`, field: "parquetOptions.enumAsString:"},
+		"map target":           {payload: `{"parquetOptions":{"mapTargetType":"ARRAY_OF_STRUCT"}}`, field: "parquetOptions.mapTargetType:"},
+		"future parquet field": {payload: `{"parquetOptions":{"futureOption":false}}`, field: "parquetOptions.futureOption:"},
+		"empty decimal list":   {payload: `{"decimalTargetTypes":[]}`, field: "decimalTargetTypes:"},
+		"decimal target":       {payload: `{"decimalTargetTypes":["NUMERIC"]}`, field: "decimalTargetTypes:"},
+		"null null markers":    {payload: `{"nullMarkers":null}`, field: "nullMarkers:"},
+		"null marker":          {payload: `{"nullMarkers":["NULL"]}`, field: "nullMarkers:"},
+		"projection":           {payload: `{"projectionFields":["value"]}`, field: "projectionFields:"},
+		"timestamp precision":  {payload: `{"timestampTargetPrecision":[6]}`, field: "timestampTargetPrecision:"},
+		"unknown load option":  {payload: `{"futureOption":false}`, field: "futureOption:"},
+	}
+	for name, test := range rejected {
+		t.Run("reject "+name, func(t *testing.T) {
+			var wire loadConfigurationResource
+			if err := json.Unmarshal([]byte(test.payload), &wire); err != nil {
+				t.Fatal(err)
+			}
+			unsupported, err := unsupportedLoadOptions([]byte(test.payload), wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(unsupported) != 1 || !strings.HasPrefix(unsupported[0], test.field) {
+				t.Fatalf("unsupported options = %v, want one %q fingerprint", unsupported, test.field)
+			}
+		})
+	}
+}
+
+func TestLoadCompatibilityOptionsRejectMalformedWireTypes(t *testing.T) {
+	for name, payload := range map[string]string{
+		"parquet array":      `{"parquetOptions":[]}`,
+		"decimal scalar":     `{"decimalTargetTypes":"NUMERIC"}`,
+		"null marker scalar": `{"nullMarkers":"NULL"}`,
+		"projection scalar":  `{"projectionFields":"value"}`,
+		"timestamp strings":  `{"timestampTargetPrecision":["6"]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var wire loadConfigurationResource
+			if err := json.Unmarshal([]byte(payload), &wire); err == nil {
+				t.Fatal("malformed compatibility option was accepted")
+			}
+		})
+	}
 }
 
 func restLoadRequest(t *testing.T, baseURL, method, path, body string, expectedStatus int) map[string]any {

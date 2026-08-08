@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -69,6 +70,22 @@ type testLoader struct {
 	block bool
 }
 
+type gatedLoader struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (l *gatedLoader) Load(ctx context.Context, _ ports.LoadRequest) (ports.LoadResult, error) {
+	l.once.Do(func() { close(l.started) })
+	select {
+	case <-l.release:
+		return ports.LoadResult{OutputRows: 3}, nil
+	case <-ctx.Done():
+		return ports.LoadResult{}, ctx.Err()
+	}
+}
+
 func (l *testLoader) Load(ctx context.Context, request ports.LoadRequest) (ports.LoadResult, error) {
 	l.mu.Lock()
 	l.calls++
@@ -105,7 +122,8 @@ func TestServiceIsIdempotentAndCleansWorkspace(t *testing.T) {
 		t.Fatalf("idempotent references differ")
 	}
 	job := waitForDone(t, service, reference)
-	if job.Error != nil || job.Statistics.InputFiles != 1 || job.Statistics.InputBytes != 7 || job.Statistics.OutputRows != 3 {
+	if job.Error != nil || job.Statistics.InputFiles != 1 || job.Statistics.InputBytes != 7 ||
+		job.Statistics.OutputBytes != 7 || job.Statistics.OutputRows != 3 {
 		t.Fatalf("job = %+v", job)
 	}
 	loader.mu.Lock()
@@ -159,6 +177,73 @@ func TestServiceConcurrentIdempotentSubmissionsExecuteOnce(t *testing.T) {
 	}
 }
 
+func TestServicePublishesOutputBytesToConcurrentReaders(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	loader := &gatedLoader{started: make(chan struct{}), release: make(chan struct{})}
+	service := newTestService(t, objects, loader, time.Second)
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-statistics-race"}
+	if _, err := service.Submit(context.Background(), reference, testConfiguration(domain.FormatParquet)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("load did not reach the warehouse boundary")
+	}
+
+	const readers = 16
+	ready := make(chan struct{}, readers)
+	errorsChannel := make(chan error, readers)
+	var group sync.WaitGroup
+	for range readers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			job, err := service.Get(context.Background(), reference)
+			ready <- struct{}{}
+			if err != nil {
+				errorsChannel <- err
+				return
+			}
+			if job.State != domain.JobRunning {
+				errorsChannel <- fmt.Errorf("state before release = %s", job.State)
+				return
+			}
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				job, err = service.Get(context.Background(), reference)
+				if err != nil {
+					errorsChannel <- err
+					return
+				}
+				if job.State == domain.JobDone {
+					if job.Error != nil || job.Statistics.InputBytes != 7 || job.Statistics.OutputBytes != 7 {
+						errorsChannel <- fmt.Errorf("terminal job = %+v", job)
+					}
+					return
+				}
+				time.Sleep(100 * time.Microsecond)
+			}
+			errorsChannel <- errors.New("load job did not become visible as DONE")
+		}()
+	}
+	for range readers {
+		select {
+		case <-ready:
+		case <-time.After(time.Second):
+			t.Fatal("concurrent reader did not observe the running job")
+		}
+	}
+	close(loader.release)
+	group.Wait()
+	close(errorsChannel)
+	for err := range errorsChannel {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+}
+
 func TestServiceRecordsStrictFormatGapWithoutDownloading(t *testing.T) {
 	objects := &testObjectStore{objects: map[string][]byte{"file:///source.avro": []byte("secret")}}
 	loader := &testLoader{}
@@ -178,6 +263,31 @@ func TestServiceRecordsStrictFormatGapWithoutDownloading(t *testing.T) {
 	objects.mu.Unlock()
 	if opens != 0 || loader.calls != 0 {
 		t.Fatalf("unsupported format performed IO: opens=%d loads=%d", opens, loader.calls)
+	}
+}
+
+func TestServiceRecordsUnsupportedOptionsWithoutSideEffects(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	loader := &testLoader{}
+	service := newTestService(t, objects, loader, time.Second)
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-options"}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.UnsupportedOptions = []string{"parquetOptions.enableListInference:fingerprint"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "notImplemented" {
+		t.Fatalf("job = %+v", job)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	loader.mu.Lock()
+	loads := loader.calls
+	loader.mu.Unlock()
+	if opens != 0 || loads != 0 {
+		t.Fatalf("unsupported options performed side effects: opens=%d loads=%d", opens, loads)
 	}
 }
 
