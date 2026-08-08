@@ -17,6 +17,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/config"
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
@@ -91,15 +92,32 @@ type tableDataCompositionWarehouse struct {
 	request ports.TableDataReadRequest
 }
 
-func (*tableDataCompositionWarehouse) EngineCapabilities() ports.EngineCapabilities {
-	return ports.EngineCapabilities{
-		MaxDecimalPrecision: domain.SparkDecimalMaxPrecision,
-		MaxDecimalScale:     domain.SparkDecimalMaxScale,
-		SupportsStruct:      true,
-		SupportsRepeated:    true,
-	}
+type tableDataSchemaAdapter struct{}
+
+func (tableDataSchemaAdapter) ValidateSchemaIntent(context.Context, engine.SchemaIntent) error {
+	return nil
 }
-func (*tableDataCompositionWarehouse) ValidateSchema([]domain.Field) error { return nil }
+
+func (*tableDataCompositionWarehouse) PlanSchema(ctx context.Context, intent engine.SchemaIntent) (engine.SchemaPlan, error) {
+	identity, _ := engine.NewIdentity("table-data-test", "1")
+	capabilities, err := engine.NewCapabilities(engine.CapabilitiesDescriptor{
+		Identity:  identity,
+		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: domain.SparkDecimalMaxPrecision, MaxScale: domain.SparkDecimalMaxScale},
+		Composite: engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
+		DDL: map[engine.DDLOperation]engine.DDLCapability{
+			engine.DDLCreateTable: {Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement},
+			engine.DDLAddColumn:   {Guarantee: engine.DDLGuaranteeAtomicPhysicalTable, MaxFieldPathDepth: 15},
+		},
+	})
+	if err != nil {
+		return engine.SchemaPlan{}, err
+	}
+	planner, err := engine.NewSchemaPlanner(capabilities, tableDataSchemaAdapter{})
+	if err != nil {
+		return engine.SchemaPlan{}, err
+	}
+	return planner.Plan(ctx, intent)
+}
 
 func (*tableDataCompositionWarehouse) CreateDataset(context.Context, string, string) error {
 	return nil
@@ -110,7 +128,13 @@ func (*tableDataCompositionWarehouse) DropDataset(context.Context, string, strin
 func (*tableDataCompositionWarehouse) CreateTable(context.Context, domain.Table) error {
 	return nil
 }
+func (*tableDataCompositionWarehouse) CreatePlannedTable(context.Context, engine.SchemaPlan, domain.Table) error {
+	return nil
+}
 func (*tableDataCompositionWarehouse) ApplySchemaAdditions(context.Context, domain.Table, []domain.SchemaAddition) error {
+	return nil
+}
+func (*tableDataCompositionWarehouse) ApplyPlannedSchemaAdditions(context.Context, engine.SchemaPlan, domain.Table, []domain.SchemaAddition) error {
 	return nil
 }
 func (*tableDataCompositionWarehouse) DropTable(context.Context, string, string, string) error {

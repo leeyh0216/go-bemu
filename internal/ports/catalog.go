@@ -2,10 +2,9 @@ package ports
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 )
 
 type CatalogRepository interface {
@@ -33,72 +32,11 @@ type HealthChecker interface {
 	Ping(context.Context) error
 }
 
-// EngineCapabilities describes portable logical-schema bounds. Engine SQL and
-// physical type names must not cross this boundary.
-type EngineCapabilities struct {
-	MaxDecimalPrecision int64
-	MaxDecimalScale     int64
-	SupportsStruct      bool
-	SupportsRepeated    bool
-}
-
-// ValidateSchema verifies the portable bounds reported by an engine. It does
-// not inspect physical type names and is safe to call before any adapter side
-// effect.
-func (capabilities EngineCapabilities) ValidateSchema(schema []domain.Field) error {
-	if capabilities.MaxDecimalPrecision < 0 || capabilities.MaxDecimalScale < 0 {
-		return fmt.Errorf("%w: capability=%s engine reported negative decimal bounds", domain.ErrBackend, domain.CapabilityEngineSchemaV1)
-	}
-	for _, field := range schema {
-		if err := capabilities.validateField(field); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (capabilities EngineCapabilities) validateField(field domain.Field) error {
-	fieldType := strings.ToUpper(field.Type)
-	if (fieldType == "RECORD" || fieldType == "STRUCT") && !capabilities.SupportsStruct {
-		return fmt.Errorf("%w: capability=%s engine does not support STRUCT field %q", domain.ErrUnsupported, domain.CapabilityEngineSchemaV1, field.Name)
-	}
-	if strings.EqualFold(field.Mode, "REPEATED") && !capabilities.SupportsRepeated {
-		return fmt.Errorf("%w: capability=%s engine does not support REPEATED field %q", domain.ErrUnsupported, domain.CapabilityEngineSchemaV1, field.Name)
-	}
-	if fieldType == "NUMERIC" || fieldType == "BIGNUMERIC" {
-		parameters, err := field.EffectiveDecimalParameters()
-		if err != nil {
-			return err
-		}
-		if capabilities.MaxDecimalPrecision == 0 || parameters.Precision > capabilities.MaxDecimalPrecision {
-			return fmt.Errorf(
-				"%w: capability=%s decimal field %q precision %d exceeds engine maximum %d",
-				domain.ErrUnsupported, domain.CapabilityEngineSchemaV1, field.Name,
-				parameters.Precision, capabilities.MaxDecimalPrecision,
-			)
-		}
-		if parameters.Scale > capabilities.MaxDecimalScale {
-			return fmt.Errorf(
-				"%w: capability=%s decimal field %q scale %d exceeds engine maximum %d",
-				domain.ErrUnsupported, domain.CapabilityEngineSchemaV1, field.Name,
-				parameters.Scale, capabilities.MaxDecimalScale,
-			)
-		}
-	}
-	for _, nested := range field.Fields {
-		if err := capabilities.validateField(nested); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// SchemaPlanner reports capabilities and verifies remaining engine-specific
-// representability without performing a physical side effect. Detailed DDL
-// planning remains a separate engine-SPI concern.
+// SchemaPlanner issues an immutable, engine-bound authorization after logical
+// capability and adapter representability checks complete without side
+// effects.
 type SchemaPlanner interface {
-	EngineCapabilities() EngineCapabilities
-	ValidateSchema([]domain.Field) error
+	PlanSchema(context.Context, engine.SchemaIntent) (engine.SchemaPlan, error)
 }
 
 // CatalogStorage is the schema-aware physical lifecycle required by catalog
@@ -114,8 +52,8 @@ type CatalogStorage interface {
 type WarehouseAdmin interface {
 	CreateDataset(context.Context, string, string) error
 	DropDataset(context.Context, string, string) error
-	CreateTable(context.Context, domain.Table) error
-	ApplySchemaAdditions(context.Context, domain.Table, []domain.SchemaAddition) error
+	CreatePlannedTable(context.Context, engine.SchemaPlan, domain.Table) error
+	ApplyPlannedSchemaAdditions(context.Context, engine.SchemaPlan, domain.Table, []domain.SchemaAddition) error
 	DropTable(context.Context, string, string, string) error
 }
 

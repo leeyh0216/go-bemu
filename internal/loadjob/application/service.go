@@ -6,6 +6,8 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 	"github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/observability"
@@ -172,11 +175,36 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	if len(configuration.Schema) > 0 && !schemasEqual(configuration.Schema, table.Schema) {
 		return statistics, fmt.Errorf("%w: requested schema does not match the destination table", domain.ErrInvalid)
 	}
-	if err := validateLoadSchema(s.loader, configuration.SourceFormat, table.Schema); err != nil {
-		return statistics, err
+	schemaIntent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
+		Operation: engine.SchemaOperationValidate,
+		Target: catalogdomain.TableReference{
+			ProjectID: table.Reference.ProjectID,
+			DatasetID: table.Reference.DatasetID,
+			TableID:   table.Reference.TableID,
+		},
+		AfterSchema: table.Schema,
+	})
+	if err != nil {
+		return statistics, translateCatalogSchemaError(err)
+	}
+	schemaPlan, err := s.loader.PlanSchema(ctx, schemaIntent)
+	if err != nil {
+		return statistics, translateCatalogSchemaError(err)
 	}
 
 	objects, err := s.resolveObjects(ctx, configuration.SourceURIs)
+	if err != nil {
+		return statistics, err
+	}
+	resolved := make([]ports.ResolvedObject, len(objects))
+	for index, object := range objects {
+		resolved[index] = ports.ResolvedObject{Fingerprint: objectFingerprint(object), Size: object.Size}
+	}
+	loadPlan, err := s.loader.PlanLoad(ctx, ports.LoadPlanRequest{
+		Destination: table, SchemaPlan: schemaPlan,
+		SourceFormat: configuration.SourceFormat, WriteDisposition: configuration.WriteDisposition,
+		Objects: resolved,
+	})
 	if err != nil {
 		return statistics, err
 	}
@@ -211,10 +239,7 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		"table_id", table.Reference.TableID, "job_id", job.Reference.JobID,
 		"file_count", len(localObjects), "input_bytes", downloaded,
 		"schema_fingerprint", schemaDigest(table.Schema), "write_disposition", configuration.WriteDisposition)
-	result, err := s.loader.Load(ctx, ports.LoadRequest{
-		Destination: table, Schema: table.Schema, Objects: localObjects,
-		SourceFormat: configuration.SourceFormat, WriteDisposition: configuration.WriteDisposition,
-	})
+	result, err := s.loader.ExecuteLoad(ctx, loadPlan, localObjects)
 	observability.LogSideEffectEnd(ctx, "warehouse", "commit_load_job", started, err,
 		"project_id", job.Reference.ProjectID, "dataset_id", table.Reference.DatasetID,
 		"table_id", table.Reference.TableID, "job_id", job.Reference.JobID,
@@ -235,25 +260,14 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	return statistics, err
 }
 
-func validateLoadSchema(loader ports.Loader, format domain.SourceFormat, schema []domain.Field) error {
-	if err := domain.ValidateSchema(schema); err != nil {
-		return err
-	}
-	if err := loader.EngineCapabilities().ValidateSchema(schema); err != nil {
-		return translateCatalogSchemaError(err)
-	}
-	if err := loader.ValidateSchema(schema); err != nil {
-		return translateCatalogSchemaError(err)
-	}
-	return loader.ValidateLoadSchema(format, schema)
-}
-
 func translateCatalogSchemaError(err error) error {
 	switch {
 	case errors.Is(err, catalogdomain.ErrUnsupported):
-		return fmt.Errorf("%w: %v", domain.ErrUnsupported, err)
+		return fmt.Errorf("%w: capability=%s: %v", domain.ErrUnsupported, catalogdomain.CapabilityEngineSchemaV1, err)
 	case errors.Is(err, catalogdomain.ErrInvalid):
 		return fmt.Errorf("%w: %v", domain.ErrInvalid, err)
+	case errors.Is(err, catalogdomain.ErrPrecondition):
+		return fmt.Errorf("%w: %v", domain.ErrPrecondition, err)
 	default:
 		return err
 	}
@@ -376,7 +390,13 @@ func (s *Service) download(ctx context.Context, job *domain.Job, objects []ports
 			return nil, total, operationErr
 		}
 		total += written
-		local = append(local, ports.LocalObject{Path: path, Size: written})
+		if written != object.Size {
+			operationErr = fmt.Errorf("%w: downloaded source size differs from resolved metadata", domain.ErrPrecondition)
+			return nil, total, operationErr
+		}
+		local = append(local, ports.LocalObject{
+			Path: path, Fingerprint: objectFingerprint(object), Size: written,
+		})
 	}
 	return local, total, nil
 }
@@ -470,6 +490,13 @@ func objectSetDigest(objects []ports.ObjectInfo) string {
 		parts[index] = object.URI + "\x00" + object.Generation + "\x00" + object.ETag
 	}
 	return observability.Digest([]byte(strings.Join(parts, "\x00")))
+}
+
+func objectFingerprint(object ports.ObjectInfo) string {
+	digest := sha256.Sum256([]byte(strings.Join([]string{
+		object.URI, object.Generation, object.ETag, strconv.FormatInt(object.Size, 10),
+	}, "\x00")))
+	return hex.EncodeToString(digest[:])
 }
 
 func objectIdentityChanged(left, right ports.ObjectInfo) bool {

@@ -32,25 +32,34 @@ type stagingColumn struct {
 	typeName string
 }
 
-func (w *Warehouse) Load(ctx context.Context, request loadports.LoadRequest) (result loadports.LoadResult, err error) {
-	if len(request.Schema) == 0 {
-		return result, fmt.Errorf("%w: destination schema is required", loadDomain.ErrInvalid)
+func (w *Warehouse) PlanLoad(ctx context.Context, request loadports.LoadPlanRequest) (loadports.LoadPlan, error) {
+	if w == nil || w.loadPlanner == nil {
+		return loadports.LoadPlan{}, fmt.Errorf("%w: DuckDB load planner is not configured", loadDomain.ErrPrecondition)
 	}
-	if err := w.ValidateLoadSchema(request.SourceFormat, request.Schema); err != nil {
+	return w.loadPlanner.Plan(ctx, request)
+}
+
+func (w *Warehouse) ExecuteLoad(
+	ctx context.Context,
+	plan loadports.LoadPlan,
+	objects []loadports.LocalObject,
+) (result loadports.LoadResult, err error) {
+	if w == nil || w.loadPlanner == nil {
+		return result, fmt.Errorf("%w: DuckDB load planner is not configured", loadDomain.ErrPrecondition)
+	}
+	request, err := w.loadPlanner.ValidateExecution(ctx, plan, objects)
+	if err != nil {
 		return result, err
-	}
-	if len(request.Objects) == 0 {
-		return result, fmt.Errorf("%w: at least one local Parquet object is required", loadDomain.ErrInvalid)
 	}
 	table := request.Destination.Reference
 	started := observability.LogSideEffectStart(ctx, "duckdb", "load_parquet",
 		"project_id", table.ProjectID, "dataset_id", table.DatasetID, "table_id", table.TableID,
-		"file_count", len(request.Objects), "schema_fingerprint", loadSchemaDigest(request.Schema),
+		"file_count", len(objects), "schema_fingerprint", loadSchemaDigest(request.Destination.Schema),
 		"write_disposition", request.WriteDisposition, "transaction_mode", "explicit")
 	defer func() {
 		observability.LogSideEffectEnd(ctx, "duckdb", "load_parquet", started, err,
 			"project_id", table.ProjectID, "dataset_id", table.DatasetID, "table_id", table.TableID,
-			"file_count", len(request.Objects), "schema_fingerprint", loadSchemaDigest(request.Schema),
+			"file_count", len(objects), "schema_fingerprint", loadSchemaDigest(request.Destination.Schema),
 			"write_disposition", request.WriteDisposition, "transaction_mode", "explicit",
 			"output_rows", result.OutputRows)
 	}()
@@ -67,11 +76,8 @@ func (w *Warehouse) Load(ctx context.Context, request loadports.LoadRequest) (re
 	}()
 
 	staging := "bqemu_load_" + strconv.FormatUint(loadSequence.Add(1), 10)
-	objectList := make([]string, len(request.Objects))
-	for index, object := range request.Objects {
-		if strings.TrimSpace(object.Path) == "" {
-			return result, fmt.Errorf("%w: local object path is empty", loadDomain.ErrInvalid)
-		}
+	objectList := make([]string, len(objects))
+	for index, object := range objects {
 		objectList[index] = quoteSQLString(object.Path)
 	}
 	createStaging := fmt.Sprintf("CREATE TEMP TABLE %s AS SELECT * FROM read_parquet([%s], union_by_name=false)",
@@ -84,11 +90,11 @@ func (w *Warehouse) Load(ctx context.Context, request loadports.LoadRequest) (re
 	if err != nil {
 		return result, err
 	}
-	selectExpressions, destinationColumns, err := validateLoadShape(request.Schema, columns)
+	selectExpressions, destinationColumns, err := validateLoadShape(request.Destination.Schema, columns)
 	if err != nil {
 		return result, err
 	}
-	for _, field := range request.Schema {
+	for _, field := range request.Destination.Schema {
 		if !strings.EqualFold(normalizeMode(field.Mode), "REQUIRED") {
 			continue
 		}
@@ -137,41 +143,6 @@ func (w *Warehouse) Load(ctx context.Context, request loadports.LoadRequest) (re
 	}
 	committed = true
 	return result, nil
-}
-
-func (w *Warehouse) ValidateLoadSchema(format loadDomain.SourceFormat, schema []loadDomain.Field) error {
-	if format != loadDomain.FormatParquet {
-		return fmt.Errorf("%w: loader supports only PARQUET", loadDomain.ErrUnsupported)
-	}
-	if err := loadDomain.ValidateSchema(schema); err != nil {
-		return err
-	}
-	if err := w.EngineCapabilities().ValidateSchema(schema); err != nil {
-		return translateCatalogLoadSchemaError(err)
-	}
-	if err := w.ValidateSchema(schema); err != nil {
-		return translateCatalogLoadSchemaError(err)
-	}
-	for _, field := range schema {
-		if len(field.Fields) != 0 || strings.EqualFold(field.Mode, "REPEATED") {
-			return fmt.Errorf(
-				"%w: capability=%s nested and repeated Parquet loads",
-				loadDomain.ErrUnsupported, loadDomain.CapabilityParquetNestedRepeatedV1,
-			)
-		}
-	}
-	return nil
-}
-
-func translateCatalogLoadSchemaError(err error) error {
-	switch {
-	case errors.Is(err, catalogdomain.ErrUnsupported):
-		return fmt.Errorf("%w: %v", loadDomain.ErrUnsupported, err)
-	case errors.Is(err, catalogdomain.ErrInvalid):
-		return fmt.Errorf("%w: %v", loadDomain.ErrInvalid, err)
-	default:
-		return err
-	}
 }
 
 func describeStaging(ctx context.Context, tx *sql.Tx, staging string) ([]stagingColumn, error) {

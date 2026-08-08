@@ -17,6 +17,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/contracttest"
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
@@ -33,15 +34,33 @@ type catalogTestWarehouse struct {
 var _ ports.Warehouse = (*catalogTestWarehouse)(nil)
 
 func (*catalogTestWarehouse) Ping(context.Context) error { return nil }
-func (*catalogTestWarehouse) EngineCapabilities() ports.EngineCapabilities {
-	return ports.EngineCapabilities{
-		MaxDecimalPrecision: domain.SparkDecimalMaxPrecision,
-		MaxDecimalScale:     domain.SparkDecimalMaxScale,
-		SupportsStruct:      true,
-		SupportsRepeated:    true,
-	}
+
+type catalogTestSchemaAdapter struct{}
+
+func (catalogTestSchemaAdapter) ValidateSchemaIntent(context.Context, engine.SchemaIntent) error {
+	return nil
 }
-func (*catalogTestWarehouse) ValidateSchema([]domain.Field) error { return nil }
+
+func (*catalogTestWarehouse) PlanSchema(ctx context.Context, intent engine.SchemaIntent) (engine.SchemaPlan, error) {
+	identity, _ := engine.NewIdentity("catalog-test", "1")
+	capabilities, err := engine.NewCapabilities(engine.CapabilitiesDescriptor{
+		Identity:  identity,
+		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: domain.SparkDecimalMaxPrecision, MaxScale: domain.SparkDecimalMaxScale},
+		Composite: engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
+		DDL: map[engine.DDLOperation]engine.DDLCapability{
+			engine.DDLCreateTable: {Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement},
+			engine.DDLAddColumn:   {Guarantee: engine.DDLGuaranteeAtomicPhysicalTable, MaxFieldPathDepth: 15},
+		},
+	})
+	if err != nil {
+		return engine.SchemaPlan{}, err
+	}
+	planner, err := engine.NewSchemaPlanner(capabilities, catalogTestSchemaAdapter{})
+	if err != nil {
+		return engine.SchemaPlan{}, err
+	}
+	return planner.Plan(ctx, intent)
+}
 func (w *catalogTestWarehouse) CreateDataset(_ context.Context, projectID, datasetID string) error {
 	w.datasets = append(w.datasets, projectID+"/"+datasetID)
 	return nil
@@ -51,7 +70,15 @@ func (w *catalogTestWarehouse) CreateTable(_ context.Context, table domain.Table
 	w.tables = append(w.tables, table.ProjectID+"/"+table.DatasetID+"/"+table.ID)
 	return nil
 }
+func (w *catalogTestWarehouse) CreatePlannedTable(_ context.Context, _ engine.SchemaPlan, table domain.Table) error {
+	w.tables = append(w.tables, table.ProjectID+"/"+table.DatasetID+"/"+table.ID)
+	return nil
+}
 func (w *catalogTestWarehouse) ApplySchemaAdditions(_ context.Context, _ domain.Table, additions []domain.SchemaAddition) error {
+	w.additions = append(w.additions, additions...)
+	return nil
+}
+func (w *catalogTestWarehouse) ApplyPlannedSchemaAdditions(_ context.Context, _ engine.SchemaPlan, _ domain.Table, additions []domain.SchemaAddition) error {
 	w.additions = append(w.additions, additions...)
 	return nil
 }

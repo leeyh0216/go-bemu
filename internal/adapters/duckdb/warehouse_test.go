@@ -35,13 +35,25 @@ func TestWarehouseMapsNestedAndRepeatedTypes(t *testing.T) {
 func int64Pointer(value int64) *int64 { return &value }
 
 func TestWarehousePublishesPortableSchemaCapabilities(t *testing.T) {
-	warehouse := &Warehouse{}
-	capabilities := warehouse.EngineCapabilities()
-	if capabilities.MaxDecimalPrecision != 38 || capabilities.MaxDecimalScale != 38 ||
-		!capabilities.SupportsStruct || !capabilities.SupportsRepeated {
-		t.Fatalf("unexpected capabilities: %#v", capabilities)
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := warehouse.ValidateSchema([]domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: int64Pointer(39)}}); err == nil {
+	t.Cleanup(func() { _ = warehouse.Close() })
+	capabilities := warehouse.Capabilities()
+	if capabilities.Decimal().MaxPrecision != 38 || capabilities.Decimal().MaxScale != 38 ||
+		capabilities.Composite().MaxStructDepth == 0 || capabilities.Composite().MaxListDepth == 0 {
+		t.Fatalf("unexpected capabilities: %#v", capabilities.Descriptor())
+	}
+	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
+		Operation:   engine.SchemaOperationCreate,
+		Target:      domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		AfterSchema: []domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: int64Pointer(39)}},
+	})
+	if err == nil {
+		_, err = warehouse.PlanSchema(context.Background(), intent)
+	}
+	if err == nil {
 		t.Fatal("schema planner accepted precision above the Spark DecimalType maximum")
 	}
 }

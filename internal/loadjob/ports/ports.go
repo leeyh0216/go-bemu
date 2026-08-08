@@ -29,16 +29,9 @@ type TableCatalog interface {
 }
 
 type LocalObject struct {
-	Path string
-	Size int64
-}
-
-type LoadRequest struct {
-	Destination      domain.Table
-	Schema           []domain.Field
-	Objects          []LocalObject
-	SourceFormat     domain.SourceFormat
-	WriteDisposition domain.WriteDisposition
+	Path        string
+	Fingerprint string
+	Size        int64
 }
 
 type LoadResult struct {
@@ -47,8 +40,8 @@ type LoadResult struct {
 
 type Loader interface {
 	catalogports.SchemaPlanner
-	ValidateLoadSchema(domain.SourceFormat, []domain.Field) error
-	Load(context.Context, LoadRequest) (LoadResult, error)
+	PlanLoad(context.Context, LoadPlanRequest) (LoadPlan, error)
+	ExecuteLoad(context.Context, LoadPlan, []LocalObject) (LoadResult, error)
 }
 
 type JobRepository interface {

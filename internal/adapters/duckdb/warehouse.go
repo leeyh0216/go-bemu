@@ -18,38 +18,22 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/engine"
+	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 type Warehouse struct {
-	db           *sql.DB
-	capabilities engine.Capabilities
+	db            *sql.DB
+	capabilities  engine.Capabilities
+	schemaPlanner *engine.SchemaPlanner
+	loadPlanner   *loadports.Planner
 }
 
 var (
 	_ ports.HealthChecker  = (*Warehouse)(nil)
 	_ ports.CatalogStorage = (*Warehouse)(nil)
-	_ ports.SchemaPlanner  = (*Warehouse)(nil)
 )
-
-func (*Warehouse) EngineCapabilities() ports.EngineCapabilities {
-	return ports.EngineCapabilities{
-		MaxDecimalPrecision: domain.SparkDecimalMaxPrecision,
-		MaxDecimalScale:     domain.SparkDecimalMaxScale,
-		SupportsStruct:      true,
-		SupportsRepeated:    true,
-	}
-}
-
-func (*Warehouse) ValidateSchema(schema []domain.Field) error {
-	for _, field := range schema {
-		if _, err := duckDBType(field); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func New(dsn string) (*Warehouse, error) {
 	db, err := sql.Open("duckdb", dsn)
@@ -64,7 +48,19 @@ func New(dsn string) (*Warehouse, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	warehouse := &Warehouse{db: db, capabilities: capabilities}
+	schemaPlanner, err := engine.NewSchemaPlanner(capabilities, duckDBSchemaAdapterPlanner{})
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure DuckDB schema planner: %w", err)
+	}
+	loadPlanner, err := loadports.NewPlanner(capabilities, duckDBLoadAdapterPlanner{schemaPlanner: schemaPlanner})
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure DuckDB load planner: %w", err)
+	}
+	warehouse := &Warehouse{
+		db: db, capabilities: capabilities, schemaPlanner: schemaPlanner, loadPlanner: loadPlanner,
+	}
 	if err := warehouse.Ping(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -114,9 +110,37 @@ func (w *Warehouse) DropDataset(ctx context.Context, projectID, datasetID string
 }
 
 func (w *Warehouse) CreateTable(ctx context.Context, table domain.Table) error {
-	if err := w.ValidateSchema(table.Schema); err != nil {
+	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
+		Operation:   engine.SchemaOperationCreate,
+		Target:      domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
+		AfterSchema: table.Schema,
+	})
+	if err != nil {
 		return err
 	}
+	plan, err := w.PlanSchema(ctx, intent)
+	if err != nil {
+		return err
+	}
+	return w.CreatePlannedTable(ctx, plan, table)
+}
+
+func (w *Warehouse) CreatePlannedTable(ctx context.Context, plan engine.SchemaPlan, table domain.Table) error {
+	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
+		Operation:   engine.SchemaOperationCreate,
+		Target:      domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
+		AfterSchema: table.Schema,
+	})
+	if err != nil {
+		return err
+	}
+	if err := w.schemaPlanner.ValidateBinding(plan, intent); err != nil {
+		return err
+	}
+	return w.createTable(ctx, table)
+}
+
+func (w *Warehouse) createTable(ctx context.Context, table domain.Table) error {
 	schemaSummary := fmt.Sprintf("%v", table.Schema)
 	started := observability.LogSideEffectStart(ctx, "duckdb", "create_table",
 		"project_id", table.ProjectID, "dataset_id", table.DatasetID, "table_id", table.ID,
@@ -173,6 +197,30 @@ func (w *Warehouse) DropTable(ctx context.Context, projectID, datasetID, tableID
 // ApplySchemaAdditions executes every legal addition in one DuckDB transaction.
 // DuckDB fills both top-level and nested STRUCT fields with NULL for existing
 // rows, matching the observable result of an additive BigQuery schema update.
+func (w *Warehouse) ApplyPlannedSchemaAdditions(
+	ctx context.Context,
+	plan engine.SchemaPlan,
+	table domain.Table,
+	additions []domain.SchemaAddition,
+) error {
+	if w == nil || w.schemaPlanner == nil {
+		return fmt.Errorf("%w: DuckDB schema planner is not configured", domain.ErrPrecondition)
+	}
+	plannedIntent := plan.Intent()
+	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
+		Operation:    engine.SchemaOperationAddColumns,
+		Target:       domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
+		BeforeSchema: plannedIntent.BeforeSchema(), AfterSchema: table.Schema, Additions: additions,
+	})
+	if err != nil {
+		return err
+	}
+	if err := w.schemaPlanner.ValidateBinding(plan, intent); err != nil {
+		return err
+	}
+	return w.ApplySchemaAdditions(ctx, table, additions)
+}
+
 func (w *Warehouse) ApplySchemaAdditions(ctx context.Context, table domain.Table, additions []domain.SchemaAddition) (err error) {
 	paths := make([]string, len(additions))
 	for index, addition := range additions {

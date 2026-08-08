@@ -9,6 +9,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
@@ -17,30 +18,62 @@ type fixedClock struct{ now time.Time }
 func (c fixedClock) Now() time.Time { return c.now }
 
 type fakeWarehouse struct {
-	datasets     []string
-	tables       []string
-	dropped      []string
-	additions    []domain.SchemaAddition
-	capabilities *ports.EngineCapabilities
-	plannerErr   error
-	plannerCalls int
+	datasets      []string
+	tables        []string
+	dropped       []string
+	additions     []domain.SchemaAddition
+	capabilities  *engine.Capabilities
+	schemaPlanner *engine.SchemaPlanner
+	plannerErr    error
+	plannerCalls  int
 }
 
 var _ ports.Warehouse = (*fakeWarehouse)(nil)
 
 func (*fakeWarehouse) Ping(context.Context) error { return nil }
 
-func (w *fakeWarehouse) EngineCapabilities() ports.EngineCapabilities {
-	if w.capabilities != nil {
-		return *w.capabilities
-	}
-	return ports.EngineCapabilities{
-		MaxDecimalPrecision: domain.SparkDecimalMaxPrecision,
-		MaxDecimalScale:     domain.SparkDecimalMaxScale,
-		SupportsStruct:      true,
-		SupportsRepeated:    true,
-	}
+type fakeWarehouseSchemaAdapter struct{ warehouse *fakeWarehouse }
+
+func (adapter fakeWarehouseSchemaAdapter) ValidateSchemaIntent(context.Context, engine.SchemaIntent) error {
+	adapter.warehouse.plannerCalls++
+	return adapter.warehouse.plannerErr
 }
+
+func (w *fakeWarehouse) PlanSchema(ctx context.Context, intent engine.SchemaIntent) (engine.SchemaPlan, error) {
+	if w.schemaPlanner == nil {
+		capabilities := fakeWarehouseCapabilities()
+		if w.capabilities != nil {
+			capabilities = *w.capabilities
+		}
+		planner, err := engine.NewSchemaPlanner(capabilities, fakeWarehouseSchemaAdapter{warehouse: w})
+		if err != nil {
+			return engine.SchemaPlan{}, err
+		}
+		w.schemaPlanner = planner
+	}
+	return w.schemaPlanner.Plan(ctx, intent)
+}
+
+func fakeWarehouseCapabilities() engine.Capabilities {
+	identity, err := engine.NewIdentity("fake", "1")
+	if err != nil {
+		panic(err)
+	}
+	capabilities, err := engine.NewCapabilities(engine.CapabilitiesDescriptor{
+		Identity:  identity,
+		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: domain.SparkDecimalMaxPrecision, MaxScale: domain.SparkDecimalMaxScale},
+		Composite: engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
+		DDL: map[engine.DDLOperation]engine.DDLCapability{
+			engine.DDLCreateTable: {Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement},
+			engine.DDLAddColumn:   {Guarantee: engine.DDLGuaranteeAtomicPhysicalTable, MaxFieldPathDepth: 15},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return capabilities
+}
+
 func (w *fakeWarehouse) ValidateSchema([]domain.Field) error {
 	w.plannerCalls++
 	return w.plannerErr
@@ -57,7 +90,15 @@ func (w *fakeWarehouse) CreateTable(_ context.Context, table domain.Table) error
 	w.tables = append(w.tables, table.ProjectID+"/"+table.DatasetID+"/"+table.ID)
 	return nil
 }
+func (w *fakeWarehouse) CreatePlannedTable(_ context.Context, _ engine.SchemaPlan, table domain.Table) error {
+	w.tables = append(w.tables, table.ProjectID+"/"+table.DatasetID+"/"+table.ID)
+	return nil
+}
 func (w *fakeWarehouse) ApplySchemaAdditions(_ context.Context, _ domain.Table, additions []domain.SchemaAddition) error {
+	w.additions = append(w.additions, additions...)
+	return nil
+}
+func (w *fakeWarehouse) ApplyPlannedSchemaAdditions(_ context.Context, _ engine.SchemaPlan, _ domain.Table, additions []domain.SchemaAddition) error {
 	w.additions = append(w.additions, additions...)
 	return nil
 }
@@ -129,11 +170,11 @@ func TestCatalogUseCaseDependsOnWarehousePort(t *testing.T) {
 func TestCatalogRejectsReplaceableEngineSchemaBoundsBeforeMutation(t *testing.T) {
 	ctx := context.Background()
 	repository := memory.NewCatalogRepository()
-	capabilities := ports.EngineCapabilities{
-		MaxDecimalPrecision: 10,
-		MaxDecimalScale:     4,
-		SupportsStruct:      true,
-		SupportsRepeated:    true,
+	descriptor := fakeWarehouseCapabilities().Descriptor()
+	descriptor.Decimal.MaxPrecision, descriptor.Decimal.MaxScale = 10, 4
+	capabilities, err := engine.NewCapabilities(descriptor)
+	if err != nil {
+		t.Fatal(err)
 	}
 	warehouse := &fakeWarehouse{capabilities: &capabilities}
 	service := NewCatalogService(repository, warehouse, fixedClock{now: time.Now()})
@@ -144,7 +185,7 @@ func TestCatalogRejectsReplaceableEngineSchemaBoundsBeforeMutation(t *testing.T)
 		t.Fatal(err)
 	}
 	precision, scale := int64(11), int64(2)
-	_, err := service.CreateTable(ctx, domain.Table{
+	_, err = service.CreateTable(ctx, domain.Table{
 		ProjectID: "test-project", DatasetID: "analytics", ID: "too_wide",
 		Schema: []domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale}},
 	})
@@ -163,7 +204,7 @@ func TestCatalogRejectsReplaceableEngineSchemaBoundsBeforeMutation(t *testing.T)
 		ProjectID: "test-project", DatasetID: "analytics", ID: "planner_rejected",
 		Schema: []domain.Field{{Name: "value", Type: "STRING"}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot plan") {
+	if !errors.Is(err, domain.ErrUnsupported) || strings.Contains(err.Error(), "cannot plan") {
 		t.Fatalf("planner error = %v", err)
 	}
 	if len(warehouse.tables) != 0 || warehouse.plannerCalls != 1 {
@@ -174,11 +215,11 @@ func TestCatalogRejectsReplaceableEngineSchemaBoundsBeforeMutation(t *testing.T)
 func TestCatalogValidatesReplaceableEngineBoundsBeforeSchemaEvolution(t *testing.T) {
 	ctx := context.Background()
 	repository := memory.NewCatalogRepository()
-	capabilities := ports.EngineCapabilities{
-		MaxDecimalPrecision: 10,
-		MaxDecimalScale:     4,
-		SupportsStruct:      true,
-		SupportsRepeated:    true,
+	descriptor := fakeWarehouseCapabilities().Descriptor()
+	descriptor.Decimal.MaxPrecision, descriptor.Decimal.MaxScale = 10, 4
+	capabilities, err := engine.NewCapabilities(descriptor)
+	if err != nil {
+		t.Fatal(err)
 	}
 	warehouse := &fakeWarehouse{capabilities: &capabilities}
 	service := NewCatalogService(repository, warehouse, fixedClock{now: time.Now()})

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 )
 
 const CapabilityRESTMetadataPatchV1 = "CAP-REST-METADATA-PATCH-V1"
@@ -91,6 +92,7 @@ func (s *CatalogService) UpdateTable(ctx context.Context, projectID, datasetID, 
 		}
 		return domain.Table{}, fmt.Errorf("%w: table %s/%s/%s expired", domain.ErrNotFound, projectID, datasetID, tableID)
 	}
+	beforeSchema := copyFields(table.Schema)
 	if patch.FriendlyName.Set {
 		table.FriendlyName = patch.FriendlyName.Value
 	}
@@ -114,13 +116,26 @@ func (s *CatalogService) UpdateTable(ctx context.Context, projectID, datasetID, 
 	if err := table.Validate(); err != nil {
 		return domain.Table{}, err
 	}
+	var schemaPlan engine.SchemaPlan
 	if patch.Schema.Set {
-		if err := validateEngineSchema(s.warehouse, table.Schema); err != nil {
+		operation := engine.SchemaOperationValidate
+		var plannedBefore []domain.Field
+		if len(additions) != 0 {
+			operation = engine.SchemaOperationAddColumns
+			plannedBefore = beforeSchema
+		}
+		schemaPlan, err = planEngineSchema(ctx, s.warehouse, engine.SchemaIntentDescriptor{
+			Operation:    operation,
+			Target:       domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
+			BeforeSchema: plannedBefore,
+			AfterSchema:  table.Schema, Additions: additions,
+		})
+		if err != nil {
 			return domain.Table{}, err
 		}
 	}
 	if len(additions) != 0 {
-		if err := s.warehouse.ApplySchemaAdditions(ctx, table, additions); err != nil {
+		if err := s.warehouse.ApplyPlannedSchemaAdditions(ctx, schemaPlan, table, additions); err != nil {
 			return domain.Table{}, err
 		}
 	}

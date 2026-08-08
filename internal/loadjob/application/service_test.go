@@ -14,9 +14,9 @@ import (
 	"time"
 
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 	"github.com/leeyh0216/go-bemu/internal/loadjob/ports"
-	catalogports "github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 type testClock struct{ value time.Time }
@@ -38,9 +38,10 @@ func (r *trackingJobRepository) CreateOrGet(ctx context.Context, job *domain.Job
 }
 
 type testObjectStore struct {
-	mu      sync.Mutex
-	objects map[string][]byte
-	opens   int
+	mu         sync.Mutex
+	objects    map[string][]byte
+	sizeOffset int64
+	opens      int
 }
 
 func (s *testObjectStore) Get(_ context.Context, uri string) (ports.ObjectInfo, error) {
@@ -48,14 +49,14 @@ func (s *testObjectStore) Get(_ context.Context, uri string) (ports.ObjectInfo, 
 	if !ok {
 		return ports.ObjectInfo{}, domain.ErrNotFound
 	}
-	return ports.ObjectInfo{URI: uri, Size: int64(len(payload))}, nil
+	return ports.ObjectInfo{URI: uri, Size: int64(len(payload)) + s.sizeOffset}, nil
 }
 func (s *testObjectStore) List(_ context.Context, pattern string) ([]ports.ObjectInfo, error) {
 	result := make([]ports.ObjectInfo, 0)
 	for uri, payload := range s.objects {
 		matched, _ := filepath.Match(pattern, uri)
 		if matched {
-			result = append(result, ports.ObjectInfo{URI: uri, Size: int64(len(payload))})
+			result = append(result, ports.ObjectInfo{URI: uri, Size: int64(len(payload)) + s.sizeOffset})
 		}
 	}
 	return result, nil
@@ -92,36 +93,100 @@ type gatedLoader struct {
 }
 
 type testLoadPlanner struct {
-	capabilities  *catalogports.EngineCapabilities
+	capabilities  *engine.Capabilities
 	plannerErr    error
 	loadPlanErr   error
 	plannerCalls  int
 	loadPlanCalls int
+	schemaPlanner *engine.SchemaPlanner
+	loadPlanner   *ports.Planner
 }
 
-func (planner *testLoadPlanner) EngineCapabilities() catalogports.EngineCapabilities {
+type testSchemaPlanAdapter struct{ planner *testLoadPlanner }
+
+func (adapter testSchemaPlanAdapter) ValidateSchemaIntent(context.Context, engine.SchemaIntent) error {
+	adapter.planner.plannerCalls++
+	return adapter.planner.plannerErr
+}
+
+type testLoadPlanAdapter struct{ planner *testLoadPlanner }
+
+func (adapter testLoadPlanAdapter) ValidateLoadRequest(context.Context, ports.LoadPlanRequest) (string, error) {
+	adapter.planner.loadPlanCalls++
+	if adapter.planner.loadPlanErr != nil {
+		return "", adapter.planner.loadPlanErr
+	}
+	return strings.Repeat("a", 64), nil
+}
+
+func (planner *testLoadPlanner) PlanSchema(ctx context.Context, intent engine.SchemaIntent) (engine.SchemaPlan, error) {
+	if err := planner.ensurePlanners(); err != nil {
+		return engine.SchemaPlan{}, err
+	}
+	return planner.schemaPlanner.Plan(ctx, intent)
+}
+
+func (planner *testLoadPlanner) PlanLoad(ctx context.Context, request ports.LoadPlanRequest) (ports.LoadPlan, error) {
+	if err := planner.ensurePlanners(); err != nil {
+		return ports.LoadPlan{}, err
+	}
+	return planner.loadPlanner.Plan(ctx, request)
+}
+
+func (planner *testLoadPlanner) validateExecution(ctx context.Context, plan ports.LoadPlan, objects []ports.LocalObject) error {
+	if err := planner.ensurePlanners(); err != nil {
+		return err
+	}
+	_, err := planner.loadPlanner.ValidateExecution(ctx, plan, objects)
+	return err
+}
+
+func (planner *testLoadPlanner) ensurePlanners() error {
+	if planner.schemaPlanner != nil && planner.loadPlanner != nil {
+		return nil
+	}
+	capabilities := testLoaderCapabilities()
 	if planner.capabilities != nil {
-		return *planner.capabilities
+		capabilities = *planner.capabilities
 	}
-	return catalogports.EngineCapabilities{
-		MaxDecimalPrecision: catalogdomain.SparkDecimalMaxPrecision,
-		MaxDecimalScale:     catalogdomain.SparkDecimalMaxScale,
-		SupportsStruct:      true,
-		SupportsRepeated:    true,
+	schemaPlanner, err := engine.NewSchemaPlanner(capabilities, testSchemaPlanAdapter{planner: planner})
+	if err != nil {
+		return err
 	}
+	loadPlanner, err := ports.NewPlanner(capabilities, testLoadPlanAdapter{planner: planner})
+	if err != nil {
+		return err
+	}
+	planner.schemaPlanner, planner.loadPlanner = schemaPlanner, loadPlanner
+	return nil
 }
 
-func (planner *testLoadPlanner) ValidateSchema([]catalogdomain.Field) error {
-	planner.plannerCalls++
-	return planner.plannerErr
+func testLoaderCapabilities() engine.Capabilities {
+	identity, err := engine.NewIdentity("test-loader", "1")
+	if err != nil {
+		panic(err)
+	}
+	capabilities, err := engine.NewCapabilities(engine.CapabilitiesDescriptor{
+		Identity:  identity,
+		Decimal:   engine.DecimalCapabilities{Supported: true, MaxPrecision: catalogdomain.SparkDecimalMaxPrecision, MaxScale: catalogdomain.SparkDecimalMaxScale},
+		Composite: engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
+		Transactions: map[engine.TransactionScope]bool{
+			engine.TransactionScopeSingleTable: true,
+		},
+		AtomicReplacements: map[engine.AtomicReplacementScope]bool{
+			engine.AtomicReplacementTable: true,
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return capabilities
 }
 
-func (planner *testLoadPlanner) ValidateLoadSchema(domain.SourceFormat, []domain.Field) error {
-	planner.loadPlanCalls++
-	return planner.loadPlanErr
-}
-
-func (l *gatedLoader) Load(ctx context.Context, _ ports.LoadRequest) (ports.LoadResult, error) {
+func (l *gatedLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objects []ports.LocalObject) (ports.LoadResult, error) {
+	if err := l.validateExecution(ctx, plan, objects); err != nil {
+		return ports.LoadResult{}, err
+	}
 	l.once.Do(func() { close(l.started) })
 	select {
 	case <-l.release:
@@ -131,10 +196,13 @@ func (l *gatedLoader) Load(ctx context.Context, _ ports.LoadRequest) (ports.Load
 	}
 }
 
-func (l *testLoader) Load(ctx context.Context, request ports.LoadRequest) (ports.LoadResult, error) {
+func (l *testLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objects []ports.LocalObject) (ports.LoadResult, error) {
+	if err := l.validateExecution(ctx, plan, objects); err != nil {
+		return ports.LoadResult{}, err
+	}
 	l.mu.Lock()
 	l.calls++
-	for _, object := range request.Objects {
+	for _, object := range objects {
 		l.paths = append(l.paths, object.Path)
 		if _, err := os.Stat(object.Path); err != nil {
 			l.mu.Unlock()
@@ -336,6 +404,31 @@ func TestServiceRecordsUnsupportedOptionsWithoutSideEffects(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsDownloadedSizeDriftBeforeLoaderExecution(t *testing.T) {
+	objects := &testObjectStore{
+		objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}, sizeOffset: 1,
+	}
+	loader := &testLoader{}
+	service := newTestService(t, objects, loader, time.Second)
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-size-drift"}
+	if _, err := service.Submit(context.Background(), reference, testConfiguration(domain.FormatParquet)); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "conditionNotMet" {
+		t.Fatalf("job = %+v", job)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	loader.mu.Lock()
+	executions := loader.calls
+	loader.mu.Unlock()
+	if opens != 1 || executions != 0 {
+		t.Fatalf("size drift boundary: opens=%d executions=%d", opens, executions)
+	}
+}
+
 func TestServicePersistsTimeoutAsTerminalError(t *testing.T) {
 	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
 	loader := &testLoader{block: true}
@@ -352,11 +445,11 @@ func TestServicePersistsTimeoutAsTerminalError(t *testing.T) {
 
 func TestServiceRejectsReplaceableEngineSchemaBoundsBeforeObjectAccess(t *testing.T) {
 	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
-	capabilities := catalogports.EngineCapabilities{
-		MaxDecimalPrecision: 10,
-		MaxDecimalScale:     4,
-		SupportsStruct:      true,
-		SupportsRepeated:    true,
+	descriptor := testLoaderCapabilities().Descriptor()
+	descriptor.Decimal.MaxPrecision, descriptor.Decimal.MaxScale = 10, 4
+	capabilities, err := engine.NewCapabilities(descriptor)
+	if err != nil {
+		t.Fatal(err)
 	}
 	loader := &testLoader{testLoadPlanner: testLoadPlanner{capabilities: &capabilities}}
 	precision, scale := int64(11), int64(2)
@@ -436,7 +529,7 @@ func TestServiceRejectsRecursiveSchemaDuplicatesBeforeJobPublication(t *testing.
 func TestServiceReportsStableNestedRepeatedParquetCapabilityBeforeObjectAccess(t *testing.T) {
 	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
 	loader := &testLoader{testLoadPlanner: testLoadPlanner{
-		loadPlanErr: fmt.Errorf("%w: capability=%s nested and repeated Parquet loads", domain.ErrUnsupported, domain.CapabilityParquetNestedRepeatedV1),
+		loadPlanErr: ports.UnsupportedLoadPlan(domain.CapabilityParquetNestedRepeatedV1),
 	}}
 	table := domain.Table{
 		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Location: "US",

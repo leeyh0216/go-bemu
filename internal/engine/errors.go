@@ -1,6 +1,10 @@
 package engine
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/leeyh0216/go-bemu/internal/domain"
+)
 
 type PlanningErrorCode string
 
@@ -64,4 +68,23 @@ func (err *PlanningError) Detail() string {
 		return ""
 	}
 	return err.detail
+}
+
+// Unwrap exposes only cataloged, engine-neutral domain classifications. Raw
+// adapter causes are deliberately never retained by PlanningError.
+func (err *PlanningError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	switch err.code {
+	case PlanningCodeInvalidDescriptor:
+		return domain.ErrInvalid
+	case PlanningCodeUnsupported:
+		return domain.ErrUnsupported
+	case PlanningCodeEngineMismatch, PlanningCodeMutationMismatch, PlanningCodeCapabilityDrift,
+		PlanningCodePlannerMismatch, PlanningCodePhysicalStateDrift:
+		return domain.ErrPrecondition
+	default:
+		return nil
+	}
 }

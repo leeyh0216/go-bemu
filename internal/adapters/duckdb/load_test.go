@@ -3,14 +3,25 @@ package duckdb
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	catalogDomain "github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 	loadDomain "github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
+	"github.com/leeyh0216/go-bemu/internal/observability"
 )
+
+type testLoadRequest struct {
+	Destination      loadDomain.Table
+	Schema           []loadDomain.Field
+	Objects          []loadports.LocalObject
+	SourceFormat     loadDomain.SourceFormat
+	WriteDisposition loadDomain.WriteDisposition
+}
 
 func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 	ctx := context.Background()
@@ -30,7 +41,7 @@ func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := createLoadParquet(t, warehouse, "SELECT 1::BIGINT AS id, 'one'::VARCHAR AS name")
-	request := loadports.LoadRequest{
+	request := testLoadRequest{
 		Destination: loadDomain.Table{
 			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
 			Schema:    []loadDomain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}, {Name: "name", Type: "STRING"}},
@@ -39,7 +50,7 @@ func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 		Objects: []loadports.LocalObject{{Path: first}}, SourceFormat: loadDomain.FormatParquet,
 		WriteDisposition: loadDomain.WriteAppend,
 	}
-	result, err := warehouse.Load(ctx, request)
+	result, err := executeTestLoad(ctx, warehouse, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +59,7 @@ func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 	}
 
 	request.WriteDisposition = loadDomain.WriteEmpty
-	if _, err := warehouse.Load(ctx, request); !errors.Is(err, loadDomain.ErrPrecondition) {
+	if _, err := executeTestLoad(ctx, warehouse, request); !errors.Is(err, loadDomain.ErrPrecondition) {
 		t.Fatalf("WRITE_EMPTY error = %v", err)
 	}
 	if got := tableRows(t, warehouse); got != 1 {
@@ -58,7 +69,7 @@ func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 	second := createLoadParquet(t, warehouse, "SELECT 2::BIGINT AS id, 'two'::VARCHAR AS name UNION ALL SELECT 3, 'three'")
 	request.Objects = []loadports.LocalObject{{Path: second}}
 	request.WriteDisposition = loadDomain.WriteTruncate
-	result, err = warehouse.Load(ctx, request)
+	result, err = executeTestLoad(ctx, warehouse, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +95,7 @@ func TestParquetLoadRejectsSchemaMismatchWithoutChangingDestination(t *testing.T
 		t.Fatal(err)
 	}
 	parquet := createLoadParquet(t, warehouse, "SELECT 'not-an-integer'::VARCHAR AS id")
-	_, err = warehouse.Load(ctx, loadports.LoadRequest{
+	_, err = executeTestLoad(ctx, warehouse, testLoadRequest{
 		Destination: loadDomain.Table{Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}},
 		Schema:      []loadDomain.Field{{Name: "id", Type: "INT64"}}, Objects: []loadports.LocalObject{{Path: parquet}},
 		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteTruncate,
@@ -119,7 +130,7 @@ func TestParquetLoadPreservesNumericAndBigNumericPhysicalDecimals(t *testing.T) 
 		t.Fatal(err)
 	}
 	parquet := createLoadParquet(t, warehouse, "SELECT 123.4500::DECIMAL(20,4) AS numeric_value, 12345678901234567890.123456789012345678::DECIMAL(38,18) AS bignumeric_value")
-	result, err := warehouse.Load(ctx, loadports.LoadRequest{
+	result, err := executeTestLoad(ctx, warehouse, testLoadRequest{
 		Destination: loadDomain.Table{
 			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
 			Schema:    fields,
@@ -163,7 +174,7 @@ func TestParquetLoadRejectsDecimalRoundingBeforeDestinationMutation(t *testing.T
 		t.Fatal(err)
 	}
 	parquet := createLoadParquet(t, warehouse, "SELECT 1.025::DECIMAL(6,3) AS amount")
-	_, err = warehouse.Load(ctx, loadports.LoadRequest{
+	_, err = executeTestLoad(ctx, warehouse, testLoadRequest{
 		Destination: loadDomain.Table{
 			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Schema: fields,
 		},
@@ -195,8 +206,8 @@ func TestParquetLoadRejectsUnsupportedSchemaBeforeReadingObjects(t *testing.T) {
 		{Name: "location", Type: "GEOGRAPHY"},
 		{Name: "amounts", Type: "NUMERIC", Mode: "REPEATED"},
 	} {
-		_, err := warehouse.Load(context.Background(), loadports.LoadRequest{
-			Destination: loadDomain.Table{Reference: loadDomain.TableReference{ProjectID: "p", DatasetID: "d", TableID: "t"}},
+		_, err := executeTestLoad(context.Background(), warehouse, testLoadRequest{
+			Destination: loadDomain.Table{Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}},
 			Schema:      []loadDomain.Field{field}, Objects: []loadports.LocalObject{{Path: "/path/that/must/not/be-read.parquet"}},
 			SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
 		})
@@ -207,6 +218,120 @@ func TestParquetLoadRejectsUnsupportedSchemaBeforeReadingObjects(t *testing.T) {
 			t.Fatalf("repeated Parquet error = %v, want stable capability", err)
 		}
 	}
+}
+
+func TestDuckDBLoadPlanningRejectsSchemaAndArtifactDriftBeforeTransaction(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	foreign, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = foreign.Close() })
+	schema := []loadDomain.Field{{Name: "id", Type: "INT64"}}
+	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
+		Operation:   engine.SchemaOperationValidate,
+		Target:      catalogDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		AfterSchema: schema,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignSchemaPlan, err := foreign.PlanSchema(ctx, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := loadports.LoadPlanRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+			Schema:    schema,
+		},
+		SchemaPlan: foreignSchemaPlan, SourceFormat: loadDomain.FormatParquet,
+		WriteDisposition: loadDomain.WriteAppend,
+		Objects:          []loadports.ResolvedObject{{Fingerprint: strings.Repeat("b", 64), Size: 7}},
+	}
+	if _, err := warehouse.PlanLoad(ctx, request); !errors.Is(err, loadDomain.ErrPrecondition) {
+		t.Fatalf("foreign schema plan error = %v", err)
+	}
+
+	schemaPlan, err := warehouse.PlanSchema(ctx, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SchemaPlan = schemaPlan
+	request.Destination.Schema = []loadDomain.Field{{Name: "id", Type: "STRING"}}
+	if _, err := warehouse.PlanLoad(ctx, request); !errors.Is(err, loadDomain.ErrPrecondition) {
+		t.Fatalf("schema drift error = %v", err)
+	}
+
+	request.Destination.Schema = schema
+	plan, err := warehouse.PlanLoad(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = warehouse.ExecuteLoad(ctx, plan, []loadports.LocalObject{{
+		Path: "/path/that/must/not/be-read.parquet", Fingerprint: strings.Repeat("b", 64), Size: 8,
+	}})
+	if !errors.Is(err, loadDomain.ErrPrecondition) {
+		t.Fatalf("artifact size drift error = %v", err)
+	}
+	assertNoLoadStagingTables(t, warehouse)
+}
+
+func executeTestLoad(ctx context.Context, warehouse *Warehouse, request testLoadRequest) (loadports.LoadResult, error) {
+	if len(request.Destination.Schema) == 0 {
+		request.Destination.Schema = catalogDomain.CloneFields(request.Schema)
+	}
+	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
+		Operation: engine.SchemaOperationValidate,
+		Target: catalogDomain.TableReference{
+			ProjectID: request.Destination.Reference.ProjectID,
+			DatasetID: request.Destination.Reference.DatasetID,
+			TableID:   request.Destination.Reference.TableID,
+		},
+		AfterSchema: request.Destination.Schema,
+	})
+	if err != nil {
+		return loadports.LoadResult{}, translateCatalogLoadTestError(err)
+	}
+	schemaPlan, err := warehouse.PlanSchema(ctx, intent)
+	if err != nil {
+		return loadports.LoadResult{}, translateCatalogLoadTestError(err)
+	}
+	resolved := make([]loadports.ResolvedObject, len(request.Objects))
+	local := append([]loadports.LocalObject(nil), request.Objects...)
+	for index := range local {
+		local[index].Fingerprint = strings.TrimPrefix(
+			observability.Digest([]byte("load-test\x00"+local[index].Path)), "sha256:",
+		)
+		if info, statErr := os.Stat(local[index].Path); statErr == nil {
+			local[index].Size = info.Size()
+		}
+		resolved[index] = loadports.ResolvedObject{Fingerprint: local[index].Fingerprint, Size: local[index].Size}
+	}
+	plan, err := warehouse.PlanLoad(ctx, loadports.LoadPlanRequest{
+		Destination: request.Destination, SchemaPlan: schemaPlan,
+		SourceFormat: request.SourceFormat, WriteDisposition: request.WriteDisposition,
+		Objects: resolved,
+	})
+	if err != nil {
+		return loadports.LoadResult{}, err
+	}
+	return warehouse.ExecuteLoad(ctx, plan, local)
+}
+
+func translateCatalogLoadTestError(err error) error {
+	if errors.Is(err, catalogDomain.ErrUnsupported) {
+		return loadports.UnsupportedLoadPlan(catalogDomain.CapabilityEngineSchemaV1)
+	}
+	if errors.Is(err, catalogDomain.ErrInvalid) {
+		return loadports.InvalidLoadPlan()
+	}
+	return loadports.StaleLoadPlan()
 }
 
 func assertNoLoadStagingTables(t *testing.T, warehouse *Warehouse) {

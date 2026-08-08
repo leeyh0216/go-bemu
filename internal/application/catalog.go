@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 	tabledatabudget "github.com/leeyh0216/go-bemu/internal/tabledata"
@@ -316,7 +317,12 @@ func (s *CatalogService) createTable(ctx context.Context, table domain.Table) (d
 	if err := table.Validate(); err != nil {
 		return domain.Table{}, err
 	}
-	if err := validateEngineSchema(s.warehouse, table.Schema); err != nil {
+	schemaPlan, err := planEngineSchema(ctx, s.warehouse, engine.SchemaIntentDescriptor{
+		Operation:   engine.SchemaOperationCreate,
+		Target:      domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
+		AfterSchema: table.Schema,
+	})
+	if err != nil {
 		return domain.Table{}, err
 	}
 	dataset, err := s.catalog.GetDataset(ctx, table.ProjectID, table.DatasetID)
@@ -347,7 +353,7 @@ func (s *CatalogService) createTable(ctx context.Context, table domain.Table) (d
 	}
 	table.CreatedAt = now
 	table.UpdatedAt = now
-	if err := s.warehouse.CreateTable(ctx, table); err != nil {
+	if err := s.warehouse.CreatePlannedTable(ctx, schemaPlan, table); err != nil {
 		return domain.Table{}, err
 	}
 	if err := s.catalog.CreateTable(ctx, table); err != nil {
@@ -503,7 +509,11 @@ func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table dom
 	if err := table.Validate(); err != nil {
 		return err
 	}
-	if err := validateEngineSchema(s.warehouse, table.Schema); err != nil {
+	if _, err := planEngineSchema(ctx, s.warehouse, engine.SchemaIntentDescriptor{
+		Operation:   engine.SchemaOperationValidate,
+		Target:      domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
+		AfterSchema: table.Schema,
+	}); err != nil {
 		return err
 	}
 	dataset, err := s.catalog.GetDataset(ctx, table.ProjectID, table.DatasetID)
@@ -528,11 +538,25 @@ func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table dom
 	return s.catalog.CreateTable(ctx, table)
 }
 
-func validateEngineSchema(planner ports.SchemaPlanner, schema []domain.Field) error {
-	if err := planner.EngineCapabilities().ValidateSchema(schema); err != nil {
-		return err
+func planEngineSchema(
+	ctx context.Context,
+	planner ports.SchemaPlanner,
+	descriptor engine.SchemaIntentDescriptor,
+) (engine.SchemaPlan, error) {
+	intent, err := engine.NewSchemaIntent(descriptor)
+	if err != nil {
+		return engine.SchemaPlan{}, err
 	}
-	return planner.ValidateSchema(schema)
+	plan, err := planner.PlanSchema(ctx, intent)
+	if err == nil {
+		return plan, nil
+	}
+	if errors.Is(err, domain.ErrUnsupported) {
+		return engine.SchemaPlan{}, fmt.Errorf(
+			"%w: capability=%s: %v", domain.ErrUnsupported, domain.CapabilityEngineSchemaV1, err,
+		)
+	}
+	return engine.SchemaPlan{}, err
 }
 
 func (s *CatalogService) ListTables(ctx context.Context, projectID, datasetID string) ([]domain.Table, error) {

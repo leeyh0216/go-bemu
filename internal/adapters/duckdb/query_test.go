@@ -151,19 +151,19 @@ func TestWarehouseExecutesReservedQuotedColumnAndAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = warehouse.Close() })
-	if err := warehouse.CreateDataset(ctx, "p", "d"); err != nil {
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
 		t.Fatal(err)
 	}
 	if err := warehouse.CreateTable(ctx, domain.Table{
-		ProjectID: "p", DatasetID: "d", ID: "t",
+		ProjectID: "test-project", DatasetID: "dataset", ID: "items",
 		Schema: []domain.Field{{Name: "select", Type: "STRING"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := warehouse.Query(ctx, ports.QueryRequest{SQL: "INSERT INTO `p.d.t` (`select`) VALUES ('value `kept`')"}); err != nil {
+	if _, err := warehouse.Query(ctx, ports.QueryRequest{SQL: "INSERT INTO `test-project.dataset.items` (`select`) VALUES ('value `kept`')"}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := warehouse.Query(ctx, ports.QueryRequest{SQL: "SELECT `select` AS `from` FROM `p.d.t`"})
+	result, err := warehouse.Query(ctx, ports.QueryRequest{SQL: "SELECT `select` AS `from` FROM `test-project.dataset.items`"})
 	if err != nil {
 		t.Fatal(err)
 	}
