@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Sequence
+import urllib.request
 import xml.etree.ElementTree as ET
 
 
@@ -135,6 +136,33 @@ class RunnerAdapter(ABC):
 
 
 class PythonPytestAdapter(RunnerAdapter):
+    def prepare(self) -> None:
+        super().prepare()
+        expected = self.context.versions["client"]
+        wheel = next(
+            (artifact for artifact in self.context.case["artifacts"] if artifact["uri"].endswith(".whl")),
+            None,
+        )
+        if wheel is None:
+            raise ContractError("Python client case has no immutable wheel artifact")
+        wheel_path = _materialize_artifact(self.context, wheel)
+        try:
+            actual = importlib.metadata.version("google-cloud-bigquery")
+        except importlib.metadata.PackageNotFoundError:
+            actual = ""
+        if actual == expected:
+            return
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-deps", str(wheel_path)],
+            cwd=self.context.repository_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise ContractError("installing the case-declared Python wheel failed")
+
     def verify_identity(self) -> None:
         actual = importlib.metadata.version("google-cloud-bigquery")
         _require_equal("google-cloud-bigquery", actual, self.context.versions["client"])
@@ -172,22 +200,63 @@ class BQCLIAdapter(RunnerAdapter):
         return result
 
 
-class SparkPytestAdapter(RunnerAdapter):
+class SparkAdapter(RunnerAdapter):
+    connector_path: Path
+    connector_spec: dict[str, Any]
+
+    def prepare(self) -> None:
+        super().prepare()
+        artifact = next(
+            (
+                candidate
+                for candidate in self.context.case["artifacts"]
+                if candidate["id"].startswith("spark-bigquery-connector-")
+            ),
+            None,
+        )
+        if artifact is None:
+            raise ContractError("Spark case has no connector JAR artifact")
+        self.connector_path = _materialize_artifact(self.context, artifact)
+        self.connector_spec = {
+            "variant": "dsv1-with-dependencies-2.12",
+            "output": self.connector_path.name,
+            "size": self.connector_path.stat().st_size,
+            "sha256": artifact["sha256"],
+            "provider": "com.google.cloud.spark.bigquery.Scala212BigQueryRelationProvider",
+            "connectorVersion": self.context.versions["connector"],
+        }
+
+    def spark_environment(self) -> dict[str, str]:
+        environment = os.environ.copy()
+        environment["BQEMU_SPARK_CONNECTOR_JAR"] = str(self.connector_path)
+        environment["BQEMU_SPARK_CONNECTOR_SPEC_JSON"] = json.dumps(
+            self.connector_spec, sort_keys=True, separators=(",", ":")
+        )
+        return environment
+
+
+class SparkPytestAdapter(SparkAdapter):
     def verify_identity(self) -> None:
         _require_equal("PySpark", importlib.metadata.version("pyspark"), self.context.versions["spark"])
         _verify_case_artifacts(self.context)
 
     def execute_scenario(self) -> subprocess.CompletedProcess[str]:
-        return self._run(_spark_pytest_command(self.context, ["tests/spark/test_public_edge.py", "tests/spark/test_dsv2_streaming.py"]))
+        return self._run(
+            _spark_pytest_command(self.context, ["tests/spark/test_public_edge.py", "tests/spark/test_dsv2_streaming.py"]),
+            environment=self.spark_environment(),
+        )
 
 
-class SparkScalaShellAdapter(RunnerAdapter):
+class SparkScalaShellAdapter(SparkAdapter):
     def verify_identity(self) -> None:
         _require_equal("Spark distribution", importlib.metadata.version("pyspark"), self.context.versions["spark"])
         _verify_case_artifacts(self.context)
 
     def execute_scenario(self) -> subprocess.CompletedProcess[str]:
-        return self._run(_spark_pytest_command(self.context, ["tests/spark/test_scala_public_edge.py"]))
+        return self._run(
+            _spark_pytest_command(self.context, ["tests/spark/test_scala_public_edge.py"]),
+            environment=self.spark_environment(),
+        )
 
 
 ADAPTERS: dict[str, type[RunnerAdapter]] = {
@@ -237,12 +306,34 @@ def build_adapter(context: CaseContext) -> RunnerAdapter:
 def _verify_case_artifacts(context: CaseContext) -> None:
     for artifact in context.case["artifacts"]:
         if artifact["id"].startswith("spark-bigquery-connector-"):
-            filename = artifact["uri"].rsplit("/", 1)[-1]
-            path = context.repository_root / ".artifacts" / "spark" / filename
-            if not path.is_file():
-                raise ContractError(f"connector artifact is missing: {filename}")
+            path = _materialize_artifact(context, artifact)
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             _require_equal(f"artifact {artifact['id']}", digest, artifact["sha256"])
+
+
+def _materialize_artifact(context: CaseContext, artifact: dict[str, str]) -> Path:
+    uri = artifact["uri"]
+    if not uri.startswith("https://"):
+        raise ContractError(f"artifact {artifact['id']} is not an HTTPS download")
+    filename = uri.rsplit("/", 1)[-1]
+    cache = context.repository_root / ".artifacts" / "consumer-downloads"
+    cache.mkdir(parents=True, exist_ok=True)
+    target = cache / f"{artifact['sha256']}-{filename}"
+    if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == artifact["sha256"]:
+        return target
+    temporary = cache / f".{target.name}.{os.getpid()}.tmp"
+    digest = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(uri, timeout=float(os.getenv("BQEMU_ARTIFACT_TIMEOUT_SECONDS", "180"))) as response:
+            with temporary.open("wb") as output:
+                while chunk := response.read(1024 * 1024):
+                    digest.update(chunk)
+                    output.write(chunk)
+        _require_equal(f"artifact {artifact['id']}", digest.hexdigest(), artifact["sha256"])
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
 
 
 def collect_actual_events(context: CaseContext, scenarios: list[dict[str, Any]]) -> list[dict[str, Any]]:

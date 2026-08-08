@@ -35,6 +35,7 @@ class ArtifactSpec:
     size: int
     sha256: str
     provider: str
+    connector_version: str
 
 
 @dataclass(frozen=True)
@@ -46,8 +47,8 @@ class SelectedArtifact:
 class ArtifactClasspathError(RuntimeError):
     """Payload-safe connector classpath drift diagnostic."""
 
-    def __init__(self, *, stage: str, shape: str, fingerprint: str, fix_hint: str):
-        self.version = CONNECTOR_VERSION
+    def __init__(self, *, stage: str, shape: str, fingerprint: str, fix_hint: str, version: str = CONNECTOR_VERSION):
+        self.version = version
         self.operation = "spark-connector-classpath"
         self.stage = stage
         self.shape = shape
@@ -102,11 +103,12 @@ def load_artifact_specs(repository_root: Path) -> dict[str, ArtifactSpec]:
     for lock_path, default_variant in locks:
         with lock_path.open("r", encoding="utf-8") as stream:
             lock = json.load(stream)
-        if lock.get("connectorVersion") != CONNECTOR_VERSION:
+        connector_version = str(lock.get("connectorVersion", ""))
+        if not connector_version:
             raise ArtifactClasspathError(
                 stage="lock-version",
-                shape="connector-version-drift",
-                fingerprint=_safe_fingerprint("lock-version", str(lock.get("connectorVersion"))),
+                shape="missing-connector-version",
+                fingerprint=_safe_fingerprint("lock-version", "missing"),
                 fix_hint="review-and-refresh-the-variant-lock",
             )
         artifacts = lock.get("artifacts", [])
@@ -129,16 +131,21 @@ def load_artifact_specs(repository_root: Path) -> dict[str, ArtifactSpec]:
             size=int(artifact["size"]),
             sha256=str(artifact["sha256"]),
             provider=provider,
+            connector_version=connector_version,
         )
     return specs
 
 
 def enforce_connector_classpath(
-    paths: list[Path], *, expected_variant: str, repository_root: Path
+    paths: list[Path], *, expected_variant: str, repository_root: Path, expected_spec: ArtifactSpec | None = None
 ) -> SelectedArtifact:
     """Return the sole exact connector or fail without exposing local paths."""
 
-    specs = load_artifact_specs(repository_root)
+    specs = (
+        {expected_variant: expected_spec}
+        if expected_spec is not None
+        else load_artifact_specs(repository_root)
+    )
     if expected_variant not in specs:
         raise ArtifactClasspathError(
             stage="variant-selection",
@@ -225,10 +232,10 @@ def _validate_jar_identity(path: Path, spec: ArtifactSpec) -> None:
         if "=" in line
         for key, value in (line.split("=", 1),)
     }
-    if providers != (spec.provider,) or versions.get("connector.version") != CONNECTOR_VERSION:
+    if providers != (spec.provider,) or versions.get("connector.version") != spec.connector_version:
         raise ArtifactClasspathError(
             stage="jar-identity",
-            shape=f"providers:{len(providers)},version-match:{versions.get('connector.version') == CONNECTOR_VERSION}",
+            shape=f"providers:{len(providers)},version-match:{versions.get('connector.version') == spec.connector_version}",
             fingerprint="sha256:" + spec.sha256,
             fix_hint="review-provider-and-version-resource-drift",
         )
