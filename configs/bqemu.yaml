@@ -8,6 +8,15 @@ defaults:
   projectId: local-project
   location: US
 
+# These resources are reconciled before the public listeners become ready.
+# Additional projects and datasets can be declared in the same list.
+bootstrap:
+  projects:
+    - id: local-project
+      friendlyName: BQEMU default project
+      description: ""
+      datasets: []
+
 server:
   http:
     address: ":9050"

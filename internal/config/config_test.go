@@ -93,6 +93,65 @@ func TestLoadRejectsMultipleDocumentsAndAmbiguousDuration(t *testing.T) {
 	}
 }
 
+func TestLoadBootstrapProjectsAndDatasets(t *testing.T) {
+	tableExpiration := int64(3_600_000)
+	path := writeConfig(t, `
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+bootstrap:
+  projects:
+    - id: primary-project
+      friendlyName: Primary
+      datasets:
+        - id: analytics
+          location: EU
+          labels:
+            environment: local
+          defaultTableExpirationMs: 3600000
+    - id: secondary-project
+      datasets:
+        - id: staging
+`)
+	result, err := load([]string{"--config", path}, lookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects := result.Config.Bootstrap.Projects
+	if len(projects) != 2 || len(projects[0].Datasets) != 1 || projects[0].Datasets[0].Location != "EU" ||
+		projects[0].Datasets[0].DefaultTableExpirationMs == nil ||
+		*projects[0].Datasets[0].DefaultTableExpirationMs != tableExpiration {
+		t.Fatalf("bootstrap configuration = %#v", projects)
+	}
+	if !strings.Contains(string(result.EffectiveYAML), "secondary-project") {
+		t.Fatalf("effective YAML omitted bootstrap resources: %s", result.EffectiveYAML)
+	}
+}
+
+func TestLoadRejectsDuplicateBootstrapResources(t *testing.T) {
+	for name, projects := range map[string]string{
+		"project": `
+    - id: repeated-project
+    - id: repeated-project`,
+		"dataset": `
+    - id: primary-project
+      datasets:
+        - id: repeated_dataset
+        - id: repeated_dataset`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeConfig(t, `
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+bootstrap:
+  projects:`+projects+"\n")
+			if _, err := load([]string{"--config", path}, lookup(nil)); err == nil ||
+				!strings.Contains(err.Error(), "duplicated") {
+				t.Fatalf("duplicate bootstrap error = %v", err)
+			}
+		})
+	}
+}
+
 func TestPublicAuthenticationConfigurationIsNotPartOfRuntimeContract(t *testing.T) {
 	if _, err := load([]string{"--set", "auth.mode=disabled"}, lookup(nil)); err == nil ||
 		!strings.Contains(err.Error(), `unknown configuration path "auth.mode"`) {
