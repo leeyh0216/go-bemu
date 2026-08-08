@@ -104,7 +104,33 @@ def create_dataset(endpoint: str, settings: Settings, dataset: str) -> None:
     )
 
 
-def create_table(endpoint: str, settings: Settings, dataset: str, table: str) -> None:
+def create_table(
+    endpoint: str,
+    settings: Settings,
+    dataset: str,
+    table: str,
+    *,
+    partitioned: bool = False,
+) -> None:
+    fields = [
+        {"name": "id", "type": "INTEGER", "mode": "NULLABLE"},
+        {"name": "name", "type": "STRING", "mode": "NULLABLE"},
+        {"name": "active", "type": "BOOLEAN", "mode": "NULLABLE"},
+    ]
+    if partitioned:
+        fields.append(
+            {"name": "partition_date", "type": "DATE", "mode": "NULLABLE"}
+        )
+    resource: dict[str, Any] = {
+        "tableReference": {
+            "projectId": settings.project,
+            "datasetId": dataset,
+            "tableId": table,
+        },
+        "schema": {"fields": fields},
+    }
+    if partitioned:
+        resource["timePartitioning"] = {"type": "DAY", "field": "partition_date"}
     request_json(
         endpoint,
         "POST",
@@ -113,20 +139,39 @@ def create_table(endpoint: str, settings: Settings, dataset: str, table: str) ->
         service="bigquery",
         model_version="current-source",
         timeout=settings.http_timeout,
+        payload=resource,
+    )
+
+
+def seed_dynamic_partition_destination(
+    endpoint: str, settings: Settings, dataset: str, table: str
+) -> None:
+    response = request_json(
+        endpoint,
+        "POST",
+        f"/bigquery/v2/projects/{settings.project}/queries",
+        operation="bigquery.jobs.query",
+        service="bigquery",
+        model_version="current-source",
+        timeout=settings.http_timeout,
         payload={
-            "tableReference": {
-                "projectId": settings.project,
-                "datasetId": dataset,
-                "tableId": table,
-            },
-            "schema": {
-                "fields": [
-                    {"name": "id", "type": "INTEGER", "mode": "NULLABLE"},
-                    {"name": "name", "type": "STRING", "mode": "NULLABLE"},
-                    {"name": "active", "type": "BOOLEAN", "mode": "NULLABLE"},
-                ]
-            },
+            "query": (
+                f"INSERT INTO `{settings.project}.{dataset}.{table}` VALUES "
+                "(-1, 'old-one', true, DATE '2026-01-01'), "
+                "(-2, 'old-two', false, DATE '2026-01-01'), "
+                "(-3, 'keep', true, DATE '2026-01-02')"
+            ),
+            "useLegacySql": False,
         },
+    )
+    require(
+        isinstance(response, dict)
+        and response.get("jobComplete") is True
+        and "errors" not in response,
+        case="spark-indirect-dynamic-overwrite",
+        operation="seed-destination",
+        shape="incomplete-query",
+        observed=response,
     )
 
 
@@ -135,6 +180,8 @@ def load_statistics(
     settings: Settings,
     dataset: str,
     table: str,
+    *,
+    allow_temporary_destination: bool = False,
 ) -> dict[str, int]:
     response = request_json(
         endpoint,
@@ -154,11 +201,18 @@ def load_statistics(
             load = job.get("configuration", {}).get("load")
             destination = load.get("destinationTable") if isinstance(load, dict) else None
             status = job.get("status")
-            if destination == {
+            destination_matches = destination == {
                 "projectId": settings.project,
                 "datasetId": dataset,
                 "tableId": table,
-            } and (
+            }
+            if allow_temporary_destination and isinstance(destination, dict):
+                destination_matches = (
+                    destination.get("projectId") == settings.project
+                    and destination.get("datasetId") == dataset
+                    and isinstance(destination.get("tableId"), str)
+                )
+            if destination_matches and (
                 isinstance(status, dict)
                 and status.get("state") == "DONE"
                 and "errorResult" not in status
@@ -484,6 +538,41 @@ def table_row_count(endpoint: str, settings: Settings, dataset: str, table: str)
     return len(rows) if isinstance(rows, list) else -1
 
 
+def table_row_ids(
+    endpoint: str, settings: Settings, dataset: str, table: str
+) -> list[int]:
+    resource = request_json(
+        endpoint,
+        "GET",
+        f"/bigquery/v2/projects/{settings.project}/datasets/{dataset}/tables/{table}/data?maxResults=100",
+        operation="bigquery.tabledata.list",
+        service="bigquery",
+        model_version="current-source",
+        timeout=settings.http_timeout,
+    )
+    rows = resource.get("rows") if isinstance(resource, dict) else None
+    require(
+        isinstance(rows, list),
+        case="spark-indirect-dynamic-overwrite",
+        operation="destination-rows",
+        shape="invalid-tabledata",
+        observed=resource,
+    )
+    values: list[int] = []
+    for row in rows:
+        cells = row.get("f") if isinstance(row, dict) else None
+        value = cells[0].get("v") if isinstance(cells, list) and cells else None
+        require(
+            isinstance(value, str) and value.lstrip("-").isdigit(),
+            case="spark-indirect-dynamic-overwrite",
+            operation="destination-rows",
+            shape="invalid-id",
+            observed=value,
+        )
+        values.append(int(value))
+    return sorted(values)
+
+
 def run_python_case(
     settings: Settings,
     endpoint: str,
@@ -636,6 +725,7 @@ def run_pyspark_case(
         == {
             "connector": versions["connector"],
             "entrypoint": "pyspark",
+            "mode": "dynamic-overwrite",
             "partitions": 4,
             "rows": 8,
             "spark": versions["spark"],
@@ -771,6 +861,17 @@ def assert_flow(result: CaseResult) -> None:
         shape="missing-jobs-get",
         observed=operations,
     )
+    if result.case in {"pyspark", "scala-spark"}:
+        require(
+            operations.count("bigquery.tables.insert") == 1
+            and operations.count("bigquery.jobs.insert") == 2
+            and operations.count("bigquery.jobs.get") >= 2
+            and operations.count("bigquery.jobs.getQueryResults") >= 1,
+            case=result.case,
+            operation="dynamic-partition-flow",
+            shape="temporary-load-then-script",
+            observed=operations,
+        )
     write_calls = [operation for operation in operations if operation in STORAGE_WRITE_OPERATIONS]
     require(
         not write_calls,
@@ -1023,7 +1124,18 @@ def run_case(
             )
             endpoint = emulator.start()
             create_dataset(endpoint, settings, dataset)
-            create_table(endpoint, settings, dataset, table)
+            spark_dynamic = case in {"pyspark", "scala-spark"}
+            create_table(
+                endpoint,
+                settings,
+                dataset,
+                table,
+                partitioned=spark_dynamic,
+            )
+            if spark_dynamic:
+                seed_dynamic_partition_destination(
+                    endpoint, settings, dataset, table
+                )
             negative_option = None
             invalid_inputs: list[dict[str, Any]] = []
             if case == "python":
@@ -1093,7 +1205,13 @@ def run_case(
                 consumer_load = load_proxy.entries[load_start:load_end]
 
                 row_count = table_row_count(endpoint, settings, dataset, table)
-                statistics = load_statistics(endpoint, settings, dataset, table)
+                statistics = load_statistics(
+                    endpoint,
+                    settings,
+                    dataset,
+                    table,
+                    allow_temporary_destination=spark_dynamic,
+                )
                 if client_statistics:
                     require(
                         client_statistics == statistics,
@@ -1135,13 +1253,23 @@ def run_case(
                     status="failed",
                 )
                 raise
+            destination_rows = expected_rows + 1 if spark_dynamic else expected_rows
             require(
-                row_count == expected_rows,
+                row_count == destination_rows,
                 case=case,
                 operation="destination-row-count",
                 shape="row-count",
                 observed=row_count,
             )
+            if spark_dynamic:
+                ids = table_row_ids(endpoint, settings, dataset, table)
+                require(
+                    ids == [-3, *range(8)],
+                    case=case,
+                    operation="dynamic-partition-result",
+                    shape="touched-vs-untouched",
+                    observed=ids,
+                )
             result = CaseResult(
                 case=case,
                 consumer=consumer,
@@ -1179,6 +1307,7 @@ def run_case(
                 "runtimeVersions": versions,
                 "expectedFiles": result.expected_files,
                 "expectedRows": result.expected_rows,
+                "expectedDestinationRows": destination_rows,
                 "consumerOperations": list(result.public_operations),
                 "storageWriteCalls": sum(
                     operation in STORAGE_WRITE_OPERATIONS

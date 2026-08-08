@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import traceback
+from datetime import date
 
 from pyspark.sql import SparkSession
 
@@ -64,8 +65,11 @@ def main() -> int:
         if not str(scala_version).startswith(versions["scalaBinary"] + "."):
             raise RuntimeError("unexpected Scala binary version")
         frame = spark.createDataFrame(
-            [(index, f"row-{index}", index % 2 == 0) for index in range(8)],
-            ["id", "name", "active"],
+            [
+                (index, f"row-{index}", index % 2 == 0, date(2026, 1, 1))
+                for index in range(8)
+            ],
+            ["id", "name", "active", "partition_date"],
         ).repartition(4)
         stage = "write"
         writer = frame.write.format("bigquery")
@@ -78,18 +82,20 @@ def main() -> int:
             "temporaryGcsBucket": arguments.bucket,
             "writeMethod": "indirect",
             "intermediateFormat": "parquet",
+            "spark.sql.sources.partitionOverwriteMode": "DYNAMIC",
             "httpConnectTimeout": "30000",
             "httpReadTimeout": "30000",
             "httpMaxRetry": "0",
         }
         for key, value in options.items():
             writer = writer.option(key, value)
-        writer.mode("append").save(arguments.destination)
+        writer.mode("overwrite").save(arguments.destination)
         print(
             json.dumps(
                 {
                     "connector": versions["connector"],
                     "entrypoint": "pyspark",
+                    "mode": "dynamic-overwrite",
                     "partitions": 4,
                     "rows": 8,
                     "spark": spark.version,

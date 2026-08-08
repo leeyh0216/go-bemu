@@ -48,6 +48,10 @@
       "kind": "source",
       "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/BigQueryIndirectDataSourceWriterContext.java"
     },
+    "indirect-write-helper": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/BigQueryWriteHelper.java"
+    },
     "streaming-sink": {
       "kind": "source",
       "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/BigQueryStreamingSink.java"
@@ -1557,6 +1561,31 @@
       ],
       "issueRef": "write",
       "limitation": "Parquet load exists behind an explicit object-store endpoint; Spark GCS staging and cleanup are not verified."
+    },
+    {
+      "id": "SBQ-WRITE-INDIRECT-DYNAMIC-OVERWRITE-V1",
+      "flow": "write-indirect-load",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+gcs+load",
+        "execution": "batch",
+        "format": "PARQUET",
+        "delivery": "exactly-once",
+        "saveMode": "overwrite",
+        "readShape": "not-applicable",
+        "typeFamily": "temporal",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-4",
+        "tablePartitioning": "dynamic-overwrite"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "spark-config",
+        "indirect-write-helper",
+        "query-materialization"
+      ],
+      "issueRef": "overwrite",
+      "limitation": "The GCS Parquet staging, temporary load, and dynamic partition script require public-process evidence."
     },
     {
       "id": "SBQ-WRITE-INDIRECT-AVRO-APPEND-V1",

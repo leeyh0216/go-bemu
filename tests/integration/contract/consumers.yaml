@@ -239,18 +239,28 @@ scenarios:
     testEvidence: []
     operationIds:
       - bigquery.tables.get
+      - bigquery.tables.insert
       - bigquery.jobs.insert
       - bigquery.jobs.get
+      - bigquery.jobs.getQueryResults
     operationExpectations:
       - operationId: bigquery.tables.get
         min: 1
         max: 0
         after: []
-      - operationId: bigquery.jobs.insert
+      - operationId: bigquery.tables.insert
         min: 1
         max: 1
         after: [bigquery.tables.get]
+      - operationId: bigquery.jobs.insert
+        min: 2
+        max: 2
+        after: [bigquery.tables.insert]
       - operationId: bigquery.jobs.get
+        min: 2
+        max: 0
+        after: [bigquery.jobs.insert]
+      - operationId: bigquery.jobs.getQueryResults
         min: 1
         max: 0
         after: [bigquery.jobs.insert]
@@ -259,18 +269,28 @@ scenarios:
     testEvidence: []
     operationIds:
       - bigquery.tables.get
+      - bigquery.tables.insert
       - bigquery.jobs.insert
       - bigquery.jobs.get
+      - bigquery.jobs.getQueryResults
     operationExpectations:
       - operationId: bigquery.tables.get
         min: 1
         max: 0
         after: []
-      - operationId: bigquery.jobs.insert
+      - operationId: bigquery.tables.insert
         min: 1
         max: 1
         after: [bigquery.tables.get]
+      - operationId: bigquery.jobs.insert
+        min: 2
+        max: 2
+        after: [bigquery.tables.insert]
       - operationId: bigquery.jobs.get
+        min: 2
+        max: 0
+        after: [bigquery.jobs.insert]
+      - operationId: bigquery.jobs.getQueryResults
         min: 1
         max: 0
         after: [bigquery.jobs.insert]
