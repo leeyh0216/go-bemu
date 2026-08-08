@@ -90,6 +90,51 @@ func TestCatalogMetadataSurvivesRepositoryRestart(t *testing.T) {
 	}
 }
 
+func TestRangePartitioningSurvivesRepositoryRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
+	repositories, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	project, dataset, _ := completeCatalogMetadata()
+	table := domain.Table{
+		ProjectID: project.ID, DatasetID: dataset.ID, ID: "range_partitioned",
+		Type: "TABLE", Location: dataset.Location,
+		Schema: []domain.Field{{Name: "bucket", Type: "INT64"}},
+		RangePartitioning: &domain.RangePartitioning{
+			Field: "bucket", Range: domain.Range{Start: -10, End: 100, Interval: 5},
+		},
+	}
+	catalog := repositories.Catalog()
+	if err := catalog.CreateProject(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.CreateDataset(ctx, dataset); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.CreateTable(ctx, table); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.Catalog().GetTable(ctx, table.ProjectID, table.DatasetID, table.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.RangePartitioning, table.RangePartitioning) || loaded.TimePartitioning != nil {
+		t.Fatalf("range partition round-trip mismatch: got=%#v want=%#v", loaded, table)
+	}
+}
+
 func TestCatalogUpdatesAndCascadesAreDurable(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
@@ -126,6 +171,7 @@ func TestCatalogUpdatesAndCascadesAreDurable(t *testing.T) {
 			}},
 		},
 	}
+	table.TimePartitioning = nil
 	table.Labels = nil
 	table.ClusteringFields = []string{}
 	table.UpdatedAt = table.UpdatedAt.Add(2 * time.Hour)
@@ -260,9 +306,6 @@ func completeCatalogMetadata() (domain.Project, domain.Dataset, domain.Table) {
 		Labels: map[string]string{"kind": "fixture"}, Type: "TABLE", Location: dataset.Location,
 		ExpirationTime:   &expires,
 		TimePartitioning: &domain.TimePartitioning{Type: "DAY", Field: "event_time", ExpirationMs: 3_600_000},
-		RangePartitioning: &domain.RangePartitioning{
-			Field: "bucket", Range: domain.Range{Start: -10, End: 100, Interval: 5},
-		},
 		ClusteringFields: []string{"payload.category", "event_time"},
 		CreatedAt:        created, UpdatedAt: updated,
 		Schema: []domain.Field{
