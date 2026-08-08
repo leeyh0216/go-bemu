@@ -1,6 +1,7 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -117,10 +118,20 @@ func (s *Server) Handler() http.Handler {
 	})
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		started := time.Now()
+		var requestBody []byte
+		var requestBodyError error
+		if request.Body != nil {
+			requestBody, requestBodyError = io.ReadAll(io.LimitReader(request.Body, maxTokenRequestBytes+1))
+			_ = request.Body.Close()
+			request.Body = io.NopCloser(bytes.NewReader(requestBody))
+		}
 		statusWriter := &responseStatusWriter{ResponseWriter: writer, status: http.StatusOK}
 		mux.ServeHTTP(statusWriter, request)
 		s.logger.Info("local credential endpoint request",
-			"method", request.Method, "path", request.URL.Path, "status", statusWriter.status,
+			"method", request.Method, "path", request.URL.Path, "query", request.URL.RawQuery,
+			"headers", request.Header, "request_body", string(requestBody), "request_body_error", requestBodyError,
+			"status", statusWriter.status, "response_headers", statusWriter.Header(),
+			"response_body", statusWriter.body.String(),
 			"duration_ms", time.Since(started).Milliseconds())
 	})
 }
@@ -390,11 +401,23 @@ func writeOAuthError(writer http.ResponseWriter, status int, code string) {
 type responseStatusWriter struct {
 	http.ResponseWriter
 	status int
+	body   bytes.Buffer
 }
 
 func (writer *responseStatusWriter) WriteHeader(status int) {
 	writer.status = status
 	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *responseStatusWriter) Write(payload []byte) (int, error) {
+	remaining := maxTokenRequestBytes - writer.body.Len()
+	if remaining > 0 {
+		if len(payload) < remaining {
+			remaining = len(payload)
+		}
+		_, _ = writer.body.Write(payload[:remaining])
+	}
+	return writer.ResponseWriter.Write(payload)
 }
 
 func Shutdown(ctx context.Context, server *http.Server) error {

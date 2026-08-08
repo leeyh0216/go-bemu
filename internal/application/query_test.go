@@ -39,7 +39,7 @@ func TestQueryServiceUsesConfiguredDefaultLocation(t *testing.T) {
 	}
 }
 
-func TestQueryJobLogsLabelShapeWithoutValues(t *testing.T) {
+func TestQueryJobLogsLabelValuesWithShape(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	var logs bytes.Buffer
@@ -59,12 +59,12 @@ func TestQueryJobLogsLabelShapeWithoutValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := logs.String()
-	if strings.Contains(output, secretValue) {
-		t.Fatalf("label value leaked into query logs: %s", output)
+	if !strings.Contains(output, secretValue) {
+		t.Fatalf("label value omitted from query logs: %s", output)
 	}
 	for _, field := range []string{"label_count", "label_keys_fingerprint", "configuration_fingerprint"} {
 		if !strings.Contains(output, field) {
-			t.Fatalf("safe query log is missing %q: %s", field, output)
+			t.Fatalf("query log is missing %q: %s", field, output)
 		}
 	}
 }

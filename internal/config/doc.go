@@ -7,6 +7,6 @@
 //
 // Precedence is defaults < YAML file < environment < repeated --set flags.
 // Unknown YAML fields fail fast so a misspelled setting cannot silently select
-// a default. Secret material is referenced by file path and is never embedded
-// in the effective configuration or its structured diagnostics.
+// a default. File-backed material remains referenced by path; the effective
+// configuration and structured diagnostics otherwise retain configured values.
 package config

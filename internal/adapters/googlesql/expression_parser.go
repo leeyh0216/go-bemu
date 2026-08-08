@@ -12,7 +12,7 @@ const expressionContextKind queryast.StatementKind = "EXPRESSION"
 
 // ParseExpression is the GoogleSQL predicate entrypoint used by APIs such as
 // Storage Read row_restriction. It never delegates syntax recognition to an
-// execution backend and never returns the submitted expression text.
+// execution backend.
 func (*Parser) ParseExpression(ctx context.Context, input string) (queryast.Expression, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -22,16 +22,16 @@ func (*Parser) ParseExpression(ctx context.Context, input string) (queryast.Expr
 	}
 	options, err := parserOptions()
 	if err != nil {
-		return nil, parserFailure()
+		return nil, parserFailure(err)
 	}
 	output, err := gsql.ParseExpression(input, options)
 	if err != nil || output == nil {
-		return nil, invalid("invalid GoogleSQL expression syntax")
+		return nil, invalidInput("invalid GoogleSQL expression syntax", input, err)
 	}
 	defer func() { runtime.KeepAlive(output) }()
 	external, err := output.Expression()
 	if err != nil || external == nil {
-		return nil, parserFailure()
+		return nil, parserFailure(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

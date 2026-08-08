@@ -3,6 +3,7 @@ package application
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -387,7 +388,7 @@ func TestAppendPreservesCallerCancellationCode(t *testing.T) {
 	}
 }
 
-func TestStorageWriteLogsFingerprintWithoutRawStreamOrRows(t *testing.T) {
+func TestStorageWriteLogsFingerprintAndRawStreamAndRows(t *testing.T) {
 	ctx, cancel := storageWriteTestContext(t)
 	defer cancel()
 	coordinator := newFakeCoordinator()
@@ -412,8 +413,8 @@ func TestStorageWriteLogsFingerprintWithoutRawStreamOrRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := output.String()
-	if strings.Contains(logs, stream.Name) || strings.Contains(logs, "raw-row-sentinel") {
-		t.Fatalf("Storage Write logs exposed raw stream or row payload: %s", logs)
+	if !strings.Contains(logs, stream.Name) || !strings.Contains(logs, base64.StdEncoding.EncodeToString(request.Rows[0])) {
+		t.Fatalf("Storage Write logs omitted raw stream or row payload: %s", logs)
 	}
 	if !strings.Contains(logs, `"stream_fingerprint":"`+digest([]byte(stream.Name))+`"`) {
 		t.Fatalf("Storage Write logs omit stream fingerprint: %s", logs)

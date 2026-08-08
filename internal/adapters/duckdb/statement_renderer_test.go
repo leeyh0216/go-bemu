@@ -289,7 +289,7 @@ func TestLowerDuckDBDMLStatements(t *testing.T) {
 
 func TestLowerDuckDBFailsClosedWithoutBindingsOrForUnsupportedFunctions(t *testing.T) {
 	t.Parallel()
-	t.Run("missing relation binding hides unresolved path", func(t *testing.T) {
+	t.Run("missing relation binding retains unresolved path", func(t *testing.T) {
 		fixture := newRendererASTFixture(t)
 		table := fixture.table([]string{"private-project", "private_dataset", "private_table"}, nil)
 		body := fixture.selectBody(fixture.selectItem(fixture.star(), ""))
@@ -312,8 +312,8 @@ func TestLowerDuckDBFailsClosedWithoutBindingsOrForUnsupportedFunctions(t *testi
 			t.Fatalf("error = %v, want ErrPrecondition", err)
 		}
 		for _, secret := range []string{"private-project", "private_dataset", "private_table"} {
-			if strings.Contains(err.Error(), secret) {
-				t.Fatalf("binding error leaked unresolved path %q: %v", secret, err)
+			if !strings.Contains(err.Error(), secret) {
+				t.Fatalf("binding error omitted unresolved path %q: %v", secret, err)
 			}
 		}
 	})
@@ -341,12 +341,12 @@ func TestLowerDuckDBFailsClosedWithoutBindingsOrForUnsupportedFunctions(t *testi
 		if strings.Contains(err.Error(), "/private/secret.csv") {
 			t.Fatalf("unsupported error leaked literal: %v", err)
 		}
-		if strings.Contains(err.Error(), "READ_CSV") || !strings.Contains(err.Error(), duckDBGoogleSQLLoweringUnsupportedV1) {
-			t.Fatalf("unsupported error leaked function or omitted capability code: %v", err)
+		if !strings.Contains(err.Error(), "READ_CSV") || !strings.Contains(err.Error(), duckDBGoogleSQLLoweringUnsupportedV1) {
+			t.Fatalf("unsupported error omitted function or capability code: %v", err)
 		}
 	})
 
-	t.Run("unknown operator is not reflected", func(t *testing.T) {
+	t.Run("unknown operator is reflected", func(t *testing.T) {
 		fixture := newRendererASTFixture(t)
 		const marker = "SECRET_OPERATOR_MARKER"
 		expression, err := queryast.NewBinaryExpression(
@@ -365,8 +365,8 @@ func TestLowerDuckDBFailsClosedWithoutBindingsOrForUnsupportedFunctions(t *testi
 			t.Fatal(err)
 		}
 		_, err = lowerDuckDBStatement(fixture.semanticStatement(statement, nil))
-		if !errors.Is(err, domain.ErrUnsupported) || strings.Contains(err.Error(), marker) {
-			t.Fatalf("operator error was not safely typed: %v", err)
+		if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), marker) {
+			t.Fatalf("operator error omitted diagnostic operator: %v", err)
 		}
 	})
 }

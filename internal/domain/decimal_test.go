@@ -116,12 +116,12 @@ func TestNormalizeDecimalValueRejectsGrammarAndPostRoundOverflow(t *testing.T) {
 	precision, scale := int64(3), int64(2)
 	field := Field{Name: "amount", Type: "NUMERIC", Precision: &precision, Scale: &scale}
 	for _, value := range []string{"1/2", "0x10", "0b10", "0o10", "0x1p2", "1_000", "NaN", "Inf", " 1.0"} {
-		if _, err := field.NormalizeDecimalValue(value); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), DecimalValueInvalidV1) || strings.Contains(err.Error(), value) {
+		if _, err := field.NormalizeDecimalValue(value); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), DecimalValueInvalidV1) || !strings.Contains(err.Error(), value) {
 			t.Fatalf("grammar error for %q = %v", value, err)
 		}
 	}
 	for _, value := range []string{"9.995", "-9.995"} {
-		if _, err := field.NormalizeDecimalValue(value); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), DecimalValueOverflowV1) || strings.Contains(err.Error(), value) {
+		if _, err := field.NormalizeDecimalValue(value); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), DecimalValueOverflowV1) || !strings.Contains(err.Error(), value) {
 			t.Fatalf("post-round overflow for %q = %v", value, err)
 		}
 	}

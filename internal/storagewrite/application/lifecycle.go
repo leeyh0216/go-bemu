@@ -85,14 +85,14 @@ func (s *Service) SweepOrphans(ctx context.Context) error {
 			s.logger.InfoContext(ctx, "pending write stream entered cleanup",
 				"event", "domain.transition", "operation", "storage_write.sweep_orphans",
 				"model_version", s.config.ProtocolModelVersion,
-				"stream_fingerprint", digest([]byte(item.name)),
+				"stream", item.name, "stream_fingerprint", digest([]byte(item.name)),
 				"state_before", cleanupPhaseActive, "state_after", cleanupPhasePending,
 				"retry_count", retryCount)
 		}
 		s.logger.InfoContext(ctx, "discarding orphaned write stream",
 			"event", "side_effect.before", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
-			"stream_fingerprint", digest([]byte(item.name)),
+			"stream", item.name, "stream_fingerprint", digest([]byte(item.name)),
 			"state_before", cleanupPhasePending, "state_after", cleanupPhasePending,
 			"retry_count", retryCount)
 		err := s.coordinator.DiscardPending(ctx, item.name)
@@ -116,13 +116,13 @@ func (s *Service) SweepOrphans(ctx context.Context) error {
 		attrs := []any{
 			"event", "side_effect.after", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
-			"stream_fingerprint", digest([]byte(item.name)), "success", err == nil,
+			"stream", item.name, "stream_fingerprint", digest([]byte(item.name)), "success", err == nil,
 			"state_before", cleanupPhasePending, "state_after", stateAfter,
 			"retry_count", retryCount,
 		}
 		if err != nil {
 			attrs = append(attrs, errorLogAttrs(err)...)
-			result = errors.Join(result, fmt.Errorf("discard pending stream %s: %w", digest([]byte(item.name)), err))
+			result = errors.Join(result, fmt.Errorf("discard pending stream %s: %w", item.name, err))
 		}
 		s.logger.InfoContext(ctx, "orphaned write stream discard completed", attrs...)
 	}
@@ -141,7 +141,7 @@ func (s *Service) RunCleanup(ctx context.Context) error {
 				s.logger.ErrorContext(ctx, "Storage Write orphan sweep failed",
 					"event", "side_effect.error", "operation", "storage_write.sweep_orphans",
 					"model_version", s.config.ProtocolModelVersion,
-					"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())))
+					"error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())))
 			}
 		}
 	}

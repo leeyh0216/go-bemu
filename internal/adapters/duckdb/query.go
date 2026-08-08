@@ -42,6 +42,7 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 		observability.LogSideEffectEnd(ctx, "duckdb", "query", started, err,
 			"project_id", request.ProjectID, "statement_type", queryStatementType(request.SQL),
 			"row_count", len(result.Rows), "affected_rows", result.AffectedRows,
+			"result", result.Rows, "schema", result.Columns,
 			"result_bytes", len(resultSummary), "result_digest", observability.Digest([]byte(resultSummary)),
 			"schema_fingerprint", observability.Digest([]byte(columnsSummary)), "transaction_mode", "autocommit")
 	}()

@@ -53,8 +53,7 @@ func isNilCatalogReader(reader ports.GoogleSQLCatalogReader) bool {
 }
 
 // Analyze returns only an owned semantic projection of the parsed and
-// resolved tree. Analyzer diagnostics are classified and redacted because
-// they may quote identifiers, literals, or the submitted SQL.
+// resolved tree. Analyzer diagnostics retain their original cause.
 func (gateway *Gateway) Analyze(ctx context.Context, request ports.QueryRequest) (semantic.Statement, error) {
 	if err := ctx.Err(); err != nil {
 		return semantic.Statement{}, err
@@ -76,20 +75,20 @@ func (gateway *Gateway) Analyze(ctx context.Context, request ports.QueryRequest)
 	}
 	options, err := analyzerOptions(snapshot.language)
 	if err != nil {
-		return semantic.Statement{}, analyzerBoundaryFailure()
+		return semantic.Statement{}, analyzerBoundaryFailure(err)
 	}
 	output, err := gsql.AnalyzeStatementFromParserAST(
 		document.statements[0], options, request.SQL, snapshot.root, snapshot.typeFactory,
 	)
 	if err != nil {
-		return semantic.Statement{}, classifyAnalysisError(err)
+		return semantic.Statement{}, fmt.Errorf("%w; input=%q", classifyAnalysisError(err), request.SQL)
 	}
 	if output == nil {
 		return semantic.Statement{}, analyzerBoundaryFailure()
 	}
 	resolved, err := output.ResolvedStatement()
 	if err != nil || resolved == nil {
-		return semantic.Statement{}, analyzerBoundaryFailure()
+		return semantic.Statement{}, analyzerBoundaryFailure(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return semantic.Statement{}, err
@@ -284,10 +283,10 @@ func registerTable(
 	table domain.Table,
 	serializationID int64,
 ) (registeredTable, *gsql.SimpleTable, error) {
-	if err := table.Validate(); err != nil {
-		return registeredTable{}, nil, canonicalSchemaFailure(err)
-	}
 	reference := domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID}
+	if err := table.Validate(); err != nil {
+		return registeredTable{}, nil, fmt.Errorf("canonical table %s schema=%#v: %w", tableFullName(reference), table.Schema, canonicalSchemaFailure(err))
+	}
 	fullName := tableFullName(reference)
 	tableNode, err := gsql.NewSimpleTable(table.ID, serializationID)
 	if err != nil {
@@ -500,7 +499,7 @@ func catalogReadFailure(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	return fmt.Errorf("%w: canonical catalog snapshot is unavailable", domain.ErrBackend)
+	return fmt.Errorf("%w: canonical catalog snapshot is unavailable: %v", domain.ErrBackend, err)
 }
 
 func canonicalSchemaFailure(err error) error {
@@ -514,11 +513,11 @@ func canonicalSchemaFailure(err error) error {
 		case strings.Contains(diagnostic, domain.GapGeographyUnsupportedV1):
 			capability = domain.GapGeographyUnsupportedV1
 		}
-		return fmt.Errorf("%w: capability=%s canonical schema is outside the analyzer contract", domain.ErrUnsupported, capability)
+		return fmt.Errorf("%w: capability=%s canonical schema is outside the analyzer contract: %v", domain.ErrUnsupported, capability, err)
 	case errors.Is(err, domain.ErrInvalid):
-		return fmt.Errorf("%w: canonical schema is invalid", domain.ErrInvalid)
+		return fmt.Errorf("%w: canonical schema is invalid: %v", domain.ErrInvalid, err)
 	default:
-		return analyzerBoundaryFailure()
+		return analyzerBoundaryFailure(err)
 	}
 }
 
@@ -526,11 +525,23 @@ func catalogShapeFailure() error {
 	return fmt.Errorf("%w: canonical catalog cannot be represented by the pinned analyzer", domain.ErrPrecondition)
 }
 
-func analyzerBoundaryFailure() error {
+func analyzerBoundaryFailure(causes ...error) error {
+	if len(causes) > 0 && causes[0] != nil {
+		return fmt.Errorf(
+			"%w: capability=%s GoogleSQL analyzer boundary failed: %v",
+			domain.ErrPrecondition, CapabilityResolvedStatementV1, causes[0],
+		)
+	}
 	return fmt.Errorf("%w: capability=%s GoogleSQL analyzer boundary failed", domain.ErrPrecondition, CapabilityResolvedStatementV1)
 }
 
-func analyzerBoundaryFailureAt(stage string) error {
+func analyzerBoundaryFailureAt(stage string, causes ...error) error {
+	if len(causes) > 0 && causes[0] != nil {
+		return fmt.Errorf(
+			"%w: capability=%s stage=%s GoogleSQL analyzer boundary failed: %v",
+			domain.ErrPrecondition, CapabilityResolvedStatementV1, stage, causes[0],
+		)
+	}
 	return fmt.Errorf(
 		"%w: capability=%s stage=%s GoogleSQL analyzer boundary failed",
 		domain.ErrPrecondition, CapabilityResolvedStatementV1, stage,
@@ -541,12 +552,12 @@ func classifyAnalysisError(err error) error {
 	diagnostic := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(diagnostic, "table not found"), strings.Contains(diagnostic, "not found: table"):
-		return fmt.Errorf("%w: code=%s GoogleSQL table resolution failed", domain.ErrNotFound, ErrorTableNotFoundV1)
+		return fmt.Errorf("%w: code=%s GoogleSQL table resolution failed: %v", domain.ErrNotFound, ErrorTableNotFoundV1, err)
 	case strings.Contains(diagnostic, "unrecognized name"), strings.Contains(diagnostic, "name not found inside"):
-		return fmt.Errorf("%w: code=%s GoogleSQL column resolution failed", domain.ErrInvalidQuery, ErrorColumnNotFoundV1)
+		return fmt.Errorf("%w: code=%s GoogleSQL column resolution failed: %v", domain.ErrInvalidQuery, ErrorColumnNotFoundV1, err)
 	case strings.Contains(diagnostic, "type not found"), strings.Contains(diagnostic, "unknown type"):
-		return fmt.Errorf("%w: code=%s GoogleSQL type resolution failed", domain.ErrInvalidQuery, ErrorTypeNotFoundV1)
+		return fmt.Errorf("%w: code=%s GoogleSQL type resolution failed: %v", domain.ErrInvalidQuery, ErrorTypeNotFoundV1, err)
 	default:
-		return fmt.Errorf("%w: code=%s GoogleSQL analysis rejected the statement", domain.ErrInvalidQuery, ErrorAnalysisInvalidV1)
+		return fmt.Errorf("%w: code=%s GoogleSQL analysis rejected the statement: %v", domain.ErrInvalidQuery, ErrorAnalysisInvalidV1, err)
 	}
 }

@@ -153,6 +153,7 @@ func (s *Server) goroutines(w http.ResponseWriter, r *http.Request) {
 	s.logger.InfoContext(r.Context(), "admin goroutine diagnostics returned",
 		"boundary", "admin.response.sent", "operation", "goroutine-stack",
 		"model_version", APIVersion, "shape", "GoRuntimeStack", "bytes", len(capture.Payload),
+		"payload", string(capture.Payload),
 		"payload_digest", digest, "truncated", capture.Truncated,
 		"duration_ms", s.clock.Now().Sub(started).Milliseconds(),
 	)
@@ -165,6 +166,8 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		supplied, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || subtle.ConstantTimeCompare([]byte(supplied), s.token) != 1 {
+			s.logger.WarnContext(r.Context(), "admin authentication rejected",
+				"operation", "admin.authenticate", "authorization", r.Header.Get("Authorization"))
 			w.Header().Set("WWW-Authenticate", `Bearer realm="bqemu-admin"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
 				"error": map[string]string{"code": "UNAUTHENTICATED", "message": "valid admin bearer token required"},

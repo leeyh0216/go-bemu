@@ -105,7 +105,7 @@ func TestLoadPlanRejectsForeignPlannerAndArtifactDrift(t *testing.T) {
 	}
 }
 
-func TestLoadPlannerRejectsInvalidInputBeforeAdapterAndStripsRawCause(t *testing.T) {
+func TestLoadPlannerRejectsInvalidInputBeforeAdapterAndRetainsRawCause(t *testing.T) {
 	schema := []domain.Field{{Name: "id", Type: "INT64"}}
 	capabilities, schemaPlan := testLoadSchemaPlan(t, schema)
 	const secret = "duckdb_sql_secret_marker"
@@ -122,8 +122,8 @@ func TestLoadPlannerRejectsInvalidInputBeforeAdapterAndStripsRawCause(t *testing
 
 	adapter.err = errors.New(secret)
 	_, err = planner.Plan(context.Background(), testLoadPlanRequest(schemaPlan, schema))
-	if !errors.Is(err, domain.ErrUnsupported) || strings.Contains(fmt.Sprint(err), secret) {
-		t.Fatalf("raw adapter error leaked: %v", err)
+	if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(fmt.Sprint(err), secret) {
+		t.Fatalf("raw adapter error was omitted: %v", err)
 	}
 	unsafe := UnsupportedLoadPlan(secret + " with spaces")
 	if strings.Contains(unsafe.Error(), secret) {

@@ -54,7 +54,7 @@ func (s *Service) RunCleanup(ctx context.Context) error {
 					"event", "side_effect.error", "side_effect", "snapshot.close",
 					"operation", "storage_read.expire_sessions",
 					"model_version", s.config.ProtocolModelVersion,
-					"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
+					"error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
 				)
 			}
 		}
@@ -114,10 +114,10 @@ func (s *Service) closeSnapshots(ctx context.Context, operation string, states [
 			"session", state.session.Name, "success", err == nil && budgetErr == nil,
 		}
 		if err != nil {
-			attrs = append(attrs, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())))
+			attrs = append(attrs, "error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())))
 		}
 		if budgetErr != nil {
-			attrs = append(attrs, "budget_error_type", fmt.Sprintf("%T", budgetErr), "budget_error_digest", digest([]byte(budgetErr.Error())))
+			attrs = append(attrs, "budget_error", budgetErr, "budget_error_type", fmt.Sprintf("%T", budgetErr), "budget_error_digest", digest([]byte(budgetErr.Error())))
 		}
 		s.logger.InfoContext(ctx, "read snapshot closed", attrs...)
 		result = errors.Join(result, err, budgetErr)
@@ -138,7 +138,7 @@ func (s *Service) closeUnstoredSnapshot(ctx context.Context, operation, reason s
 		"reason", reason, "success", err == nil,
 	}
 	if err != nil {
-		attrs = append(attrs, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())))
+		attrs = append(attrs, "error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())))
 	}
 	s.logger.InfoContext(ctx, "unstored read snapshot closed", attrs...)
 	return err

@@ -69,6 +69,8 @@ func (p *oauthConnectProxy) ServeHTTP(writer http.ResponseWriter, request *http.
 		p.logger.Info(
 			"local OAuth proxy request",
 			"method", request.Method,
+			"target", request.Host,
+			"headers", request.Header,
 			"target_allowed", targetAllowed,
 			"status", status,
 			"duration_ms", time.Since(started).Milliseconds(),

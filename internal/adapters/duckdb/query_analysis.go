@@ -1,8 +1,7 @@
 package duckdb
 
-// Query analysis extracts only the structural facts required by the
-// application boundary. SQL text remains inside this adapter and is never
-// emitted in logs.
+// Query analysis extracts the structural facts required by the application
+// boundary and retains the source SQL in operator diagnostics.
 //
 // Protocol/parser provenance:
 //   - GoogleSQL quoted identifiers and table paths:
@@ -61,7 +60,7 @@ func (w *Warehouse) AnalyzeQuery(ctx context.Context, request ports.QueryRequest
 	}
 	attrs := []any{
 		"event", "boundary.exit", "boundary", "duckdb.query_analysis",
-		"model_version", model, "query_bytes", len(request.SQL),
+		"model_version", model, "query", request.SQL, "query_bytes", len(request.SQL),
 		"query_digest", observability.Digest([]byte(request.SQL)),
 		"statement_type", queryStatementType(request.SQL),
 		"referenced_table_count", len(references), "mutation_target_count", len(analysis.MutationTargets),

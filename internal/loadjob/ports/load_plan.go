@@ -75,7 +75,7 @@ func (planner *Planner) Plan(ctx context.Context, request LoadPlanRequest) (Load
 	}
 	proof, err := planner.adapter.ValidateLoadRequest(ctx, cloneLoadPlanRequest(request))
 	if err != nil {
-		return LoadPlan{}, sanitizeAdapterPlanningError(err)
+		return LoadPlan{}, classifyAdapterPlanningError(err)
 	}
 	if !fingerprintValid(proof) {
 		return LoadPlan{}, fmt.Errorf("%w: load adapter proof is invalid", domain.ErrInvalid)
@@ -120,7 +120,7 @@ func (planner *Planner) ValidateExecution(
 	}
 	proof, err := planner.adapter.ValidateLoadRequest(ctx, cloneLoadPlanRequest(plan.request))
 	if err != nil {
-		return LoadPlanRequest{}, sanitizeAdapterPlanningError(err)
+		return LoadPlanRequest{}, classifyAdapterPlanningError(err)
 	}
 	if proof != plan.adapterProof {
 		return LoadPlanRequest{}, fmt.Errorf("%w: load adapter representation changed after planning", domain.ErrPrecondition)
@@ -145,6 +145,7 @@ func (plan LoadPlan) Request() LoadPlanRequest        { return cloneLoadPlanRequ
 type LoadPlanningError struct {
 	code       LoadPlanningErrorCode
 	capability string
+	cause      error
 }
 
 type LoadPlanningErrorCode string
@@ -176,21 +177,30 @@ func (err *LoadPlanningError) Error() string {
 	if err == nil {
 		return "<nil>"
 	}
-	return "load planning failed: code=" + string(err.code) + " capability=" + err.capability
+	message := "load planning failed: code=" + string(err.code) + " capability=" + err.capability
+	if err.cause != nil {
+		message += ": " + err.cause.Error()
+	}
+	return message
 }
 
-func (err *LoadPlanningError) Unwrap() error {
+func (err *LoadPlanningError) Unwrap() []error {
 	if err == nil {
 		return nil
 	}
+	causes := make([]error, 0, 2)
 	switch err.code {
 	case LoadPlanningUnsupported:
-		return domain.ErrUnsupported
+		causes = append(causes, domain.ErrUnsupported)
 	case LoadPlanningPrecondition:
-		return domain.ErrPrecondition
+		causes = append(causes, domain.ErrPrecondition)
 	default:
-		return domain.ErrInvalid
+		causes = append(causes, domain.ErrInvalid)
 	}
+	if err.cause != nil {
+		causes = append(causes, err.cause)
+	}
+	return causes
 }
 
 func validateLoadPlanRequest(capabilities engine.Capabilities, request LoadPlanRequest) error {
@@ -254,7 +264,7 @@ func validateLoadPlanRequest(capabilities engine.Capabilities, request LoadPlanR
 	return nil
 }
 
-func sanitizeAdapterPlanningError(err error) error {
+func classifyAdapterPlanningError(err error) error {
 	if err == context.Canceled || err == context.DeadlineExceeded {
 		return err
 	}
@@ -262,7 +272,7 @@ func sanitizeAdapterPlanningError(err error) error {
 	if errors.As(err, &planningErr) {
 		return planningErr
 	}
-	return UnsupportedLoadPlan("LOAD_ADAPTER_CAPABILITY")
+	return &LoadPlanningError{code: LoadPlanningUnsupported, capability: "LOAD_ADAPTER_CAPABILITY", cause: err}
 }
 
 func cloneLoadPlanRequest(input LoadPlanRequest) LoadPlanRequest {

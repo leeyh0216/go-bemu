@@ -340,7 +340,7 @@ func adapterPlanningError(operation string, err error) error {
 		return err
 	}
 	return newPlanningError(
-		PlanningCodeUnsupported, operation, "adapter.planning", "engine adapter rejected the logical plan", nil,
+		PlanningCodeUnsupported, operation, "adapter.planning", "engine adapter rejected the logical plan", err,
 	)
 }
 

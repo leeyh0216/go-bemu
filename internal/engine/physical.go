@@ -36,10 +36,10 @@ type PhysicalTableStateDescriptor struct {
 	Provenance               PhysicalStateProvenance
 }
 
-// PhysicalTableState is a sanitized inspection result. Shape fingerprints and
-// the correlation-derived marker contain no row values, SQL, physical type
-// strings, or connection details. The adapter records Generation and its marker
-// in the same transaction as the physical mutation.
+// PhysicalTableState is an engine-neutral inspection result. Shape fingerprints
+// and the correlation-derived marker describe the applied physical mutation.
+// The adapter records Generation and its marker in the same transaction as the
+// physical mutation.
 type PhysicalTableState struct {
 	target                   domain.TableReference
 	exists                   bool

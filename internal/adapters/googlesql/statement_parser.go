@@ -15,8 +15,7 @@ import (
 
 const queryASTCapability = "query.google-sql-ast-v1"
 
-// UnsupportedNodeError is stable across parser diagnostics and never contains
-// submitted SQL or literal values.
+// UnsupportedNodeError identifies the unsupported syntax location.
 type UnsupportedNodeError struct {
 	StatementKind queryast.StatementKind
 	NodeKind      string
@@ -77,29 +76,29 @@ func parseExternal(sql string) (parsedDocument, error) {
 	}
 	options, err := parserOptions()
 	if err != nil {
-		return parsedDocument{}, parserFailure()
+		return parsedDocument{}, parserFailure(err)
 	}
 	output, err := gsql.ParseScript(sql, options, nil)
 	if err != nil || output == nil {
-		return parsedDocument{}, invalid("invalid GoogleSQL statement syntax")
+		return parsedDocument{}, invalidInput("invalid GoogleSQL statement syntax", sql, err)
 	}
 	script, err := output.Script()
 	if err != nil || script == nil {
-		return parsedDocument{}, parserFailure()
+		return parsedDocument{}, parserFailure(err)
 	}
 	list, err := script.StatementListNode()
 	if err != nil || list == nil {
-		return parsedDocument{}, parserFailure()
+		return parsedDocument{}, parserFailure(err)
 	}
 	count, err := list.NumChildren()
 	if err != nil || count <= 0 {
-		return parsedDocument{}, invalid("GoogleSQL statement is empty")
+		return parsedDocument{}, invalid("GoogleSQL statement is empty", err)
 	}
 	statements := make([]gsql.ASTStatementNode, 0, count)
 	for index := int32(0); index < count; index++ {
 		statement, err := list.StatementList(index)
 		if err != nil || statement == nil {
-			return parsedDocument{}, parserFailure()
+			return parsedDocument{}, parserFailure(err)
 		}
 		statements = append(statements, statement)
 	}

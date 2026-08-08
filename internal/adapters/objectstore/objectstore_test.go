@@ -100,7 +100,7 @@ func TestGCSJSONSupportsFakeServerListGetAndMedia(t *testing.T) {
 	}
 }
 
-func TestGCSJSONDoesNotExposeHTTPErrorBody(t *testing.T) {
+func TestGCSJSONRetainsHTTPErrorBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = io.WriteString(w, "secret-payload")
@@ -111,8 +111,8 @@ func TestGCSJSONDoesNotExposeHTTPErrorBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = store.Get(context.Background(), "gs://bucket/object")
-	if err == nil || strings.Contains(err.Error(), "secret-payload") || !strings.Contains(err.Error(), "500") {
-		t.Fatalf("unsafe error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "secret-payload") || !strings.Contains(err.Error(), "500") {
+		t.Fatalf("diagnostic error = %v", err)
 	}
 }
 

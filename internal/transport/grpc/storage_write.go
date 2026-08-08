@@ -282,7 +282,7 @@ func (c appendConnection) responseStream(request *storagepb.AppendRowsRequest) s
 
 func appendErrorResponse(stream string, err error) *storagepb.AppendRowsResponse {
 	code := storageWriteCode(err)
-	message := safeStorageWriteMessage(err)
+	message := storageWriteMessage(err)
 	statusMessage := &statuspb.Status{Code: int32(code), Message: message}
 	if detail := appendStorageError(err, stream); detail != nil {
 		if packed, packErr := anypb.New(detail); packErr == nil {
@@ -309,7 +309,7 @@ func appendStorageError(err error, stream string) *storagepb.StorageError {
 	default:
 		return nil
 	}
-	return &storagepb.StorageError{Code: code, Entity: stream, ErrorMessage: safeStorageWriteMessage(err)}
+	return &storagepb.StorageError{Code: code, Entity: stream, ErrorMessage: storageWriteMessage(err)}
 }
 
 func writeStreamToProto(stream writedomain.WriteStream, includeSchema bool) *storagepb.WriteStream {
@@ -429,15 +429,15 @@ func storageWriteStatus(err error) error {
 		return nil
 	}
 	if errors.Is(err, context.Canceled) {
-		return grpcstatus.Error(codes.Canceled, "Storage Write request canceled")
+		return grpcstatus.Error(codes.Canceled, err.Error())
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return grpcstatus.Error(codes.DeadlineExceeded, "Storage Write request deadline exceeded")
+		return grpcstatus.Error(codes.DeadlineExceeded, err.Error())
 	}
 	if _, ok := grpcstatus.FromError(err); ok {
 		return err
 	}
-	return grpcstatus.Error(storageWriteCode(err), safeStorageWriteMessage(err))
+	return grpcstatus.Error(storageWriteCode(err), storageWriteMessage(err))
 }
 
 func storageWriteCode(err error) codes.Code {
@@ -465,29 +465,8 @@ func storageWriteCode(err error) codes.Code {
 	}
 }
 
-func safeStorageWriteMessage(err error) string {
-	switch writedomain.CodeOf(err) {
-	case writedomain.ErrorInvalidArgument:
-		return "invalid Storage Write request"
-	case writedomain.ErrorNotFound:
-		return "Storage Write resource not found"
-	case writedomain.ErrorFailedPrecondition:
-		return "Storage Write stream state does not permit this operation"
-	case writedomain.ErrorResourceExhausted:
-		return "Storage Write capacity exhausted"
-	case writedomain.ErrorCanceled:
-		return "Storage Write request canceled"
-	case writedomain.ErrorDeadlineExceeded:
-		return "Storage Write operation exceeded its configured deadline"
-	case writedomain.ErrorAlreadyExists:
-		return "append offset already exists"
-	case writedomain.ErrorOutOfRange:
-		return "append offset is beyond stream end"
-	case writedomain.ErrorUnimplemented:
-		return "Storage Write request shape is not implemented"
-	default:
-		return "Storage Write operation failed"
-	}
+func storageWriteMessage(err error) string {
+	return err.Error()
 }
 
 func cloneOffset(value *wrapperspb.Int64Value) *int64 {

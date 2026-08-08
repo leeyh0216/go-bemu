@@ -127,8 +127,8 @@ func TestCreateSessionRejectsPreCanceledContextBeforeAdmission(t *testing.T) {
 			if domain.CodeOf(err) != testCase.wantCode || !errors.Is(err, testCase.wantCause) {
 				t.Fatalf("pre-admission context error = %v/%s, want %s", err, domain.CodeOf(err), testCase.wantCode)
 			}
-			if strings.Contains(err.Error(), testCase.wantCause.Error()) {
-				t.Fatalf("public application error leaked context cause: %v", err)
+			if !strings.Contains(err.Error(), testCase.wantCause.Error()) {
+				t.Fatalf("public application error omitted context cause: %v", err)
 			}
 			if materializer.callCount() != 0 {
 				t.Fatalf("materializer calls = %d, want 0", materializer.callCount())
@@ -258,8 +258,8 @@ func TestCloseCancelsInflightMaterializationAndReturnsReservation(t *testing.T) 
 		if domain.CodeOf(err) != domain.ErrorFailedPrecondition {
 			t.Fatalf("inflight create code = %s, want FAILED_PRECONDITION: %v", domain.CodeOf(err), err)
 		}
-		if strings.Contains(err.Error(), "context canceled") {
-			t.Fatalf("shutdown error leaked cancellation cause: %v", err)
+		if !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("shutdown error omitted cancellation cause: %v", err)
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
@@ -295,8 +295,8 @@ func TestCallerCancellationIsCanceledAndReleasesReservationOnce(t *testing.T) {
 		if domain.CodeOf(err) != domain.ErrorCanceled || !errors.Is(err, context.Canceled) {
 			t.Fatalf("caller cancellation = %v/%s, want typed CANCELED", err, domain.CodeOf(err))
 		}
-		if strings.Contains(err.Error(), "context canceled") {
-			t.Fatalf("public application error leaked cancellation cause: %v", err)
+		if !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("public application error omitted cancellation cause: %v", err)
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())

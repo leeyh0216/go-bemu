@@ -175,7 +175,7 @@ func (w *Warehouse) ApplyTableMutation(
 	}
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
-		return sanitizedDDLBackendError(ctx, err)
+		return classifiedDDLBackendError(ctx, err)
 	}
 	defer func() {
 		if err != nil {
@@ -190,7 +190,7 @@ func (w *Warehouse) ApplyTableMutation(
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, statement); err != nil {
-		return sanitizedDDLMutationError(ctx, err)
+		return classifiedDDLMutationError(ctx, err)
 	}
 	current, err = inspectDDLStateForProof(ctx, tx, mutation.Target(), mutation.AfterSchema(), plan.Proof().After())
 	if err != nil {
@@ -200,7 +200,7 @@ func (w *Warehouse) ApplyTableMutation(
 		return err
 	}
 	if err = tx.Commit(); err != nil {
-		return sanitizedDDLBackendError(ctx, err)
+		return classifiedDDLBackendError(ctx, err)
 	}
 	return nil
 }
@@ -234,7 +234,7 @@ func (w *Warehouse) ApplyTableTruncation(
 	}
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
-		return sanitizedDDLBackendError(ctx, err)
+		return classifiedDDLBackendError(ctx, err)
 	}
 	defer func() {
 		if err != nil {
@@ -250,14 +250,14 @@ func (w *Warehouse) ApplyTableTruncation(
 	}
 	tableName := quotedDDLTable(replacement.Target())
 	if _, err = tx.ExecContext(ctx, "DELETE FROM "+tableName); err != nil {
-		return sanitizedDDLMutationError(ctx, err)
+		return classifiedDDLMutationError(ctx, err)
 	}
 	var remaining int64
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM "+tableName).Scan(&remaining); err != nil || remaining != 0 {
 		if err == nil {
 			err = errors.New("truncate result is not empty")
 		}
-		return sanitizedDDLBackendError(ctx, err)
+		return classifiedDDLBackendError(ctx, err)
 	}
 	current, err = inspectDDLStateForProof(ctx, tx, replacement.Target(), replacement.Schema(), plan.Proof().After())
 	if err != nil {
@@ -267,7 +267,7 @@ func (w *Warehouse) ApplyTableTruncation(
 		return err
 	}
 	if err = tx.Commit(); err != nil {
-		return sanitizedDDLBackendError(ctx, err)
+		return classifiedDDLBackendError(ctx, err)
 	}
 	return nil
 }
@@ -369,7 +369,7 @@ func inspectDDLStateForProof(
 ) (engine.PhysicalTableState, error) {
 	exists, fingerprint, err := inspectDDLTable(ctx, queryer, target)
 	if err != nil {
-		return engine.PhysicalTableState{}, sanitizedDDLBackendError(ctx, err)
+		return engine.PhysicalTableState{}, classifiedDDLBackendError(ctx, err)
 	}
 	if exists != expected.Exists() {
 		return engine.PhysicalTableState{}, fmt.Errorf("%w: physical DDL state changed after planning", domain.ErrPrecondition)
@@ -377,7 +377,7 @@ func inspectDDLStateForProof(
 	if exists {
 		expectedFingerprint, err := expectedDDLPhysicalFingerprint(ctx, queryer, schema)
 		if err != nil {
-			return engine.PhysicalTableState{}, sanitizedDDLBackendError(ctx, err)
+			return engine.PhysicalTableState{}, classifiedDDLBackendError(ctx, err)
 		}
 		if fingerprint != expectedFingerprint || fingerprint != expected.PhysicalShapeFingerprint() {
 			return engine.PhysicalTableState{}, fmt.Errorf("%w: physical DDL shape changed after planning", domain.ErrPrecondition)
@@ -452,24 +452,24 @@ func quotedDDLTable(target domain.TableReference) string {
 	return quoteIdentifier(physicalSchema(target.ProjectID, target.DatasetID)) + "." + quoteIdentifier(target.TableID)
 }
 
-func sanitizedDDLMutationError(ctx context.Context, err error) error {
+func classifiedDDLMutationError(ctx context.Context, err error) error {
 	if contextErr := ctx.Err(); contextErr != nil {
 		return contextErr
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	return fmt.Errorf("%w: engine rejected the planned table mutation; capability=%s",
-		domain.ErrInvalid, domain.GapQueryDDLCatalogSyncV1)
+	return fmt.Errorf("%w: engine rejected the planned table mutation; capability=%s: %v",
+		domain.ErrInvalid, domain.GapQueryDDLCatalogSyncV1, err)
 }
 
-func sanitizedDDLBackendError(ctx context.Context, err error) error {
+func classifiedDDLBackendError(ctx context.Context, err error) error {
 	if contextErr := ctx.Err(); contextErr != nil {
 		return contextErr
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	return fmt.Errorf("%w: engine could not apply the planned table mutation; capability=%s",
-		domain.ErrPrecondition, domain.GapQueryDDLCatalogSyncV1)
+	return fmt.Errorf("%w: engine could not apply the planned table mutation; capability=%s: %v",
+		domain.ErrPrecondition, domain.GapQueryDDLCatalogSyncV1, err)
 }

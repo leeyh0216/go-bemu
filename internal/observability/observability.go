@@ -86,10 +86,6 @@ func ErrorAttrs(err error) []any {
 	}
 }
 
-func RedactText(value string) string {
-	return value
-}
-
 func MetadataEntries(values map[string][]string) []string {
 	entries := make([]string, 0, len(values))
 	for key := range values {

@@ -292,8 +292,8 @@ type Result struct {
 	PrintEffective       bool
 }
 
-// Error carries stable fields that can be emitted directly by CI or structured
-// startup logging without exposing the configuration payload.
+// Error carries stable classification fields together with the original cause
+// for CI and structured startup diagnostics.
 type Error struct {
 	Stage       string
 	Operation   string
@@ -395,7 +395,7 @@ func load(args []string, lookupEnv func(string) (string, bool)) (Result, error) 
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&configPath, "config", configPath, "path to a BQEMU YAML configuration file")
 	fs.Var(&overrides, "set", "override a configuration leaf as path=value; repeatable")
-	fs.BoolVar(&printEffective, "print-effective-config", false, "validate and print the merged non-secret configuration")
+	fs.BoolVar(&printEffective, "print-effective-config", false, "validate and print the merged effective configuration")
 	if err := fs.Parse(args); err != nil {
 		return Result{}, configError("arguments", "parse-flags", "arguments", "flag-set", "check-command-line", "", err)
 	}

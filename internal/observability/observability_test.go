@@ -21,7 +21,6 @@ func TestPayloadAndErrorAttributesRetainRawDiagnostics(t *testing.T) {
 	attrs := fmt.Sprint(
 		PayloadAttrs("query", []byte(payload)),
 		ErrorAttrs(fmt.Errorf("%s", errorMessage)),
-		RedactText(payload),
 	)
 	for _, expected := range []string{payload, errorMessage, "query_bytes", "error_type"} {
 		if !strings.Contains(attrs, expected) {

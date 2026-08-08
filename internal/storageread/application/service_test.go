@@ -194,7 +194,7 @@ func TestClosePreventsAConcurrentLifecycleFromCreatingNewSessions(t *testing.T) 
 	}
 }
 
-func TestStructuredLogsKeepRestrictionAndRowPayloadOpaque(t *testing.T) {
+func TestStructuredLogsRetainRestrictionAndRowPayload(t *testing.T) {
 	ctx, cancel := testContext(t)
 	defer cancel()
 	var output bytes.Buffer
@@ -212,9 +212,9 @@ func TestStructuredLogsKeepRestrictionAndRowPayloadOpaque(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := output.String()
-	for _, secret := range []string{"restriction-secret", "raw-row-secret"} {
-		if strings.Contains(logs, secret) {
-			t.Fatalf("logs contain raw value %q: %s", secret, logs)
+	for _, value := range []string{"restriction-secret", "raw-row-secret"} {
+		if !strings.Contains(logs, value) {
+			t.Fatalf("logs omitted raw value %q: %s", value, logs)
 		}
 	}
 	for _, field := range []string{"model_version", "schema_fingerprint", "payload_digest", "row_count", "retained_snapshot_bytes", "reservation_bytes", "side_effect.before", "side_effect.after"} {
@@ -274,8 +274,8 @@ func TestCreateSessionPreservesClassifiedMaterializerErrors(t *testing.T) {
 			if domain.CodeOf(err) != testCase.want {
 				t.Fatalf("materializer error code = %s, want %s: %v", domain.CodeOf(err), testCase.want, err)
 			}
-			if strings.Contains(err.Error(), "secret") {
-				t.Fatalf("public application error leaked adapter cause: %v", err)
+			if !strings.Contains(err.Error(), "secret") {
+				t.Fatalf("public application error omitted adapter cause: %v", err)
 			}
 		})
 	}

@@ -47,7 +47,7 @@ func (w *Warehouse) ExecuteStatement(
 		"transaction_mode", "autocommit",
 	)
 	defer func() {
-		err = sanitizeDuckDBStatementError(err)
+		err = classifyDuckDBStatementError(err)
 		observability.LogSideEffectEnd(ctx, "duckdb", "execute_statement", started, err,
 			"statement_kind", string(statement.Kind()),
 			"analysis_fingerprint", plan.semanticAnalysisFingerprint(),
@@ -126,25 +126,22 @@ func readDuckDBStatementRows(rows *sql.Rows, output duckDBStatementOutput) (doma
 	return result, nil
 }
 
-// sanitizeDuckDBStatementError deliberately discards backend and schema error
-// text. DuckDB can include generated SQL, identifiers, and bound values in its
-// diagnostics; those details must not cross the adapter boundary.
-func sanitizeDuckDBStatementError(err error) error {
+func classifyDuckDBStatementError(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
 	switch {
 	case errors.Is(err, domain.ErrUnsupported):
-		return fmt.Errorf("%w: code=%s", domain.ErrUnsupported, duckDBStatementUnsupportedFailureV1)
+		return fmt.Errorf("%w: code=%s: %v", domain.ErrUnsupported, duckDBStatementUnsupportedFailureV1, err)
 	case errors.Is(err, domain.ErrPrecondition):
-		return fmt.Errorf("%w: code=%s", domain.ErrPrecondition, duckDBStatementPreconditionFailureV1)
+		return fmt.Errorf("%w: code=%s: %v", domain.ErrPrecondition, duckDBStatementPreconditionFailureV1, err)
 	case errors.Is(err, domain.ErrConflict):
-		return fmt.Errorf("%w: code=%s", domain.ErrConflict, duckDBStatementConflictFailureV1)
+		return fmt.Errorf("%w: code=%s: %v", domain.ErrConflict, duckDBStatementConflictFailureV1, err)
 	case errors.Is(err, domain.ErrNotFound):
-		return fmt.Errorf("%w: code=%s", domain.ErrNotFound, duckDBStatementNotFoundFailureV1)
+		return fmt.Errorf("%w: code=%s: %v", domain.ErrNotFound, duckDBStatementNotFoundFailureV1, err)
 	case errors.Is(err, domain.ErrInvalid), errors.Is(err, domain.ErrInvalidQuery):
-		return fmt.Errorf("%w: code=%s", domain.ErrInvalidQuery, duckDBStatementInvalidFailureV1)
+		return fmt.Errorf("%w: code=%s: %v", domain.ErrInvalidQuery, duckDBStatementInvalidFailureV1, err)
 	default:
-		return fmt.Errorf("%w: code=%s", domain.ErrBackend, duckDBStatementBackendFailureV1)
+		return fmt.Errorf("%w: code=%s: %v", domain.ErrBackend, duckDBStatementBackendFailureV1, err)
 	}
 }

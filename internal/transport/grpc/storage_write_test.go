@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -333,8 +334,8 @@ func TestStorageWriteConfiguredDeadlineMapsToGRPCDeadlineExceeded(t *testing.T) 
 	if got := storageWriteCode(err); got != codes.DeadlineExceeded {
 		t.Fatalf("storageWriteCode = %s, want DEADLINE_EXCEEDED", got)
 	}
-	if got := safeStorageWriteMessage(err); got != "Storage Write operation exceeded its configured deadline" {
-		t.Fatalf("safe message = %q", got)
+	if got := storageWriteMessage(err); !strings.Contains(got, "opaque backend timeout") {
+		t.Fatalf("diagnostic message = %q", got)
 	}
 }
 
@@ -347,8 +348,8 @@ func TestStorageWriteCanceledAppendMapsToEmbeddedCanceled(t *testing.T) {
 	if got := codes.Code(response.GetError().GetCode()); got != codes.Canceled {
 		t.Fatalf("embedded response code = %s, want CANCELED", got)
 	}
-	if got := response.GetError().GetMessage(); got != "Storage Write request canceled" {
-		t.Fatalf("safe message = %q", got)
+	if got := response.GetError().GetMessage(); !strings.Contains(got, "context canceled") {
+		t.Fatalf("diagnostic message = %q", got)
 	}
 }
 

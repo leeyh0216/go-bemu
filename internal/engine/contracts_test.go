@@ -427,7 +427,7 @@ func TestPhysicalStateAndPlanProofDescriptorsFailClosed(t *testing.T) {
 	assertPlanningCode(t, err, PlanningCodeInvalidDescriptor)
 }
 
-func TestPlanningErrorsDoNotExposeAdapterOrDescriptorSecrets(t *testing.T) {
+func TestPlanningErrorsRetainAdapterCauses(t *testing.T) {
 	const secret = "PRINTABLE_SECRET_MARKER"
 	descriptor := testCapabilitiesDescriptor(t, "duckdb", "1.4.4")
 	descriptor.Transactions[TransactionScope(secret)] = true
@@ -445,16 +445,16 @@ func TestPlanningErrorsDoNotExposeAdapterOrDescriptorSecrets(t *testing.T) {
 	planner := mustPlanner(t, capabilities, adapter)
 	_, err = planner.PlanTableChange(context.Background(), testTypeChangeMutation(t), testRequirements())
 	assertPlanningAttribute(t, err, PlanningCodeUnsupported, "adapter.planning")
-	if strings.Contains(err.Error(), secret) || errors.Is(err, adapterError) {
-		t.Fatal("adapter cause escaped the safe planning error contract")
+	if !strings.Contains(err.Error(), secret) || !errors.Is(err, adapterError) {
+		t.Fatal("adapter cause was omitted from the planning error")
 	}
 
 	wrappedCancellation := fmt.Errorf("%s: %w", secret, context.Canceled)
 	adapter.table = func(context.Context, TableMutation) (PlanProof, error) { return PlanProof{}, wrappedCancellation }
 	_, err = planner.PlanTableChange(context.Background(), testTypeChangeMutation(t), testRequirements())
 	assertPlanningAttribute(t, err, PlanningCodeUnsupported, "adapter.planning")
-	if strings.Contains(err.Error(), secret) || errors.Is(err, context.Canceled) {
-		t.Fatal("wrapped adapter cancellation escaped the safe planning error contract")
+	if !strings.Contains(err.Error(), secret) || !errors.Is(err, context.Canceled) {
+		t.Fatal("wrapped adapter cancellation was omitted from the planning error")
 	}
 
 	adapter.table = func(context.Context, TableMutation) (PlanProof, error) { return PlanProof{}, context.Canceled }

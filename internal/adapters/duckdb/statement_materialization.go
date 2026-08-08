@@ -152,7 +152,7 @@ func (w *Warehouse) MaterializeStatement(
 		"transaction_mode", "explicit",
 	)
 	defer func() {
-		err = sanitizeDuckDBStatementError(err)
+		err = classifyDuckDBStatementError(err)
 		observability.LogSideEffectEnd(ctx, "duckdb", "materialize_statement", started, err,
 			"statement_kind", string(statement.Kind()),
 			"analysis_fingerprint", plan.semanticAnalysisFingerprint(),

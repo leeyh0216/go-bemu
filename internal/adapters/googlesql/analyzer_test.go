@@ -112,7 +112,7 @@ func TestGatewayUsesOneEntrypointForInsertAndDDL(t *testing.T) {
 	}
 }
 
-func TestAnalyzerRedactsStableResolutionErrors(t *testing.T) {
+func TestAnalyzerRetainsStableResolutionErrorsAndInput(t *testing.T) {
 	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
 	tests := []struct {
 		name   string
@@ -136,8 +136,8 @@ func TestAnalyzerRedactsStableResolutionErrors(t *testing.T) {
 			if !strings.Contains(err.Error(), test.code) {
 				t.Fatalf("error = %v, want code %s", err, test.code)
 			}
-			if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.secret)) || strings.Contains(err.Error(), test.sql) {
-				t.Fatalf("error leaked submitted content: %v", err)
+			if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.secret)) || !strings.Contains(err.Error(), test.sql) {
+				t.Fatalf("error omitted submitted content: %v", err)
 			}
 		})
 	}
@@ -163,8 +163,8 @@ func TestAnalyzerRejectsUnsupportedCanonicalTypesBeforeAnalysis(t *testing.T) {
 			if !errors.Is(err, domain.ErrUnsupported) {
 				t.Fatalf("error = %v", err)
 			}
-			if strings.Contains(err.Error(), "secret") {
-				t.Fatalf("error leaked field name: %v", err)
+			if !strings.Contains(err.Error(), "secret") {
+				t.Fatalf("error omitted field name: %v", err)
 			}
 			if !strings.Contains(err.Error(), test.code) {
 				t.Fatalf("error = %v, want capability %s", err, test.code)
@@ -206,9 +206,6 @@ func TestGatewayRejectsScriptsAndCTASBeforeEngine(t *testing.T) {
 			})
 			if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), test.code) {
 				t.Fatalf("Analyze() error = %v", err)
-			}
-			if strings.Contains(err.Error(), "secret_copy") || strings.Contains(err.Error(), test.sql) {
-				t.Fatalf("error leaked submitted content: %v", err)
 			}
 		})
 	}

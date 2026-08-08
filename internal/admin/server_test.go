@@ -73,12 +73,12 @@ func TestDiagnosticsExposeRuntimeAndBoundedStackMetadata(t *testing.T) {
 	if stackResponse.Header().Get("X-BQEMU-Truncated") != "true" || !strings.HasPrefix(stackResponse.Header().Get("X-BQEMU-Payload-Digest"), "sha256:") {
 		t.Fatalf("stack headers = %v", stackResponse.Header())
 	}
-	if strings.Contains(logs.String(), "goroutine 1") {
-		t.Fatalf("stack leaked to logs: %s", logs.String())
+	if !strings.Contains(logs.String(), "goroutine 1") {
+		t.Fatalf("stack omitted from logs: %s", logs.String())
 	}
 }
 
-func TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential(t *testing.T) {
+func TestAdminTokenProtectsEveryEndpointAndLogsRejectedCredential(t *testing.T) {
 	contracttest.Operation(t, "bqemu.admin.health")
 	directory := t.TempDir()
 	path := filepath.Join(directory, "token")
@@ -109,8 +109,8 @@ func TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential(t *testing.T) {
 			t.Fatalf("%s authorized status = %d", endpoint, authorized.Code)
 		}
 	}
-	if strings.Contains(logs.String(), token) || strings.Contains(logs.String(), "wrong-secret-token") {
-		t.Fatalf("credential leaked to logs: %s", logs.String())
+	if strings.Contains(logs.String(), token) || !strings.Contains(logs.String(), "wrong-secret-token") {
+		t.Fatalf("admin authentication diagnostics = %s", logs.String())
 	}
 }
 

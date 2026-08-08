@@ -372,7 +372,7 @@ func TestQuerySchemaInfersBigNumericWhenNumericRangeCannotRepresentDecimal(t *te
 	}
 }
 
-func TestQueryMaterializationLogsShapeAndDigestWithoutRawSQLOrRows(t *testing.T) {
+func TestQueryMaterializationLogsRawSQLWithShapeAndDigest(t *testing.T) {
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()
 	warehouse, _ := newQueryMaterializationFixture(t, ctx)
@@ -390,12 +390,12 @@ func TestQueryMaterializationLogsShapeAndDigestWithoutRawSQLOrRows(t *testing.T)
 		t.Fatal(err)
 	}
 	output := logs.String()
-	if strings.Contains(output, marker) {
-		t.Fatalf("raw SQL/result value leaked into safe logs: %s", output)
+	if !strings.Contains(output, marker) {
+		t.Fatalf("raw SQL omitted from logs: %s", output)
 	}
 	for _, field := range []string{"query_bytes", "query_digest", "schema_fingerprint", "model_version", "transaction_mode"} {
 		if !strings.Contains(output, field) {
-			t.Fatalf("safe materialization log is missing %q: %s", field, output)
+			t.Fatalf("materialization log is missing %q: %s", field, output)
 		}
 	}
 }

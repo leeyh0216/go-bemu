@@ -93,7 +93,7 @@ func TestListTableDataTrimsCanonicalPageAndRejectsOversizedRow(t *testing.T) {
 	}
 }
 
-func TestListTableDataStructuredLogsOmitRawRowsAndNames(t *testing.T) {
+func TestListTableDataStructuredLogsRetainRawRowsAndNames(t *testing.T) {
 	ctx, cancel := duckDBTableDataTestContext(t)
 	defer cancel()
 	warehouse, reference := newDuckDBTableDataFixture(t, ctx)
@@ -111,8 +111,8 @@ func TestListTableDataStructuredLogsOmitRawRowsAndNames(t *testing.T) {
 	}
 	output := logs.String()
 	for _, raw := range []string{"private-project", "sensitive_dataset", "private_table", "row-secret-marker"} {
-		if strings.Contains(output, raw) {
-			t.Fatalf("table data logs leaked %q: %s", raw, output)
+		if !strings.Contains(output, raw) {
+			t.Fatalf("table data logs omitted %q: %s", raw, output)
 		}
 	}
 	for _, field := range []string{"table_reference_digest", "result_digest", "row_count", "total_rows", tableDataModelVersion} {

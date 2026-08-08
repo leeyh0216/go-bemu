@@ -71,11 +71,11 @@ func (f Field) NormalizeDecimalValue(input string) (string, error) {
 		return "", err
 	}
 	if !decimalLiteralPattern.MatchString(input) {
-		return "", decimalValueError(f, DecimalValueInvalidV1, len(input), "does not use the supported base-10 grammar")
+		return "", decimalValueError(f, DecimalValueInvalidV1, input, "does not use the supported base-10 grammar")
 	}
 	rational, ok := new(big.Rat).SetString(input)
 	if !ok {
-		return "", decimalValueError(f, DecimalValueInvalidV1, len(input), "cannot be parsed as a base-10 decimal")
+		return "", decimalValueError(f, DecimalValueInvalidV1, input, "cannot be parsed as a base-10 decimal")
 	}
 	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(parameters.Scale), nil)
 	scaled := new(big.Rat).Mul(rational, new(big.Rat).SetInt(factor))
@@ -101,13 +101,13 @@ func (f Field) NormalizeDecimalValue(input string) (string, error) {
 		digits = 1
 	}
 	if int64(digits) > parameters.Precision {
-		return "", decimalValueError(f, DecimalValueOverflowV1, len(input), fmt.Sprintf("exceeds precision %d after rounding", parameters.Precision))
+		return "", decimalValueError(f, DecimalValueOverflowV1, input, fmt.Sprintf("exceeds precision %d after rounding", parameters.Precision))
 	}
 	return formatScaledDecimal(quotient, parameters.Scale), nil
 }
 
-func decimalValueError(field Field, code string, valueBytes int, reason string) error {
-	return fmt.Errorf("%w: code=%s decimal field %q value_bytes=%d %s", ErrInvalid, code, field.Name, valueBytes, reason)
+func decimalValueError(field Field, code, value, reason string) error {
+	return fmt.Errorf("%w: code=%s decimal field %q value=%q value_bytes=%d %s", ErrInvalid, code, field.Name, value, len(value), reason)
 }
 
 func formatScaledDecimal(value *big.Int, scale int64) string {

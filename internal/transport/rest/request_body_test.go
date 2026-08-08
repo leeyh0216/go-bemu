@@ -56,7 +56,7 @@ func TestRESTGzipChunkedTablesInsertUsesDecodedJSON(t *testing.T) {
 	}
 
 	output := logs.String()
-	for _, expected := range []string{`"encoding":"gzip"`, `"outcome":"accepted"`, "compressed_digest", "uncompressed_digest"} {
+	for _, expected := range []string{`"encoding":"gzip"`, `"outcome":"accepted"`, "private-body-value", "compressed_digest", "uncompressed_digest"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("request body log lacks %q: %s", expected, output)
 		}
@@ -219,8 +219,8 @@ func TestRESTCorruptGzipStreamIsRejectedAfterHandlerRead(t *testing.T) {
 			t.Fatalf("corrupt gzip log lacks %q: %s", expected, output)
 		}
 	}
-	if strings.Contains(output, "private-corrupt-body") {
-		t.Fatalf("corrupt gzip body leaked into logs: %s", output)
+	if !strings.Contains(output, "private-corrupt-body") {
+		t.Fatalf("corrupt gzip body omitted from logs: %s", output)
 	}
 }
 
@@ -281,8 +281,8 @@ func TestRESTRejectedBodyLogsMatchHTTPStatuses(t *testing.T) {
 			t.Fatalf("rejection log lacks %q: %s", expected, output)
 		}
 	}
-	if strings.Contains(output, "sensitivesensitive") || strings.Contains(output, "private-invalid") {
-		t.Fatalf("rejected request body leaked into logs: %s", output)
+	if !strings.Contains(output, "sensitivesensitive") || !strings.Contains(output, "private-invalid") {
+		t.Fatalf("rejected request body omitted from logs: %s", output)
 	}
 }
 

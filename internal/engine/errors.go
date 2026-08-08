@@ -18,28 +18,31 @@ const (
 	PlanningCodePhysicalStateDrift PlanningErrorCode = "ENGINE_PLAN_PHYSICAL_STATE_DRIFT"
 )
 
-// PlanningError is safe to carry across the application boundary. Attribute
-// contains a stable logical capability name; Detail must not contain SQL,
-// connection strings, physical type names, or user values.
+// PlanningError carries stable planning classification and the original cause.
 type PlanningError struct {
 	code      PlanningErrorCode
 	operation string
 	attribute string
 	detail    string
+	cause     error
 }
 
-func newPlanningError(code PlanningErrorCode, operation, attribute, detail string, _ error) *PlanningError {
-	return &PlanningError{code: code, operation: operation, attribute: attribute, detail: detail}
+func newPlanningError(code PlanningErrorCode, operation, attribute, detail string, cause error) *PlanningError {
+	return &PlanningError{code: code, operation: operation, attribute: attribute, detail: detail, cause: cause}
 }
 
 func (err *PlanningError) Error() string {
 	if err == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf(
+	message := fmt.Sprintf(
 		"engine planning failed: code=%s operation=%s attribute=%s detail=%s",
 		err.code, err.operation, err.attribute, err.detail,
 	)
+	if err.cause != nil {
+		message += fmt.Sprintf(" cause=%v", err.cause)
+	}
+	return message
 }
 
 func (err *PlanningError) Code() PlanningErrorCode {
@@ -70,21 +73,22 @@ func (err *PlanningError) Detail() string {
 	return err.detail
 }
 
-// Unwrap exposes only cataloged, engine-neutral domain classifications. Raw
-// adapter causes are deliberately never retained by PlanningError.
-func (err *PlanningError) Unwrap() error {
+func (err *PlanningError) Unwrap() []error {
 	if err == nil {
 		return nil
 	}
+	causes := make([]error, 0, 2)
 	switch err.code {
 	case PlanningCodeInvalidDescriptor:
-		return domain.ErrInvalid
+		causes = append(causes, domain.ErrInvalid)
 	case PlanningCodeUnsupported:
-		return domain.ErrUnsupported
+		causes = append(causes, domain.ErrUnsupported)
 	case PlanningCodeEngineMismatch, PlanningCodeMutationMismatch, PlanningCodeCapabilityDrift,
 		PlanningCodePlannerMismatch, PlanningCodePhysicalStateDrift:
-		return domain.ErrPrecondition
-	default:
-		return nil
+		causes = append(causes, domain.ErrPrecondition)
 	}
+	if err.cause != nil {
+		causes = append(causes, err.cause)
+	}
+	return causes
 }

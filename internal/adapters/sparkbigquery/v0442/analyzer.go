@@ -120,6 +120,7 @@ func (analyzer *Analyzer) logRejection(ctx context.Context, request ports.QueryR
 	attrs := []any{
 		"event", "boundary.reject", "boundary", "sparkbigquery.v0442.query_operation_analysis",
 		"operation", operation, "model_version", profile,
+		"query", request.SQL,
 		"query_bytes", len(request.SQL), "query_digest", observability.Digest([]byte(request.SQL)),
 		"source_commit", SourceCommit,
 		"fix_hint", "compare the pinned connector producer before updating this versioned profile",

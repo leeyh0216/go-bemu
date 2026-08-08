@@ -336,11 +336,12 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	s.logger.InfoContext(ctx, "submitting Storage Write batch",
 		"event", "side_effect.before", "side_effect", sideEffect,
 		"operation", operation, "model_version", s.config.ProtocolModelVersion,
-		"stream_fingerprint", digest([]byte(canonical)), "table", table.Name(), "start_offset", startOffset,
+		"stream", canonical, "stream_fingerprint", digest([]byte(canonical)), "table", table.Name(), "start_offset", startOffset,
 		"row_count", len(request.Rows), "row_bytes", rowsBytes(request.Rows),
+		"rows", request.Rows, "descriptor", descriptor,
 		"payload_bytes", request.PayloadBytes, "wire_bytes", request.WireBytes,
 		"schema_fingerprint", fingerprint, "payload_digest", batch.PayloadDigest,
-		"trace_id", safeTraceID(request.TraceID), "tx_state", pendingTxState(isDefault))
+		"trace_id", request.TraceID, "tx_state", pendingTxState(isDefault))
 	err = call(ctx, batch)
 	s.logSideEffectEnd(ctx, operation, sideEffect, canonical, table.Name(), startOffset, len(request.Rows), fingerprint, batch.PayloadDigest, err)
 	if err != nil {
@@ -927,5 +928,5 @@ func pendingTxState(isDefault bool) string {
 }
 
 func errorLogAttrs(err error) []any {
-	return []any{"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error()))}
+	return []any{"error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error()))}
 }

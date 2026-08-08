@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -40,7 +41,7 @@ var errNestedReadProjectionUnsupported = errors.New("nested Storage Read project
 // table, NOT_FOUND means the catalog resource is absent, and UNIMPLEMENTED
 // means the official request shape is valid but this adapter does not support
 // it yet. DuckDB query, staging, and codec failures remain unclassified so the
-// application reports INTERNAL without exposing backend details.
+// application reports INTERNAL while retaining the backend cause.
 //
 // Official contracts:
 //   - status semantics: https://grpc.io/docs/guides/status-codes/
@@ -149,6 +150,7 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 		"operation_name", operation, "model_version", m.config.ProtocolModelVersion,
 		"project_id", projectID, "dataset_id", datasetID, "table_id", tableID,
 		"format", request.Format.String(), "selected_field_count", len(fields),
+		"statement", statement, "restriction", request.RowRestriction,
 		"statement_bytes", len(statement), "statement_digest", observability.Digest([]byte(statement)),
 		"restriction_bytes", len(request.RowRestriction), "restriction_digest", observability.Digest([]byte(request.RowRestriction)),
 		"spill_threshold_bytes", m.config.SpillThresholdBytes,
@@ -411,6 +413,7 @@ func (s *snapshotStager) startSpill(ctx context.Context) (resultErr error) {
 	tempDir := []byte(filepath.Clean(s.config.TempDir))
 	started := observability.LogSideEffectStart(ctx, "duckdb", "create_read_snapshot_spill",
 		"model_version", s.config.ProtocolModelVersion,
+		"temp_dir", string(tempDir),
 		"temp_dir_bytes", len(tempDir), "temp_dir_digest", observability.Digest(tempDir),
 		"staged_row_count", len(s.memoryRows), "staged_bytes", s.encodedBytes)
 	defer func() {
@@ -437,6 +440,7 @@ func (s *snapshotStager) writeSpillRow(ctx context.Context, row []byte) (resultE
 	ordinal := len(s.spillRows)
 	started := observability.LogSideEffectStart(ctx, "duckdb", "write_read_snapshot_spill_row",
 		"model_version", s.config.ProtocolModelVersion, "row_ordinal", ordinal,
+		"row", row,
 		"row_bytes", len(row), "row_digest", observability.Digest(row))
 	defer func() {
 		observability.LogSideEffectEnd(ctx, "duckdb", "write_read_snapshot_spill_row", started, resultErr,
@@ -555,7 +559,7 @@ func (s *duckDBReadSnapshot) OpenRange(ctx context.Context, start, end, maxRows 
 	}
 	if s.spillPath != "" {
 		started := observability.LogSideEffectStart(ctx, "duckdb", "open_read_snapshot_spill_reader",
-			"model_version", s.modelVersion, "start_offset", start, "end_offset", end)
+			"model_version", s.modelVersion, "spill_path", s.spillPath, "start_offset", start, "end_offset", end)
 		file, err := os.Open(s.spillPath)
 		observability.LogSideEffectEnd(ctx, "duckdb", "open_read_snapshot_spill_reader", started, err,
 			"model_version", s.modelVersion, "start_offset", start, "end_offset", end)
@@ -581,7 +585,7 @@ func (s *duckDBReadSnapshot) Close(ctx context.Context) (resultErr error) {
 		return nil
 	}
 	started := observability.LogSideEffectStart(ctx, "duckdb", "remove_read_snapshot_spill",
-		"model_version", s.modelVersion, "row_count", s.metadata.RowCount,
+		"model_version", s.modelVersion, "spill_path", s.spillPath, "row_count", s.metadata.RowCount,
 		"encoded_bytes", s.metadata.EstimatedBytes, "retained_bytes", s.metadata.RetainedBytes)
 	defer func() {
 		observability.LogSideEffectEnd(ctx, "duckdb", "remove_read_snapshot_spill", started, resultErr,
@@ -642,7 +646,7 @@ func (i *duckDBSnapshotIterator) Next(ctx context.Context) (readdomain.EncodedBa
 		observability.LogSideEffectEnd(ctx, "duckdb", "encode_read_snapshot_batch", started, err,
 			"model_version", i.snapshot.modelVersion, "format", i.snapshot.format.String(),
 			"offset", i.next, "row_count", len(rows), "max_payload_bytes", i.maxBytes,
-			"payload_bytes", len(serialized), "payload_digest", observability.Digest(serialized))
+			"payload", serialized, "payload_bytes", len(serialized), "payload_digest", observability.Digest(serialized))
 		if err != nil {
 			return readdomain.EncodedBatch{}, err
 		}
@@ -678,6 +682,8 @@ func (i *duckDBSnapshotIterator) readStagedRow(ctx context.Context, ordinal int6
 	if _, err := i.spillFile.ReadAt(payload, location.offset); err != nil {
 		return nil, fmt.Errorf("read spilled snapshot row %d: %w", ordinal, err)
 	}
+	slog.DebugContext(ctx, "read snapshot spill row payload",
+		"operation", "read_snapshot_spill_row", "row_ordinal", ordinal, "payload", payload)
 	return payload, nil
 }
 

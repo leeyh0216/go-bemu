@@ -43,8 +43,7 @@ func initialize() error {
 	return initializeErr
 }
 
-// ParseDDL parses exactly one statement. Syntax errors are deliberately
-// redacted because upstream diagnostics can contain the submitted SQL text.
+// ParseDDL parses exactly one statement and retains parser diagnostics.
 func (*Parser) ParseDDL(ctx context.Context, request ports.QueryRequest) (domain.DDLCommand, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.DDLCommand{}, false, err
@@ -57,7 +56,7 @@ func (*Parser) ParseDDL(ctx context.Context, request ports.QueryRequest) (domain
 	}
 	options, err := parserOptions()
 	if err != nil {
-		return domain.DDLCommand{}, false, parserFailure()
+		return domain.DDLCommand{}, false, parserFailure(err)
 	}
 	output, err := gsql.ParseStatement(request.SQL, options)
 	if err != nil || output == nil {
@@ -67,11 +66,11 @@ func (*Parser) ParseDDL(ctx context.Context, request ports.QueryRequest) (domain
 				domain.ErrUnsupported, domain.GapQueryScriptsUnsupportedV1,
 			)
 		}
-		return domain.DDLCommand{}, false, invalid("invalid GoogleSQL statement syntax")
+		return domain.DDLCommand{}, false, invalidInput("invalid GoogleSQL statement syntax", request.SQL, err)
 	}
 	statement, err := output.Statement()
 	if err != nil || statement == nil {
-		return domain.DDLCommand{}, false, parserFailure()
+		return domain.DDLCommand{}, false, parserFailure(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.DDLCommand{}, false, err
@@ -871,12 +870,25 @@ func isNil(value any) bool {
 	}
 }
 
-func parserFailure() error {
+func parserFailure(causes ...error) error {
+	if len(causes) > 0 && causes[0] != nil {
+		return fmt.Errorf("%w: GoogleSQL parser could not inspect the syntax tree: %v", domain.ErrInvalid, causes[0])
+	}
 	return fmt.Errorf("%w: GoogleSQL parser could not inspect the syntax tree", domain.ErrInvalid)
 }
 
-func invalid(reason string) error {
+func invalid(reason string, causes ...error) error {
+	if len(causes) > 0 && causes[0] != nil {
+		return fmt.Errorf("%w: %s: %v", domain.ErrInvalid, reason, causes[0])
+	}
 	return fmt.Errorf("%w: %s", domain.ErrInvalid, reason)
+}
+
+func invalidInput(reason, input string, cause error) error {
+	if cause != nil {
+		return fmt.Errorf("%w: %s; input=%q: %v", domain.ErrInvalid, reason, input, cause)
+	}
+	return fmt.Errorf("%w: %s; input=%q", domain.ErrInvalid, reason, input)
 }
 
 func unsupported(reason string) error {

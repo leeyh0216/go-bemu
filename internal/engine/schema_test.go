@@ -164,15 +164,15 @@ func TestSchemaPlannerFailsBeforeAdapterForUnsupportedLogicalBounds(t *testing.T
 	}
 }
 
-func TestSchemaPlannerStripsRawAdapterCause(t *testing.T) {
+func TestSchemaPlannerRetainsRawAdapterCause(t *testing.T) {
 	const secret = "duckdb_sql_secret_marker"
 	planner, err := NewSchemaPlanner(schemaTestCapabilities(t), &fakeSchemaAdapterPlanner{err: errors.New(secret)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = planner.Plan(context.Background(), testCreateSchemaIntent(t, "events", []domain.Field{{Name: "id", Type: "INT64"}}))
-	if !errors.Is(err, domain.ErrUnsupported) || strings.Contains(fmt.Sprint(err), secret) {
-		t.Fatalf("adapter planning error leaked raw cause: %v", err)
+	if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(fmt.Sprint(err), secret) {
+		t.Fatalf("adapter planning error omitted raw cause: %v", err)
 	}
 }
 
@@ -207,7 +207,7 @@ func TestSchemaPlannerEnforcesAddColumnDepthAndAtomicity(t *testing.T) {
 	}
 }
 
-func TestPlanningErrorExposesOnlyCatalogedDomainClassifications(t *testing.T) {
+func TestPlanningErrorRetainsClassificationsAndCauses(t *testing.T) {
 	tests := []struct {
 		code PlanningErrorCode
 		want error
@@ -224,7 +224,7 @@ func TestPlanningErrorExposesOnlyCatalogedDomainClassifications(t *testing.T) {
 		t.Run(string(testCase.code), func(t *testing.T) {
 			const secret = "adapter_secret_marker"
 			err := newPlanningError(testCase.code, "test", "test.attribute", "stable detail", errors.New(secret))
-			if !errors.Is(err, testCase.want) || strings.Contains(fmt.Sprint(err), secret) {
+			if !errors.Is(err, testCase.want) || !strings.Contains(fmt.Sprint(err), secret) {
 				t.Fatalf("planning error = %v, want classification %v", err, testCase.want)
 			}
 		})

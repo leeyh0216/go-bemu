@@ -28,12 +28,14 @@ func (w *Warehouse) ListTableData(ctx context.Context, request ports.TableDataRe
 	budget := tabledatabudget.NewAccumulator(request.MaxResponseBytes)
 	referenceSummary := reference.ProjectID + "\x00" + reference.DatasetID + "\x00" + reference.TableID
 	started := observability.LogSideEffectStart(ctx, "duckdb", "list_table_data",
+		"table_reference", reference,
 		"table_reference_digest", observability.Digest([]byte(referenceSummary)),
 		"offset", offset, "limit", limit, "transaction_mode", "explicit",
 		"model_version", tableDataModelVersion)
 	defer func() {
 		metrics := budget.Metrics()
 		observability.LogSideEffectEnd(ctx, "duckdb", "list_table_data", started, err,
+			"table_reference", reference, "rows", page.Rows,
 			"table_reference_digest", observability.Digest([]byte(referenceSummary)),
 			"offset", offset, "limit", limit, "row_count", len(page.Rows), "total_rows", page.TotalRows,
 			"result_bytes", metrics.Bytes, "result_digest", metrics.Digest,

@@ -88,7 +88,7 @@ func TestExecuteStatementRunsTypedInsertAndSelectPlans(t *testing.T) {
 	}
 }
 
-func TestExecuteStatementRedactsDuckDBDiagnostics(t *testing.T) {
+func TestExecuteStatementRetainsDuckDBDiagnostics(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()
@@ -110,8 +110,8 @@ func TestExecuteStatementRedactsDuckDBDiagnostics(t *testing.T) {
 	if !errors.Is(err, domain.ErrBackend) {
 		t.Fatalf("execution error = %v, want ErrBackend", err)
 	}
-	if strings.Contains(err.Error(), marker) || !strings.Contains(err.Error(), duckDBStatementBackendFailureV1) {
-		t.Fatalf("backend diagnostic was not safely redacted: %v", err)
+	if !strings.Contains(err.Error(), marker) || !strings.Contains(err.Error(), duckDBStatementBackendFailureV1) {
+		t.Fatalf("backend diagnostic lost stable code or original cause: %v", err)
 	}
 }
 
@@ -301,8 +301,8 @@ func TestExecuteStatementFailsClosedForAnalyzedOutputMismatch(t *testing.T) {
 		t.Fatalf("output mismatch error = %v, want ErrPrecondition", err)
 	}
 	for _, marker := range []string{"actual_name", "different_name"} {
-		if strings.Contains(err.Error(), marker) {
-			t.Fatalf("output mismatch leaked identifier %q: %v", marker, err)
+		if !strings.Contains(err.Error(), marker) {
+			t.Fatalf("output mismatch omitted identifier %q: %v", marker, err)
 		}
 	}
 }

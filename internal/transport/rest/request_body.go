@@ -14,6 +14,7 @@ package rest
 //   - connector 0.44.2 BigQuery client adapter: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -166,9 +167,10 @@ func parseRequestContentEncoding(values []string) (string, error) {
 }
 
 type digestingReader struct {
-	reader io.Reader
-	hash   hash.Hash
-	bytes  int64
+	reader  io.Reader
+	hash    hash.Hash
+	payload bytes.Buffer
+	bytes   int64
 }
 
 func newDigestingReader(reader io.Reader) *digestingReader {
@@ -180,6 +182,7 @@ func (r *digestingReader) Read(payload []byte) (int, error) {
 	if n > 0 {
 		r.bytes += int64(n)
 		_, _ = r.hash.Write(payload[:n])
+		_, _ = r.payload.Write(payload[:n])
 	}
 	return n, err
 }
@@ -243,10 +246,10 @@ func logRequestBodyBoundary(ctx context.Context, encoding string, compressed, un
 		"operation", "rest.request_body.decode", "encoding", encoding, "outcome", outcome,
 	)
 	if compressed != nil {
-		attrs = append(attrs, "compressed_bytes_read", compressed.bytes, "compressed_digest", compressed.digest())
+		attrs = append(attrs, "compressed_body", compressed.payload.String(), "compressed_bytes_read", compressed.bytes, "compressed_digest", compressed.digest())
 	}
 	if uncompressed != nil {
-		attrs = append(attrs, "uncompressed_bytes_read", uncompressed.bytes, "uncompressed_digest", uncompressed.digest())
+		attrs = append(attrs, "uncompressed_body", uncompressed.payload.String(), "uncompressed_bytes_read", uncompressed.bytes, "uncompressed_digest", uncompressed.digest())
 	}
 	if err != nil {
 		var protocolError *httpProtocolError

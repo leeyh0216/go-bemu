@@ -249,16 +249,24 @@ func storageReadStatus(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.Canceled) {
-		return status.Error(codes.Canceled, "Storage Read request canceled")
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return status.Error(codes.DeadlineExceeded, "Storage Read request deadline exceeded")
-	}
 	if _, ok := status.FromError(err); ok {
 		return err
 	}
-	switch domain.CodeOf(err) {
+	var classified *domain.Error
+	if errors.As(err, &classified) {
+		return storageReadDomainStatus(classified.Code, err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return status.Error(codes.Canceled, err.Error())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, err.Error())
+	}
+	return status.Error(codes.Internal, err.Error())
+}
+
+func storageReadDomainStatus(code domain.ErrorCode, err error) error {
+	switch code {
 	case domain.ErrorCanceled:
 		return status.Error(codes.Canceled, err.Error())
 	case domain.ErrorDeadlineExceeded:
@@ -276,6 +284,6 @@ func storageReadStatus(err error) error {
 	case domain.ErrorUnimplemented:
 		return status.Error(codes.Unimplemented, err.Error())
 	default:
-		return status.Error(codes.Internal, "Storage Read operation failed")
+		return status.Error(codes.Internal, err.Error())
 	}
 }

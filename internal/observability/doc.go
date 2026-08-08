@@ -1,9 +1,7 @@
-// Package observability provides protocol-boundary and side-effect logging with
-// a fail-closed data contract. Request/response bodies, SQL, row data, protobuf
-// JSON, error text, and credentials are never emitted. Opaque inputs are
-// represented by shape, byte count, item count, and SHA-256 digest in every log
-// level and configuration mode. The legacy unsafePayloads setting remains
-// parse-compatible but cannot relax this contract.
+// Package observability provides protocol-boundary and side-effect logging.
+// Diagnostic records retain request metadata, SQL, protocol messages, payloads,
+// and original errors. Operators must apply destination access, retention, and
+// transport controls that are appropriate for the data handled by the emulator.
 //
 // Protocol provenance:
 //   - gRPC server interceptors: https://grpc.io/docs/guides/interceptors/

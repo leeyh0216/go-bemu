@@ -347,7 +347,7 @@ func classifyDynamicOverwriteQueryError(stage string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
-	return fmt.Errorf("%w: %s failed", domain.ErrInvalidQuery, stage)
+	return fmt.Errorf("%w: %s failed: %w", domain.ErrInvalidQuery, stage, err)
 }
 
 func classifyDynamicOverwriteBackendError(stage string, err error) error {
@@ -357,7 +357,7 @@ func classifyDynamicOverwriteBackendError(stage string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
-	return fmt.Errorf("%w: %s failed", domain.ErrBackend, stage)
+	return fmt.Errorf("%w: %s failed: %w", domain.ErrBackend, stage, err)
 }
 
 func dynamicOverwriteSafeAttrs(operation ports.QueryOperation, destination, source domain.Table) []any {

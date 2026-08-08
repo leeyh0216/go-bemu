@@ -73,8 +73,8 @@ func (config CoordinatorConfig) Validate() error {
 // order, while the adapter decodes them using Descriptor before touching its
 // backend. WireBytes is the complete AppendRowsRequest envelope used for
 // transient weighted admission; staged storage uses a deterministic serialized
-// row estimate. Logs may include counts, fingerprints, and digests, but never
-// Descriptor or Rows.
+// row estimate. Diagnostic logs may include Descriptor and Rows alongside
+// counts and identity digests.
 // https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#appendrowsrequest
 type AppendBatch struct {
 	StreamName        string

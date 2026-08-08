@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 )
@@ -145,14 +146,10 @@ func recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				// Panic values can contain request bodies, credentials, SQL, or
-				// adapter diagnostics. Treat them as an opaque boundary and record
-				// only the Go shape. Cloud Logging recommends excluding sensitive
-				// data rather than relying on pattern redaction.
-				// https://cloud.google.com/logging/docs/audit/best-practices
 				slog.ErrorContext(r.Context(), "HTTP handler panic",
 					"event", "boundary.panic", "boundary", "http",
-					"panic_type", fmt.Sprintf("%T", recovered),
+					"panic", recovered, "panic_type", fmt.Sprintf("%T", recovered),
+					"stack", string(debug.Stack()),
 				)
 				writeError(w, errors.New("internal server error"))
 			}

@@ -24,9 +24,8 @@ const (
 	ErrorInternal           ErrorCode = "INTERNAL"
 )
 
-// Error carries a stable category across application and transport boundaries.
-// Cause is retained for logs/tests but adapters must not expose it verbatim: a
-// database error can contain row values, SQL text, or local file paths.
+// Error carries a stable category and the original cause across application
+// and transport boundaries.
 type Error struct {
 	Code      ErrorCode
 	Operation string
@@ -38,7 +37,13 @@ func (e *Error) Error() string {
 		return "<nil>"
 	}
 	if e.Operation == "" {
+		if e.Cause != nil {
+			return fmt.Sprintf("%s: %v", e.Code, e.Cause)
+		}
 		return string(e.Code)
+	}
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %s: %v", e.Operation, e.Code, e.Cause)
 	}
 	return fmt.Sprintf("%s: %s", e.Operation, e.Code)
 }

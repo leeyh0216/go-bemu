@@ -48,7 +48,7 @@ func (w *Warehouse) MaterializeQuery(ctx context.Context, request ports.QueryMat
 	started := observability.LogSideEffectStart(ctx, "duckdb", "materialize_query_destination",
 		"project_id", destination.ProjectID, "dataset_id", destination.DatasetID, "table_id", destination.TableID,
 		"write_disposition", request.WriteDisposition, "create_disposition", request.CreateDisposition,
-		"destination_exists", request.DestinationExists, "query_bytes", len(queryBytes),
+		"destination_exists", request.DestinationExists, "query", request.Query.SQL, "query_bytes", len(queryBytes),
 		"query_digest", observability.Digest(queryBytes), "statement_type", queryStatementType(request.Query.SQL),
 		"destination_schema_fingerprint", queryDestinationSchemaDigest(request.DestinationSchema),
 		"model_version", adapterModel, "transaction_mode", "explicit")

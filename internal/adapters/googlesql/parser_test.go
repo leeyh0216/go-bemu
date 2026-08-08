@@ -159,7 +159,7 @@ func TestParserRejectsScriptsAndUnsupportedDDLWithoutCommand(t *testing.T) {
 	}
 }
 
-func TestParserDelegatesNonDDLAndRedactsSyntaxErrors(t *testing.T) {
+func TestParserDelegatesNonDDLAndRetainsSyntaxErrors(t *testing.T) {
 	parser := newParser(t)
 	for _, sql := range []string{
 		"SELECT 1",
@@ -177,8 +177,8 @@ func TestParserDelegatesNonDDLAndRedactsSyntaxErrors(t *testing.T) {
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("syntax error = %v", err)
 	}
-	if strings.Contains(err.Error(), "customer_secret") || strings.Contains(err.Error(), secretSQL) {
-		t.Fatalf("syntax error leaked SQL: %v", err)
+	if !strings.Contains(err.Error(), "customer_secret") || !strings.Contains(err.Error(), secretSQL) {
+		t.Fatalf("syntax error omitted SQL: %v", err)
 	}
 }
 

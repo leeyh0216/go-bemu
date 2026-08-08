@@ -116,7 +116,7 @@ func TestStorageWriteRejectsDecimalOverflowBeforeRowMutation(t *testing.T) {
 		StreamName: table.Name() + "/streams/_default", Table: table,
 		Descriptor: descriptor, Rows: [][]byte{row}, SchemaFingerprint: "decimal", PayloadDigest: "overflow",
 	})
-	if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueOverflowV1) || strings.Contains(err.Error(), "1234.56") {
+	if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueOverflowV1) || !strings.Contains(err.Error(), "1234.56") {
 		t.Fatalf("decimal overflow error = %v", err)
 	}
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
@@ -140,7 +140,7 @@ func TestStorageWriteRejectsNonBigQueryDecimalGrammarBeforeRowMutation(t *testin
 				StreamName: table.Name() + "/streams/_default", Table: table,
 				Descriptor: descriptor, Rows: [][]byte{row}, SchemaFingerprint: "decimal", PayloadDigest: value,
 			})
-			if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueInvalidV1) || strings.Contains(err.Error(), value) || strings.Contains(err.Error(), "secret-marker") {
+			if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueInvalidV1) || !strings.Contains(err.Error(), value) {
 				t.Fatalf("decimal grammar error = %v", err)
 			}
 			if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
@@ -150,7 +150,7 @@ func TestStorageWriteRejectsNonBigQueryDecimalGrammarBeforeRowMutation(t *testin
 	}
 }
 
-func TestStorageWritePublicGRPCRedactsInvalidDecimalAndReturnsInvalidArgument(t *testing.T) {
+func TestStorageWritePublicGRPCRetainsInvalidDecimalAndReturnsInvalidArgument(t *testing.T) {
 	ctx, cancel := duckDBStorageWriteTestContext(t)
 	defer cancel()
 	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "amount", Type: "NUMERIC"}})
@@ -212,11 +212,11 @@ func TestStorageWritePublicGRPCRedactsInvalidDecimalAndReturnsInvalidArgument(t 
 	if response.GetError().GetCode() != int32(codes.InvalidArgument) {
 		t.Fatalf("AppendRows status = %#v, want INVALID_ARGUMENT", response.GetError())
 	}
-	if strings.Contains(response.String(), secret) || strings.Contains(response.String(), "secret-marker") {
-		t.Fatalf("AppendRows response exposed the decimal payload: %s", response)
+	if !strings.Contains(response.String(), secret) {
+		t.Fatalf("AppendRows response omitted the decimal payload: %s", response)
 	}
-	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), "secret-marker") {
-		t.Fatalf("Storage Write logs exposed the decimal payload: %s", logs.String())
+	if !strings.Contains(logs.String(), secret) {
+		t.Fatalf("Storage Write logs omitted the decimal payload: %s", logs.String())
 	}
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
 		t.Fatalf("invalid public ProtoRow inserted %d rows", got)
@@ -1193,7 +1193,7 @@ func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 		Descriptor: serializedDescriptor, Rows: [][]byte{serializedInvalid},
 		SchemaFingerprint: "nested-schema", PayloadDigest: "invalid-nested-row",
 	})
-	if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueInvalidV1) || strings.Contains(err.Error(), invalidMarker) {
+	if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueInvalidV1) || !strings.Contains(err.Error(), invalidMarker) {
 		t.Fatalf("invalid nested/repeated decimal error = %v", err)
 	}
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 1 {

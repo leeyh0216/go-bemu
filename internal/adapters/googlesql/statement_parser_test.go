@@ -171,7 +171,7 @@ func TestStatementParserMapsQueryAndDMLStructure(t *testing.T) {
 	}
 }
 
-func TestStatementParserRejectsBackendSyntaxWithoutLeakingSQL(t *testing.T) {
+func TestStatementParserRejectsBackendSyntaxAndRetainsSQL(t *testing.T) {
 	parser := newParser(t)
 	for _, sql := range []string{
 		"SELECT TIMESTAMPTZ '2042-01-02 03:04:05+00' AS customer_secret",
@@ -181,8 +181,8 @@ func TestStatementParserRejectsBackendSyntaxWithoutLeakingSQL(t *testing.T) {
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("Parse() = (%#v, %v), want invalid", statement, err)
 		}
-		if strings.Contains(err.Error(), "customer_secret") || strings.Contains(err.Error(), sql) {
-			t.Fatalf("error leaked submitted SQL: %v", err)
+		if !strings.Contains(err.Error(), "customer_secret") || !strings.Contains(err.Error(), sql) {
+			t.Fatalf("error omitted submitted SQL: %v", err)
 		}
 	}
 }

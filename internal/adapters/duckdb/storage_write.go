@@ -155,8 +155,9 @@ func (c *StorageWriteCoordinator) AppendDefault(ctx context.Context, batch write
 	admissionBytes := batchInFlightBytes(batch)
 	globalInFlight, streamInFlight := c.admission.snapshot(batch.StreamName)
 	started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_append_default",
-		"stream_fingerprint", storageWriteStreamFingerprint(batch.StreamName), "table", batch.Table.Name(), "start_offset", batch.StartOffset,
+		"stream", batch.StreamName, "stream_fingerprint", storageWriteStreamFingerprint(batch.StreamName), "table", batch.Table.Name(), "start_offset", batch.StartOffset,
 		"row_count", len(batch.Rows), "row_bytes", serializedRowsBytes(batch.Rows),
+		"rows", batch.Rows, "descriptor", batch.Descriptor,
 		"schema_fingerprint", batch.SchemaFingerprint, "payload_digest", batch.PayloadDigest,
 		"admission_bytes", admissionBytes, "global_in_flight_bytes", globalInFlight,
 		"stream_in_flight_bytes", streamInFlight, "transaction_mode", "explicit")
@@ -199,8 +200,9 @@ func (c *StorageWriteCoordinator) StagePending(ctx context.Context, batch writep
 	globalInFlight, streamInFlight := c.admission.snapshot(batch.StreamName)
 	globalStaged, streamStaged := c.stagedSnapshot(batch.StreamName)
 	started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_stage_pending",
-		"stream_fingerprint", storageWriteStreamFingerprint(batch.StreamName), "table", batch.Table.Name(), "start_offset", batch.StartOffset,
+		"stream", batch.StreamName, "stream_fingerprint", storageWriteStreamFingerprint(batch.StreamName), "table", batch.Table.Name(), "start_offset", batch.StartOffset,
 		"row_count", len(batch.Rows), "row_bytes", serializedRowsBytes(batch.Rows),
+		"rows", batch.Rows, "descriptor", batch.Descriptor,
 		"schema_fingerprint", batch.SchemaFingerprint, "payload_digest", batch.PayloadDigest,
 		"admission_bytes", admissionBytes, "global_in_flight_bytes", globalInFlight,
 		"stream_in_flight_bytes", streamInFlight, "global_staged_bytes", globalStaged,

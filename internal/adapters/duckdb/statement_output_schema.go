@@ -115,12 +115,12 @@ func canonicalizeDuckDBStatementOutput(
 ) ([]domain.Field, error) {
 	expected := output.schemaHints()
 	if len(observed) != len(expected) {
-		return nil, invalidDuckDBStatementOutput()
+		return nil, fmt.Errorf("%w: observed=%v expected=%v", invalidDuckDBStatementOutput(), observed, expected)
 	}
 	for index := range expected {
 		if !duckDBStatementOutputNameMatches(index, observed[index].Name, expected[index].Name) ||
 			!duckDBStatementOutputTypeMatches(observed[index], expected[index]) {
-			return nil, invalidDuckDBStatementOutput()
+			return nil, fmt.Errorf("%w: column=%d observed=%v expected=%v", invalidDuckDBStatementOutput(), index, observed[index], expected[index])
 		}
 	}
 	return expected, nil

@@ -117,7 +117,7 @@ func collectDuckDBTableBindings(
 		}
 		binding, found, err := resolve(key)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("resolve relation %v: %w", table.Path().Segments(), err)
 		}
 		if !found {
 			return nil, fmt.Errorf(
@@ -744,9 +744,9 @@ func renderIdentifierPath(path queryast.IdentifierPath) string {
 
 const duckDBGoogleSQLLoweringUnsupportedV1 = "query.googlesql.duckdb-lowering.unsupported-v1"
 
-func unsupportedDuckDBLowering(_ string, _ any) error {
+func unsupportedDuckDBLowering(category string, value any) error {
 	return fmt.Errorf(
-		"%w: code=%s semantic node is not supported by the DuckDB adapter",
-		domain.ErrUnsupported, duckDBGoogleSQLLoweringUnsupportedV1,
+		"%w: code=%s semantic node is not supported by the DuckDB adapter: category=%s value=%v",
+		domain.ErrUnsupported, duckDBGoogleSQLLoweringUnsupportedV1, category, value,
 	)
 }

@@ -54,7 +54,7 @@ func (s *Service) ReadRows(ctx context.Context, request domain.ReadRowsRequest, 
 			"event", "side_effect.error", "side_effect", "snapshot.open_range",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
 			"stream", request.StreamName,
-			"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
+			"error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
 		)
 		return domain.NewError(domain.ErrorInternal, operation, err)
 	}
@@ -64,7 +64,7 @@ func (s *Service) ReadRows(ctx context.Context, request domain.ReadRowsRequest, 
 			"event", "side_effect.error", "side_effect", "snapshot.open_range",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
 			"stream", request.StreamName,
-			"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
+			"error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
 		)
 		return domain.NewError(domain.ErrorInternal, operation, err)
 	}
@@ -86,7 +86,7 @@ func (s *Service) ReadRows(ctx context.Context, request domain.ReadRowsRequest, 
 			"stream", request.StreamName, "success", closeErr == nil,
 		}
 		if closeErr != nil {
-			attrs = append(attrs, "error_type", fmt.Sprintf("%T", closeErr), "error_digest", digest([]byte(closeErr.Error())))
+			attrs = append(attrs, "error", closeErr, "error_type", fmt.Sprintf("%T", closeErr), "error_digest", digest([]byte(closeErr.Error())))
 			if result == nil {
 				result = domain.NewError(domain.ErrorInternal, operation, closeErr)
 			}
@@ -109,7 +109,7 @@ func (s *Service) ReadRows(ctx context.Context, request domain.ReadRowsRequest, 
 				"event", "side_effect.error", "side_effect", "snapshot.iterator.next",
 				"operation", operation, "model_version", s.config.ProtocolModelVersion,
 				"stream", request.StreamName, "expected_offset", expected-entry.stream.StartOffset,
-				"error_type", fmt.Sprintf("%T", nextErr), "error_digest", digest([]byte(nextErr.Error())),
+				"error", nextErr, "error_type", fmt.Sprintf("%T", nextErr), "error_digest", digest([]byte(nextErr.Error())),
 			)
 			return domain.NewError(domain.ErrorInternal, operation, nextErr)
 		}
@@ -132,6 +132,7 @@ func (s *Service) ReadRows(ctx context.Context, request domain.ReadRowsRequest, 
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
 			"stream", request.StreamName, "offset", batch.Offset-entry.stream.StartOffset,
 			"row_count", batch.RowCount, "payload_bytes", len(batch.SerializedRows),
+			"payload", string(batch.SerializedRows), "payload_base64", batch.SerializedRows,
 			"payload_digest", digest(batch.SerializedRows),
 			"schema_fingerprint", entry.session.session.Schema.Fingerprint,
 		)

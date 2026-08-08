@@ -376,6 +376,7 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 	started := observability.LogSideEffectStart(ctx, "job_repository", "create_job",
 		"project_id", job.Reference.ProjectID, "job_id", job.Reference.JobID,
 		"location", job.Reference.Location, "job_type", "QUERY",
+		"sql", job.Configuration.SQL, "labels", job.Configuration.Labels,
 		"priority", job.Configuration.Priority, "label_count", len(job.Configuration.Labels),
 		"label_keys_fingerprint", queryLabelKeysFingerprint(job.Configuration.Labels),
 		"configuration_fingerprint", job.ConfigurationDigest)
@@ -450,6 +451,7 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job) {
 		"project_id", job.Reference.ProjectID, "job_id", job.Reference.JobID,
 		"location", job.Reference.Location, "job_state", job.State,
 		"row_count", len(result.Rows), "affected_rows", result.AffectedRows,
+		"rows", result.Rows, "schema", result.Columns,
 		"schema_fingerprint", observability.Digest([]byte(columnsSummary)), "success", job.Error == nil && persistErr == nil,
 	)
 	if job.Error != nil {
@@ -457,7 +459,8 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job) {
 		exitAttrs = append(exitAttrs, observability.ErrorAttrs(fmt.Errorf("%s", job.Error.Message))...)
 	}
 	if persistErr != nil {
-		exitAttrs = append(exitAttrs, "persistence_error_digest", observability.Digest([]byte(persistErr.Error())))
+		exitAttrs = append(exitAttrs, "persistence_error", persistErr,
+			"persistence_error_digest", observability.Digest([]byte(persistErr.Error())))
 	}
 	slog.InfoContext(ctx, "query job", exitAttrs...)
 }

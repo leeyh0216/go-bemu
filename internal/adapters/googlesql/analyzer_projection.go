@@ -112,7 +112,7 @@ func (projection *resolvedProjection) walk(node gsql.ResolvedNode) error {
 	}
 	children, err := node.GetChildNodes()
 	if err != nil {
-		return analyzerBoundaryFailureAt("resolved-children")
+		return analyzerBoundaryFailureAt("resolved-children", err)
 	}
 	for _, child := range children {
 		if child == nil {
@@ -133,11 +133,11 @@ func (projection *resolvedProjection) collectTableScan(scan *gsql.ResolvedTableS
 	projection.references = append(projection.references, registered.reference)
 	columns, err := scan.ColumnList()
 	if err != nil {
-		return analyzerBoundaryFailureAt("table-scan-columns")
+		return analyzerBoundaryFailureAt("table-scan-columns", err)
 	}
 	indices, err := scan.ColumnIndexList()
 	if err != nil {
-		return analyzerBoundaryFailureAt("table-scan-indices")
+		return analyzerBoundaryFailureAt("table-scan-indices", err)
 	}
 	if len(indices) == 0 && len(columns) <= len(registered.logical) {
 		indices = make([]int32, len(columns))
@@ -155,7 +155,7 @@ func (projection *resolvedProjection) collectTableScan(scan *gsql.ResolvedTableS
 		}
 		columnID, err := column.ColumnId()
 		if err != nil {
-			return analyzerBoundaryFailureAt("table-scan-column-id")
+			return analyzerBoundaryFailureAt("table-scan-column-id", err)
 		}
 		projection.canonicalByID[columnID] = registered.logical[fieldIndex]
 	}
@@ -165,11 +165,11 @@ func (projection *resolvedProjection) collectTableScan(scan *gsql.ResolvedTableS
 func (projection *resolvedProjection) registeredTable(scan *gsql.ResolvedTableScan) (registeredTable, error) {
 	tableNode, err := scan.Table()
 	if err != nil || tableNode == nil {
-		return registeredTable{}, analyzerBoundaryFailureAt("table-scan-table")
+		return registeredTable{}, analyzerBoundaryFailureAt("table-scan-table", err)
 	}
 	fullName, err := tableNode.FullName()
 	if err != nil {
-		return registeredTable{}, analyzerBoundaryFailureAt("table-scan-full-name")
+		return registeredTable{}, analyzerBoundaryFailureAt("table-scan-full-name", err)
 	}
 	registered, found := projection.snapshot.tables[strings.ToLower(fullName)]
 	if !found {
@@ -289,13 +289,13 @@ func (projection *resolvedProjection) expressionBindings(
 ) ([]semantic.ExpressionTypeDescriptor, bool, error) {
 	expressions, err := queryast.Expressions(syntax)
 	if err != nil {
-		return nil, false, analyzerBoundaryFailureAt("syntax-expressions")
+		return nil, false, analyzerBoundaryFailureAt("syntax-expressions", err)
 	}
 	resolvedByRange := make(map[byteRange][]semantic.Type)
 	for _, expression := range projection.expressions {
 		range_, present, err := resolvedByteRange(expression)
 		if err != nil {
-			return nil, false, analyzerBoundaryFailureAt("resolved-expression-location")
+			return nil, false, analyzerBoundaryFailureAt("resolved-expression-location", err)
 		}
 		if !present {
 			continue
@@ -353,11 +353,11 @@ func (projection *resolvedProjection) resolvedExpressionType(expression gsql.Res
 	if columnReference, ok := expression.(*gsql.ResolvedColumnRef); ok {
 		column, err := columnReference.Column()
 		if err != nil || column == nil {
-			return semantic.Type{}, analyzerBoundaryFailureAt("resolved-column-reference")
+			return semantic.Type{}, analyzerBoundaryFailureAt("resolved-column-reference", err)
 		}
 		columnID, err := column.ColumnId()
 		if err != nil {
-			return semantic.Type{}, analyzerBoundaryFailureAt("resolved-column-reference-id")
+			return semantic.Type{}, analyzerBoundaryFailureAt("resolved-column-reference-id", err)
 		}
 		if canonical, found := projection.canonicalByID[columnID]; found {
 			return canonical, nil
@@ -365,7 +365,7 @@ func (projection *resolvedProjection) resolvedExpressionType(expression gsql.Res
 	}
 	typeNode, err := expression.Type()
 	if err != nil || typeNode == nil {
-		return semantic.Type{}, analyzerBoundaryFailureAt("resolved-expression-type")
+		return semantic.Type{}, analyzerBoundaryFailureAt("resolved-expression-type", err)
 	}
 	return semanticTypeFromGoogleSQL(typeNode)
 }

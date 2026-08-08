@@ -7,6 +7,6 @@
 //   - https://pkg.go.dev/runtime/debug#ReadBuildInfo
 //   - https://pkg.go.dev/net/http#Server
 //
-// The handler never logs Authorization values or stack text. Boundary logs use
-// only operation, size, digest, duration, and truncation metadata.
+// Diagnostic payloads and authorization failures can be emitted in logs. Run
+// the listener on a protected network and restrict access to its log sink.
 package admin

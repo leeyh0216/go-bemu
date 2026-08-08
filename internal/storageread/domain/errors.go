@@ -25,9 +25,8 @@ const (
 	ErrorInternal           ErrorCode = "INTERNAL"
 )
 
-// Error carries a stable category across the application/transport boundary.
-// Adapters must not expose Cause directly to clients because backend errors can
-// contain SQL values, file names, or credentials.
+// Error carries a stable category and the original cause across the
+// application/transport boundary.
 type Error struct {
 	Code      ErrorCode
 	Operation string
@@ -39,7 +38,13 @@ func (e *Error) Error() string {
 		return "<nil>"
 	}
 	if e.Operation == "" {
+		if e.Cause != nil {
+			return fmt.Sprintf("%s: %v", e.Code, e.Cause)
+		}
 		return string(e.Code)
+	}
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %s: %v", e.Operation, e.Code, e.Cause)
 	}
 	return fmt.Sprintf("%s: %s", e.Operation, e.Code)
 }

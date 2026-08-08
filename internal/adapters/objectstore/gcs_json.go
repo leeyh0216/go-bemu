@@ -178,8 +178,7 @@ func (g *GCSJSON) Open(ctx context.Context, object loadports.ObjectInfo) (io.Rea
 		return nil, fmt.Errorf("request object media: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		_ = response.Body.Close()
-		return nil, g.httpStatusError(response.StatusCode)
+		return nil, g.readHTTPStatusError(response)
 	}
 	return response.Body, nil
 }
@@ -195,7 +194,7 @@ func (g *GCSJSON) getJSON(ctx context.Context, requestURL string, target any) er
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return g.httpStatusError(response.StatusCode)
+		return g.readHTTPStatusError(response)
 	}
 	limited := io.LimitReader(response.Body, g.maxMetadataBytes+1)
 	payload, err := io.ReadAll(limited)
@@ -211,14 +210,36 @@ func (g *GCSJSON) getJSON(ctx context.Context, requestURL string, target any) er
 	return nil
 }
 
-func (g *GCSJSON) httpStatusError(status int) error {
+func (g *GCSJSON) readHTTPStatusError(response *http.Response) error {
+	payload, readErr := io.ReadAll(io.LimitReader(response.Body, g.maxMetadataBytes+1))
+	_ = response.Body.Close()
+	classification := g.classifyHTTPStatus(response.StatusCode)
+	if readErr != nil {
+		if classification != nil {
+			return fmt.Errorf("%w: read object-store HTTP %d error response: %v", classification, response.StatusCode, readErr)
+		}
+		return fmt.Errorf("read object-store HTTP %d error response: %w", response.StatusCode, readErr)
+	}
+	if int64(len(payload)) > g.maxMetadataBytes {
+		if classification != nil {
+			return fmt.Errorf("%w: object-store HTTP %d error response exceeds configured limit", classification, response.StatusCode)
+		}
+		return fmt.Errorf("object-store HTTP %d error response exceeds configured limit", response.StatusCode)
+	}
+	if classification != nil {
+		return fmt.Errorf("%w: object-store HTTP status %d: %s", classification, response.StatusCode, string(payload))
+	}
+	return fmt.Errorf("object-store HTTP status %d: %s", response.StatusCode, string(payload))
+}
+
+func (g *GCSJSON) classifyHTTPStatus(status int) error {
 	if status == http.StatusNotFound {
-		return fmt.Errorf("%w: object-store HTTP status %d", domain.ErrNotFound, status)
+		return domain.ErrNotFound
 	}
 	if status == http.StatusPreconditionFailed || status == http.StatusForbidden || status == http.StatusUnauthorized {
-		return fmt.Errorf("%w: object-store HTTP status %d", domain.ErrPrecondition, status)
+		return domain.ErrPrecondition
 	}
-	return fmt.Errorf("object-store HTTP status %d", status)
+	return nil
 }
 
 func (g *GCSJSON) objectURL(bucket, object string, values url.Values) string {

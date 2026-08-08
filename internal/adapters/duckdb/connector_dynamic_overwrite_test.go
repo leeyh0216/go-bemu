@@ -8,6 +8,7 @@ package duckdb
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -82,8 +83,12 @@ func TestSparkDynamicTimePartitionOverwriteAnalysisIsSourcePinnedAndFailClosed(t
 			t.Fatalf("profile drift log lacks %q: %s", required, logged)
 		}
 	}
-	if strings.Contains(logged, "sensitive_payload_marker") || strings.Contains(logged, driftedAlias) {
-		t.Fatalf("profile drift log exposed SQL payload: %s", logged)
+	var rejection map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &rejection); err != nil {
+		t.Fatalf("decode profile drift log: %v", err)
+	}
+	if rejection["query"] != driftedAlias || !strings.Contains(logged, "sensitive_payload_marker") {
+		t.Fatalf("profile drift log omitted SQL payload: %s", logged)
 	}
 	onePartSource := strings.ReplaceAll(statement, "test-project.analytics.temporary", "temporary")
 	if _, err := analyzer.AnalyzeQuery(ctx, ports.QueryRequest{
@@ -113,7 +118,7 @@ func TestSparkDynamicTimePartitionOverwriteAnalysisIsSourcePinnedAndFailClosed(t
 	}
 }
 
-func TestConnectorOverwriteBackendErrorsDoNotExposePhysicalCause(t *testing.T) {
+func TestConnectorOverwriteBackendErrorsRetainPhysicalCause(t *testing.T) {
 	const secretPhysicalDetail = `Catalog Error: Table "secret_physical_table" does not exist`
 	raw := errors.New(secretPhysicalDetail)
 	for _, test := range []struct {
@@ -128,9 +133,8 @@ func TestConnectorOverwriteBackendErrorsDoNotExposePhysicalCause(t *testing.T) {
 			if !errors.Is(test.err, test.want) {
 				t.Fatalf("classified error = %v, want %v", test.err, test.want)
 			}
-			if errors.Is(test.err, raw) || strings.Contains(test.err.Error(), secretPhysicalDetail) ||
-				strings.Contains(test.err.Error(), "secret_physical_table") {
-				t.Fatalf("classified error exposed physical cause: %v", test.err)
+			if !errors.Is(test.err, raw) || !strings.Contains(test.err.Error(), secretPhysicalDetail) {
+				t.Fatalf("classified error omitted physical cause: %v", test.err)
 			}
 		})
 	}
@@ -141,8 +145,7 @@ func TestConnectorOverwriteBackendErrorsDoNotExposePhysicalCause(t *testing.T) {
 		t.Fatalf("deadline classification = %v", got)
 	}
 	wrappedCancellation := fmt.Errorf("%s: %w", secretPhysicalDetail, context.Canceled)
-	if got := classifyDynamicOverwriteQueryError("execute overwrite", wrappedCancellation); got != context.Canceled ||
-		strings.Contains(got.Error(), "secret_physical_table") {
+	if got := classifyDynamicOverwriteQueryError("execute overwrite", wrappedCancellation); got != context.Canceled {
 		t.Fatalf("wrapped cancellation classification = %v", got)
 	}
 }

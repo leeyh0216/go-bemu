@@ -140,8 +140,8 @@ func TestSweepOrphansRetainsTombstoneUntilDiscardSucceeds(t *testing.T) {
 	}
 
 	output := logs.String()
-	if strings.Contains(output, stream.Name) {
-		t.Fatalf("cleanup logs exposed a raw stream resource: %s", output)
+	if !strings.Contains(output, stream.Name) {
+		t.Fatalf("cleanup logs omitted the raw stream resource: %s", output)
 	}
 	for _, required := range []string{
 		`"stream_fingerprint":"` + digest([]byte(stream.Name)) + `"`,

@@ -42,7 +42,7 @@ func TestExpressionParserMapsStorageReadPredicate(t *testing.T) {
 	}
 }
 
-func TestExpressionParserFailsClosedAndRedactsSubmittedPredicate(t *testing.T) {
+func TestExpressionParserFailsClosedAndRetainsInvalidPredicate(t *testing.T) {
 	parser := newParser(t)
 	tests := []struct {
 		input string
@@ -57,8 +57,8 @@ func TestExpressionParserFailsClosedAndRedactsSubmittedPredicate(t *testing.T) {
 		if !errors.Is(err, tt.kind) {
 			t.Fatalf("ParseExpression(%q) = (%#v, %v), want %v", tt.input, expression, err, tt.kind)
 		}
-		if strings.Contains(err.Error(), "customer_secret") || strings.Contains(err.Error(), tt.input) {
-			t.Fatalf("error leaked predicate: %v", err)
+		if tt.kind == domain.ErrInvalid && (!strings.Contains(err.Error(), "customer_secret") || !strings.Contains(err.Error(), tt.input)) {
+			t.Fatalf("error omitted predicate: %v", err)
 		}
 	}
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
-func TestAnalyzeQueryFindsStructuralRelationsWithoutPayloadLogging(t *testing.T) {
+func TestAnalyzeQueryFindsStructuralRelationsAndLogsPayload(t *testing.T) {
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()
 	warehouse, err := New("")
@@ -53,10 +53,10 @@ func TestAnalyzeQueryFindsStructuralRelationsWithoutPayloadLogging(t *testing.T)
 			t.Fatalf("reference %d = %#v, want %#v", index, actual, expected)
 		}
 	}
-	if output := logs.String(); strings.Contains(output, secretLiteral) {
-		t.Fatalf("query payload leaked from analysis logs: %s", output)
+	if output := logs.String(); !strings.Contains(output, secretLiteral) {
+		t.Fatalf("query payload omitted from analysis logs: %s", output)
 	} else if !strings.Contains(output, "query_digest") || !strings.Contains(output, "referenced_table_count") {
-		t.Fatalf("safe analysis shape fields missing from logs: %s", output)
+		t.Fatalf("analysis shape fields missing from logs: %s", output)
 	}
 }
 

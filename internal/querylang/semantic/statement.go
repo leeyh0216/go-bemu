@@ -428,14 +428,14 @@ func validateRelationBindings(
 		order = append(order, key)
 	}
 	if len(descriptors) != len(expected) {
-		return nil, nil, relationBindingFailure()
+		return nil, nil, relationBindingFailure(relations...)
 	}
 
 	bindings := make(map[queryast.NodeKey]RelationBinding, len(descriptors))
 	for _, descriptor := range descriptors {
 		relation, exists := expected[descriptor.Key]
 		if !exists || descriptor.Key.SourceDigest() != syntax.Source().Digest() {
-			return nil, nil, relationBindingFailure()
+			return nil, nil, relationBindingFailure(relations...)
 		}
 		if _, duplicate := bindings[descriptor.Key]; duplicate {
 			return nil, nil, relationBindingFailure()
@@ -495,8 +495,14 @@ func validateExpressionBindings(
 	return bindings, order, nil
 }
 
-func relationBindingFailure() error {
-	return fmt.Errorf("%w: code=%s analyzed relation binding is invalid", domain.ErrPrecondition, ErrorRelationBindingInvalidV1)
+func relationBindingFailure(relations ...queryast.Relation) error {
+	paths := make([][]string, 0, len(relations))
+	for _, relation := range relations {
+		if table, ok := relation.(*queryast.TableRelation); ok {
+			paths = append(paths, table.Path().Segments())
+		}
+	}
+	return fmt.Errorf("%w: code=%s analyzed relation binding is invalid: unresolved_relations=%v", domain.ErrPrecondition, ErrorRelationBindingInvalidV1, paths)
 }
 
 func expressionBindingFailure() error {

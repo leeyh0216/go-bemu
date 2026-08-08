@@ -11,7 +11,7 @@ import (
 )
 
 // executeStaticOverwrite applies the typed constant-false MERGE operation. The
-// request SQL is used only for safe diagnostics after ExecuteQueryOperation has
+// request SQL is used only for diagnostics after ExecuteQueryOperation has
 // verified its digest; this adapter never reparses or executes the request text.
 func (w *Warehouse) executeStaticOverwrite(
 	ctx context.Context,

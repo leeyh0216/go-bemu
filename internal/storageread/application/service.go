@@ -118,6 +118,7 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		"operation", operation, "model_version", s.config.ProtocolModelVersion,
 		"table", request.Table, "format", request.Format.String(),
 		"selected_field_count", len(request.SelectedFields),
+		"row_restriction", request.RowRestriction,
 		"row_restriction_bytes", len(request.RowRestriction),
 		"row_restriction_digest", digest([]byte(request.RowRestriction)),
 	)
@@ -126,7 +127,7 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		s.logger.ErrorContext(ctx, "read snapshot materialization failed",
 			"event", "side_effect.error", "side_effect", "snapshot.materialize",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
-			"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
+			"error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
 		)
 		return domain.Session{}, s.classifyMaterializationFailure(ctx, operation, err)
 	}
@@ -136,7 +137,7 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		s.logger.ErrorContext(ctx, "read snapshot materialization returned no snapshot",
 			"event", "side_effect.error", "side_effect", "snapshot.materialize",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
-			"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
+			"error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
 		)
 		return domain.Session{}, domain.NewError(domain.ErrorInternal, operation, err)
 	}
@@ -146,9 +147,9 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		s.logger.ErrorContext(ctx, "read snapshot metadata violated the port contract",
 			"event", "side_effect.error", "side_effect", "snapshot.materialize",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
-			"format", request.Format.String(), "schema_bytes", len(metadata.Schema.Serialized),
+			"format", request.Format.String(), "schema", metadata.Schema.Serialized, "schema_bytes", len(metadata.Schema.Serialized),
 			"schema_fingerprint", digest(metadata.Schema.Serialized),
-			"error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
+			"error", err, "error_type", fmt.Sprintf("%T", err), "error_digest", digest([]byte(err.Error())),
 		)
 		closeErr := s.closeUnstoredSnapshot(ctx, operation, "invalid_metadata", snapshot)
 		return domain.Session{}, domain.NewError(domain.ErrorInternal, operation, errors.Join(err, closeErr))
@@ -164,6 +165,7 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		"operation", operation, "model_version", s.config.ProtocolModelVersion,
 		"format", metadata.Schema.Format.String(), "row_count", metadata.RowCount,
 		"estimated_bytes", metadata.EstimatedBytes, "retained_bytes", metadata.RetainedBytes,
+		"schema", metadata.Schema.Serialized,
 		"schema_bytes", len(metadata.Schema.Serialized),
 		"schema_fingerprint", metadata.Schema.Fingerprint,
 	)
@@ -223,8 +225,8 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 
 // classifyMaterializationFailure separates caller cancellation from the
 // service-owned cancellation used by Close. Both status categories are stable
-// public protocol outcomes; the adapter cause remains available only through
-// errors.Is/internal digests and is never rendered by domain.Error.Error.
+// public protocol outcomes; the original adapter cause remains attached for
+// transport responses and operator diagnostics.
 // Source: https://grpc.io/docs/guides/status-codes/
 func (s *Service) classifyMaterializationFailure(ctx context.Context, operation string, err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -235,7 +237,7 @@ func (s *Service) classifyMaterializationFailure(ctx context.Context, operation 
 		closed := s.closed
 		s.mu.RUnlock()
 		if closed {
-			return domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Read service closed during materialization"))
+			return domain.NewError(domain.ErrorFailedPrecondition, operation, fmt.Errorf("Storage Read service closed during materialization: %w", err))
 		}
 	}
 	// Outbound adapters classify request, capability, and lookup failures.

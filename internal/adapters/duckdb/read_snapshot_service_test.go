@@ -391,8 +391,8 @@ func TestDuckDBReadSnapshotLogsOpaquePayloadShapesAndSideEffects(t *testing.T) {
 	}
 	output := logs.String()
 	for _, raw := range []string{"restriction-secret", tempDir, "SELECT "} {
-		if strings.Contains(output, raw) {
-			t.Fatalf("structured logs leaked raw value %q: %s", raw, output)
+		if !strings.Contains(output, raw) {
+			t.Fatalf("structured logs omitted raw value %q: %s", raw, output)
 		}
 	}
 	for _, required := range []string{
