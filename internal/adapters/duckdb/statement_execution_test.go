@@ -72,8 +72,11 @@ func TestExecuteStatementRunsTypedInsertAndSelectPlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	analyzedSelect := selectFixture.semanticStatement(selectStatement, map[queryast.NodeKey]duckDBTableBinding{
+	analyzedSelect := selectFixture.semanticStatementWithOutput(selectStatement, map[queryast.NodeKey]duckDBTableBinding{
 		selectTarget.NodeKey(): selectFixture.physicalBinding(reference),
+	}, []semantic.ColumnDescriptor{
+		semanticScalarColumn(t, "id", semantic.TypeInt64),
+		semanticScalarColumn(t, "payload", semantic.TypeString),
 	})
 	result, err := warehouse.ExecuteStatement(ctx, analyzedSelect)
 	if err != nil {
@@ -101,7 +104,9 @@ func TestExecuteStatementRedactsDuckDBDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = warehouse.ExecuteStatement(ctx, fixture.semanticStatement(statement, nil))
+	_, err = warehouse.ExecuteStatement(ctx, fixture.semanticStatementWithOutput(statement, nil,
+		[]semantic.ColumnDescriptor{semanticScalarColumn(t, marker, semantic.TypeString)},
+	))
 	if !errors.Is(err, domain.ErrBackend) {
 		t.Fatalf("execution error = %v, want ErrBackend", err)
 	}
@@ -144,8 +149,11 @@ func TestMaterializeStatementCreatesDestinationFromOneTypedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	analyzed := fixture.semanticStatement(selectStatement, map[queryast.NodeKey]duckDBTableBinding{
+	analyzed := fixture.semanticStatementWithOutput(selectStatement, map[queryast.NodeKey]duckDBTableBinding{
 		source.NodeKey(): fixture.physicalBinding(sourceReference),
+	}, []semantic.ColumnDescriptor{
+		semanticScalarColumn(t, "id", semantic.TypeInt64),
+		semanticScalarColumn(t, "payload", semantic.TypeString),
 	})
 	destinationReference := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "created"}
 	destination, err := NewStatementDestination(StatementDestinationDescriptor{
@@ -200,6 +208,153 @@ func TestStatementDestinationOwnsCanonicalSchema(t *testing.T) {
 	}
 }
 
+func TestStatementOutputPreservesNestedRepeatedBigNumericIdentity(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	fixture := newRendererASTFixture(t)
+
+	physicalBigNumeric := fixture.scalarType(queryast.TypeBigNumeric, nil, nil)
+	first, err := queryast.NewCastExpression(
+		fixture.key("cast"), fixture.stringLiteral("1.000000000000000001"), physicalBigNumeric, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := queryast.NewCastExpression(
+		fixture.key("cast"), fixture.stringLiteral("2.000000000000000002"), physicalBigNumeric, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amounts := fixture.arrayLiteral(physicalBigNumeric, first, second)
+	payload := fixture.structLiteral([]string{"amounts"}, []queryast.Expression{amounts})
+	body := fixture.selectBody(fixture.selectItem(payload, "payload"))
+	query, err := queryast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syntax, err := queryast.NewSelectStatement(fixture.source(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logicalBigNumeric := semantic.TypeDescriptor{
+		Kind: semantic.TypeBigNumeric, RoundingMode: domain.RoundingModeHalfEven,
+	}
+	logicalPayload, err := semantic.NewType(semantic.TypeDescriptor{
+		Kind: semantic.TypeStruct,
+		Fields: []semantic.FieldDescriptor{{
+			Name: "amounts",
+			Type: semantic.TypeDescriptor{Kind: semantic.TypeArray, Element: &logicalBigNumeric},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := fixture.semanticStatementWithOutput(syntax, nil, []semantic.ColumnDescriptor{{
+		Name: "payload", Type: logicalPayload,
+	}})
+
+	executed, err := warehouse.ExecuteStatement(ctx, statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNestedRepeatedBigNumericIdentity(t, executed.Columns)
+
+	destination, err := NewStatementDestination(StatementDestinationDescriptor{
+		Reference: domain.TableReference{
+			ProjectID: "test-project", DatasetID: "analytics", TableID: "nested_decimal_result",
+		},
+		Exists: false, WriteDisposition: domain.WriteEmpty, CreateDisposition: domain.CreateIfNeeded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	materialized, err := warehouse.MaterializeStatement(ctx, statement, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNestedRepeatedBigNumericIdentity(t, materialized.QueryResult.Columns)
+}
+
+func TestExecuteStatementFailsClosedForAnalyzedOutputMismatch(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	fixture := newRendererASTFixture(t)
+	body := fixture.selectBody(fixture.selectItem(fixture.integer("1"), "actual_name"))
+	query, err := queryast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syntax, err := queryast.NewSelectStatement(fixture.source(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := fixture.semanticStatementWithOutput(syntax, nil, []semantic.ColumnDescriptor{
+		semanticScalarColumn(t, "different_name", semantic.TypeInt64),
+	})
+	_, err = warehouse.ExecuteStatement(ctx, statement)
+	if !errors.Is(err, domain.ErrPrecondition) {
+		t.Fatalf("output mismatch error = %v, want ErrPrecondition", err)
+	}
+	for _, marker := range []string{"actual_name", "different_name"} {
+		if strings.Contains(err.Error(), marker) {
+			t.Fatalf("output mismatch leaked identifier %q: %v", marker, err)
+		}
+	}
+}
+
+func TestMaterializeStatementUsesCanonicalAnonymousOutputName(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	fixture := newRendererASTFixture(t)
+	body := fixture.selectBody(fixture.selectItem(fixture.integer("7"), ""))
+	query, err := queryast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syntax, err := queryast.NewSelectStatement(fixture.source(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := fixture.semanticStatementWithOutput(syntax, nil, []semantic.ColumnDescriptor{
+		semanticScalarColumn(t, "f0_", semantic.TypeInt64),
+	})
+	destinationReference := domain.TableReference{
+		ProjectID: "test-project", DatasetID: "analytics", TableID: "anonymous_result",
+	}
+	destination, err := NewStatementDestination(StatementDestinationDescriptor{
+		Reference: destinationReference, Exists: false,
+		WriteDisposition: domain.WriteEmpty, CreateDisposition: domain.CreateIfNeeded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := warehouse.MaterializeStatement(ctx, statement, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.QueryResult.Columns) != 1 || result.QueryResult.Columns[0].Name != "f0_" {
+		t.Fatalf("canonical anonymous schema = %#v", result.QueryResult.Columns)
+	}
+	physical, err := renderPhysicalTable(destinationReference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value int64
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT "+quoteIdentifier("f0_")+" FROM "+physical).Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != 7 {
+		t.Fatalf("canonical anonymous value = %d, want 7", value)
+	}
+}
+
 func newStatementExecutionWarehouse(t *testing.T, ctx context.Context) *Warehouse {
 	t.Helper()
 	warehouse, err := New("")
@@ -240,4 +395,26 @@ func newTypedSourceSeedStatement(t *testing.T, reference domain.TableReference) 
 	return fixture.semanticStatement(statement, map[queryast.NodeKey]duckDBTableBinding{
 		target.NodeKey(): fixture.physicalBinding(reference),
 	})
+}
+
+func semanticScalarColumn(t *testing.T, name string, kind semantic.TypeKind) semantic.ColumnDescriptor {
+	t.Helper()
+	typ, err := semantic.NewType(semantic.TypeDescriptor{Kind: kind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return semantic.ColumnDescriptor{Name: name, Type: typ}
+}
+
+func assertNestedRepeatedBigNumericIdentity(t *testing.T, fields []domain.Field) {
+	t.Helper()
+	if len(fields) != 1 || fields[0].Name != "payload" || fields[0].Type != "RECORD" ||
+		fields[0].Mode != "NULLABLE" || len(fields[0].Fields) != 1 {
+		t.Fatalf("nested output schema = %#v", fields)
+	}
+	amounts := fields[0].Fields[0]
+	if amounts.Name != "amounts" || amounts.Type != "BIGNUMERIC" || amounts.Mode != "REPEATED" ||
+		amounts.Precision != nil || amounts.Scale != nil || amounts.RoundingMode != domain.RoundingModeHalfEven {
+		t.Fatalf("repeated BIGNUMERIC identity = %#v", amounts)
+	}
 }

@@ -644,6 +644,14 @@ func (fixture *rendererASTFixture) semanticStatement(
 	statement queryast.Statement,
 	bindings map[queryast.NodeKey]duckDBTableBinding,
 ) semantic.Statement {
+	return fixture.semanticStatementWithOutput(statement, bindings, nil)
+}
+
+func (fixture *rendererASTFixture) semanticStatementWithOutput(
+	statement queryast.Statement,
+	bindings map[queryast.NodeKey]duckDBTableBinding,
+	output []semantic.ColumnDescriptor,
+) semantic.Statement {
 	fixture.t.Helper()
 	relations, err := queryast.Relations(statement)
 	if err != nil {
@@ -668,7 +676,7 @@ func (fixture *rendererASTFixture) semanticStatement(
 	}
 	analyzed, err := semantic.NewStatement(semantic.StatementDescriptor{
 		Syntax: statement, ResolvedKind: statement.Kind(), RelationBindings: descriptors,
-		ExpressionsComplete: false,
+		ExpressionsComplete: false, OutputColumns: output,
 	})
 	if err != nil {
 		fixture.t.Fatal(err)

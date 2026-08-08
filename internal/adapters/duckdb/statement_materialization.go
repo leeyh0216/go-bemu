@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
@@ -127,6 +128,10 @@ func (w *Warehouse) MaterializeStatement(
 	if !plan.returnsRows() {
 		return result, fmt.Errorf("%w: destination requires a row-producing statement", domain.ErrInvalidQuery)
 	}
+	output, err := newDuckDBStatementOutput(statement, true)
+	if err != nil {
+		return result, err
+	}
 	if !destination.exists && destination.createDisposition == domain.CreateNever {
 		return result, fmt.Errorf("%w: statement destination does not exist", domain.ErrNotFound)
 	}
@@ -175,17 +180,18 @@ func (w *Warehouse) MaterializeStatement(
 	if err := stageDuckDBStatementPlan(ctx, tx, staging, plan); err != nil {
 		return result, err
 	}
-	var schemaHints []domain.Field
-	if destination.exists {
-		schemaHints = destination.schema
-	}
-	queryResult, err := readMaterializedQueryResult(ctx, tx, staging, schemaHints)
+	queryResult, err := readMaterializedQueryResult(ctx, tx, staging, output.schemaHints())
 	if err != nil {
 		return result, err
 	}
-	if err := normalizeMaterializedColumnNames(ctx, tx, staging, &queryResult); err != nil {
+	canonicalOutput, err := canonicalizeDuckDBStatementOutput(queryResult.Columns, output)
+	if err != nil {
 		return result, err
 	}
+	if err := alignMaterializedStatementColumnNames(ctx, tx, staging, queryResult.Columns, canonicalOutput); err != nil {
+		return result, err
+	}
+	queryResult.Columns = canonicalOutput
 	if destination.exists {
 		if err := validateExistingQueryDestinationShape(queryResult.Columns, destination.schema, destination.writeDisposition); err != nil {
 			return result, err
@@ -227,6 +233,69 @@ func stageDuckDBStatementPlan(
 	statement := "CREATE TEMP TABLE " + quoteIdentifier(staging) + " AS " + plan.statementSQL()
 	_, err := tx.ExecContext(ctx, statement, plan.bindArguments()...)
 	return err
+}
+
+func alignMaterializedStatementColumnNames(
+	ctx context.Context,
+	tx *sql.Tx,
+	staging string,
+	observed, expected []domain.Field,
+) error {
+	if tx == nil || staging == "" || len(observed) != len(expected) {
+		return invalidDuckDBStatementOutput()
+	}
+	targets := make(map[string]struct{}, len(expected))
+	occupied := make(map[string]struct{}, len(observed)+len(expected))
+	for _, field := range observed {
+		occupied[strings.ToLower(field.Name)] = struct{}{}
+	}
+	for _, field := range expected {
+		key := strings.ToLower(field.Name)
+		if key == "" {
+			return invalidDuckDBStatementOutput()
+		}
+		if _, duplicate := targets[key]; duplicate {
+			return invalidDuckDBStatementOutput()
+		}
+		targets[key] = struct{}{}
+		occupied[key] = struct{}{}
+	}
+
+	type columnRename struct {
+		temporary string
+		target    string
+	}
+	sequence := queryMaterializationSequence.Add(1)
+	renamed := make([]columnRename, 0, len(expected))
+	for index := range expected {
+		if observed[index].Name == expected[index].Name {
+			continue
+		}
+		temporary := fmt.Sprintf("__bqemu_output_column_%d_%d", sequence, index)
+		for suffix := 1; ; suffix++ {
+			if _, collision := occupied[strings.ToLower(temporary)]; !collision {
+				break
+			}
+			temporary = fmt.Sprintf("__bqemu_output_column_%d_%d_%d", sequence, index, suffix)
+		}
+		occupied[strings.ToLower(temporary)] = struct{}{}
+		if _, err := tx.ExecContext(ctx,
+			"ALTER TABLE "+quoteIdentifier(staging)+" RENAME COLUMN "+
+				quoteIdentifier(observed[index].Name)+" TO "+quoteIdentifier(temporary),
+		); err != nil {
+			return err
+		}
+		renamed = append(renamed, columnRename{temporary: temporary, target: expected[index].Name})
+	}
+	for _, rename := range renamed {
+		if _, err := tx.ExecContext(ctx,
+			"ALTER TABLE "+quoteIdentifier(staging)+" RENAME COLUMN "+
+				quoteIdentifier(rename.temporary)+" TO "+quoteIdentifier(rename.target),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func statementDestinationFingerprint(reference domain.TableReference) string {

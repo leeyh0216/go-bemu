@@ -35,6 +35,10 @@ func (w *Warehouse) ExecuteStatement(
 	if err != nil {
 		return domain.QueryResult{}, err
 	}
+	output, err := newDuckDBStatementOutput(statement, plan.returnsRows())
+	if err != nil {
+		return domain.QueryResult{}, err
+	}
 
 	started := observability.LogSideEffectStart(ctx, "duckdb", "execute_statement",
 		"statement_kind", string(statement.Kind()),
@@ -54,14 +58,14 @@ func (w *Warehouse) ExecuteStatement(
 		)
 	}()
 
-	return executeDuckDBStatementPlan(ctx, w.db, plan, nil)
+	return executeDuckDBStatementPlan(ctx, w.db, plan, output)
 }
 
 func executeDuckDBStatementPlan(
 	ctx context.Context,
 	runner duckDBStatementRunner,
 	plan duckDBStatementPlan,
-	schemaHints []domain.Field,
+	output duckDBStatementOutput,
 ) (domain.QueryResult, error) {
 	if runner == nil {
 		return domain.QueryResult{}, fmt.Errorf("%w: DuckDB statement runner is missing", domain.ErrPrecondition)
@@ -84,15 +88,19 @@ func executeDuckDBStatementPlan(
 		return domain.QueryResult{}, err
 	}
 	defer rows.Close()
-	return readDuckDBStatementRows(rows, schemaHints)
+	return readDuckDBStatementRows(rows, output)
 }
 
-func readDuckDBStatementRows(rows *sql.Rows, schemaHints []domain.Field) (domain.QueryResult, error) {
+func readDuckDBStatementRows(rows *sql.Rows, output duckDBStatementOutput) (domain.QueryResult, error) {
 	columnTypes, err := rows.ColumnTypes()
 	if err != nil {
 		return domain.QueryResult{}, err
 	}
-	columns, err := queryResultSchema(columnTypes, schemaHints)
+	observed, err := queryResultSchema(columnTypes, output.schemaHints())
+	if err != nil {
+		return domain.QueryResult{}, err
+	}
+	columns, err := canonicalizeDuckDBStatementOutput(observed, output)
 	if err != nil {
 		return domain.QueryResult{}, err
 	}
