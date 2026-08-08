@@ -14,6 +14,8 @@
   Read/Write, indirect load, MERGE, types, and authentication flows.
 - [Compatibility](compatibility.md): implemented, partial, registered, planned,
   and unsupported behavior.
+- [Local client credentials and TLS](client-credentials-and-tls.md): disposable
+  credentials, loopback token exchange, TLS trust, and client-specific setup.
 - [Schema evolution and CDC](schema-evolution-cdc.md): additive schema rules,
   Storage Write schema changes, CDC ordering, and explicit current limits.
 - [Dynamic partition overwrite](dynamic-partition-overwrite.md): pinned Spark

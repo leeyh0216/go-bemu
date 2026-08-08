@@ -203,6 +203,11 @@ certificate SAN. TLS only protects transport; it does not add the token
 acquisition or IAM semantics described by [Google Cloud
 authentication](https://cloud.google.com/docs/authentication).
 
+Strict clients can still require a valid credential file and token exchange.
+[Local client credentials and TLS](docs/en/client-credentials-and-tls.md)
+documents the single generation command, direct-token alternative, Python,
+`bq`, Spark, Docker Compose, and development-container setup.
+
 <!-- section: documentation -->
 ## Documentation
 
@@ -210,6 +215,7 @@ authentication](https://cloud.google.com/docs/authentication).
 - [Architecture](docs/en/architecture.md)
 - [BigQuery and connector internals](docs/en/bigquery-internals.md)
 - [Compatibility contract](docs/en/compatibility.md)
+- [Local client credentials and TLS](docs/en/client-credentials-and-tls.md)
 - [Schema evolution and CDC](docs/en/schema-evolution-cdc.md)
 - [Maintainer guide and runbooks](docs/en/maintainer-guide.md)
 - [Configuration and operations](docs/en/operations.md)

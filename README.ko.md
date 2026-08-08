@@ -215,6 +215,11 @@ make run
 인증](https://cloud.google.com/docs/authentication)의 토큰 획득이나 IAM 동작을
 추가하지 않습니다.
 
+엄격한 클라이언트는 형식이 유효한 인증 파일과 token 교환을 요구할 수 있습니다.
+[로컬 클라이언트 인증 파일과 TLS](docs/ko/client-credentials-and-tls.md)에서 파일을
+한 번에 생성하는 방법, direct token, Python, `bq`, Spark, Docker Compose, 개발
+컨테이너 설정을 설명합니다.
+
 <!-- section: documentation -->
 ## 문서
 
@@ -222,6 +227,7 @@ make run
 - [아키텍처](docs/ko/architecture.md)
 - [BigQuery와 커넥터 내부 동작](docs/ko/bigquery-internals.md)
 - [호환성 계약](docs/ko/compatibility.md)
+- [로컬 클라이언트 인증 파일과 TLS](docs/ko/client-credentials-and-tls.md)
 - [스키마 변경과 CDC](docs/ko/schema-evolution-cdc.md)
 - [유지보수 안내와 작업 절차](docs/ko/maintainer-guide.md)
 - [설정과 운영](docs/ko/operations.md)
