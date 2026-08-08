@@ -56,6 +56,9 @@ type ScalarType struct {
 }
 
 func NewScalarType(key NodeKey, kind TypeKind, precision, scale *int64) (*ScalarType, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid scalar type node key")
+	}
 	switch kind {
 	case TypeBool, TypeInt64, TypeFloat64, TypeNumeric, TypeBigNumeric, TypeString,
 		TypeBytes, TypeDate, TypeDatetime, TypeTime, TypeTimestamp, TypeJSON, TypeGeography:
@@ -107,7 +110,7 @@ type ArrayType struct {
 }
 
 func NewArrayType(key NodeKey, element Type) (*ArrayType, error) {
-	if typeIsNil(element) {
+	if !validNodeKey(key) || typeIsNil(element) {
 		return nil, fmt.Errorf("array element type is required")
 	}
 	return &ArrayType{typeBase: typeBase{key: key}, element: element}, nil
@@ -143,6 +146,9 @@ type StructType struct {
 }
 
 func NewStructType(key NodeKey, fields []StructTypeField) (*StructType, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid struct type node key")
+	}
 	cloned := append([]StructTypeField(nil), fields...)
 	for _, field := range cloned {
 		if typeIsNil(field.type_) {

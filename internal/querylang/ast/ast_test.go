@@ -13,7 +13,10 @@ func TestStatementOwnsCollectionsAndProvidesStableSemanticFingerprint(t *testing
 	source := mustSource(t, 0, 64)
 	target := mustTable(t, 1, "project", "dataset", "events")
 	first := mustInteger(t, 2, "1")
-	label := queryast.NewStringLiteral(mustKey(t, 3, "string", 20, 27), "private-value")
+	label, err := queryast.NewStringLiteral(mustKey(t, 3, "string", 20, 27), "private-value")
+	if err != nil {
+		t.Fatal(err)
+	}
 	row := []queryast.Expression{first, label}
 	columns := []queryast.Identifier{mustIdentifier(t, "id"), mustIdentifier(t, "label")}
 
@@ -87,6 +90,27 @@ func TestNumericTypePreservesOmittedScale(t *testing.T) {
 	scale := int64(2)
 	if _, err := queryast.NewScalarType(mustKey(t, 2, "scalar-type", 0, 11), queryast.TypeNumeric, nil, &scale); err == nil {
 		t.Fatal("scale without precision was accepted")
+	}
+}
+
+func TestNodeConstructorsRejectZeroNodeKey(t *testing.T) {
+	if _, err := queryast.NewStarExpression(queryast.NodeKey{}); err == nil {
+		t.Fatal("star accepted a zero NodeKey")
+	}
+	if _, err := queryast.NewNullLiteral(queryast.NodeKey{}); err == nil {
+		t.Fatal("NULL accepted a zero NodeKey")
+	}
+	if _, err := queryast.NewBooleanLiteral(queryast.NodeKey{}, true); err == nil {
+		t.Fatal("boolean accepted a zero NodeKey")
+	}
+	if _, err := queryast.NewFloatLiteral(queryast.NodeKey{}, 1); err == nil {
+		t.Fatal("float accepted a zero NodeKey")
+	}
+	if _, err := queryast.NewStringLiteral(queryast.NodeKey{}, "value"); err == nil {
+		t.Fatal("string accepted a zero NodeKey")
+	}
+	if _, err := queryast.NewScalarType(queryast.NodeKey{}, queryast.TypeInt64, nil, nil); err == nil {
+		t.Fatal("scalar type accepted a zero NodeKey")
 	}
 }
 

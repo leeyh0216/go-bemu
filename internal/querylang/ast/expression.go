@@ -69,7 +69,7 @@ type IdentifierExpression struct {
 }
 
 func NewIdentifierExpression(key NodeKey, path IdentifierPath) (*IdentifierExpression, error) {
-	if path.Len() == 0 {
+	if !validNodeKey(key) || path.Len() == 0 {
 		return nil, fmt.Errorf("identifier expression path is empty")
 	}
 	return &IdentifierExpression{expressionBase: expressionBase{key: key}, path: path}, nil
@@ -92,8 +92,11 @@ type StarExpression struct {
 	qualifier *IdentifierPath
 }
 
-func NewStarExpression(key NodeKey) *StarExpression {
-	return &StarExpression{expressionBase: expressionBase{key: key}}
+func NewStarExpression(key NodeKey) (*StarExpression, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid star expression node key")
+	}
+	return &StarExpression{expressionBase: expressionBase{key: key}}, nil
 }
 
 func NewQualifiedStarExpression(key NodeKey, qualifier IdentifierPath) (*StarExpression, error) {
@@ -127,8 +130,11 @@ func (expression *StarExpression) writeSemantic(builder *fingerprintBuilder) {
 
 type NullLiteral struct{ expressionBase }
 
-func NewNullLiteral(key NodeKey) *NullLiteral {
-	return &NullLiteral{expressionBase: expressionBase{key: key}}
+func NewNullLiteral(key NodeKey) (*NullLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid NULL literal node key")
+	}
+	return &NullLiteral{expressionBase: expressionBase{key: key}}, nil
 }
 func (*NullLiteral) expressionNode()      {}
 func (*NullLiteral) Kind() ExpressionKind { return ExpressionNull }
@@ -142,8 +148,11 @@ type BooleanLiteral struct {
 	value bool
 }
 
-func NewBooleanLiteral(key NodeKey, value bool) *BooleanLiteral {
-	return &BooleanLiteral{expressionBase: expressionBase{key: key}, value: value}
+func NewBooleanLiteral(key NodeKey, value bool) (*BooleanLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid boolean literal node key")
+	}
+	return &BooleanLiteral{expressionBase: expressionBase{key: key}, value: value}, nil
 }
 func (*BooleanLiteral) expressionNode()      {}
 func (*BooleanLiteral) Kind() ExpressionKind { return ExpressionBoolean }
@@ -164,6 +173,9 @@ type IntegerLiteral struct {
 }
 
 func NewIntegerLiteral(key NodeKey, canonical string) (*IntegerLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid integer literal node key")
+	}
 	value, ok := new(big.Int).SetString(canonical, 10)
 	if !ok {
 		return nil, fmt.Errorf("invalid integer literal")
@@ -186,8 +198,11 @@ type FloatLiteral struct {
 	value float64
 }
 
-func NewFloatLiteral(key NodeKey, value float64) *FloatLiteral {
-	return &FloatLiteral{expressionBase: expressionBase{key: key}, value: value}
+func NewFloatLiteral(key NodeKey, value float64) (*FloatLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid float literal node key")
+	}
+	return &FloatLiteral{expressionBase: expressionBase{key: key}, value: value}, nil
 }
 func (*FloatLiteral) expressionNode()        {}
 func (*FloatLiteral) Kind() ExpressionKind   { return ExpressionFloat }
@@ -205,8 +220,11 @@ type StringLiteral struct {
 	value string
 }
 
-func NewStringLiteral(key NodeKey, value string) *StringLiteral {
-	return &StringLiteral{expressionBase: expressionBase{key: key}, value: value}
+func NewStringLiteral(key NodeKey, value string) (*StringLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid string literal node key")
+	}
+	return &StringLiteral{expressionBase: expressionBase{key: key}, value: value}, nil
 }
 func (*StringLiteral) expressionNode()       {}
 func (*StringLiteral) Kind() ExpressionKind  { return ExpressionString }
@@ -226,6 +244,9 @@ type TemporalLiteral struct {
 }
 
 func NewTemporalLiteral(key NodeKey, typ TypeKind, value string) (*TemporalLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid temporal literal node key")
+	}
 	switch typ {
 	case TypeDate, TypeDatetime, TypeTime, TypeTimestamp:
 	default:
@@ -256,6 +277,9 @@ type ArrayLiteral struct {
 }
 
 func NewArrayLiteral(key NodeKey, elementType Type, elements []Expression) (*ArrayLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid array literal node key")
+	}
 	cloned := append([]Expression(nil), elements...)
 	for _, element := range cloned {
 		if expressionIsNil(element) {
@@ -307,6 +331,9 @@ type StructLiteral struct {
 }
 
 func NewStructLiteral(key NodeKey, typ Type, fields []StructLiteralField) (*StructLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid struct literal node key")
+	}
 	cloned := append([]StructLiteralField(nil), fields...)
 	for _, field := range cloned {
 		if expressionIsNil(field.value) {
@@ -359,7 +386,7 @@ type FunctionCall struct {
 }
 
 func NewFunctionCall(key NodeKey, name IdentifierPath, arguments []Expression, distinct bool, nullHandling FunctionNullHandling) (*FunctionCall, error) {
-	if name.Len() == 0 {
+	if !validNodeKey(key) || name.Len() == 0 {
 		return nil, fmt.Errorf("function name is empty")
 	}
 	switch nullHandling {
@@ -407,7 +434,7 @@ type UnaryExpression struct {
 }
 
 func NewUnaryExpression(key NodeKey, operator UnaryOperator, value Expression) (*UnaryExpression, error) {
-	if strings.TrimSpace(string(operator)) == "" || expressionIsNil(value) {
+	if !validNodeKey(key) || strings.TrimSpace(string(operator)) == "" || expressionIsNil(value) {
 		return nil, fmt.Errorf("invalid unary expression")
 	}
 	return &UnaryExpression{expressionBase: expressionBase{key: key}, operator: operator, value: value}, nil
@@ -433,7 +460,7 @@ type BinaryExpression struct {
 }
 
 func NewBinaryExpression(key NodeKey, operator BinaryOperator, left, right Expression) (*BinaryExpression, error) {
-	if strings.TrimSpace(string(operator)) == "" || expressionIsNil(left) || expressionIsNil(right) {
+	if !validNodeKey(key) || strings.TrimSpace(string(operator)) == "" || expressionIsNil(left) || expressionIsNil(right) {
 		return nil, fmt.Errorf("invalid binary expression")
 	}
 	return &BinaryExpression{expressionBase: expressionBase{key: key}, operator: operator, left: left, right: right}, nil
@@ -461,7 +488,7 @@ type CastExpression struct {
 }
 
 func NewCastExpression(key NodeKey, value Expression, typ Type, safe bool) (*CastExpression, error) {
-	if expressionIsNil(value) || typeIsNil(typ) {
+	if !validNodeKey(key) || expressionIsNil(value) || typeIsNil(typ) {
 		return nil, fmt.Errorf("invalid cast expression")
 	}
 	return &CastExpression{expressionBase: expressionBase{key: key}, value: value, type_: typ, safe: safe}, nil
