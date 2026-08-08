@@ -80,8 +80,8 @@
         "discovery": true
       },
       "supportedInput": {
-        "en": "Project and dataset path parameters are supported.",
-        "ko": "프로젝트와 데이터 세트 경로 매개변수를 지원합니다."
+        "en": "Project and dataset path parameters plus bq-compatible accessPolicyVersion and datasetView method arguments are accepted.",
+        "ko": "프로젝트와 데이터 세트 경로 매개변수 및 bq 호환 accessPolicyVersion, datasetView 메서드 인자를 받습니다."
       },
       "conditions": [],
       "limitations": {
@@ -89,8 +89,8 @@
         "byDesign": [
           "google-iam"
         ],
-        "en": "datasetView metadata selection is tracked; access-policy data remains outside the emulator scope.",
-        "ko": "datasetView 메타데이터 선택은 구현 예정이며 액세스 정책 데이터는 에뮬레이터 범위에서 제외합니다."
+        "en": "datasetView selection semantics are tracked; accessPolicyVersion is exposed for generated-client compatibility while access-policy data remains outside scope.",
+        "ko": "datasetView 선택 의미는 구현 예정입니다. accessPolicyVersion은 생성 클라이언트 호환성을 위해 노출하지만 액세스 정책 데이터는 범위에서 제외합니다."
       },
       "issues": [
         "#33"
@@ -119,8 +119,8 @@
         "discovery": true
       },
       "supportedInput": {
-        "en": "Dataset reference, location, labels, description, and expiration metadata are supported.",
-        "ko": "데이터 세트 참조와 위치, 라벨, 설명, 만료 메타데이터를 지원합니다."
+        "en": "Dataset reference, location, labels, description, expiration metadata, and the bq-compatible accessPolicyVersion method argument are accepted.",
+        "ko": "데이터 세트 참조와 위치, 라벨, 설명, 만료 메타데이터 및 bq 호환 accessPolicyVersion 메서드 인자를 받습니다."
       },
       "conditions": [],
       "limitations": {
@@ -129,8 +129,8 @@
           "google-control-plane",
           "google-iam"
         ],
-        "en": "Access policies and Cloud KMS encryption configuration are intentionally outside the emulator scope.",
-        "ko": "액세스 정책과 Cloud KMS 암호화 설정은 에뮬레이터 범위에서 의도적으로 제외합니다."
+        "en": "accessPolicyVersion is exposed for generated-client compatibility but access policies and Cloud KMS configuration are intentionally outside the emulator scope.",
+        "ko": "생성 클라이언트 호환성을 위해 accessPolicyVersion을 노출하지만 액세스 정책과 Cloud KMS 설정은 에뮬레이터 범위에서 의도적으로 제외합니다."
       },
       "issues": [],
       "sources": [
@@ -164,8 +164,8 @@
       "limitations": {
         "policy": "tracked",
         "byDesign": [],
-        "en": "The filter query parameter is not advertised or supported.",
-        "ko": "filter 쿼리 매개변수는 Discovery에 표시하지 않으며 지원하지 않습니다."
+        "en": "The filter method argument remains in Discovery for generated-client compatibility, but non-empty filter semantics are not implemented.",
+        "ko": "생성 클라이언트 호환성을 위해 filter 메서드 인자를 Discovery에 유지하지만 비어 있지 않은 filter 의미는 지원하지 않습니다."
       },
       "issues": [
         "#33"
@@ -193,8 +193,8 @@
         "discovery": true
       },
       "supportedInput": {
-        "en": "Description, labels, and supported expiration fields can be patched with ETags.",
-        "ko": "설명과 라벨, 지원하는 만료 필드를 ETag와 함께 변경할 수 있습니다."
+        "en": "Description, labels, and supported expiration fields can be patched with ETags; bq-compatible accessPolicyVersion and updateMode method arguments are exposed.",
+        "ko": "설명과 라벨, 지원하는 만료 필드를 ETag와 함께 변경할 수 있으며 bq 호환 accessPolicyVersion, updateMode 메서드 인자를 노출합니다."
       },
       "conditions": [],
       "limitations": {
@@ -231,8 +231,8 @@
         "discovery": true
       },
       "supportedInput": {
-        "en": "The same mutable fields as datasets.patch are accepted.",
-        "ko": "datasets.patch와 같은 변경 가능 필드를 받습니다."
+        "en": "The same mutable fields and generated-client method arguments as datasets.patch are accepted.",
+        "ko": "datasets.patch와 같은 변경 가능 필드 및 생성 클라이언트 메서드 인자를 받습니다."
       },
       "conditions": [],
       "limitations": {
@@ -362,8 +362,8 @@
       "limitations": {
         "policy": "tracked",
         "byDesign": [],
-        "en": "Media upload paths are not advertised; unsupported load formats end with notImplemented.",
-        "ko": "미디어 업로드 경로는 표시하지 않으며 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."
+        "en": "Discovery retains media-body metadata required by bq 2.1.31, but the media upload endpoints are not registered; unsupported load formats end with notImplemented.",
+        "ko": "bq 2.1.31에 필요한 media-body 메타데이터는 Discovery에 유지하지만 미디어 업로드 엔드포인트는 등록하지 않습니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."
       },
       "issues": [
         "#5"

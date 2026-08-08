@@ -155,6 +155,21 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	if discovery["id"] != "bigquery:v2" || resources["datasets"] == nil || resources["tables"] == nil || resources["jobs"] != nil {
 		t.Fatalf("catalog discovery advertised the wrong surface: %#v", discovery)
 	}
+	datasetMethods := resources["datasets"].(map[string]any)["methods"].(map[string]any)
+	for method, parameters := range map[string][]string{
+		"insert": {"accessPolicyVersion"},
+		"get":    {"accessPolicyVersion", "datasetView"},
+		"patch":  {"accessPolicyVersion", "updateMode"},
+		"update": {"accessPolicyVersion", "updateMode"},
+		"list":   {"filter"},
+	} {
+		actual := datasetMethods[method].(map[string]any)["parameters"].(map[string]any)
+		for _, parameter := range parameters {
+			if actual[parameter] == nil {
+				t.Fatalf("datasets.%s discovery is missing bq CLI parameter %q", method, parameter)
+			}
+		}
+	}
 	projects := resources["projects"].(map[string]any)
 	projectMethods := projects["methods"].(map[string]any)
 	projectListMethod := projectMethods["list"].(map[string]any)

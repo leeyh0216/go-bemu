@@ -82,8 +82,12 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 	}
 	resources := discovery["resources"].(map[string]any)
 	jobMethods := resources["jobs"].(map[string]any)["methods"].(map[string]any)
+	jobInsert := jobMethods["insert"].(map[string]any)
+	if jobInsert["supportsMediaUpload"] != true || jobInsert["mediaUpload"] == nil {
+		t.Fatal("jobs.insert discovery must retain media_body compatibility for bq CLI")
+	}
 	jobListParameters := jobMethods["list"].(map[string]any)["parameters"].(map[string]any)
-	for _, parameter := range []string{"projection", "minCreationTime", "maxCreationTime", "parentJobId"} {
+	for _, parameter := range []string{"allUsers", "stateFilter", "projection", "minCreationTime", "maxCreationTime", "parentJobId"} {
 		if jobListParameters[parameter] == nil {
 			t.Fatalf("jobs.list discovery is missing bq CLI parameter %q", parameter)
 		}
@@ -211,8 +215,8 @@ func TestDiscoveryMethodsMatchOperationManifest(t *testing.T) {
 				t.Fatalf("discovery operation %q is duplicated at %s.%s", operationID, resourceName, methodName)
 			}
 			actual[operationID] = method["httpMethod"].(string) + " /bigquery/v2/" + method["path"].(string)
-			if operationID == "bigquery.jobs.insert" && (method["supportsMediaUpload"] != nil || method["mediaUpload"] != nil) {
-				t.Fatal("jobs.insert advertises media upload paths that are not registered")
+			if operationID == "bigquery.jobs.insert" && (method["supportsMediaUpload"] != true || method["mediaUpload"] == nil) {
+				t.Fatal("jobs.insert discovery is missing bq CLI media_body compatibility metadata")
 			}
 		}
 	}
