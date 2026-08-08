@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/contracttest"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	loadApplication "github.com/leeyh0216/go-bemu/internal/loadjob/application"
+	loadDomain "github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 )
 
 func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
@@ -69,15 +71,11 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects, err := objectstore.NewGCSOnlyRouter(gcs)
-	if err != nil {
-		t.Fatal(err)
-	}
 	loadConfig := loadApplication.DefaultConfig()
 	loadConfig.TempDirectory = t.TempDir()
 	loadConfig.OperationTimeout = 5 * time.Second
 	loads, err := loadApplication.NewService(
-		loadApplication.NewMemoryJobRepository(), objects, NewLoadTableCatalog(catalog), warehouse,
+		loadApplication.NewMemoryJobRepository(), gcs, NewLoadTableCatalog(catalog), warehouse,
 		clock, ids, loadConfig,
 	)
 	if err != nil {
@@ -145,7 +143,12 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	_, _ = catalog.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: "events", Schema: []domain.Field{{Name: "id", Type: "INT64"}}})
 	config := loadApplication.DefaultConfig()
 	config.TempDirectory = t.TempDir()
-	loads, err := loadApplication.NewService(loadApplication.NewMemoryJobRepository(), objectstore.FileSystem{}, NewLoadTableCatalog(catalog), warehouse, clock, ids, config)
+	gcs, err := objectstore.NewGCSJSON(objectstore.GCSJSONConfig{Endpoint: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadJobs := loadApplication.NewMemoryJobRepository()
+	loads, err := loadApplication.NewService(loadJobs, gcs, NewLoadTableCatalog(catalog), warehouse, clock, ids, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +161,15 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	server := httptest.NewServer(NewServerWithLoadJobs(catalog, queries, loads, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 
-	body := `{"jobReference":{"jobId":"avro-gap","location":"US"},"configuration":{"load":{"sourceUris":["file:///does-not-exist.avro"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"AVRO"}}}`
+	invalidSource := `{"jobReference":{"jobId":"invalid-source","location":"US"},"configuration":{"load":{"sourceUris":["file:///must-not-be-read.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
+	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", invalidSource, http.StatusBadRequest)
+	if _, err := loadJobs.Get(ctx, loadDomain.JobReference{
+		ProjectID: "test-project", Location: "US", JobID: "invalid-source",
+	}); !errors.Is(err, loadDomain.ErrNotFound) {
+		t.Fatalf("invalid source persisted a load job: %v", err)
+	}
+
+	body := `{"jobReference":{"jobId":"avro-gap","location":"US"},"configuration":{"load":{"sourceUris":["gs://test-bucket/does-not-exist.avro"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"AVRO"}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", body, http.StatusOK)
 	job := waitForRESTLoad(t, server.URL, "avro-gap")
 	errorResult := job["status"].(map[string]any)["errorResult"].(map[string]any)
@@ -169,7 +180,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 		t.Fatalf("failed load exposed successful outputBytes: %#v", job)
 	}
 
-	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["file:///does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enableListInference":true}}}}`
+	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["gs://test-bucket/does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enableListInference":true}}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", activeOption, http.StatusOK)
 	job = waitForRESTLoad(t, server.URL, "parquet-option-gap")
 	errorResult = job["status"].(map[string]any)["errorResult"].(map[string]any)
@@ -177,17 +188,17 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 		t.Fatalf("active Parquet option did not remain an explicit gap: %#v", job)
 	}
 
-	malformedOption := `{"configuration":{"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":[]}}}`
+	malformedOption := `{"configuration":{"load":{"sourceUris":["gs://test-bucket/x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":[]}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", malformedOption, http.StatusBadRequest)
 
-	both := `{"configuration":{"query":{"query":"SELECT 1"},"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
+	both := `{"configuration":{"query":{"query":"SELECT 1"},"load":{"sourceUris":["gs://test-bucket/x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", both, http.StatusBadRequest)
 
 	for _, schema := range []string{
 		`{"fields":[{"name":"location","type":"GEOGRAPHY"}]}`,
 		`{"fields":[{"name":"amount","type":"BIGNUMERIC","precision":"39","scale":"1"}]}`,
 	} {
-		unsupportedSchema := `{"jobReference":{"jobId":"unsupported-schema","location":"US"},"configuration":{"load":{"sourceUris":["file:///must-not-be-read.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","schema":` + schema + `}}}`
+		unsupportedSchema := `{"jobReference":{"jobId":"unsupported-schema","location":"US"},"configuration":{"load":{"sourceUris":["gs://test-bucket/must-not-be-read.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","schema":` + schema + `}}}`
 		restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", unsupportedSchema, http.StatusNotImplemented)
 	}
 }

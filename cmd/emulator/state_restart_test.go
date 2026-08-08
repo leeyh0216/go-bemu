@@ -152,7 +152,6 @@ storage:
   write:
     enabled: false
 load:
-  enabled: true
   gcsEndpoint: "http://127.0.0.1:1"
 logging:
   level: error

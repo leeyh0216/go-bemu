@@ -239,18 +239,16 @@ type StorageWriteConfig struct {
 	ProtocolModelVersion        string   `yaml:"protocolModelVersion" json:"protocolModelVersion"`
 }
 
-// LoadConfig bounds every network and filesystem side effect of a load job.
-// GCS sources use the JSON objects.get/list protocol; file sources are an
-// explicit local-only opt-in because they can read host-mounted paths.
+// LoadConfig bounds every network and temporary-workspace side effect of a
+// load job. Sources are resolved exclusively through a GCS-compatible JSON
+// endpoint; public load requests never address the local filesystem.
 //
 // Official contracts:
 //   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad
 //   - https://cloud.google.com/storage/docs/json_api/v1/objects/get
 //   - https://cloud.google.com/storage/docs/json_api/v1/objects/list
 type LoadConfig struct {
-	Enabled          bool     `yaml:"enabled" json:"enabled"`
 	GCSEndpoint      string   `yaml:"gcsEndpoint" json:"gcsEndpoint"`
-	AllowFileSources bool     `yaml:"allowFileSources" json:"allowFileSources"`
 	OperationTimeout Duration `yaml:"operationTimeout" json:"operationTimeout"`
 	MaxObjects       int      `yaml:"maxObjects" json:"maxObjects"`
 	MaxObjectBytes   int64    `yaml:"maxObjectBytes" json:"maxObjectBytes"`
@@ -354,6 +352,7 @@ func Defaults() Config {
 			},
 		},
 		Load: LoadConfig{
+			GCSEndpoint:      "http://127.0.0.1:4443",
 			OperationTimeout: Duration(2 * time.Minute), MaxObjects: 1_000,
 			MaxObjectBytes: 1 << 30, MaxTotalBytes: 4 << 30,
 			MaxMetadataBytes: 8 << 20, MaxListedObjects: 10_000,
@@ -491,8 +490,7 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_TABLE_DATA_MAX_PAGE_ROWS", "tableData.maxPageRows"},
 	{"BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES", "tableData.maxResponseBytes"},
 	{"BQEMU_TABLE_DATA_MAX_ROW_BYTES", "tableData.maxRowBytes"},
-	{"BQEMU_LOAD_ENABLED", "load.enabled"}, {"BQEMU_LOAD_GCS_ENDPOINT", "load.gcsEndpoint"},
-	{"BQEMU_LOAD_ALLOW_FILE_SOURCES", "load.allowFileSources"},
+	{"BQEMU_LOAD_GCS_ENDPOINT", "load.gcsEndpoint"},
 	{"BQEMU_LOAD_OPERATION_TIMEOUT", "load.operationTimeout"}, {"BQEMU_LOAD_MAX_OBJECTS", "load.maxObjects"},
 	{"BQEMU_LOAD_MAX_OBJECT_BYTES", "load.maxObjectBytes"}, {"BQEMU_LOAD_MAX_TOTAL_BYTES", "load.maxTotalBytes"},
 	{"BQEMU_LOAD_MAX_METADATA_BYTES", "load.maxMetadataBytes"}, {"BQEMU_LOAD_MAX_LISTED_OBJECTS", "load.maxListedObjects"},
@@ -689,12 +687,8 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setDuration(&cfg.Storage.Write.CleanupInterval)
 	case "storage.write.protocolModelVersion":
 		return setString(&cfg.Storage.Write.ProtocolModelVersion)
-	case "load.enabled":
-		return setBool(&cfg.Load.Enabled)
 	case "load.gcsEndpoint":
 		return setString(&cfg.Load.GCSEndpoint)
-	case "load.allowFileSources":
-		return setBool(&cfg.Load.AllowFileSources)
 	case "load.operationTimeout":
 		return setDuration(&cfg.Load.OperationTimeout)
 	case "load.maxObjects":
@@ -875,11 +869,9 @@ func (cfg Config) Validate() error {
 	if cfg.Load.MaxObjectBytes > cfg.Load.MaxTotalBytes {
 		return errors.New("load.maxObjectBytes must not exceed load.maxTotalBytes")
 	}
-	if cfg.Load.Enabled {
-		endpoint, err := url.Parse(cfg.Load.GCSEndpoint)
-		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-			return errors.New("load.gcsEndpoint must be an absolute HTTP(S) URL when load is enabled")
-		}
+	endpoint, err := url.Parse(cfg.Load.GCSEndpoint)
+	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+		return errors.New("load.gcsEndpoint must be an absolute HTTP(S) URL")
 	}
 	if !oneOf(cfg.Logging.Level, "debug", "info", "warn", "error") {
 		return fmt.Errorf("unsupported logging.level %q", cfg.Logging.Level)

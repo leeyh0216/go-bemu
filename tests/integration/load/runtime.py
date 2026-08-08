@@ -1173,9 +1173,7 @@ class EmulatorRuntime:
             "BQEMU_PUBLIC_URL": self.endpoint,
             "BQEMU_DATABASE_DSN": str(self.work / "load-e2e.duckdb"),
             "BQEMU_TEMP_DIRECTORY": str(temporary),
-            "BQEMU_LOAD_ENABLED": "true",
             "BQEMU_LOAD_GCS_ENDPOINT": self.gcs_endpoint,
-            "BQEMU_LOAD_ALLOW_FILE_SOURCES": "false",
         }
         self.log = self.log_path.open("wb")
         http_port.release()
