@@ -1,0 +1,313 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/ports"
+)
+
+func TestCatalogMetadataSurvivesRepositoryRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
+	repositories, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := repositories.Catalog()
+	// The bundle exposes a catalog context port. Consumers with narrower duties
+	// can retain only the composed resource interface they require.
+	var _ ports.ProjectRepository = catalog
+	var _ ports.DatasetRepository = catalog
+	var _ ports.TableRepository = catalog
+
+	project, dataset, table := completeCatalogMetadata()
+	if err := catalog.CreateProject(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.CreateDataset(ctx, dataset); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.CreateTable(ctx, table); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	restartedCatalog := restarted.Catalog()
+
+	loadedProject, err := restartedCatalog.GetProject(ctx, project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedDataset, err := restartedCatalog.GetDataset(ctx, dataset.ProjectID, dataset.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedTable, err := restartedCatalog.GetTable(ctx, table.ProjectID, table.DatasetID, table.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loadedProject, project) {
+		t.Fatalf("project round-trip mismatch:\n got: %#v\nwant: %#v", loadedProject, project)
+	}
+	if !reflect.DeepEqual(loadedDataset, dataset) {
+		t.Fatalf("dataset round-trip mismatch:\n got: %#v\nwant: %#v", loadedDataset, dataset)
+	}
+	if !reflect.DeepEqual(loadedTable, table) {
+		t.Fatalf("table round-trip mismatch:\n got: %#v\nwant: %#v", loadedTable, table)
+	}
+
+	assertDecimalIdentity(t, loadedTable.Schema)
+	projects, err := restartedCatalog.ListProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].ID != project.ID {
+		t.Fatalf("restarted projects = %#v, %v", projects, err)
+	}
+	datasets, err := restartedCatalog.ListDatasets(ctx, project.ID)
+	if err != nil || len(datasets) != 1 || !reflect.DeepEqual(datasets[0], dataset) {
+		t.Fatalf("restarted datasets = %#v, %v", datasets, err)
+	}
+	tables, err := restartedCatalog.ListTables(ctx, project.ID, dataset.ID)
+	if err != nil || len(tables) != 1 || !reflect.DeepEqual(tables[0], table) {
+		t.Fatalf("restarted tables = %#v, %v", tables, err)
+	}
+}
+
+func TestCatalogUpdatesAndCascadesAreDurable(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
+	repositories, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := repositories.Catalog()
+	project, dataset, table := completeCatalogMetadata()
+	if err := catalog.CreateProject(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.CreateDataset(ctx, dataset); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.CreateTable(ctx, table); err != nil {
+		t.Fatal(err)
+	}
+
+	dataset.Labels = map[string]string{}
+	dataset.Description = "updated dataset"
+	dataset.DefaultTableExpirationMs = nil
+	dataset.UpdatedAt = dataset.UpdatedAt.Add(time.Hour)
+	if err := catalog.UpdateDataset(ctx, dataset); err != nil {
+		t.Fatal(err)
+	}
+	precision, explicitZero := int64(38), int64(0)
+	table.Schema = []domain.Field{
+		{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+		{
+			Name: "payload", Type: "STRUCT", Fields: []domain.Field{{
+				Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &explicitZero,
+				RoundingMode: domain.RoundingModeHalfAwayFromZero,
+			}},
+		},
+	}
+	table.Labels = nil
+	table.ClusteringFields = []string{}
+	table.UpdatedAt = table.UpdatedAt.Add(2 * time.Hour)
+	if err := catalog.UpdateTable(ctx, table); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	loadedDataset, err := restarted.Catalog().GetDataset(ctx, dataset.ProjectID, dataset.ID)
+	if err != nil || !reflect.DeepEqual(loadedDataset, dataset) {
+		t.Fatalf("updated dataset = %#v, %v; want %#v", loadedDataset, err, dataset)
+	}
+	loadedTable, err := restarted.Catalog().GetTable(ctx, table.ProjectID, table.DatasetID, table.ID)
+	if err != nil || !reflect.DeepEqual(loadedTable, table) {
+		t.Fatalf("updated table = %#v, %v; want %#v", loadedTable, err, table)
+	}
+	if err := restarted.Catalog().DeleteDataset(ctx, dataset.ProjectID, dataset.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Catalog().GetTable(ctx, table.ProjectID, table.DatasetID, table.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("cascaded table lookup error = %v", err)
+	}
+}
+
+func TestMigrationChecksumMismatchStopsOpen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
+	repositories, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open(driverName, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE bqemu_schema_migrations
+SET checksum = ? WHERE version = 1`, strings.Repeat("0", 64)); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Open(ctx, path)
+	if err == nil || !strings.Contains(err.Error(), "checksum or identity mismatch") {
+		t.Fatalf("Open() error = %v, want migration checksum rejection", err)
+	}
+}
+
+func TestMissingSchemaObjectStopsOpen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
+	repositories, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open(driverName, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TRIGGER bqemu_table_fields_parent_insert`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Open(ctx, path)
+	if err == nil || !strings.Contains(err.Error(), "schema object bqemu_table_fields_parent_insert") {
+		t.Fatalf("Open() error = %v, want missing schema rejection", err)
+	}
+}
+
+func TestCompiledMigrationChecksumIsImmutable(t *testing.T) {
+	if len(migrations) != 1 {
+		t.Fatalf("migration count = %d, update the prefix contract test", len(migrations))
+	}
+	if got := checksumMigration(migrations[0]); got != baselineChecksum {
+		t.Fatalf("baseline checksum = %s, want %s", got, baselineChecksum)
+	}
+}
+
+func completeCatalogMetadata() (domain.Project, domain.Dataset, domain.Table) {
+	created := time.Date(2026, 8, 8, 1, 2, 3, 456789000, time.UTC)
+	updated := created.Add(37 * time.Minute)
+	tableExpiration := int64(86_400_000)
+	partitionExpiration := int64(7_200_000)
+	expires := created.Add(48 * time.Hour)
+	precision38, precision20 := int64(38), int64(20)
+	scale4 := int64(4)
+
+	project := domain.Project{
+		ID: "test-project", FriendlyName: "Test project", Description: "project metadata",
+		CreatedAt: created, UpdatedAt: updated,
+	}
+	dataset := domain.Dataset{
+		ProjectID: project.ID, ID: "analytics", FriendlyName: "Analytics",
+		Description: "dataset metadata", Location: "asia-northeast3",
+		Labels:                   map[string]string{"environment": "test", "owner": "data"},
+		DefaultTableExpirationMs: &tableExpiration, DefaultPartitionExpirationMs: &partitionExpiration,
+		CreatedAt: created, UpdatedAt: updated, Hidden: true,
+	}
+	table := domain.Table{
+		ProjectID: project.ID, DatasetID: dataset.ID, ID: "events",
+		FriendlyName: "Events", Description: "table metadata",
+		Labels: map[string]string{"kind": "fixture"}, Type: "TABLE", Location: dataset.Location,
+		ExpirationTime:   &expires,
+		TimePartitioning: &domain.TimePartitioning{Type: "DAY", Field: "event_time", ExpirationMs: 3_600_000},
+		RangePartitioning: &domain.RangePartitioning{
+			Field: "bucket", Range: domain.Range{Start: -10, End: 100, Interval: 5},
+		},
+		ClusteringFields: []string{"payload.category", "event_time"},
+		CreatedAt:        created, UpdatedAt: updated,
+		Schema: []domain.Field{
+			{Name: "event_time", Type: "TIMESTAMP", Mode: "REQUIRED", Description: "event timestamp"},
+			{Name: "bucket", Type: "INT64"},
+			{
+				Name: "payload", Type: "STRUCT", Description: "nested payload", Fields: []domain.Field{
+					{Name: "category", Type: "STRING"},
+					{Name: "numeric_default", Type: "NUMERIC"},
+					{
+						Name: "bignumeric_explicit_rounding", Type: "BIGNUMERIC",
+						RoundingMode: domain.RoundingModeUnspecified,
+					},
+					{
+						Name: "bignumeric_precision_only", Type: "BIGNUMERIC", Precision: &precision38,
+						RoundingMode: domain.RoundingModeHalfAwayFromZero,
+					},
+					{
+						Name: "numeric_parameterized", Type: "NUMERIC", Precision: &precision20, Scale: &scale4,
+						RoundingMode: domain.RoundingModeHalfEven,
+					},
+					{
+						Name: "items", Type: "RECORD", Mode: "REPEATED", Fields: []domain.Field{
+							{Name: "enabled", Type: "BOOL", Mode: "REQUIRED"},
+						},
+					},
+				},
+			},
+		},
+	}
+	return project, dataset, table
+}
+
+func assertDecimalIdentity(t *testing.T, fields []domain.Field) {
+	t.Helper()
+	payload := fields[2]
+	numericDefault := payload.Fields[1]
+	if numericDefault.Precision != nil || numericDefault.Scale != nil || numericDefault.RoundingMode != "" {
+		t.Fatalf("omitted NUMERIC parameters changed: %#v", numericDefault)
+	}
+	bigExplicitRounding := payload.Fields[2]
+	if bigExplicitRounding.Precision != nil || bigExplicitRounding.Scale != nil ||
+		bigExplicitRounding.RoundingMode != domain.RoundingModeUnspecified {
+		t.Fatalf("explicit BIGNUMERIC rounding identity changed: %#v", bigExplicitRounding)
+	}
+	bigPrecisionOnly := payload.Fields[3]
+	if bigPrecisionOnly.Precision == nil || *bigPrecisionOnly.Precision != 38 || bigPrecisionOnly.Scale != nil ||
+		bigPrecisionOnly.RoundingMode != domain.RoundingModeHalfAwayFromZero {
+		t.Fatalf("precision-only BIGNUMERIC identity changed: %#v", bigPrecisionOnly)
+	}
+	numericParameterized := payload.Fields[4]
+	if numericParameterized.Precision == nil || *numericParameterized.Precision != 20 ||
+		numericParameterized.Scale == nil || *numericParameterized.Scale != 4 ||
+		numericParameterized.RoundingMode != domain.RoundingModeHalfEven {
+		t.Fatalf("parameterized NUMERIC identity changed: %#v", numericParameterized)
+	}
+}

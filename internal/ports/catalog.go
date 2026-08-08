@@ -7,23 +7,42 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/engine"
 )
 
-type CatalogRepository interface {
+// ProjectRepository is the project metadata boundary for the catalog context.
+// Consumers that only manage projects should depend on this interface rather
+// than the complete catalog repository.
+type ProjectRepository interface {
 	CreateProject(context.Context, domain.Project) error
 	GetProject(context.Context, string) (domain.Project, error)
 	ListProjects(context.Context) ([]domain.Project, error)
 	DeleteProject(context.Context, string) error
+}
 
+// DatasetRepository is the dataset metadata boundary for the catalog context.
+type DatasetRepository interface {
 	CreateDataset(context.Context, domain.Dataset) error
 	UpdateDataset(context.Context, domain.Dataset) error
 	GetDataset(context.Context, string, string) (domain.Dataset, error)
 	ListDatasets(context.Context, string) ([]domain.Dataset, error)
 	DeleteDataset(context.Context, string, string) error
+}
 
+// TableRepository is the canonical table and recursive-schema metadata
+// boundary for the catalog context.
+type TableRepository interface {
 	CreateTable(context.Context, domain.Table) error
 	UpdateTable(context.Context, domain.Table) error
 	GetTable(context.Context, string, string, string) (domain.Table, error)
 	ListTables(context.Context, string, string) ([]domain.Table, error)
 	DeleteTable(context.Context, string, string, string) error
+}
+
+// CatalogRepository composes the narrow catalog metadata ports. Adapters may
+// implement all three, while smaller consumers can request only the resource
+// boundary they use.
+type CatalogRepository interface {
+	ProjectRepository
+	DatasetRepository
+	TableRepository
 }
 
 // HealthChecker is the minimal readiness dependency. Transports must not gain
