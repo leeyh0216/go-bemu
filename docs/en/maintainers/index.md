@@ -21,6 +21,8 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 <!-- section: implementation -->
 ## Implementation Guides
 
+- [SQL regression cases](sql-regression.md): data-driven fixtures, typed
+  expectations, focused execution, and required CI behavior.
 - [Storage engine adapter guide](../engine-adapter-guide.md): capabilities,
   planning contracts, composition, and conformance tests.
 - [Schema evolution and CDC](../schema-evolution-cdc.md): schema mutation and
