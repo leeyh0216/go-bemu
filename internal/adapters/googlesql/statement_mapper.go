@@ -188,12 +188,13 @@ func (mapper *statementMapper) mapTargetRelation(node *gsql.ASTPathExpression, a
 }
 
 func (mapper *statementMapper) mapQuery(statementKind queryast.StatementKind, node *gsql.ASTQuery) (queryast.Query, error) {
-	with, err := node.WithClause()
+	withNode, err := node.WithClause()
 	if err != nil {
 		return queryast.Query{}, parserFailure()
 	}
-	if with != nil {
-		return queryast.Query{}, unsupportedNode(statementKind, "with-clause", with)
+	with, recursive, err := mapper.mapWithClause(statementKind, withNode)
+	if err != nil {
+		return queryast.Query{}, err
 	}
 	if lockMode, err := node.LockMode(); err != nil {
 		return queryast.Query{}, parserFailure()
@@ -229,7 +230,70 @@ func (mapper *statementMapper) mapQuery(statementKind queryast.StatementKind, no
 	if err != nil {
 		return queryast.Query{}, err
 	}
-	return queryast.NewQuery(nil, false, body, orderBy, limit, offset)
+	return queryast.NewQuery(with, recursive, body, orderBy, limit, offset)
+}
+
+func (mapper *statementMapper) mapWithClause(
+	statementKind queryast.StatementKind,
+	node *gsql.ASTWithClause,
+) ([]queryast.CommonTableExpression, bool, error) {
+	if node == nil {
+		return nil, false, nil
+	}
+	recursive, err := node.Recursive()
+	if err != nil {
+		return nil, false, parserFailure()
+	}
+	children, err := astChildren(node)
+	if err != nil {
+		return nil, false, err
+	}
+	expressions := make([]queryast.CommonTableExpression, 0, len(children))
+	for _, child := range children {
+		entry, ok := child.(*gsql.ASTWithClauseEntry)
+		if !ok {
+			return nil, false, unsupportedNode(statementKind, "with-entry", child)
+		}
+		if groupRows, err := entry.AliasedGroupRows(); err != nil {
+			return nil, false, parserFailure()
+		} else if groupRows != nil {
+			return nil, false, unsupportedNode(statementKind, "with-group-rows", groupRows)
+		}
+		aliased, err := entry.AliasedQuery()
+		if err != nil || aliased == nil {
+			return nil, false, parserFailure()
+		}
+		if modifiers, err := aliased.Modifiers(); err != nil {
+			return nil, false, parserFailure()
+		} else if modifiers != nil {
+			return nil, false, unsupportedNode(statementKind, "with-modifiers", modifiers)
+		}
+		aliasNode, err := aliased.Alias()
+		if err != nil || aliasNode == nil {
+			return nil, false, parserFailure()
+		}
+		alias, err := mapIdentifier(aliasNode)
+		if err != nil {
+			return nil, false, err
+		}
+		queryNode, err := aliased.Query()
+		if err != nil || queryNode == nil {
+			return nil, false, parserFailure()
+		}
+		query, err := mapper.mapQuery(statementKind, queryNode)
+		if err != nil {
+			return nil, false, err
+		}
+		expression, err := queryast.NewCommonTableExpression(alias, nil, query)
+		if err != nil {
+			return nil, false, parserFailure()
+		}
+		expressions = append(expressions, expression)
+	}
+	if len(expressions) == 0 {
+		return nil, false, parserFailure()
+	}
+	return expressions, recursive, nil
 }
 
 func (mapper *statementMapper) mapQueryBody(statementKind queryast.StatementKind, node gsql.ASTQueryExpressionNode) (queryast.QueryBody, error) {

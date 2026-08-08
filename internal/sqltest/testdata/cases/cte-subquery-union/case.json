@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "cte-subquery-union",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "ordered"
+}
