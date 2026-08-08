@@ -42,17 +42,15 @@ BigQuery는 부분 변경에 `tables.patch` 사용을 권장합니다. `tables.u
 상태로 제공합니다. 라벨, 설명, 만료 시각, 기본 만료 시간을 변경할 수 있습니다.
 `If-Match` 검증에 실패하면 HTTP 412를 반환합니다.
 
-`CAP-SCHEMA-ADDITIVE-V1`은 REST 원본 요청과 실제 에뮬레이터 프로세스를 대상으로
-검증했습니다. 공식 [Python 클라이언트
-`3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/)도 사용했습니다.
-DuckDB 어댑터는 모든 저장소 필드 추가를 명시적 트랜잭션에서 적용합니다. 기존 행의
-null 처리도 시험합니다.
+`CAP-SCHEMA-ADDITIVE-V1`은 공개 REST 경계와 실제 에뮬레이터 프로세스를 대상으로
+검증했습니다. DuckDB 어댑터는 모든 저장소 필드 추가를 명시적 트랜잭션에서
+적용합니다. 기존 행의 null 처리도 시험합니다.
 
-기준 메타데이터는 여전히 프로세스 내부에만 있습니다. 프로세스가 중단되면 메모리
-카탈로그와 DuckDB 파일을 원자적으로 맞출 수 없습니다. DuckDB에서 직접 수행한
-변경은 기준 BigQuery 메타데이터 변경으로 보지 않습니다.
+기준 메타데이터는 SQLite에 저장해 재시작 후에도 복구하고, 실제 테이블은 DuckDB에
+저장합니다. 두 저장소에 걸친 공개 과정은 아직 하나의 영속적인 원자 작업이 아닙니다.
+DuckDB에서 직접 수행한 변경은 기준 BigQuery 메타데이터 변경으로 보지 않습니다.
 
-DDL 변환, 적재·쿼리의 `schemaUpdateOptions`, Storage Write 스키마 알림은 별도
+DDL 복구, 적재·쿼리의 `schemaUpdateOptions`, Storage Write 스키마 알림은 별도
 미지원 항목입니다.
 
 <!-- section: load-schema-updates -->
@@ -83,13 +81,12 @@ DDL 변환, 적재·쿼리의 `schemaUpdateOptions`, Storage Write 스키마 알
 [`AppendRows` RPC](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows)에
 정의되어 있습니다.
 
-현재 공개 쓰기 서비스는 부분 지원(`Partial`) 상태입니다. `ProtoRows` 추가 요청의
-작성자 스키마 지문값을 보관합니다. 실행 중인 프로세스에서는 `PENDING` 스트림의
-정확한 오프셋을 유지합니다.
+현재 공개 쓰기 서비스는 부분 지원(`Partial`) 상태입니다. 작성자 스키마 지문값,
+정확한 오프셋, 행 추가 영수증, 커밋 단계를 SQLite에 저장하고 시작할 때 미완료 작업을
+조정합니다.
 
 대상 스키마 버전을 영속적으로 추적하지는 않습니다. `updated_schema`도 반환하지
-않습니다. 호환되지 않는 변경, 스키마 알림, 재시작 후 오프셋 복구는 지원하지
-않습니다.
+않습니다. 호환되지 않는 변경과 스키마 알림은 지원하지 않습니다.
 
 <!-- section: cdc-contract -->
 ## BigQuery CDC 계약
@@ -131,53 +128,19 @@ CDC 적용 순서를 판단하기 전에 `BatchCommitWriteStreams`가 대기 스
 이 원장은 포트 뒤에 있어야 합니다. DuckDB 테이블은 원장을 저장하는 어댑터 구현 중
 하나일 뿐입니다. 상태 전이 API 자체가 아닙니다.
 
-<!-- section: flink-profile -->
-## Flink 커넥터 1.2.0 클라이언트 프로필
-
-공식 GoogleCloudDataproc Flink 커넥터 `1.2.0`은 [Spark 커넥터
-`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)와
-별도의 클라이언트 프로필입니다. 두 커넥터의 작업·체크포인트 모델과 Storage RPC
-호출 순서는 서로 바꿔 쓸 수 없습니다.
-
-계획한 프로필은 [출시된 Maven
-디렉터리](https://repo1.maven.org/maven2/com/google/cloud/flink/flink-1.17-connector-bigquery/1.2.0/)에서
-`com.google.cloud.flink:flink-1.17-connector-bigquery:1.2.0`을 찾아야 합니다. 파일의
-URL, 크기, SHA-256을 기록해야 합니다. 원본 저장소를 복제하거나 직접 빌드해서는 안
-됩니다. 정확한 버전은 태그가 지정된
-[`pom.xml`](https://github.com/GoogleCloudDataproc/flink-bigquery-connector/blob/1.2.0/flink-1.17-connector-bigquery/pom.xml)로
-확인합니다.
-
-프로필 작업에는 크기 제한이 있는 원본 읽기를 명시합니다. 기본 스트림의 한 번 이상
-쓰기와 체크포인트를 사용하는 버퍼 스트림 쓰기도 구분합니다. 스키마 불일치, CDC
-`UPSERT`와 `DELETE`도 각각 별도 작업으로 정의합니다.
-
-커넥터 코드는
-[`BigQueryCdcSchemaProvider.java`](https://github.com/GoogleCloudDataproc/flink-bigquery-connector/blob/1.2.0/flink-1.17-connector-bigquery/flink-connector-bigquery/src/main/java/com/google/cloud/flink/bigquery/sink/serializer/BigQueryCdcSchemaProvider.java)에서
-CDC 의사 열을 추가합니다.
-[`BigQueryExactlyOnceSink.java`](https://github.com/GoogleCloudDataproc/flink-bigquery-connector/blob/1.2.0/flink-1.17-connector-bigquery/flink-connector-bigquery/src/main/java/com/google/cloud/flink/bigquery/sink/BigQueryExactlyOnceSink.java)에서
-체크포인트를 사용하는 작성기를 구성합니다.
-
-이 원본 링크는 클라이언트가 기대하는 동작을 설명합니다. 에뮬레이터가 해당 동작을
-지원한다는 뜻은 아닙니다. 공개 Storage Read와 `ProtoRows`의 `PENDING`·기본 쓰기
-범위는 부분 지원(`Partial`)입니다. Flink `1.2.0` E2E 검증을 마친 작업은 없습니다.
-버퍼·체크포인트 쓰기, 스키마 알림, CDC는 명시적인 미지원 항목입니다.
-
 <!-- section: evolution-pipeline -->
 ## 모듈식 검증 절차
 
 모든 스키마·CDC 동작은 다음 순서로 검증합니다.
 
 ```text
-프로토콜 프로필 -> 어댑터 -> 지원 범위 -> 기준 결과 -> E2E
+operation contract -> application transition -> port/adapter -> product test
 ```
 
-프로필은 클라이언트와 프로토콜 버전을 식별합니다. 어댑터는 알려진 입력 구조만
-변환합니다. 지원 범위에는 지원, 부분 지원, 미지원 상태를 기록합니다.
-
-기준 시험 데이터에는 성공 및 실패 구조와 해당 원본 진단 맥락을 함께 포함해야
-합니다. E2E는 출시된 클라이언트로 공개 REST/gRPC API를
-통과해야 합니다. DuckDB 단위 테스트가 성공했다는 이유로 어느 단계도 생략할 수
-없습니다.
+작업 계약은 공개 동작을 정의합니다. 애플리케이션 전이는 검증과 상태 변경을
+소유합니다. 포트는 저장소별 동작을 어댑터 뒤에 두고, 제품 테스트는 공개 REST/gRPC
+경계를 실행합니다. 대상별 사례, 아티팩트 잠금, 출시 런타임 근거는 [통합 테스트
+프레임워크](../../tests/integration/docs/ko/framework.md)에서 관리합니다.
 
 <!-- section: drift-report -->
 ## 불일치 보고서
@@ -185,7 +148,7 @@ CDC 의사 열을 추가합니다.
 모든 불일치 보고서에는 다음과 같은 안정된 필드를 포함해야 합니다.
 
 ```text
-version=<클라이언트/프로토콜 버전>
+contract_version=<매니페스트 또는 스키마 버전>
 operation=<REST 메서드, RPC 또는 SQL 템플릿>
 shape=<JSON/protobuf/스키마 요약>
 fingerprint=<결정적 요약 해시>
@@ -195,19 +158,19 @@ fix_hint=<다음 조치 경계>
 `fingerprint`는 기준 스키마나 데이터 구조에서 계산하며 원본 진단 맥락과 함께
 제공할 수 있습니다.
 
-`version`과 `operation`은 적용할 프로필을 선택합니다. `shape`와 `fingerprint`는
-불일치가 발생한 위치를 좁힙니다. `fix_hint`는 수정할 어댑터, 지원 범위, 기준 결과,
-E2E 단계 중 하나를 가리킵니다.
+`contract_version`과 `operation`은 영향을 받은 공개 경계를 식별합니다. `shape`와
+`fingerprint`는 불일치가 발생한 위치를 좁힙니다. `fix_hint`는 수정할 제품 계층 또는
+통합 사례를 가리킵니다.
 
 <!-- section: test-gates -->
 ## 승격 검증
 
 검증 완료 스키마 테스트는 최상위, 중첩, 반복 레코드 필드 추가를 다룹니다. 데이터가
 있는 테이블에서 새 필드가 null인지도 확인합니다. 파괴적인 변경 거부, 트랜잭션 중
-저장소 오류, 오래된 ETag, Python 클라이언트 E2E도 검증합니다.
+저장소 오류, 오래된 ETag, 공개 프로세스 동작도 검증합니다.
 
-재시작 후 상태 조정, DDL, 적재·쿼리 스키마 변경, Storage Write 스키마 알림은 아직
-지원하지 않습니다.
+두 저장소에 걸친 영속 복구, 적재·쿼리 스키마 변경, Storage Write 스키마 알림은
+아직 지원하지 않습니다.
 
 향후 CDC 검증에는 순서가 뒤바뀌거나 중복된 순서 값이 필요합니다. `UPSERT`와
 `DELETE`, 누락된 키, 잘못된 의사 열도 시험해야 합니다. 재연결과 오프셋 재전송, 여러
