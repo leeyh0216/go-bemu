@@ -207,6 +207,121 @@ func TestExecuteStatementRollsBackGoogleSQLScriptOnLaterFailure(t *testing.T) {
 	}
 }
 
+func TestMaterializeStatementRunsGoogleSQLScriptInOneTransaction(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	source := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "source"}
+	if _, err := warehouse.ExecuteStatement(ctx, newTypedSourceSeedStatement(t, source)); err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := googlesqladapter.NewGateway(statementExecutionCatalog{snapshot: statementExecutionSnapshot()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := gateway.Analyze(ctx, ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics",
+		SQL: "DECLARE increment INT64 DEFAULT 10; SET increment = increment + 1; " +
+			"SELECT id + increment AS value FROM analytics.source ORDER BY id",
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	destinationReference := domain.TableReference{
+		ProjectID: "test-project", DatasetID: "analytics", TableID: "script_result",
+	}
+	destination, err := NewStatementDestination(StatementDestinationDescriptor{
+		Reference: destinationReference, Exists: false,
+		WriteDisposition: domain.WriteEmpty, CreateDisposition: domain.CreateIfNeeded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := warehouse.MaterializeStatement(ctx, statement, destination)
+	if err != nil {
+		t.Fatalf("MaterializeStatement() error = %v", err)
+	}
+	if !result.DestinationCreated || len(result.QueryResult.Rows) != 2 ||
+		result.QueryResult.Rows[0][0] != int64(12) || result.QueryResult.Rows[1][0] != int64(13) {
+		t.Fatalf("materialized script result = %#v", result)
+	}
+	physical, err := renderPhysicalTable(destinationReference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT sum(value) FROM "+physical).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 25 {
+		t.Fatalf("materialized script total = %d, want 25", total)
+	}
+}
+
+func TestMaterializeStatementRollsBackScriptPrefixWhenPublicationFails(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	source := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "source"}
+	if _, err := warehouse.ExecuteStatement(ctx, newTypedSourceSeedStatement(t, source)); err != nil {
+		t.Fatal(err)
+	}
+	destinationReference := domain.TableReference{
+		ProjectID: "test-project", DatasetID: "analytics", TableID: "incompatible_result",
+	}
+	destinationSchema := []domain.Field{{Name: "payload", Type: "STRING", Mode: "NULLABLE"}}
+	if err := warehouse.CreateTable(ctx, domain.Table{
+		ProjectID: destinationReference.ProjectID, DatasetID: destinationReference.DatasetID,
+		ID: destinationReference.TableID, Type: "TABLE", Schema: domain.CloneFields(destinationSchema),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := googlesqladapter.NewGateway(statementExecutionCatalog{snapshot: statementExecutionSnapshot()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := gateway.Analyze(ctx, ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics",
+		SQL: "UPDATE analytics.source SET payload = 'changed' WHERE id = 1; " +
+			"SELECT id AS value FROM analytics.source ORDER BY id",
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	destination, err := NewStatementDestination(StatementDestinationDescriptor{
+		Reference: destinationReference, Exists: true, Schema: destinationSchema,
+		WriteDisposition: domain.WriteAppend, CreateDisposition: domain.CreateNever,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.MaterializeStatement(ctx, statement, destination); !errors.Is(err, domain.ErrPrecondition) {
+		t.Fatalf("MaterializeStatement() error = %v, want ErrPrecondition", err)
+	}
+	sourcePhysical, err := renderPhysicalTable(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload string
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT payload FROM "+sourcePhysical+" WHERE id = 1").Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload != "one" {
+		t.Fatalf("source payload after failed publication = %q, want rollback", payload)
+	}
+	destinationPhysical, err := renderPhysicalTable(destinationReference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT count(*) FROM "+destinationPhysical).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("destination rows after failed publication = %d, want 0", count)
+	}
+}
+
 func TestExecuteStatementRunsTypedInsertAndSelectPlans(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := duckDBQueryTestContext(t)

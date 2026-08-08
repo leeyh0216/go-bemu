@@ -20,13 +20,9 @@ func (w *Warehouse) executeGoogleSQLScript(
 	ctx context.Context,
 	statement semantic.Statement,
 ) (result domain.QueryResult, err error) {
-	script, ok := statement.Syntax().(*queryast.ScriptStatement)
-	if !ok || !statement.RelationsComplete() {
-		return result, fmt.Errorf("%w: analyzed script is invalid", domain.ErrPrecondition)
-	}
-	children := script.Statements()
-	if len(children) < 2 {
-		return result, fmt.Errorf("%w: analyzed script has too few statements", domain.ErrPrecondition)
+	children, err := validatedGoogleSQLScriptStatements(statement)
+	if err != nil {
+		return result, err
 	}
 
 	started := observability.LogSideEffectStart(ctx, "duckdb", "execute_script",
@@ -59,6 +55,57 @@ func (w *Warehouse) executeGoogleSQLScript(
 		}
 	}()
 
+	result, err = executeGoogleSQLScriptTransaction(ctx, tx, statement, children,
+		func(ctx context.Context, tx *sql.Tx, plan duckDBStatementPlan) (domain.QueryResult, error) {
+			output, outputErr := newDuckDBStatementOutput(statement, plan.returnsRows())
+			if outputErr != nil {
+				return domain.QueryResult{}, outputErr
+			}
+			return executeDuckDBStatementPlan(ctx, tx, plan, output)
+		})
+	if err != nil {
+		return result, err
+	}
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("commit GoogleSQL script transaction: %w", err)
+	}
+	committed = true
+	return result, nil
+}
+
+type duckDBScriptFinalStatement func(
+	context.Context,
+	*sql.Tx,
+	duckDBStatementPlan,
+) (domain.QueryResult, error)
+
+func validatedGoogleSQLScriptStatements(statement semantic.Statement) ([]queryast.Statement, error) {
+	script, ok := statement.Syntax().(*queryast.ScriptStatement)
+	if !ok || !statement.RelationsComplete() {
+		return nil, fmt.Errorf("%w: analyzed script is invalid", domain.ErrPrecondition)
+	}
+	children := script.Statements()
+	if len(children) < 2 {
+		return nil, fmt.Errorf("%w: analyzed script has too few statements", domain.ErrPrecondition)
+	}
+	return children, nil
+}
+
+// executeGoogleSQLScriptTransaction evaluates declarations, assignments, and
+// intermediate statements before delegating the final statement. The caller
+// owns the transaction, so execution and result publication can commit as one
+// unit.
+func executeGoogleSQLScriptTransaction(
+	ctx context.Context,
+	tx *sql.Tx,
+	statement semantic.Statement,
+	children []queryast.Statement,
+	final duckDBScriptFinalStatement,
+) (result domain.QueryResult, err error) {
+	if tx == nil || final == nil || len(children) < 2 {
+		return result, fmt.Errorf("%w: GoogleSQL script transaction is invalid", domain.ErrPrecondition)
+	}
+
 	variables := make(map[string]string)
 	createdTables := make([]string, 0)
 	sequence := scriptVariableSequence.Add(1)
@@ -87,11 +134,7 @@ func (w *Warehouse) executeGoogleSQLScript(
 				return result, lowerErr
 			}
 			if last {
-				output, outputErr := newDuckDBStatementOutput(statement, plan.returnsRows())
-				if outputErr != nil {
-					return result, outputErr
-				}
-				result, err = executeDuckDBStatementPlan(ctx, tx, plan, output)
+				result, err = final(ctx, tx, plan)
 				if err != nil {
 					return result, fmt.Errorf("execute GoogleSQL script statement %d: %w", index, err)
 				}
@@ -106,10 +149,6 @@ func (w *Warehouse) executeGoogleSQLScript(
 			return result, fmt.Errorf("drop GoogleSQL script variable %d: %w", index, err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return result, fmt.Errorf("commit GoogleSQL script transaction: %w", err)
-	}
-	committed = true
 	return result, nil
 }
 

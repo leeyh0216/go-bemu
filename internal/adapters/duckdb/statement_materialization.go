@@ -9,6 +9,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
@@ -121,12 +122,18 @@ func (w *Warehouse) MaterializeStatement(
 	statement semantic.Statement,
 	destination StatementDestination,
 ) (result StatementMaterializationResult, err error) {
-	plan, err := lowerDuckDBStatement(statement)
+	var plan duckDBStatementPlan
+	var scriptStatements []queryast.Statement
+	if statement.Kind() == queryast.StatementScript {
+		scriptStatements, err = validatedGoogleSQLScriptStatements(statement)
+	} else {
+		plan, err = lowerDuckDBStatement(statement)
+		if err == nil && !plan.returnsRows() {
+			err = fmt.Errorf("%w: destination requires a row-producing statement", domain.ErrInvalidQuery)
+		}
+	}
 	if err != nil {
 		return result, err
-	}
-	if !plan.returnsRows() {
-		return result, fmt.Errorf("%w: destination requires a row-producing statement", domain.ErrInvalidQuery)
 	}
 	output, err := newDuckDBStatementOutput(statement, true)
 	if err != nil {
@@ -139,23 +146,27 @@ func (w *Warehouse) MaterializeStatement(
 	if err != nil {
 		return result, fmt.Errorf("%w: statement destination is invalid", domain.ErrInvalid)
 	}
+	bindCount := 0
+	if len(scriptStatements) == 0 {
+		bindCount = len(plan.bindArguments())
+	}
 
 	started := observability.LogSideEffectStart(ctx, "duckdb", "materialize_statement",
 		"statement_kind", string(statement.Kind()),
-		"analysis_fingerprint", plan.semanticAnalysisFingerprint(),
+		"analysis_fingerprint", statement.AnalysisFingerprint(),
 		"destination_fingerprint", statementDestinationFingerprint(destination.reference),
 		"write_disposition", destination.writeDisposition,
 		"create_disposition", destination.createDisposition,
 		"destination_exists", destination.exists,
 		"destination_schema_fingerprint", queryDestinationSchemaDigest(destination.schema),
-		"bind_count", len(plan.bindArguments()),
+		"bind_count", bindCount,
 		"transaction_mode", "explicit",
 	)
 	defer func() {
 		err = classifyDuckDBStatementError(err)
 		observability.LogSideEffectEnd(ctx, "duckdb", "materialize_statement", started, err,
 			"statement_kind", string(statement.Kind()),
-			"analysis_fingerprint", plan.semanticAnalysisFingerprint(),
+			"analysis_fingerprint", statement.AnalysisFingerprint(),
 			"destination_fingerprint", statementDestinationFingerprint(destination.reference),
 			"write_disposition", destination.writeDisposition,
 			"destination_created", result.DestinationCreated,
@@ -176,6 +187,41 @@ func (w *Warehouse) MaterializeStatement(
 		}
 	}()
 
+	if len(scriptStatements) != 0 {
+		_, err = executeGoogleSQLScriptTransaction(ctx, tx, statement, scriptStatements,
+			func(ctx context.Context, tx *sql.Tx, finalPlan duckDBStatementPlan) (domain.QueryResult, error) {
+				materialized, materializeErr := materializeDuckDBStatementPlan(
+					ctx, tx, finalPlan, output, destination, destinationName,
+				)
+				result = materialized
+				return materialized.QueryResult, materializeErr
+			})
+	} else {
+		result, err = materializeDuckDBStatementPlan(
+			ctx, tx, plan, output, destination, destinationName,
+		)
+	}
+	if err != nil {
+		return result, err
+	}
+	if err := tx.Commit(); err != nil {
+		return result, err
+	}
+	committed = true
+	return result, nil
+}
+
+func materializeDuckDBStatementPlan(
+	ctx context.Context,
+	tx *sql.Tx,
+	plan duckDBStatementPlan,
+	output duckDBStatementOutput,
+	destination StatementDestination,
+	destinationName string,
+) (result StatementMaterializationResult, err error) {
+	if tx == nil || !plan.returnsRows() || destinationName == "" {
+		return result, fmt.Errorf("%w: statement materialization plan is invalid", domain.ErrPrecondition)
+	}
 	staging := fmt.Sprintf("__bqemu_statement_result_%d", queryMaterializationSequence.Add(1))
 	if err := stageDuckDBStatementPlan(ctx, tx, staging, plan); err != nil {
 		return result, err
@@ -213,10 +259,6 @@ func (w *Warehouse) MaterializeStatement(
 	if _, err := tx.ExecContext(ctx, "DROP TABLE "+quoteIdentifier(staging)); err != nil {
 		return result, err
 	}
-	if err := tx.Commit(); err != nil {
-		return result, err
-	}
-	committed = true
 	result.DestinationCreated = !destination.exists
 	return result, nil
 }
