@@ -138,10 +138,6 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure Spark BigQuery query profiles: %w", err)
 	}
-	ddlParser, err := googlesqladapter.NewParser()
-	if err != nil {
-		return fmt.Errorf("configure GoogleSQL DDL parser: %w", err)
-	}
 	googleSQLGateway, err := googlesqladapter.NewGateway(catalogService)
 	if err != nil {
 		return fmt.Errorf("configure GoogleSQL analyzer gateway: %w", err)
@@ -153,7 +149,6 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		application.WithGoogleSQLGateway(googleSQLGateway),
 		application.WithStatementExecutor(statementExecutor),
 		application.WithStatementMaterializer(statementMaterializer),
-		application.WithQueryDDLParser(ddlParser),
 		application.WithQueryDDLExecutor(catalogService),
 		application.WithQueryMaterializer(queryMaterializer),
 		application.WithQueryDestinationCatalog(catalogService),
