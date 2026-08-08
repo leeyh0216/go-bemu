@@ -32,10 +32,11 @@ it is never broadly rewritten by a permissive regex.
 <!-- section: consequences -->
 ## Consequences
 
-General GoogleSQL remains unsupported until a semantic adapter exists. Exact
-connector template rules record version, fingerprint, authoritative source,
-negative cases, and removal condition. SQL DDL must not mutate physical catalog
-without synchronizing canonical metadata.
+General GoogleSQL queries remain a declared subset. Catalog DDL now uses a
+GoogleSQL AST adapter and typed semantic commands. Exact connector template
+rules record version, fingerprint, authoritative source, negative cases, and
+removal condition. SQL DDL must not mutate physical catalog without
+synchronizing canonical metadata.
 
 <!-- section: alternatives -->
 ## Alternatives

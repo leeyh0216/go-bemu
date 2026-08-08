@@ -202,25 +202,26 @@ inside one DuckDB transaction. Storage Write validates all named PENDING streams
 before its serialized coordinator applies one DuckDB transaction, following the
 atomic group contract of
 [`BatchCommitWriteStreams`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams).
-Those atomic transactions do not make the process-local job or stream ledgers
-restart-durable, and object download is deliberately outside the load commit.
+Query and load job metadata is SQLite-durable, but query result rows and the
+Storage Write stream ledger are not yet restart-durable. Object download is
+deliberately outside the load commit.
 
 <!-- section: sql-boundary -->
 ## SQL Dialect Boundary
 
-Backtick reference rewriting is a temporary adapter concern. The current lexical
-scanner distinguishes relation positions from quoted columns, strings, and
-comments, but is not a complete parser for scripts, table decorators, function
-arguments, or every unquoted path. General compatibility requires a structural
-GoogleSQL parser/semantic adapter. The authoritative syntax is the
+Catalog-mutating statements use a GoogleSQL AST adapter and immutable semantic
+commands. General query reference rewriting remains a bounded adapter and is
+not a complete implementation of scripts, table decorators, or every query
+expression. The authoritative syntax is the
 [GoogleSQL lexical structure](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)
 and [query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax).
 Unknown or unsupported forms must fail explicitly rather than be approximately
 rewritten.
-The analyzer marks catalog-mutating DDL and the application rejects `CREATE`,
-`ALTER`, `DROP`, and `TRUNCATE` before job creation or engine execution under
-`query.ddl.catalog-sync-v1`. Implementing DDL requires an atomic canonical
-catalog reconciliation port, not direct DuckDB execution.
+The application executes `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`,
+top-level `ADD`, `RENAME`, and `DROP COLUMN`, and `ALTER COLUMN SET DATA TYPE`
+through typed engine plans and the canonical catalog service. Unsupported DDL
+fails before mutation under `query.ddl.catalog-sync-v1`. A process crash between
+the engine change and SQLite publication still requires #26 reconciliation.
 The same boundary permits only one statement plus an optional trailing
 semicolon. A literal/comment-aware scan rejects all [multi-statement
 queries](https://cloud.google.com/bigquery/docs/multi-statement-queries) before
@@ -243,10 +244,12 @@ remain explicit gaps.
 <!-- section: runtime-security -->
 ## Runtime, TLS, and Public Access
 
-The process composes one warehouse, process-local catalog/job repositories,
-system clock/ID adapters, application services, public REST/gRPC listeners, and
-the optional separate admin listener. One certificate pair enables TLS on the
-public listeners and on admin when enabled.
+The process composes one storage engine and a BQEMU-owned SQLite state store.
+SQLite owns canonical catalog, query/load job metadata, and Storage Read
+lifecycle metadata. System clock/ID adapters, application services, public
+REST/gRPC listeners, and an optional admin listener are composed around those
+ports. One certificate pair enables TLS on the public listeners and on admin
+when enabled.
 
 BigQuery-compatible REST and gRPC endpoints do not authenticate or authorize
 callers. Missing, arbitrary, malformed, and expired-looking `Authorization`

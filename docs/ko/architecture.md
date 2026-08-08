@@ -252,27 +252,28 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 [`BatchCommitWriteStreams`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams)로
 정의된 원자적 그룹 계약을 따릅니다.
 
-이 트랜잭션만으로 프로세스 내부 작업 저장소나 스트림 원장이 재시작 후에도 유지되는
-것은 아닙니다. 객체 다운로드는 의도적으로 적재 커밋 밖에서 수행합니다.
+쿼리와 로드 작업 메타데이터는 SQLite에 저장합니다. 쿼리 결과 행과 Storage Write
+스트림 원장은 아직 재시작 후 복구하지 않습니다. 객체 다운로드는 의도적으로 적재
+커밋 밖에서 수행합니다.
 
 <!-- section: sql-boundary -->
 ## SQL 문법 경계
 
-백틱 참조 변환은 현재 임시 어댑터가 담당합니다. 어휘 분석기는 관계가 나오는 위치,
-인용된 열, 문자열, 주석을 구분합니다. 스크립트, 테이블 데코레이터, 함수 인수, 인용하지
-않은 모든 경로까지 처리하는 완전한 구문 분석기는 아닙니다.
+카탈로그를 변경하는 문장은 GoogleSQL AST 어댑터와 불변 의미 명령으로 처리합니다.
+일반 쿼리의 참조 변환은 제한된 어댑터가 담당합니다. 스크립트, 테이블 데코레이터,
+모든 쿼리 표현식을 처리하는 완전한 구현은 아닙니다.
 
-일반적인 호환성을 제공하려면 GoogleSQL 구문 분석기와 의미 분석 어댑터가 필요합니다.
 문법 기준은 [GoogleSQL 어휘
 구조](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)와
 [쿼리 문법](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax)입니다.
 알 수 없거나 지원하지 않는 형식은 비슷한 SQL로 추정하지 않고 명시적으로
 거부해야 합니다.
 
-분석기는 카탈로그를 바꾸는 DDL을 표시합니다. 애플리케이션은
-`query.ddl.catalog-sync-v1`에 따라 `CREATE`, `ALTER`, `DROP`, `TRUNCATE`를 작업 생성과
-엔진 실행 전에 거부합니다. DDL을 지원하려면 DuckDB에서 직접 실행해서는 안 됩니다.
-기준 카탈로그와 저장소 변경을 원자적으로 조정하는 포트가 필요합니다.
+애플리케이션은 `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, 최상위 `ADD`, `RENAME`,
+`DROP COLUMN`, `ALTER COLUMN SET DATA TYPE`을 타입 있는 엔진 계획과 기준 카탈로그
+서비스를 통해 실행합니다. 지원하지 않는 DDL은 변경 전에
+`query.ddl.catalog-sync-v1`로 거부합니다. 엔진 변경과 SQLite 공개 사이에서 프로세스가
+중단된 경우의 복구는 #26에 남아 있습니다.
 
 같은 경계에서는 명령문 하나와 선택적인 마지막 세미콜론만 허용합니다. 리터럴과
 주석을 구분하는 검사기는 모든 [여러 명령문
@@ -297,9 +298,10 @@ INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실�
 <!-- section: runtime-security -->
 ## 실행 환경, TLS, 공개 접근
 
-프로세스는 웨어하우스 하나와 프로세스 내부 카탈로그·작업 저장소를 구성합니다.
-시스템 시계와 ID 어댑터, 애플리케이션 서비스, 공개 REST/gRPC 수신기도 구성합니다.
-관리용 수신기는 선택 사항입니다.
+프로세스는 저장 엔진 하나와 BQEMU 전용 SQLite 상태 저장소를 구성합니다. SQLite는
+기준 카탈로그, 쿼리·로드 작업 메타데이터, Storage Read 수명 주기 메타데이터를
+소유합니다. 그 주위에 시스템 시계와 ID 어댑터, 애플리케이션 서비스, 공개 REST/gRPC
+수신기를 구성합니다. 관리용 수신기는 선택 사항입니다.
 
 인증서 한 쌍으로 공개 수신기와 활성화된 관리 수신기에 TLS를 적용할 수 있습니다.
 

@@ -90,9 +90,9 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 | 기능 | 상태 | 지원 범위 |
 | --- | --- | --- |
 | `jobs.query` | 부분 지원 | Python 3.43.0으로 동기 실행을 확인했습니다. DuckDB 호환 SQL 일부만 지원합니다. |
-| 쿼리 `jobs.insert` | 부분 지원 | Python 3.43.0으로 조회 흐름을 확인했습니다. 비동기 상태는 프로세스 메모리에 저장합니다. |
+| 쿼리 `jobs.insert` | 부분 지원 | Python 3.43.0으로 조회 흐름을 확인했습니다. 실행은 현재 프로세스가 담당하며 구성, 상태, 오류, 시각, 통계는 SQLite에 저장합니다. |
 | `jobs.get` | 기본 검증 | `PENDING`, `RUNNING`, `DONE`과 최종 오류를 지원합니다. |
-| `jobs.list` | 부분 지원 | 위치를 포함한 식별자와 불투명한 커서 토큰을 지원합니다. 현재 프로세스의 스냅샷만 조회합니다. |
+| `jobs.list` | 부분 지원 | 위치를 포함해 SQLite에 저장한 작업 메타데이터와 불투명한 커서 토큰을 지원합니다. |
 | `jobs.getQueryResults` | 부분 지원 | 위치 기반 조회, `startIndex`, `maxResults`, 작업과 결과에 묶인 불투명한 페이지 토큰을 지원합니다. |
 
 ### 대상 테이블과 쿼리 메타데이터
@@ -108,12 +108,12 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 
 | 기능 | 상태 | 지원 범위 |
 | --- | --- | --- |
-| SQL DDL | 미지원 | 기준 메타데이터와 DuckDB 카탈로그를 같은 애플리케이션 작업으로 변경하지 못하므로 실행 전에 실패합니다. 미지원 ID는 `query.ddl.catalog-sync-v1`입니다. |
+| 의미 기반 SQL DDL | 부분 지원 | GoogleSQL AST 계획으로 `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, 최상위 `ADD`, `RENAME`, `DROP COLUMN`, `ALTER COLUMN SET DATA TYPE`을 실행합니다. 지원하지 않는 절은 변경 전에 `query.ddl.catalog-sync-v1`로 거부하며 SQLite와 엔진 사이의 중단 복구는 #26에 남아 있습니다. |
 | 여러 문장으로 된 쿼리 | 미지원 | 문자열과 주석을 구분하여 마지막 세미콜론 하나만 허용합니다. 스크립트는 실행 전에 거부합니다. 미지원 ID는 `query.scripts.unsupported-v1`이며 공식 [여러 문장 쿼리 계약](https://cloud.google.com/bigquery/docs/multi-statement-queries)을 참고합니다. |
 | 취소 | 부분 지원 | 종료 과정에서는 새 작업을 거부하고 실행 중인 작업을 취소한 뒤 Storage와 DuckDB를 닫습니다. 공개 [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel)과 취소 상태는 지원하지 않습니다. |
-| Parquet 로드 `jobs.insert`, `jobs.get`, `jobs.list` | 부분 지원 | 별도로 활성화해야 하며 기존 대상 테이블만 사용합니다. 상태는 프로세스 메모리에 저장합니다. |
+| Parquet 로드 `jobs.insert`, `jobs.get`, `jobs.list` | 부분 지원 | 별도로 활성화해야 합니다. 구성, 상태, 오류, 시각, 통계는 SQLite에 저장합니다. |
 | 복사와 추출 | 미지원 | 해당 설정을 거부합니다. |
-| 작업과 결과의 영속 상태 | 미지원 | 메모리 저장소만 사용합니다. |
+| 작업과 결과의 영속 상태 | 부분 지원 | 쿼리와 로드 작업 메타데이터는 재시작 후 복구합니다. 쿼리 결과 행은 저장하지 않으며, 재시작한 비어 있지 않은 결과는 빈 성공 대신 명시적인 `backendError`를 반환합니다. |
 | 쿼리 결과 보관 크기 제한 | 미지원 | 모든 결과 행을 Go 메모리에 보관합니다. 미지원 ID는 `query.results.unbounded-memory-v1`입니다. |
 | 복합 쿼리 결과 스키마 | 부분 지원 | `ARRAY`와 `STRUCT` 스키마, 중첩 및 반복 `TableRow` 셀을 보존합니다. 자료형을 구분할 수 없는 10진수 하위 필드와 지원하지 않는 물리 스키마는 메타데이터 반영 전에 거부합니다. |
 | 비동기 쿼리 실행 시간 제한 | 부분 지원 | `query.operationTimeout`으로 동기 및 비동기 실행을 제한합니다. 종료 시 승인 거부, 취소, 대기를 처리합니다. 작업자 용량과 요청의 정확한 `timeoutMs` 동작은 미지원이며 ID는 `query.execution.bounded-v1`입니다. |
@@ -123,7 +123,7 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 | 동기 요청 제어 | 부분 지원 | 36바이트 ASCII `requestId`와 음수가 아닌 `timeoutMs`를 받습니다. 미완료 응답 대기 제한, 변경 쿼리 중복 제거, `jobTimeoutMs`는 미지원이며 ID는 `query.sync.request-controls-v1`입니다. |
 | 지원하지 않는 쿼리 옵션 | 엄격히 거부 | 매개변수, `dryRun`, 캐시 및 비용 제어, `jobTimeoutMs`는 `400`으로 거부합니다. 미지원 ID는 `query.options.unsupported-v1`입니다. |
 | 위치를 생략한 데이터 세트 추론 | 부분 지원 | 구조적으로 참조한 테이블, 다른 프로젝트의 `defaultDataset.projectId`, 명시적 대상 데이터 세트를 실행 전에 검사합니다. ID는 `query.location.dataset-inference-v1`입니다. |
-| 최종 상태 저장 실패 복구 | 미지원 | 저장소 갱신에 실패하면 `RUNNING` 상태가 남을 수 있습니다. 미지원 ID는 `query.terminal-persistence-v1`입니다. |
+| 최종 상태 저장 실패 복구 | 부분 지원 | 시작할 때 중단된 `PENDING`과 `RUNNING` 작업을 최종 오류로 바꿉니다. 모든 교차 저장소 실패 지점의 복구는 `query.terminal-persistence-v1`에 남아 있습니다. |
 
 작업 상태와 오류 필드는 공식 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job)
 리소스를 기준으로 합니다. 중첩 및 반복 결과 셀은 재귀적인
@@ -291,14 +291,15 @@ Spark `3.5.8`과 커넥터 `0.44.2`로 Arrow 및 AVRO 읽기 스키마와 직접
 | 공개 `SplitReadStream` | 미지원이며 `UNIMPLEMENTED`를 반환합니다. |
 | Arrow/Avro 스키마와 행 데이터 | 부분 지원입니다. 행과 응답 바이트 수에 상한을 두고 DuckDB 결과를 인코딩합니다. |
 | 열 선택과 행 제한 | 최상위 필드와 제한된 표현식만 지원합니다. 중첩 필드 선택은 지원하지 않습니다. |
-| 논리 스트림과 오프셋 재개 | 실행 중인 세션에서 고정된 범위와 스트림 기준 오프셋을 지원합니다. |
+| 논리 스트림과 오프셋 재개 | 실행 중인 세션에서 고정된 범위와 스트림 기준 오프셋을 지원하며 수명 주기 메타데이터는 SQLite에 저장합니다. |
 | 과거 시점 스냅샷과 압축 | 지원하지 않습니다. |
 
 공개 기능은 일부만 지원합니다. 실행 중인 세션마다 고정된 DuckDB 결과 하나를
 소유하며, 설정한 수의 논리 스트림으로 나눕니다. 결과 크기에는 상한을 둡니다.
 
-스트림 분할 RPC, 전송 압축, 과거 시점의 `snapshot_time`, 중첩 필드 선택, 재시작 후
-세션 복구는 지원하지 않습니다. 목표 동작은 공식
+스트림 분할 RPC, 전송 압축, 과거 시점의 `snapshot_time`, 중첩 필드 선택은 지원하지
+않습니다. 재시작 후 만료되지 않은 이전 스트림은 `UNAVAILABLE`, 만료된 스트림은
+`NOT_FOUND`를 반환하며 snapshot 행 데이터는 다시 만들지 않습니다. 목표 동작은 공식
 [`BigQueryRead`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryRead)
 서비스와 커넥터의
 [`ReadSessionCreator.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java)를

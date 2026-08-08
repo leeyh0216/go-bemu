@@ -82,20 +82,20 @@ not implied.
 | Operation | Status | Limit |
 | --- | --- | --- |
 | `jobs.query` | Partial | Python 3.43.0 path verified; synchronous DuckDB-compatible SQL subset |
-| query `jobs.insert` | Partial | Python 3.43.0 polling path verified; process-local asynchronous execution |
+| query `jobs.insert` | Partial | Python 3.43.0 polling path verified; execution is process-local while configuration, status, errors, timestamps, and statistics are SQLite-durable |
 | `jobs.get` | Verified basic | `PENDING/RUNNING/DONE`, terminal errors |
-| `jobs.list` | Partial | location-aware identity and opaque cursor token; process-local snapshot only |
+| `jobs.list` | Partial | location-aware SQLite metadata and opaque cursor token |
 | `jobs.getQueryResults` | Partial | location-aware lookup, `startIndex`, `maxResults`, and job/result-bound opaque page tokens |
 | explicit destination table | Partial | scalar exact-schema `WRITE_EMPTY`/`WRITE_APPEND`/`WRITE_TRUNCATE`; capability `query.destination.exact-schema-v1` |
 | connector query metadata | Verified basic | `INTERACTIVE`/`BATCH` priority and validated labels, including an explicitly empty label map, are fingerprinted and round-tripped |
 | anonymous destination table | Partial | row-producing query jobs publish a generated hidden-dataset destination with 24-hour lazy expiration; capability `query.destination.anonymous-v1` |
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset only; gap `query.destination.truncate-schema-replacement-v1` |
-| SQL DDL | Unsupported | `CREATE`/`ALTER`/`DROP`/`TRUNCATE` fail before job or engine side effects until physical and canonical catalog changes share one application contract; gap `query.ddl.catalog-sync-v1` |
+| semantic SQL DDL | Partial | GoogleSQL AST plans execute `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, top-level `ADD`/`RENAME`/`DROP COLUMN`, and `ALTER COLUMN SET DATA TYPE`; unsupported clauses fail before mutation under `query.ddl.catalog-sync-v1`, while crash recovery between SQLite and the engine remains #26 |
 | multi-statement queries | Unsupported | literal/comment-aware scanning permits one optional trailing semicolon and rejects scripts before job or engine side effects; gap `query.scripts.unsupported-v1`; see the official [multi-statement query contract](https://cloud.google.com/bigquery/docs/multi-statement-queries) |
 | cancellation | Partial | runtime shutdown rejects new work, cancels and drains admitted sync/async work before closing Storage or DuckDB; public [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel) and cancellation state remain unsupported |
-| Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in, existing destination table, process-local state |
+| Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in; configuration, status, errors, timestamps, and statistics are SQLite-durable |
 | copy/extract | Unsupported | configuration rejected |
-| durable job/result state | Unsupported | in-memory repository |
+| durable job/result state | Partial | query/load job metadata survives restart; query row payloads do not, and a restarted non-empty result returns an explicit `backendError` instead of an empty success |
 | bounded query result retention | Unsupported | all result rows remain in Go memory; gap `query.results.unbounded-memory-v1` |
 | complex query-result schema | Partial | ARRAY/STRUCT schemas and nested/repeated `TableRow` cells are preserved; ambiguous decimal subfields and unsupported physical shapes fail before metadata publication |
 | bounded async query execution | Partial | file-configured `query.operationTimeout` bounds service-owned sync/async execution; shutdown admission/cancel/wait is implemented, while worker capacity and exact request `timeoutMs` remain gaps; capability `query.execution.bounded-v1` |
@@ -105,7 +105,7 @@ not implied.
 | synchronous request controls | Partial | validates the 36-byte ASCII `requestId` and accepts non-negative `timeoutMs`; bounded unfinished responses, mutating-query deduplication, and `jobTimeoutMs` remain gap `query.sync.request-controls-v1` |
 | unsupported query options | Strict gap | parameters, `dryRun`, cache/billing controls, and `jobTimeoutMs` are explicitly rejected with `400`; gap `query.options.unsupported-v1` |
 | omitted-location dataset inference | Partial | structurally referenced tables, cross-project `defaultDataset.projectId`, and explicit destination datasets are checked before insertion; capability `query.location.dataset-inference-v1` |
-| terminal persistence recovery | Unsupported | a failed terminal repository update can leave `RUNNING`; gap `query.terminal-persistence-v1` |
+| terminal persistence recovery | Partial | startup changes interrupted `PENDING`/`RUNNING` jobs to terminal errors; recovery from every cross-store failure point remains gap `query.terminal-persistence-v1` |
 
 Canonical job state and error fields come from the official
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job) resource.
@@ -263,13 +263,14 @@ metadata.
 | public `SplitReadStream` | Unsupported; returns `UNIMPLEMENTED` |
 | Arrow/Avro schema and row payloads | Partial; encoded from bounded DuckDB rows and response bytes |
 | projection and row restriction | Partial; top-level fields and a bounded expression subset; nested projection unsupported |
-| logical streams and offset resume | Partial; stable ranges and stream-relative offsets within a live session |
+| logical streams and offset resume | Partial; stable ranges and stream-relative offsets within a live session, with SQLite-durable lifecycle metadata |
 | historical snapshot and compression | Unsupported |
 
 The public capability is Partial. Each live session owns one stable, bounded
 DuckDB materialization and exposes configurable logical streams. Split RPC,
-wire compression, historical `snapshot_time`, nested projection, and durable
-session recovery after restart remain gaps.
+wire compression, historical `snapshot_time`, and nested projection remain
+gaps. After restart, an unexpired stream returns `UNAVAILABLE` and an expired
+stream returns `NOT_FOUND`; snapshot row bytes are not reconstructed.
 
 The target contract is the official
 [`BigQueryRead`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryRead)
