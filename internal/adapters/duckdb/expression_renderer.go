@@ -232,6 +232,10 @@ func (visitor *duckDBExpressionVisitor) VisitFunctionCall(call *queryast.Functio
 		return visitor.renderPlainFunction(call, "to_json", 1, 1)
 	case "DATE_TRUNC", "TIMESTAMP_TRUNC":
 		return visitor.renderTemporalTrunc(call)
+	case "GENERATE_ARRAY":
+		return visitor.renderGenerateArray(call)
+	case "RANGE_BUCKET":
+		return visitor.renderRangeBucket(call)
 	default:
 		return unsupportedDuckDBLowering("function", name)
 	}
@@ -314,6 +318,43 @@ func (visitor *duckDBExpressionVisitor) renderTemporalTrunc(call *queryast.Funct
 		return err
 	}
 	visitor.result = "date_trunc(" + visitor.renderer.bindArgument(strings.ToLower(partName)) + ", " + value + ")"
+	return nil
+}
+
+func (visitor *duckDBExpressionVisitor) renderGenerateArray(call *queryast.FunctionCall) error {
+	if call.Distinct() || call.NullHandling() != queryast.FunctionNullHandlingDefault ||
+		(len(call.Arguments()) != 2 && len(call.Arguments()) != 3) {
+		return unsupportedDuckDBLowering("GENERATE_ARRAY signature", len(call.Arguments()))
+	}
+	arguments, err := visitor.renderer.renderExpressionList(call.Arguments())
+	if err != nil {
+		return err
+	}
+	visitor.result = "generate_series(" + arguments + ")"
+	return nil
+}
+
+func (visitor *duckDBExpressionVisitor) renderRangeBucket(call *queryast.FunctionCall) error {
+	if call.Distinct() || call.NullHandling() != queryast.FunctionNullHandlingDefault || len(call.Arguments()) != 2 {
+		return unsupportedDuckDBLowering("RANGE_BUCKET signature", len(call.Arguments()))
+	}
+	pointForNull, err := visitor.renderer.renderExpression(call.Arguments()[0])
+	if err != nil {
+		return err
+	}
+	boundaries, err := visitor.renderer.renderExpression(call.Arguments()[1])
+	if err != nil {
+		return err
+	}
+	pointForComparison, err := visitor.renderer.renderExpression(call.Arguments()[0])
+	if err != nil {
+		return err
+	}
+	boundaryTable := quoteIdentifier("__bqemu_range_bucket")
+	boundaryColumn := quoteIdentifier("__bqemu_boundary")
+	visitor.result = "(CASE WHEN " + pointForNull + " IS NULL THEN NULL ELSE (SELECT count(*) FROM UNNEST(" +
+		boundaries + ") AS " + boundaryTable + "(" + boundaryColumn + ") WHERE " + boundaryColumn + " <= " +
+		pointForComparison + ") END)"
 	return nil
 }
 

@@ -171,6 +171,101 @@ func TestExecuteStatementRunsGenericDeclareMergeScriptAtomically(t *testing.T) {
 	}
 }
 
+func TestExecuteStatementRunsRangePartitionMergeScript(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "analytics"); err != nil {
+		t.Fatal(err)
+	}
+	fields := []domain.Field{
+		{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+		{Name: "partition_id", Type: "INT64", Mode: "NULLABLE"},
+		{Name: "payload", Type: "STRING", Mode: "NULLABLE"},
+	}
+	for _, tableID := range []string{"temporary", "destination"} {
+		if err := warehouse.CreateTable(ctx, domain.Table{
+			ProjectID: "test-project", DatasetID: "analytics", ID: tableID,
+			Type: "TABLE", Schema: domain.CloneFields(fields),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema := quoteIdentifier(physicalSchema("test-project", "analytics"))
+	if _, err := warehouse.db.ExecContext(ctx,
+		"INSERT INTO "+schema+"."+quoteIdentifier("destination")+
+			" VALUES (1, 5, 'old'), (2, 15, 'keep'), (5, NULL, 'old-null')",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx,
+		"INSERT INTO "+schema+"."+quoteIdentifier("temporary")+
+			" VALUES (3, 7, 'new'), (4, NULL, 'new-null')",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := statementExecutionSnapshot()
+	snapshot.Projects[0].Datasets[0].Tables = []domain.Table{
+		{ProjectID: "test-project", DatasetID: "analytics", ID: "temporary", Type: "TABLE", Schema: domain.CloneFields(fields)},
+		{ProjectID: "test-project", DatasetID: "analytics", ID: "destination", Type: "TABLE", Schema: domain.CloneFields(fields)},
+	}
+	gateway, err := googlesqladapter.NewGateway(statementExecutionCatalog{snapshot: snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	googleSQL := "DECLARE partitions_to_delete DEFAULT " +
+		"(SELECT ARRAY_AGG(DISTINCT(IFNULL(IF(partition_id >= 100, 0, " +
+		"RANGE_BUCKET(partition_id, GENERATE_ARRAY(0, 100, 10))), -1)) IGNORE NULLS) " +
+		"FROM `test-project.analytics.temporary`); " +
+		"MERGE `test-project.analytics.destination` AS target " +
+		"USING `test-project.analytics.temporary` AS source ON FALSE " +
+		"WHEN NOT MATCHED BY SOURCE AND IFNULL(IF(target.partition_id >= 100, 0, " +
+		"RANGE_BUCKET(target.partition_id, GENERATE_ARRAY(0, 100, 10))), -1) " +
+		"IN UNNEST(partitions_to_delete) THEN DELETE " +
+		"WHEN NOT MATCHED BY TARGET THEN INSERT(id, partition_id, payload) " +
+		"VALUES(source.id, source.partition_id, source.payload)"
+	statement, err := gateway.Analyze(ctx, ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics", SQL: googleSQL,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	result, err := warehouse.ExecuteStatement(ctx, statement)
+	if err != nil {
+		t.Fatalf("ExecuteStatement() error = %v", err)
+	}
+	if result.AffectedRows != 4 {
+		t.Fatalf("affected rows = %d, want 4", result.AffectedRows)
+	}
+	rows, err := warehouse.db.QueryContext(ctx,
+		"SELECT id, payload FROM "+schema+"."+quoteIdentifier("destination")+" ORDER BY id",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var observed []string
+	for rows.Next() {
+		var id int64
+		var payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			t.Fatal(err)
+		}
+		observed = append(observed, fmt.Sprintf("%d:%s", id, payload))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(observed, ",") != "2:keep,3:new,4:new-null" {
+		t.Fatalf("destination rows = %#v", observed)
+	}
+}
+
 func TestExecuteStatementRollsBackGoogleSQLScriptOnLaterFailure(t *testing.T) {
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()
