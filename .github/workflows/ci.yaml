@@ -191,6 +191,83 @@ jobs:
       contents: read
     uses: ./.github/workflows/spark-contract.yaml
 
+  auth-client-test:
+    name: Credential and TLS / ${{ matrix.case }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: python
+            python_version: "3.13"
+            setup_target: python-setup
+          - case: bq
+            python_version: ""
+            setup_target: ""
+          - case: pyspark
+            python_version: "3.11"
+            setup_target: auth-spark-setup
+          - case: scala-spark
+            python_version: "3.11"
+            setup_target: auth-spark-setup
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prepare case-specific diagnostics
+        env:
+          CONSUMER_CASE: ${{ matrix.case }}
+        run: |
+          mkdir -p ".artifacts/auth/$CONSUMER_CASE"
+          printf '%s\n' \
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuite name=\"bqemu-auth-$CONSUMER_CASE\" tests=\"1\" failures=\"1\"><testcase classname=\"bqemu.auth\" name=\"$CONSUMER_CASE\"><failure message=\"runner-not-reached\"/></testcase></testsuite>" \
+            > ".artifacts/auth/$CONSUMER_CASE/junit-$CONSUMER_CASE.xml"
+          chmod 0600 ".artifacts/auth/$CONSUMER_CASE/junit-$CONSUMER_CASE.xml"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: ${{ matrix.python_version != '' }}
+        with:
+          python-version: ${{ matrix.python_version }}
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        if: ${{ matrix.setup_target != '' }}
+        with:
+          enable-cache: true
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        if: ${{ matrix.case == 'bq' }}
+        with:
+          version: 566.0.0
+          install_components: bq
+      - name: Verify exact bq consumer version
+        if: ${{ matrix.case == 'bq' }}
+        run: test "$(bq version)" = "This is BigQuery CLI 2.1.31"
+      - name: Install pinned case dependencies
+        if: ${{ matrix.setup_target != '' }}
+        env:
+          SETUP_TARGET: ${{ matrix.setup_target }}
+        run: make "$SETUP_TARGET"
+      - name: Run real-process credential case
+        env:
+          CONSUMER_CASE: ${{ matrix.case }}
+        run: |
+          make auth-client-test \
+            BQEMU_AUTH_CASE="$CONSUMER_CASE" \
+            BQEMU_AUTH_JUNIT=".artifacts/auth/$CONSUMER_CASE/junit-$CONSUMER_CASE.xml" \
+            BQEMU_AUTH_DIAGNOSTICS=".artifacts/auth/$CONSUMER_CASE/events.ndjson"
+      - name: Upload case-specific diagnostics and JUnit
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: auth-client-${{ matrix.case }}-diagnostics-${{ github.run_id }}
+          path: .artifacts/auth/${{ matrix.case }}
+          if-no-files-found: error
+          retention-days: 7
+
   validation-complete:
     name: All required validation succeeded
     if: ${{ always() }}
@@ -201,6 +278,7 @@ jobs:
       - python-client
       - bq-cli
       - spark-contract
+      - auth-client-test
       - container-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -213,6 +291,7 @@ jobs:
           PYTHON_RESULT: ${{ needs.python-client.result }}
           BQ_RESULT: ${{ needs.bq-cli.result }}
           SPARK_RESULT: ${{ needs.spark-contract.result }}
+          AUTH_CLIENT_RESULT: ${{ needs.auth-client-test.result }}
           CONTAINER_RESULT: ${{ needs.container-smoke.result }}
         run: |
           failed=0
@@ -223,6 +302,7 @@ jobs:
             "python-client:$PYTHON_RESULT" \
             "bq-cli:$BQ_RESULT" \
             "spark-contract:$SPARK_RESULT" \
+            "auth-client-test:$AUTH_CLIENT_RESULT" \
             "container-smoke:$CONTAINER_RESULT"
           do
             job=${result%%:*}

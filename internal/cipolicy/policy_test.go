@@ -32,6 +32,7 @@ var requiredValidationJobs = []string{
 	"python-client",
 	"bq-cli",
 	"spark-contract",
+	"auth-client-test",
 	"container-smoke",
 }
 
@@ -139,6 +140,33 @@ func TestCIRequiresAllValidationBeforePublish(t *testing.T) {
 	requireSequenceContains(t, requiredValue(t, push, "tags"), "v*", "push tags")
 
 	jobs := requiredMapping(t, workflow, "jobs")
+	authClient := requiredMapping(t, jobs, "auth-client-test")
+	if !nodeContainsScalar(authClient, "make auth-client-test") {
+		t.Fatal("auth-client-test job must use the stable Makefile entrypoint")
+	}
+	strategy := requiredMapping(t, authClient, "strategy")
+	if got := requiredScalar(t, strategy, "fail-fast"); got != "false" {
+		t.Fatalf("auth-client-test.strategy.fail-fast = %q, want false", got)
+	}
+	for _, consumerCase := range []string{"python", "bq", "pyspark", "scala-spark"} {
+		if !nodeContainsScalar(authClient, consumerCase) {
+			t.Errorf("auth-client-test matrix is missing %s", consumerCase)
+		}
+	}
+	for _, contract := range []string{
+		"BQEMU_AUTH_CASE",
+		"BQEMU_AUTH_DIAGNOSTICS",
+		"junit-$CONSUMER_CASE",
+		"events.ndjson",
+		"always()",
+	} {
+		if !nodeContainsScalar(authClient, contract) {
+			t.Errorf("auth-client-test is missing matrix contract %q", contract)
+		}
+	}
+	if nodeContainsScalar(authClient, "tee ") {
+		t.Fatal("auth-client-test must not persist raw process output with tee")
+	}
 	aggregate := requiredMapping(t, jobs, "validation-complete")
 	needs := sequenceValues(t, requiredValue(t, aggregate, "needs"))
 	if diff := stringSetDifference(requiredValidationJobs, needs); len(diff) != 0 {

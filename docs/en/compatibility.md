@@ -267,7 +267,8 @@ service and connector
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | Implemented when configured |
 | BigQuery-compatible endpoint authentication | Intentionally absent; missing, arbitrary, and malformed credentials are ignored |
-| ADC/OAuth/STS/WIF token acquisition | Outside the public emulator runtime; clients may still require credentials before sending a request |
+| Disposable service-account, authorized-user, WIF, and direct-token files | Implemented by the loopback-only `bqemu-auth-fixture` development helper |
+| OAuth/STS token acquisition | Implemented only for generated local fixtures; Google identity and IAM control planes are not emulated |
 | diagnostics admin token | Optional and limited to the separate admin listener |
 | IAM authorization | Unsupported |
 
@@ -279,7 +280,9 @@ the destination transaction, and load jobs and idempotency records are
 process-local.
 The public edge does not parse or validate `Authorization` header or metadata
 values. Client credential requirements, TLS, the separate diagnostics admin
-token, and IAM are distinct compatibility claims.
+token, and IAM are distinct compatibility claims. See [Local client credentials
+and TLS](client-credentials-and-tls.md) for the generated file shapes, listener
+contract, and strict-client setup.
 
 <!-- section: persistence-atomicity -->
 ## Persistence and Atomicity

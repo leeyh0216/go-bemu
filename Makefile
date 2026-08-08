@@ -17,13 +17,16 @@ BQEMU_SPARK_RPC_TIMEOUT_SECONDS ?= 30
 BQEMU_ARTIFACT_TIMEOUT_SECONDS ?= 180
 BQEMU_SPARK_VENV ?= $(CURDIR)/.artifacts/spark/venv
 BQEMU_SPARK_PYTHON ?= $(BQEMU_SPARK_VENV)/bin/python
+BQEMU_AUTH_CASE ?= all
+BQEMU_AUTH_JUNIT ?=
+BQEMU_AUTH_DIAGNOSTICS ?=
 GO_TEST_FLAGS ?=
 GO_SOURCE_DIRS ?= ./cmd ./contract ./docs ./internal
 IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup auth-client-setup auth-fixtures auth-client-test build run format format-check contract-generate contract-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test build run format format-check contract-generate contract-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -66,7 +69,9 @@ build:
 	CGO_ENABLED=1 go build -trimpath -o "$(BINARY)" ./cmd/emulator
 	CGO_ENABLED=0 go build -trimpath -o "$(AUTH_FIXTURE_BINARY)" ./cmd/bqemu-auth-fixture
 
-auth-client-setup: python-setup
+auth-client-setup: python-setup auth-spark-setup
+
+auth-spark-setup:
 	@if test -x "$(BQEMU_SPARK_PYTHON)"; then \
 		"$(BQEMU_SPARK_PYTHON)" -c 'import sys; assert sys.version_info[:2] == (3, 11), "Spark contract requires Python 3.11"'; \
 	else \
@@ -74,7 +79,8 @@ auth-client-setup: python-setup
 	fi
 	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
-	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py
+	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py \
+		--lock tests/spark/artifacts.lock.json
 
 auth-fixtures:
 	CGO_ENABLED=0 go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
@@ -83,6 +89,9 @@ auth-client-test:
 	BQEMU_AUTH_PYTHON="$(PYTHON)" \
 	BQEMU_AUTH_SPARK_PYTHON="$(BQEMU_SPARK_PYTHON)" \
 	BQEMU_AUTH_BQ="$(BQEMU_BQCLI_BIN)" \
+	BQEMU_AUTH_CASE="$(BQEMU_AUTH_CASE)" \
+	BQEMU_AUTH_JUNIT="$(BQEMU_AUTH_JUNIT)" \
+	BQEMU_AUTH_DIAGNOSTICS="$(BQEMU_AUTH_DIAGNOSTICS)" \
 	BQEMU_AUTH_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
 	"$(PYTHON3)" tests/auth/run_contract.py
 

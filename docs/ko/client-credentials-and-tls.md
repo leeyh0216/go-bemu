@@ -56,6 +56,17 @@ go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
 링크는 덮어쓰지 않습니다. 폐기 가능한 파일 묶음 전체를 교체할 때만 `--force`를
 지정합니다.
 
+`--force`를 지정하면 먼저 같은 상위 경로에 전체 파일 묶음을 생성합니다. 각 파일과
+디렉터리를 동기화하고 내용을 검증한 뒤 기존 디렉터리와 원자적으로 교환합니다. 교환
+전에 실패하거나 프로세스가 종료되면 기존 파일 묶음은 바뀌지 않습니다. 다음 생성
+명령은 중단된 실행이 남긴 표시된 임시 디렉터리를 정리합니다. 원자 교체는 Linux 또는
+macOS와 원자적 디렉터리 교환을 지원하는 파일 시스템에서만 사용할 수 있습니다.
+지원하지 않는 환경에서는 기존 파일을 변경하지 않고 명령이 실패합니다.
+생성 중에는 같은 상위 경로의 `.bqemu-auth.lock`을 잠급니다. 따라서 다른 프로세스가
+사용 중인 임시 디렉터리를 정리할 수 없습니다. Linux와 macOS에서는 인증 정보가 없는
+이 잠금 파일이 명령 종료 후에도 남을 수 있습니다. 생성 프로세스가 실행 중이 아닐
+때만 삭제해야 합니다.
+
 Token 교환에는 `https://localhost:9052` 주소를 기본으로 사용합니다. 로컬 CONNECT
 프록시의 기본 주소는 `http://127.0.0.1:9053`입니다. 포트가 사용 중이라면 두 주소를
 함께 변경합니다.
@@ -63,6 +74,11 @@ Token 교환에는 `https://localhost:9052` 주소를 기본으로 사용합니�
 ```bash
 go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth --base-url https://localhost:19052 --proxy-url http://127.0.0.1:19053
 ```
+
+생성한 매니페스트에는 두 수신 주소가 모두 기록됩니다. `serve`는 이 주소를 기본값으로
+읽으므로 위 예시에서 `--listen`이나 `--proxy-listen`을 다시 지정할 필요가 없습니다.
+수신 주소를 명시적으로 재정의하려면 루프백 호스트와 매니페스트에 기록된 포트를
+사용해야 합니다. 아래 예시는 기본 포트를 기준으로 설명합니다.
 
 클라이언트가 컨테이너 서비스 이름으로 BQEMU에 접속한다면 `--tls-dns-name`을
 반복해서 지정할 수 있습니다.
@@ -94,6 +110,9 @@ JSON 인증 파일을 사용하기 전에 발급 서버를 실행합니다.
 ```bash
 go run ./cmd/bqemu-auth-fixture serve --manifest .bqemu-auth/manifest.json
 ```
+
+이 명령은 `generate`가 `manifest.json`에 기록한 발급 서버와 프록시 주소에서
+수신합니다.
 
 같은 프로세스가 두 개의 루프백 수신기를 시작합니다.
 
@@ -322,9 +341,9 @@ go run ./cmd/bqemu-auth-fixture serve --manifest .bqemu-auth/manifest.json
 ```
 
 커넥터 REST 엔드포인트에는 `https://bqemu:9050` 주소를 사용하고 Storage gRPC에는
-`bqemu:9060` 주소를 사용합니다. `NO_PROXY`에도 `bqemu`를 추가합니다. Token 교환
-주소는 계속
-`localhost:9052`를 사용합니다. 개발 컨테이너에는 Go 1.26 이상과 `keytool`이
+`bqemu:9060` 주소를 사용합니다. `NO_PROXY`에도 `bqemu`를 추가합니다. Token 교환에는
+매니페스트에 기록된 주소를 사용합니다. 기본값은 `localhost:9052`입니다. 개발
+컨테이너에는 Go 1.26 이상과 `keytool`이
 필요합니다. 다른 파일 시스템 경로에서 생성한 파일을 컨테이너 안으로 옮기면
 안 됩니다.
 
@@ -340,6 +359,14 @@ make auth-client-setup
 make auth-client-test
 ```
 
+기본 명령은 네 소비자를 모두 실행합니다. CI는 같은 진입점을 사용하면서
+`BQEMU_AUTH_CASE`에 `python`, `bq`, `pyspark`, `scala-spark` 중 하나를 지정합니다.
+따라서 실행기를 바꾸지 않고 실패한 소비자를 구분할 수 있습니다.
+`BQEMU_AUTH_JUNIT`을 지정하면 case 이름, 실행 시간, 오류 자료형, 오류 SHA-256 값만
+포함한 JUnit XML 파일을 생성합니다. `BQEMU_AUTH_DIAGNOSTICS`를 지정하면 상태, 출력
+크기, SHA-256 값처럼 허용한 필드만 NDJSON으로 기록합니다. 자식 프로세스의 원문은
+저장하지 않습니다.
+
 `PATH`에 있는 `bq` 실행 파일은 `2.1.31`이어야 합니다. 다음 조합만 정확히
 검사합니다.
 
@@ -348,8 +375,9 @@ make auth-client-test
 - PySpark와 Scala Spark `3.5.8`
 - Spark BigQuery 커넥터 `0.44.2`
 
-진단 정보에는 작업 이름, 종료 상태, 출력 크기, SHA-256 값만 포함됩니다. 생성한
-비밀 값과 클라이언트 원문 출력은 표시하지 않습니다.
+진단 정보에는 작업 이름, 종료 상태, 출력 크기, SHA-256 값만 포함됩니다. 자식
+프로세스의 각 출력은 생성한 비밀 값, 개인 키 조각, 로컬 발급 token 접두사가 있는지도
+검사합니다. 생성한 비밀 값과 클라이언트 원문 출력은 표시하지 않습니다.
 
 <!-- section: cleanup -->
 ## 교체와 삭제
@@ -358,6 +386,7 @@ make auth-client-test
 
 ```bash
 rm -rf .bqemu-auth
+rm -f .bqemu-auth.lock
 ```
 
 다시 생성하면 키와 token이 모두 바뀝니다. JSON 엔드포인트를 개별적으로 수정하지

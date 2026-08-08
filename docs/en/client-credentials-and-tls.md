@@ -56,6 +56,18 @@ The output directory is `0700`. `wif.json` contains the absolute path of
 paths and symbolic links are rejected. Add `--force` only when replacing an
 entire disposable set.
 
+With `--force`, the helper writes a complete sibling directory, synchronizes
+and validates every generated file, and then atomically exchanges that
+directory with the previous generation. A failure or interruption before the
+exchange leaves the previous generation unchanged. A later generation removes
+marked staging directories left by an interrupted run. Atomic replacement
+requires Linux or macOS and a filesystem that supports atomic directory
+exchange; otherwise the command fails without changing the previous files.
+Generation also holds a sibling `.bqemu-auth.lock`, so another process cannot
+delete an active staging directory. On Linux and macOS this credential-free
+advisory lock file may remain after the command exits. Remove it only when no
+fixture generator is running.
+
 The default addresses are `https://localhost:9052` for token exchange and
 `http://127.0.0.1:9053` for the local CONNECT proxy. Override them together when
 the ports are occupied:
@@ -63,6 +75,12 @@ the ports are occupied:
 ```bash
 go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth --base-url https://localhost:19052 --proxy-url http://127.0.0.1:19053
 ```
+
+The generated manifest records both listener addresses. `serve` reads them by
+default, so the custom-port example does not need separate `--listen` or
+`--proxy-listen` flags. An explicit listener override must use a loopback host
+and the same port recorded in the manifest. The remaining examples use the
+default ports.
 
 Use a repeatable `--tls-dns-name` when a client reaches BQEMU by a container
 service name:
@@ -94,6 +112,9 @@ Start the issuer before using any JSON credential profile:
 ```bash
 go run ./cmd/bqemu-auth-fixture serve --manifest .bqemu-auth/manifest.json
 ```
+
+This command listens on the issuer and proxy addresses stored by `generate` in
+`manifest.json`.
 
 The same process starts two loopback listeners:
 
@@ -318,7 +339,8 @@ go run ./cmd/bqemu-auth-fixture serve --manifest .bqemu-auth/manifest.json
 ```
 
 Use `https://bqemu:9050` and `bqemu:9060` as the connector endpoints, add
-`bqemu` to `NO_PROXY`, and continue to use `localhost:9052` for token exchange.
+`bqemu` to `NO_PROXY`, and use the token-exchange address recorded in the
+manifest (`localhost:9052` by default).
 The development container must provide Go 1.26+ and `keytool`. Do not generate
 the files on one filesystem path and then move them into the container.
 
@@ -334,6 +356,14 @@ make auth-client-setup
 make auth-client-test
 ```
 
+The default target runs all four consumers. CI uses the same entrypoint with
+`BQEMU_AUTH_CASE` set to `python`, `bq`, `pyspark`, or `scala-spark`, so a
+failure identifies one consumer without changing the contract runner. Set
+`BQEMU_AUTH_JUNIT` to write a case-specific JUnit XML file containing only the
+case name, duration, error type, and error digest. `BQEMU_AUTH_DIAGNOSTICS`
+writes only allowlisted NDJSON events with status, byte counts, and SHA-256
+digests; it never stores raw child output.
+
 The `bq` executable must already be version `2.1.31` on `PATH`. The contract
 checks exactly:
 
@@ -343,7 +373,9 @@ checks exactly:
 - Spark BigQuery connector `0.44.2`.
 
 Diagnostics contain operation names, exit status, byte counts, and SHA-256
-digests. Generated secrets and raw client output are not printed.
+digests. Each child stream is also scanned for generated secret values, private
+key fragments, and locally issued token prefixes. Generated secrets and raw
+client output are not printed.
 
 <!-- section: cleanup -->
 ## Rotate and Remove the Files
@@ -352,6 +384,7 @@ Stop the issuer and remove the generated files when the test ends:
 
 ```bash
 rm -rf .bqemu-auth
+rm -f .bqemu-auth.lock
 ```
 
 A new generation creates new keys and tokens. Regenerate instead of editing

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import ssl
 import subprocess
@@ -24,6 +26,7 @@ from typing import Any, BinaryIO
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,10 +36,51 @@ EXPECTED_SPARK_VERSION = "3.5.8"
 EXPECTED_CONNECTOR_VERSION = "0.44.2"
 MAX_CAPTURE_BYTES = 1 << 20
 MAX_BACKGROUND_LOG_BYTES = 16 << 20
+MAX_DIAGNOSTIC_FILE_BYTES = 256 << 10
+ISSUED_TOKEN_PREFIX = b"bqemu-local-issued-"
+CONSUMER_CASES = ("python", "bq", "pyspark", "scala-spark")
+EVENT_FIELDS = frozenset(
+    {
+        "boundary",
+        "operation",
+        "return_code",
+        "stdout_bytes",
+        "stdout_digest",
+        "stderr_bytes",
+        "stderr_digest",
+        "output_bytes",
+        "output_digest",
+        "suite",
+        "consumer_case",
+        "python",
+        "bq",
+        "spark",
+        "connector",
+        "status",
+        "error_type",
+        "error_digest",
+        "stage",
+    }
+)
+SAFE_EVENT_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}")
 
 
 class ContractError(RuntimeError):
     """A credential-free failure with a stable operation."""
+
+
+def selected_case() -> str:
+    value = os.getenv("BQEMU_AUTH_CASE", "all")
+    if value != "all" and value not in CONSUMER_CASES:
+        raise ContractError(
+            "stage=config operation=select-consumer shape=unsupported-case "
+            "fix_hint=use-a-reviewed-auth-consumer-case"
+        )
+    return value
+
+
+def case_enabled(case: str, candidate: str) -> bool:
+    return case == "all" or case == candidate
 
 
 def positive_timeout() -> float:
@@ -61,8 +105,135 @@ def digest_bytes(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
+def junit_document(
+    case: str,
+    elapsed_seconds: float,
+    error: Exception | None,
+) -> ET.ElementTree:
+    suite = ET.Element(
+        "testsuite",
+        {
+            "name": f"bqemu-auth-{case}",
+            "tests": "1",
+            "failures": "0" if error is None else "1",
+            "errors": "0",
+            "time": f"{elapsed_seconds:.3f}",
+        },
+    )
+    test_case = ET.SubElement(
+        suite,
+        "testcase",
+        {
+            "classname": "bqemu.auth",
+            "name": case,
+            "time": f"{elapsed_seconds:.3f}",
+        },
+    )
+    if error is not None:
+        encoded = f"{type(error).__name__}:{error}".encode(
+            "utf-8", errors="replace"
+        )
+        ET.SubElement(
+            test_case,
+            "failure",
+            {
+                "type": type(error).__name__,
+                "message": digest_bytes(encoded),
+            },
+        )
+    return ET.ElementTree(suite)
+
+
+def write_junit(
+    case: str,
+    elapsed_seconds: float,
+    error: Exception | None,
+) -> None:
+    configured = os.getenv("BQEMU_AUTH_JUNIT", "")
+    if not configured:
+        return
+    target = Path(configured).expanduser().absolute()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    document = junit_document(case, elapsed_seconds, error)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=target.name + ".",
+            dir=target.parent,
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            document.write(
+                stream,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(target)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def encoded_event(fields: dict[str, Any]) -> bytes:
+    valid = set(fields).issubset(EVENT_FIELDS)
+    for value in fields.values():
+        if isinstance(value, bool):
+            valid = False
+        elif isinstance(value, int):
+            continue
+        elif not isinstance(value, str) or SAFE_EVENT_TEXT.fullmatch(value) is None:
+            valid = False
+    if not valid:
+        fingerprint = digest_bytes(
+            json.dumps(
+                fields,
+                sort_keys=True,
+                default=lambda value: type(value).__name__,
+            ).encode(
+                "utf-8", errors="replace"
+            )
+        )
+        fields = {
+            "suite": "client-credentials-and-tls",
+            "status": "failed",
+            "error_type": "UnsafeDiagnosticField",
+            "error_digest": fingerprint,
+        }
+    return (
+        json.dumps(fields, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+
+
+def initialize_diagnostics() -> None:
+    configured = os.getenv("BQEMU_AUTH_DIAGNOSTICS", "")
+    if not configured:
+        return
+    target = Path(configured).expanduser().absolute()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as stream:
+        os.chmod(target, 0o600)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def event(**fields: Any) -> None:
-    print(json.dumps(fields, sort_keys=True, separators=(",", ":")), flush=True)
+    payload = encoded_event(fields)
+    sys.stdout.buffer.write(payload)
+    sys.stdout.buffer.flush()
+    configured = os.getenv("BQEMU_AUTH_DIAGNOSTICS", "")
+    if not configured:
+        return
+    target = Path(configured).expanduser().absolute()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("ab") as stream:
+        if stream.tell() + len(payload) > MAX_DIAGNOSTIC_FILE_BYTES:
+            return
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 class StreamCapture:
@@ -97,12 +268,85 @@ class StreamCapture:
         return "sha256:" + self.digest.hexdigest()
 
 
+def verify_diagnostic_capture() -> None:
+    class ChunkedReader(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            return super().read(min(size, 17))
+
+    secret_marker = b"BQEMU_AUTH_FIXED_SECRET_MARKER_DO_NOT_RETAIN"
+    capture = StreamCapture((secret_marker,), retained_limit=8)
+    stream = ChunkedReader(b"public-prefix" + secret_marker)
+    capture.consume(stream)
+
+    child_environment = os.environ.copy()
+    child_environment["BQEMU_AUTH_INJECTED_SECRET"] = secret_marker.decode("ascii")
+    injected_error: ContractError | None = None
+    try:
+        run_process(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os,sys; value=os.environ['BQEMU_AUTH_INJECTED_SECRET']; "
+                    "print(value); print(value, file=sys.stderr); "
+                    "raise RuntimeError(value)"
+                ),
+            ],
+            "diagnostic-secret-injection",
+            environment=child_environment,
+            secrets=(secret_marker,),
+            report=False,
+        )
+    except ContractError as error:
+        injected_error = error
+
+    disclosed_artifact = False
+    with tempfile.TemporaryDirectory(prefix="bqemu-auth-diagnostic-self-test-") as path:
+        artifact_dir = Path(path)
+        junit_document(
+            "python", 1.0, RuntimeError(secret_marker.decode("ascii"))
+        ).write(artifact_dir / "junit-python.xml", encoding="utf-8")
+        safe_failure = {
+            "suite": "client-credentials-and-tls",
+            "consumer_case": "python",
+            "status": "failed",
+            "error_type": "RuntimeError",
+            "error_digest": digest_bytes(secret_marker),
+        }
+        (artifact_dir / "events.ndjson").write_bytes(encoded_event(safe_failure))
+        for name in ("error.json", "evidence.json"):
+            (artifact_dir / name).write_text(
+                json.dumps(
+                    {"error_type": "RuntimeError", "digest": digest_bytes(secret_marker)},
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        disclosed_artifact = any(
+            secret_marker in artifact.read_bytes()
+            for artifact in artifact_dir.iterdir()
+        )
+
+    if (
+        not capture.disclosed
+        or len(capture.retained) > 8
+        or injected_error is None
+        or secret_marker in str(injected_error).encode("utf-8", errors="replace")
+        or disclosed_artifact
+    ):
+        raise ContractError(
+            "stage=security operation=diagnostic-capture shape=regression "
+            "fix_hint=restore-bounded-cross-chunk-secret-scan"
+        )
+
+
 def run_process(
     command: list[str],
     operation: str,
     *,
     environment: dict[str, str] | None = None,
     secrets: tuple[bytes, ...] = (),
+    report: bool = True,
 ) -> bytes:
     try:
         process = subprocess.Popen(
@@ -143,15 +387,16 @@ def run_process(
     finally:
         for thread in threads:
             thread.join(timeout=5)
-    event(
-        boundary="process",
-        operation=operation,
-        return_code=return_code,
-        stdout_bytes=stdout.total,
-        stdout_digest=stdout.fingerprint,
-        stderr_bytes=stderr.total,
-        stderr_digest=stderr.fingerprint,
-    )
+    if report:
+        event(
+            boundary="process",
+            operation=operation,
+            return_code=return_code,
+            stdout_bytes=stdout.total,
+            stdout_digest=stdout.fingerprint,
+            stderr_bytes=stderr.total,
+            stderr_digest=stderr.fingerprint,
+        )
     if stdout.disclosed or stderr.disclosed:
         raise ContractError(
             f"stage=security operation={operation} shape=credential-disclosure "
@@ -424,13 +669,21 @@ def secret_values(fixture_dir: Path) -> tuple[bytes, ...]:
     user = json.loads(
         (fixture_dir / "authorized-user.json").read_text(encoding="utf-8")
     )
-    return (
+    private_key_lines = tuple(
+        line.encode("ascii")
+        for line in service["private_key"].splitlines()
+        if len(line) >= 32 and not line.startswith("-----")
+    )
+    values = (
         service["private_key"].encode("utf-8"),
+        *private_key_lines,
         user["client_secret"].encode("utf-8"),
         user["refresh_token"].encode("utf-8"),
-        (fixture_dir / "subject-token.txt").read_bytes(),
+        (fixture_dir / "subject-token.txt").read_bytes().strip(),
         (fixture_dir / "access-token.txt").read_bytes().strip(),
+        ISSUED_TOKEN_PREFIX,
     )
+    return tuple(dict.fromkeys(value for value in values if value))
 
 
 def assert_dataset_output(output: bytes, dataset: str, operation: str) -> None:
@@ -451,8 +704,191 @@ def assert_dataset_output(output: bytes, dataset: str, operation: str) -> None:
         )
 
 
-def main() -> int:
-    connector_jar = verify_connector_artifact()
+def run_python_consumer(
+    python_client: Path,
+    endpoint: str,
+    project: str,
+    dataset: str,
+    fixture_dir: Path,
+    environment: dict[str, str],
+    secrets: tuple[bytes, ...],
+) -> None:
+    output = run_process(
+        [
+            str(python_client),
+            str(ROOT / "tests" / "auth" / "python_client.py"),
+            "--endpoint",
+            endpoint,
+            "--project",
+            project,
+            "--dataset",
+            dataset,
+            "--fixture-dir",
+            str(fixture_dir),
+        ],
+        "python-3.43.0",
+        environment=environment,
+        secrets=secrets,
+    )
+    if EXPECTED_PYTHON_VERSION.encode("utf-8") not in output:
+        raise ContractError(
+            "stage=assert operation=python-3.43.0 shape=success-marker-missing "
+            "fix_hint=inspect-pinned-python-runner"
+        )
+
+
+def run_bq_consumer(
+    bq: str,
+    work: Path,
+    endpoint: str,
+    project: str,
+    dataset: str,
+    fixture_dir: Path,
+    manifest: dict[str, Any],
+    environment: dict[str, str],
+    secrets: tuple[bytes, ...],
+) -> None:
+    version_output = run_process([bq, "version"], "bq-version")
+    if f"BigQuery CLI {EXPECTED_BQ_VERSION}".encode() not in version_output:
+        raise ContractError(
+            "stage=assert operation=bq-version shape=version-drift "
+            "fix_hint=install-bq-2.1.31"
+        )
+    bq_base = [
+        bq,
+        f"--api={endpoint}",
+        f"--project_id={project}",
+        f"--ca_certificates_file={manifest['ca_certificate']}",
+        "--format=json",
+    ]
+    token = (fixture_dir / "access-token.txt").read_text(encoding="utf-8").strip()
+    direct_output = run_process(
+        bq_base + [f"--oauth_access_token={token}", "ls"],
+        "bq-access-token",
+        environment=environment,
+        secrets=secrets,
+    )
+    assert_dataset_output(direct_output, dataset, "bq-access-token")
+    for filename in (
+        "service-account.json",
+        "authorized-user.json",
+        "wif.json",
+    ):
+        with tempfile.TemporaryDirectory(
+            prefix="bqemu-cloudsdk-", dir=work
+        ) as cloud_config:
+            credential_environment = environment.copy()
+            credential_environment.update(
+                {
+                    "CLOUDSDK_CONFIG": cloud_config,
+                    "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE": str(
+                        fixture_dir / filename
+                    ),
+                }
+            )
+            output = run_process(
+                bq_base + ["ls"],
+                "bq-" + filename.removesuffix(".json"),
+                environment=credential_environment,
+                secrets=secrets,
+            )
+            assert_dataset_output(
+                output,
+                dataset,
+                "bq-" + filename.removesuffix(".json"),
+            )
+
+
+def run_pyspark_consumer(
+    spark_python: Path,
+    connector_jar: Path,
+    endpoint: str,
+    grpc_endpoint: str,
+    project: str,
+    table_name: str,
+    fixture_dir: Path,
+    manifest: dict[str, Any],
+    secrets: tuple[bytes, ...],
+) -> None:
+    output = run_process(
+        [
+            str(spark_python),
+            str(ROOT / "tests" / "auth" / "pyspark_connector.py"),
+            "--connector-jar",
+            str(connector_jar),
+            "--http-endpoint",
+            endpoint,
+            "--grpc-endpoint",
+            grpc_endpoint,
+            "--project",
+            project,
+            "--table",
+            table_name,
+            "--fixture-dir",
+            str(fixture_dir),
+        ],
+        "pyspark-3.5.8-connector-0.44.2",
+        environment=java_environment(manifest, spark_python),
+        secrets=secrets,
+    )
+    if b'"client":"pyspark"' not in output:
+        raise ContractError(
+            "stage=assert operation=pyspark shape=success-marker-missing "
+            "fix_hint=inspect-pinned-spark-runner"
+        )
+
+
+def run_scala_consumer(
+    spark_python: Path,
+    spark_shell: Path,
+    connector_jar: Path,
+    endpoint: str,
+    grpc_endpoint: str,
+    project: str,
+    table_name: str,
+    fixture_dir: Path,
+    manifest: dict[str, Any],
+    secrets: tuple[bytes, ...],
+) -> None:
+    environment = java_environment(manifest, spark_python)
+    environment.update(
+        {
+            "BQEMU_AUTH_PROJECT": project,
+            "BQEMU_AUTH_TABLE": table_name,
+            "BQEMU_AUTH_FIXTURE_DIR": str(fixture_dir),
+            "BQEMU_AUTH_HTTP_ENDPOINT": endpoint,
+            "BQEMU_AUTH_GRPC_ENDPOINT": grpc_endpoint,
+        }
+    )
+    output = run_process(
+        [
+            str(spark_shell),
+            "--master",
+            "local[1]",
+            "--jars",
+            str(connector_jar),
+            "-i",
+            str(ROOT / "tests" / "auth" / "scala_connector.scala"),
+        ],
+        "scala-spark-3.5.8-connector-0.44.2",
+        environment=environment,
+        secrets=secrets,
+    )
+    if b'"client":"scala-spark"' not in output:
+        raise ContractError(
+            "stage=assert operation=scala-spark shape=success-marker-missing "
+            "fix_hint=inspect-pinned-spark-runner"
+        )
+
+
+def main(case: str) -> int:
+    initialize_diagnostics()
+    verify_diagnostic_capture()
+    connector_jar = (
+        verify_connector_artifact()
+        if case_enabled(case, "pyspark") or case_enabled(case, "scala-spark")
+        else None
+    )
     python_client = Path(
         os.getenv("BQEMU_AUTH_PYTHON", str(ROOT / ".venv" / "bin" / "python"))
     ).expanduser().absolute()
@@ -470,11 +906,16 @@ def main() -> int:
         )
     ).expanduser().absolute()
     bq = os.getenv("BQEMU_AUTH_BQ", "bq")
-    for path, operation in (
-        (python_client, "python-client"),
-        (spark_python, "pyspark"),
-        (spark_shell, "scala-spark"),
-    ):
+    required_executables: list[tuple[Path, str]] = []
+    if case_enabled(case, "python"):
+        required_executables.append((python_client, "python-client"))
+    if case_enabled(case, "pyspark"):
+        required_executables.append((spark_python, "pyspark"))
+    if case_enabled(case, "scala-spark"):
+        required_executables.extend(
+            ((spark_python, "scala-python"), (spark_shell, "scala-spark"))
+        )
+    for path, operation in required_executables:
         if not path.is_file():
             raise ContractError(
                 f"stage=setup operation={operation} shape=missing-executable "
@@ -539,8 +980,6 @@ def main() -> int:
                 "serve",
                 "--manifest",
                 str(fixture_dir / "manifest.json"),
-                "--listen",
-                f"127.0.0.1:{issuer_port}",
             ],
             "credential-issuer",
             secrets,
@@ -570,137 +1009,62 @@ def main() -> int:
             bootstrap(context, endpoint, project, dataset, table)
 
             client_env = child_environment(manifest)
-            python_output = run_process(
-                [
-                    str(python_client),
-                    str(ROOT / "tests" / "auth" / "python_client.py"),
-                    "--endpoint",
+            if case_enabled(case, "python"):
+                run_python_consumer(
+                    python_client,
                     endpoint,
-                    "--project",
                     project,
-                    "--dataset",
                     dataset,
-                    "--fixture-dir",
-                    str(fixture_dir),
-                ],
-                "python-3.43.0",
-                environment=client_env,
-                secrets=secrets,
-            )
-            if EXPECTED_PYTHON_VERSION.encode("utf-8") not in python_output:
-                raise ContractError(
-                    "stage=assert operation=python-3.43.0 shape=success-marker-missing "
-                    "fix_hint=inspect-pinned-python-runner"
+                    fixture_dir,
+                    client_env,
+                    secrets,
                 )
-
-            version_output = run_process([bq, "version"], "bq-version")
-            if f"BigQuery CLI {EXPECTED_BQ_VERSION}".encode() not in version_output:
-                raise ContractError(
-                    "stage=assert operation=bq-version shape=version-drift "
-                    "fix_hint=install-bq-2.1.31"
-                )
-            bq_base = [
-                bq,
-                f"--api={endpoint}",
-                f"--project_id={project}",
-                f"--ca_certificates_file={manifest['ca_certificate']}",
-                "--format=json",
-            ]
-            token = (fixture_dir / "access-token.txt").read_text(
-                encoding="utf-8"
-            ).strip()
-            direct_output = run_process(
-                bq_base + [f"--oauth_access_token={token}", "ls"],
-                "bq-access-token",
-                environment=client_env,
-                secrets=secrets,
-            )
-            assert_dataset_output(direct_output, dataset, "bq-access-token")
-            for filename in (
-                "service-account.json",
-                "authorized-user.json",
-                "wif.json",
-            ):
-                with tempfile.TemporaryDirectory(
-                    prefix="bqemu-cloudsdk-", dir=work
-                ) as cloud_config:
-                    credential_env = client_env.copy()
-                    credential_env.update(
-                        {
-                            "CLOUDSDK_CONFIG": cloud_config,
-                            "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE": str(
-                                fixture_dir / filename
-                            ),
-                        }
-                    )
-                    output = run_process(
-                        bq_base + ["ls"],
-                        "bq-" + filename.removesuffix(".json"),
-                        environment=credential_env,
-                        secrets=secrets,
-                    )
-                    assert_dataset_output(
-                        output,
-                        dataset,
-                        "bq-" + filename.removesuffix(".json"),
-                    )
-
-            spark_env = java_environment(manifest, spark_python)
-            pyspark_output = run_process(
-                [
-                    str(spark_python),
-                    str(ROOT / "tests" / "auth" / "pyspark_connector.py"),
-                    "--connector-jar",
-                    str(connector_jar),
-                    "--http-endpoint",
+            if case_enabled(case, "bq"):
+                run_bq_consumer(
+                    bq,
+                    work,
                     endpoint,
-                    "--grpc-endpoint",
-                    grpc_endpoint,
-                    "--project",
                     project,
-                    "--table",
-                    table_name,
-                    "--fixture-dir",
-                    str(fixture_dir),
-                ],
-                "pyspark-3.5.8-connector-0.44.2",
-                environment=spark_env,
-                secrets=secrets,
-            )
-            if b'"client":"pyspark"' not in pyspark_output:
-                raise ContractError(
-                    "stage=assert operation=pyspark shape=success-marker-missing "
-                    "fix_hint=inspect-pinned-spark-runner"
+                    dataset,
+                    fixture_dir,
+                    manifest,
+                    client_env,
+                    secrets,
                 )
-
-            scala_env = spark_env.copy()
-            scala_env.update(
-                {
-                    "BQEMU_AUTH_PROJECT": project,
-                    "BQEMU_AUTH_TABLE": table_name,
-                    "BQEMU_AUTH_FIXTURE_DIR": str(fixture_dir),
-                    "BQEMU_AUTH_HTTP_ENDPOINT": endpoint,
-                    "BQEMU_AUTH_GRPC_ENDPOINT": grpc_endpoint,
-                }
-            )
-            scala_output = run_process(
-                [
-                    str(spark_shell),
-                    "--master",
-                    "local[1]",
-                    "--jars",
-                    str(connector_jar),
-                    "-i",
-                    str(ROOT / "tests" / "auth" / "scala_connector.scala"),
-                ],
-                "scala-spark-3.5.8-connector-0.44.2",
-                environment=scala_env,
-                secrets=secrets,
-            )
-            if b'"client":"scala-spark"' not in scala_output:
-                raise ContractError(
-                    "stage=assert operation=scala-spark shape=success-marker-missing "
-                    "fix_hint=inspect-pinned-spark-runner"
+            if case_enabled(case, "pyspark"):
+                if connector_jar is None:
+                    raise ContractError(
+                        "stage=setup operation=pyspark shape=missing-connector "
+                        "fix_hint=restore-reviewed-connector-artifact"
+                    )
+                run_pyspark_consumer(
+                    spark_python,
+                    connector_jar,
+                    endpoint,
+                    grpc_endpoint,
+                    project,
+                    table_name,
+                    fixture_dir,
+                    manifest,
+                    secrets,
+                )
+            if case_enabled(case, "scala-spark"):
+                if connector_jar is None:
+                    raise ContractError(
+                        "stage=setup operation=scala-spark shape=missing-connector "
+                        "fix_hint=restore-reviewed-connector-artifact"
+                    )
+                run_scala_consumer(
+                    spark_python,
+                    spark_shell,
+                    connector_jar,
+                    endpoint,
+                    grpc_endpoint,
+                    project,
+                    table_name,
+                    fixture_dir,
+                    manifest,
+                    secrets,
                 )
         finally:
             emulator.stop()
@@ -726,6 +1090,7 @@ def main() -> int:
 
     event(
         suite="client-credentials-and-tls",
+        consumer_case=case,
         python=EXPECTED_PYTHON_VERSION,
         bq=EXPECTED_BQ_VERSION,
         spark=EXPECTED_SPARK_VERSION,
@@ -736,16 +1101,37 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    started = time.monotonic()
+    configured_case = os.getenv("BQEMU_AUTH_CASE", "all")
+    case_label = configured_case if configured_case in (*CONSUMER_CASES, "all") else "invalid"
+    failure: Exception | None = None
     try:
-        raise SystemExit(main())
+        main(selected_case())
+    except Exception as error:
+        failure = error
+        encoded = f"{type(error).__name__}:{error}".encode(
+            "utf-8", errors="replace"
+        )
+        event(
+            suite="client-credentials-and-tls",
+            consumer_case=case_label,
+            status="failed",
+            error_type=type(error).__name__,
+            error_digest=digest_bytes(encoded),
+        )
+    try:
+        write_junit(case_label, time.monotonic() - started, failure)
     except Exception as error:
         encoded = f"{type(error).__name__}:{error}".encode(
             "utf-8", errors="replace"
         )
         event(
             suite="client-credentials-and-tls",
+            consumer_case=case_label,
             status="failed",
             error_type=type(error).__name__,
             error_digest=digest_bytes(encoded),
+            stage="junit",
         )
-        raise SystemExit(1) from None
+        failure = error
+    raise SystemExit(1 if failure is not None else 0)
