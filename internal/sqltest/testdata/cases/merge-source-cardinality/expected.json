@@ -1,0 +1,21 @@
+{
+  "kind": "error",
+  "error": {
+    "phase": "execute",
+    "code": "query.googlesql.merge-source-cardinality-v1"
+  },
+  "tables": [
+    {
+      "projectId": "test-project",
+      "datasetId": "analytics",
+      "tableId": "inventory",
+      "exists": true,
+      "rowOrder": "ordered",
+      "schema": [
+        {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+        {"name": "quantity", "type": "INT64", "mode": "REQUIRED"}
+      ],
+      "rows": [[1, 5], [2, 7]]
+    }
+  ]
+}

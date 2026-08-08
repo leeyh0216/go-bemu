@@ -1,0 +1,23 @@
+{
+  "kind": "affected",
+  "affectedRows": 3,
+  "tables": [
+    {
+      "projectId": "test-project",
+      "datasetId": "analytics",
+      "tableId": "destination",
+      "exists": true,
+      "rowOrder": "unordered",
+      "schema": [
+        {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+        {"name": "partition_date", "type": "DATE", "mode": "NULLABLE"},
+        {"name": "payload", "type": "STRING", "mode": "NULLABLE"}
+      ],
+      "rows": [
+        [2, "2024-01-02", "keep"],
+        [3, "2024-01-01", "new"],
+        [4, null, "unpartitioned"]
+      ]
+    }
+  ]
+}

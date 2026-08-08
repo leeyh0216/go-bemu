@@ -1,0 +1,18 @@
+{
+  "kind": "affected",
+  "affectedRows": 2,
+  "tables": [
+    {
+      "projectId": "test-project",
+      "datasetId": "analytics",
+      "tableId": "inventory",
+      "exists": true,
+      "rowOrder": "ordered",
+      "schema": [
+        {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+        {"name": "quantity", "type": "INT64", "mode": "REQUIRED"}
+      ],
+      "rows": [[1, 10], [2, 0]]
+    }
+  ]
+}

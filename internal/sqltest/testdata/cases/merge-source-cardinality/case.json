@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "merge-source-cardinality",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "none"
+}

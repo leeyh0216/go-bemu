@@ -1,0 +1,31 @@
+{
+  "projects": [
+    {
+      "projectId": "test-project",
+      "datasets": [
+        {
+          "datasetId": "analytics",
+          "location": "US",
+          "tables": [
+            {
+              "tableId": "inventory",
+              "schema": [
+                {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "quantity", "type": "INT64", "mode": "REQUIRED"}
+              ],
+              "rows": [[1, 5], [2, 7]]
+            },
+            {
+              "tableId": "adjustments",
+              "schema": [
+                {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "quantity", "type": "INT64", "mode": "REQUIRED"}
+              ],
+              "rows": [[1, 10], [2, -1]]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

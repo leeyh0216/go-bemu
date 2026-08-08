@@ -19,12 +19,25 @@ const (
 	duckDBStatementPreconditionFailureV1 = "query.googlesql.duckdb-execution.precondition-v1"
 	duckDBStatementConflictFailureV1     = "query.googlesql.duckdb-execution.conflict-v1"
 	duckDBStatementNotFoundFailureV1     = "query.googlesql.duckdb-execution.not-found-v1"
+	duckDBMergeSourceCardinalityV1       = "query.googlesql.merge-source-cardinality-v1"
 )
 
 type duckDBStatementRunner interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
+
+type duckDBStatementContractError struct {
+	kind   error
+	code   string
+	detail string
+}
+
+func (failure *duckDBStatementContractError) Error() string {
+	return fmt.Sprintf("%v: code=%s: %s", failure.kind, failure.code, failure.detail)
+}
+
+func (failure *duckDBStatementContractError) Unwrap() error { return failure.kind }
 
 // ExecuteStatement lowers an analyzed GoogleSQL statement exactly once and
 // sends only the adapter-private DuckDB plan to the backend.
@@ -45,11 +58,15 @@ func (w *Warehouse) ExecuteStatement(
 		return domain.QueryResult{}, err
 	}
 
+	transactionMode := "autocommit"
+	if plan.requiresTransaction() {
+		transactionMode = "explicit"
+	}
 	started := observability.LogSideEffectStart(ctx, "duckdb", "execute_statement",
 		"statement_kind", string(statement.Kind()),
 		"analysis_fingerprint", plan.semanticAnalysisFingerprint(),
 		"bind_count", len(plan.bindArguments()),
-		"transaction_mode", "autocommit",
+		"transaction_mode", transactionMode,
 	)
 	defer func() {
 		err = classifyDuckDBStatementError(err)
@@ -59,11 +76,32 @@ func (w *Warehouse) ExecuteStatement(
 			"row_count", len(result.Rows),
 			"affected_rows", result.AffectedRows,
 			"schema_fingerprint", queryMaterializationSchemaDigest(result.Columns),
-			"transaction_mode", "autocommit",
+			"transaction_mode", transactionMode,
 		)
 	}()
 
-	return executeDuckDBStatementPlan(ctx, w.db, plan, output)
+	if !plan.requiresTransaction() {
+		return executeDuckDBStatementPlan(ctx, w.db, plan, output)
+	}
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.QueryResult{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	result, err = executeDuckDBStatementPlan(ctx, tx, plan, output)
+	if err != nil {
+		return result, err
+	}
+	if err := tx.Commit(); err != nil {
+		return result, err
+	}
+	committed = true
+	return result, nil
 }
 
 func executeDuckDBStatementPlan(
@@ -74,6 +112,9 @@ func executeDuckDBStatementPlan(
 ) (domain.QueryResult, error) {
 	if runner == nil {
 		return domain.QueryResult{}, fmt.Errorf("%w: DuckDB statement runner is missing", domain.ErrPrecondition)
+	}
+	if err := validateDuckDBStatementPreconditions(ctx, runner, plan); err != nil {
+		return domain.QueryResult{}, err
 	}
 	arguments := plan.bindArguments()
 	if !plan.returnsRows() {
@@ -94,6 +135,37 @@ func executeDuckDBStatementPlan(
 	}
 	defer rows.Close()
 	return readDuckDBStatementRows(rows, output)
+}
+
+func validateDuckDBStatementPreconditions(
+	ctx context.Context,
+	runner duckDBStatementRunner,
+	plan duckDBStatementPlan,
+) error {
+	for _, precondition := range plan.statementPreconditions() {
+		if precondition.statement == "" || precondition.errorCode == "" {
+			return fmt.Errorf("%w: DuckDB statement precondition is invalid", domain.ErrPrecondition)
+		}
+		rows, err := runner.QueryContext(ctx, precondition.statement, precondition.arguments...)
+		if err != nil {
+			return err
+		}
+		violated := rows.Next()
+		if rowsErr := rows.Err(); rowsErr != nil {
+			rows.Close()
+			return rowsErr
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			return closeErr
+		}
+		if violated {
+			return &duckDBStatementContractError{
+				kind: domain.ErrInvalidQuery, code: precondition.errorCode,
+				detail: "multiple source rows match one MERGE target row",
+			}
+		}
+	}
+	return nil
 }
 
 func readDuckDBStatementRows(rows *sql.Rows, output duckDBStatementOutput) (domain.QueryResult, error) {
@@ -133,6 +205,10 @@ func readDuckDBStatementRows(rows *sql.Rows, output duckDBStatementOutput) (doma
 
 func classifyDuckDBStatementError(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var contractError *duckDBStatementContractError
+	if errors.As(err, &contractError) {
 		return err
 	}
 	switch {

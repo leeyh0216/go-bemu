@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "merge-first-qualified-when",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "none"
+}

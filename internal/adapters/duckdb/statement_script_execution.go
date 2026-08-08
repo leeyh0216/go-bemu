@@ -228,6 +228,9 @@ func executeAndDiscardDuckDBStatement(
 	runner duckDBStatementRunner,
 	plan duckDBStatementPlan,
 ) error {
+	if err := validateDuckDBStatementPreconditions(ctx, runner, plan); err != nil {
+		return err
+	}
 	if !plan.returnsRows() {
 		_, err := runner.ExecContext(ctx, plan.statementSQL(), plan.bindArguments()...)
 		return err

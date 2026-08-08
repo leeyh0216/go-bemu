@@ -15,9 +15,33 @@ type duckDBStatementPlan struct {
 	arguments           []any
 	producesRows        bool
 	analysisFingerprint string
+	preconditions       []duckDBStatementPrecondition
+}
+
+type duckDBStatementPrecondition struct {
+	statement string
+	arguments []any
+	errorCode string
 }
 
 var statementAnalysisFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var statementContractErrorCodePattern = regexp.MustCompile(`^[a-z][a-z0-9.-]{0,127}$`)
+
+func newDuckDBStatementPrecondition(
+	statement string,
+	arguments []any,
+	errorCode string,
+) (duckDBStatementPrecondition, error) {
+	if strings.TrimSpace(statement) == "" {
+		return duckDBStatementPrecondition{}, fmt.Errorf("%w: generated DuckDB precondition is empty", domain.ErrInvalidQuery)
+	}
+	if !statementContractErrorCodePattern.MatchString(errorCode) {
+		return duckDBStatementPrecondition{}, fmt.Errorf("%w: DuckDB precondition error code is invalid", domain.ErrPrecondition)
+	}
+	return duckDBStatementPrecondition{
+		statement: statement, arguments: cloneStatementArguments(arguments), errorCode: errorCode,
+	}, nil
+}
 
 func newDuckDBStatementPlan(
 	statement string,
@@ -49,6 +73,35 @@ func (plan duckDBStatementPlan) returnsRows() bool { return plan.producesRows }
 
 func (plan duckDBStatementPlan) semanticAnalysisFingerprint() string {
 	return plan.analysisFingerprint
+}
+
+func (plan duckDBStatementPlan) withPreconditions(
+	preconditions []duckDBStatementPrecondition,
+) duckDBStatementPlan {
+	plan.preconditions = cloneDuckDBStatementPreconditions(preconditions)
+	return plan
+}
+
+func (plan duckDBStatementPlan) statementPreconditions() []duckDBStatementPrecondition {
+	return cloneDuckDBStatementPreconditions(plan.preconditions)
+}
+
+func (plan duckDBStatementPlan) requiresTransaction() bool {
+	return len(plan.preconditions) != 0
+}
+
+func cloneDuckDBStatementPreconditions(
+	preconditions []duckDBStatementPrecondition,
+) []duckDBStatementPrecondition {
+	cloned := make([]duckDBStatementPrecondition, len(preconditions))
+	for index, precondition := range preconditions {
+		cloned[index] = duckDBStatementPrecondition{
+			statement: precondition.statement,
+			arguments: cloneStatementArguments(precondition.arguments),
+			errorCode: precondition.errorCode,
+		}
+	}
+	return cloned
 }
 
 func cloneStatementArguments(arguments []any) []any {

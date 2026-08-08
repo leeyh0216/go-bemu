@@ -1,0 +1,19 @@
+{
+  "kind": "affected",
+  "affectedRows": 4,
+  "tables": [
+    {
+      "projectId": "test-project",
+      "datasetId": "analytics",
+      "tableId": "destination",
+      "exists": true,
+      "rowOrder": "unordered",
+      "schema": [
+        {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+        {"name": "partition_id", "type": "INT64", "mode": "NULLABLE"},
+        {"name": "payload", "type": "STRING", "mode": "NULLABLE"}
+      ],
+      "rows": [[2, 15, "keep"], [3, 7, "new"], [4, null, "new-null"]]
+    }
+  ]
+}

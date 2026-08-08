@@ -70,3 +70,42 @@ func TestDuckDBStatementPlanRejectsEmptyGeneratedSQL(t *testing.T) {
 		t.Fatalf("error = %v, want ErrInvalidQuery", err)
 	}
 }
+
+func TestDuckDBStatementPlanOwnsPreconditionArguments(t *testing.T) {
+	t.Parallel()
+	payload := []byte("payload")
+	precondition, err := newDuckDBStatementPrecondition(
+		"SELECT 1 WHERE ? IS NOT NULL", []any{payload}, duckDBMergeSourceCardinalityV1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := newDuckDBStatementPlan("UPDATE target SET value = 1", nil, false, strings.Repeat("0", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan = plan.withPreconditions([]duckDBStatementPrecondition{precondition})
+	payload[0] = 'X'
+	first := plan.statementPreconditions()
+	first[0].arguments[0].([]byte)[0] = 'Y'
+	second := plan.statementPreconditions()
+	if string(second[0].arguments[0].([]byte)) != "payload" ||
+		second[0].errorCode != duckDBMergeSourceCardinalityV1 || !plan.requiresTransaction() {
+		t.Fatalf("statement preconditions are mutable: %#v", second)
+	}
+}
+
+func TestDuckDBStatementPreconditionRejectsInvalidDescriptor(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		statement string
+		code      string
+	}{
+		{statement: "", code: duckDBMergeSourceCardinalityV1},
+		{statement: "SELECT 1", code: "INVALID CODE"},
+	} {
+		if _, err := newDuckDBStatementPrecondition(test.statement, nil, test.code); err == nil {
+			t.Fatalf("precondition statement=%q code=%q unexpectedly succeeded", test.statement, test.code)
+		}
+	}
+}

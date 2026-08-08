@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "dynamic-range-partition-overwrite",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "none"
+}

@@ -1,0 +1,33 @@
+{
+  "projects": [
+    {
+      "projectId": "test-project",
+      "datasets": [
+        {
+          "datasetId": "analytics",
+          "location": "US",
+          "tables": [
+            {
+              "tableId": "destination",
+              "schema": [
+                {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "partition_date", "type": "DATE", "mode": "NULLABLE"},
+                {"name": "payload", "type": "STRING", "mode": "NULLABLE"}
+              ],
+              "rows": [[1, "2024-01-01", "old"], [2, "2024-01-02", "keep"]]
+            },
+            {
+              "tableId": "temporary",
+              "schema": [
+                {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "partition_date", "type": "DATE", "mode": "NULLABLE"},
+                {"name": "payload", "type": "STRING", "mode": "NULLABLE"}
+              ],
+              "rows": [[3, "2024-01-01", "new"], [4, null, "unpartitioned"]]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

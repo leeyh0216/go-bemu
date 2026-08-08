@@ -71,9 +71,13 @@ func lowerDuckDBSyntax(
 	if err := syntax.Accept(visitor); err != nil {
 		return duckDBStatementPlan{}, err
 	}
-	return newDuckDBStatementPlan(
+	plan, err := newDuckDBStatementPlan(
 		visitor.statement, renderer.arguments, visitor.producesRows, statement.AnalysisFingerprint(),
 	)
+	if err != nil {
+		return duckDBStatementPlan{}, err
+	}
+	return plan.withPreconditions(visitor.preconditions), nil
 }
 
 func newDuckDBStatementRenderer(
@@ -204,9 +208,10 @@ func validateDuckDBTableBinding(binding duckDBTableBinding) error {
 }
 
 type duckDBTopLevelVisitor struct {
-	renderer     *duckDBStatementRenderer
-	statement    string
-	producesRows bool
+	renderer      *duckDBStatementRenderer
+	statement     string
+	producesRows  bool
+	preconditions []duckDBStatementPrecondition
 }
 
 func (visitor *duckDBTopLevelVisitor) VisitScript(*queryast.ScriptStatement) error {
@@ -339,6 +344,7 @@ func (visitor *duckDBTopLevelVisitor) VisitDelete(statement *queryast.DeleteStat
 }
 
 func (visitor *duckDBTopLevelVisitor) VisitMerge(statement *queryast.MergeStatement) error {
+	preconditionArgumentStart := len(visitor.renderer.arguments)
 	target, err := visitor.renderer.renderMutationTarget(statement.Target())
 	if err != nil {
 		return err
@@ -350,6 +356,21 @@ func (visitor *duckDBTopLevelVisitor) VisitMerge(statement *queryast.MergeStatem
 	condition, err := visitor.renderer.renderExpression(statement.Condition())
 	if err != nil {
 		return err
+	}
+	preconditionArguments := cloneStatementArguments(
+		visitor.renderer.arguments[preconditionArgumentStart:],
+	)
+	if mergeRequiresSourceCardinalityCheck(statement) {
+		precondition, err := newDuckDBStatementPrecondition(
+			"SELECT 1 FROM "+target+" WHERE (SELECT count(*) FROM "+
+				source+" WHERE "+condition+") > 1 LIMIT 1",
+			preconditionArguments,
+			duckDBMergeSourceCardinalityV1,
+		)
+		if err != nil {
+			return err
+		}
+		visitor.preconditions = append(visitor.preconditions, precondition)
 	}
 	var builder strings.Builder
 	builder.WriteString("MERGE INTO ")
@@ -368,6 +389,19 @@ func (visitor *duckDBTopLevelVisitor) VisitMerge(statement *queryast.MergeStatem
 	}
 	visitor.statement = builder.String()
 	return nil
+}
+
+func mergeRequiresSourceCardinalityCheck(statement *queryast.MergeStatement) bool {
+	for _, when := range statement.When() {
+		if when.Match() != queryast.MergeMatched {
+			continue
+		}
+		switch when.Action().Kind() {
+		case queryast.MergeActionUpdate, queryast.MergeActionDelete:
+			return true
+		}
+	}
+	return false
 }
 
 func (visitor *duckDBTopLevelVisitor) VisitCreateTable(*queryast.CreateTableStatement) error {
