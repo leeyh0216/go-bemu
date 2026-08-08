@@ -15,9 +15,10 @@ compiled defaults < YAML file < mapped environment variables < repeated --set pa
 ```
 
 `BQEMU_CONFIG` selects the optional file and `--config` overrides that selector.
-Every runtime leaf exists in the `config.bqemu.dev/v1alpha1` model and can be
-overridden with typed `--set`; common settings also have named `BQEMU_*`
-environment mappings. The complete Docker-oriented example is
+Every scalar runtime leaf exists in the `config.bqemu.dev/v1alpha1` model and
+can be overridden with typed `--set`; common settings also have named `BQEMU_*`
+environment mappings. Structured catalog bootstrap declarations are owned by
+the YAML file. The complete Docker-oriented example is
 [`configs/bqemu.yaml`](../../configs/bqemu.yaml).
 
 | Layer | Selector | Contract |
@@ -25,7 +26,7 @@ environment mappings. The complete Docker-oriented example is
 | compiled defaults | none | complete valid in-memory model |
 | file | `BQEMU_CONFIG` or `--config` | one YAML document, at most 1 MiB |
 | environment | documented `BQEMU_*` mappings | non-empty scalar overrides |
-| CLI | repeatable `--set path=value` | typed override for every leaf |
+| CLI | repeatable `--set path=value` | typed override for scalar leaves |
 
 The composition root consumes defaults, HTTP/gRPC/TLS limits, database/temp
 paths, shutdown budgets, logging, admin, UI, both Storage services, and load
@@ -104,6 +105,48 @@ limits are enforced. Load source URIs must use `gs://`; local paths and other
 schemes are rejected before job persistence. Runtime contract-profile
 negotiation remains uncomposed. A valid setting is not a claim beyond each
 Partial capability.
+
+### Catalog bootstrap
+
+`bootstrap.projects` declares projects and datasets that must exist before any
+public listener opens. The list is file-owned because its nested resource
+identity cannot be represented safely as independent scalar environment or
+`--set` overrides.
+
+```yaml
+defaults:
+  projectId: local-project
+  location: US
+bootstrap:
+  projects:
+    - id: local-project
+      friendlyName: Local project
+      datasets:
+        - id: analytics
+          location: US
+          labels:
+            environment: local
+    - id: secondary-project
+      datasets:
+        - id: staging
+```
+
+An omitted dataset location inherits `defaults.location`. Project and dataset
+IDs must be unique within the declaration. Dataset descriptions, labels, and
+default table or partition expiration values are retained in canonical state.
+
+Startup first compares every declared resource with canonical state. An exact
+match is a no-op, so restarting with the same file does not change metadata or
+ETags. Any metadata drift fails startup before listeners open; missing resources
+are then created in declaration order. When `bootstrap.projects` is absent or
+empty, the runtime preserves the previous behavior by creating only
+`defaults.projectId`. If that project is present in the list, its declared
+metadata is authoritative while it remains the default request context.
+
+Keep the SQLite state file and engine database from the same runtime generation.
+Recovery from a process kill exactly between an engine mutation and its
+canonical-state commit remains part of the [cross-store recovery
+work](https://github.com/leeyh0216/go-bemu/issues/26).
 
 The BigQuery-compatible REST and gRPC listeners do not authenticate or authorize
 requests. They ignore missing, arbitrary, malformed, duplicate, and
