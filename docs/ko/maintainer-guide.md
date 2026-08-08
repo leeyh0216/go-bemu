@@ -100,6 +100,15 @@ CI와 실행 어댑터는 `contract/consumers.normalized.json`만 읽습니다. 
 산출물은 릴리스 출처만 나타내며 CI가 설치한 실행 파일과 같다고 간주하지 않습니다.
 산출물의 `usage`는 `python-wheel`, `spark-connector-dsv1-jar`처럼 어댑터가 엄격하게 검사하는
 용도입니다. 컴파일러는 어댑터가 요구한 각 용도의 산출물이 정확히 하나인지 확인합니다.
+모든 필수 사례는 인증과 TLS 행렬에도 함께 추가됩니다. 실행 어댑터가 인증 실행
+유형을 선택하며, 같은 실행 환경 버전과 산출물 용도로 설치 및 동일성을 검증합니다.
+
+bq 사례는 처리 방식이 다릅니다. `cloud-sdk-release-provenance`는
+`tool-provenance` 역할의 OCI 해시이며 실행 어댑터가 직접 실행하지 않습니다. CI는
+`setup-gcloud`로 사례에 선언한 Cloud SDK 버전을 설치합니다. 어댑터는 구조화된
+`gcloud version` 출력에서 Cloud SDK와 bq 구성 요소의 정확한 버전을 확인하고,
+`bq version` 값도 별도로 확인합니다. 증거에도 이 경계를 기록하며 OCI 이미지가
+설치된 실행 파일이라고 표현하지 않습니다.
 
 `required` 사례가 실패하면 이미지가 배포되지 않습니다. `preview`와 `nightly` 사례는
 수동 또는 주기 실행 워크플로에서 선택하며 릴리스 조건에 포함하지 않습니다. 두 실행

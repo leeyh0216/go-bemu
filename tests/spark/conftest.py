@@ -28,9 +28,9 @@ import uuid
 import pytest
 
 from artifact_variants import (
-    ArtifactSpec,
     DSV1_VARIANT,
     DSV2_RAW_VARIANT,
+    artifact_spec_from_json,
     enforce_connector_classpath,
 )
 
@@ -50,6 +50,24 @@ DSV2_ARTIFACT_LOCK_PATH = (
 OPERATION_MANIFEST_PATH = REPOSITORY_ROOT / "contract" / "operations.normalized.json"
 STATIC_ACCESS_TOKEN = "bqemu-spark-e2e-static-token"
 TRUSTSTORE_PASSWORD = "bqemu-test-only"
+
+
+def runtime_versions() -> dict[str, str]:
+    try:
+        versions = json.loads(os.environ["BQEMU_RUNTIME_VERSIONS_JSON"])
+    except (KeyError, json.JSONDecodeError) as error:
+        raise pytest.UsageError(
+            "BQEMU_RUNTIME_VERSIONS_JSON must come from a normalized consumer case"
+        ) from error
+    if not isinstance(versions, dict) or any(
+        not isinstance(key, str)
+        or not key
+        or not isinstance(value, str)
+        or not value
+        for key, value in versions.items()
+    ):
+        raise pytest.UsageError("normalized runtime versions are invalid")
+    return versions
 
 
 class CapabilityGapError(RuntimeError):
@@ -175,7 +193,7 @@ def _emit(*, operation: str, stage: str, shape: str, status: str, fix_hint: str)
         f"{operation}\0{stage}\0{shape}\0{status}".encode("utf-8")
     ).hexdigest()
     event = {
-        "version": "spark-bigquery-connector-0.44.2",
+        "version": f"spark-bigquery-connector-{runtime_versions()['connector']}",
         "operation": operation,
         "stage": stage,
         "shape": shape,
@@ -1018,15 +1036,7 @@ def connector_jar(test_timeout: float) -> Path:
         raw_spec = os.getenv("BQEMU_SPARK_CONNECTOR_SPEC_JSON")
         if not raw_spec:
             raise pytest.UsageError("BQEMU_SPARK_CONNECTOR_SPEC_JSON is required with a configured connector JAR")
-        spec = json.loads(raw_spec)
-        expected_spec = ArtifactSpec(
-            variant=str(spec["variant"]),
-            output=str(spec["output"]),
-            size=int(spec["size"]),
-            sha256=str(spec["sha256"]),
-            provider=str(spec["provider"]),
-            connector_version=str(spec["connectorVersion"]),
-        )
+        expected_spec = artifact_spec_from_json(raw_spec)
     else:
         _run(
             [
@@ -1059,15 +1069,7 @@ def dsv2_connector_jar(test_timeout: float) -> Path:
             raise pytest.UsageError(
                 "BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON is required with a configured DSv2 connector JAR"
             )
-        spec = json.loads(raw_spec)
-        expected_spec = ArtifactSpec(
-            variant=str(spec["variant"]),
-            output=str(spec["output"]),
-            size=int(spec["size"]),
-            sha256=str(spec["sha256"]),
-            provider=str(spec["provider"]),
-            connector_version=str(spec["connectorVersion"]),
-        )
+        expected_spec = artifact_spec_from_json(raw_spec)
     else:
         _run(
             [
@@ -1299,13 +1301,19 @@ def spark_session(connector_jar: Path, public_edge: PublicEdge, test_timeout: fl
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
-    if spark.version != "3.5.8":
+    versions = runtime_versions()
+    runtime_scala = spark._jvm.scala.util.Properties.versionNumberString()
+    if (
+        spark.version != versions["spark"]
+        or runtime_scala != versions["scala"]
+        or not runtime_scala.startswith(versions["scalaBinary"] + ".")
+    ):
         spark.stop()
-        pytest.fail(f"Spark version drift: {spark.version}")
+        pytest.fail("Spark or Scala runtime identity drift")
     _emit(
         operation="spark-public-edge-setup",
         stage="spark-ready",
-        shape="local-4-scala-2.12",
+        shape=f"local-4-scala-{versions['scalaBinary']}",
         status="ready",
         fix_hint="none",
     )

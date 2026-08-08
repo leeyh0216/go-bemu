@@ -1,3 +1,11 @@
-google-cloud-bigquery==3.43.0
+# Adapter dependencies shared by normalized google-cloud-bigquery cases.
+# The client wheel itself is installed from each case's python-wheel artifact.
+google-api-core[grpc]
+google-auth[pyopenssl]
+google-cloud-core
+google-resumable-media
+packaging
+python-dateutil
+requests
 pytest==9.1.1
 pytest-timeout==2.4.0

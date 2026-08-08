@@ -16,35 +16,48 @@ import subprocess
 import sys
 import time
 from typing import Any, Sequence
-import urllib.request
 import xml.etree.ElementTree as ET
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from scripts.consumer_runtime import (  # noqa: E402
+    ArtifactSpec,
+    ConsumerRuntimeError,
+    NormalizedConsumerCase,
+    check_python_dependencies,
+    install_python_artifact,
+    load_normalized_case,
+    load_normalized_manifest,
+    materialize_artifact,
+    require_artifact,
+    select_normalized_cases,
+)
+
+
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "contract" / "consumers.normalized.json"
-
-
-class ContractError(RuntimeError):
-    pass
+ContractError = ConsumerRuntimeError
 
 
 @dataclass(frozen=True)
 class CaseContext:
-    case: dict[str, Any]
+    case: NormalizedConsumerCase
     repository_root: Path
     artifact_root: Path
 
     @property
     def case_id(self) -> str:
-        return str(self.case["id"])
+        return self.case.case_id
 
     @property
     def versions(self) -> dict[str, str]:
-        return self.case["runtimeProfile"]["versions"]
+        return dict(self.case.versions)
 
     @property
     def runner_id(self) -> str:
-        return str(self.case["runnerAdapter"]["id"])
+        return self.case.runner_adapter_id
 
 
 class RunnerAdapter(ABC):
@@ -66,7 +79,7 @@ class RunnerAdapter(ABC):
         raise NotImplementedError
 
     def collect_evidence(self) -> None:
-        scenarios = self.context.case["scenarioSet"]["scenarios"]
+        scenarios = list(self.context.case.scenarios)
         events = collect_actual_events(self.context, scenarios)
         difference = compare_contract(scenarios, events)
         if self.result is not None and self.result.returncode == 0 and difference is not None:
@@ -75,9 +88,6 @@ class RunnerAdapter(ABC):
                 1,
                 self.result.stdout,
                 "successful runner violated its normalized wire contract",
-            )
-            _write_junit(
-                self.context.artifact_root / "junit.xml", self.context.case_id, self.result
             )
         evidence = {
             "schemaVersion": "1",
@@ -113,6 +123,8 @@ class RunnerAdapter(ABC):
                     **difference,
                 },
             )
+        else:
+            (self.context.artifact_root / "diff.json").unlink(missing_ok=True)
 
     def cleanup(self) -> None:
         return
@@ -125,43 +137,80 @@ class RunnerAdapter(ABC):
         except Exception as error:
             self.result = subprocess.CompletedProcess([], 1, "", str(error))
             self._record_runner_error(error)
-            _write_junit(
-                self.context.artifact_root / "junit.xml", self.context.case_id, self.result
-            )
-        finally:
-            try:
-                self.collect_evidence()
-            except Exception as error:
-                self.result = subprocess.CompletedProcess([], 1, "", "evidence collection failed")
-                self._record_runner_error(error)
-                _write_junit(
-                    self.context.artifact_root / "junit.xml", self.context.case_id, self.result
-                )
-            finally:
-                try:
-                    self.cleanup()
-                except Exception as error:
-                    self.result = subprocess.CompletedProcess([], 1, "", "runner cleanup failed")
-                    self._record_runner_error(error)
-                    _write_junit(
-                        self.context.artifact_root / "junit.xml", self.context.case_id, self.result
-                    )
+        try:
+            self.cleanup()
+        except Exception as error:
+            self.result = subprocess.CompletedProcess([], 1, "", "runner cleanup failed")
+            self._record_runner_error(error)
+        try:
+            self.collect_evidence()
+        except Exception as error:
+            self.result = subprocess.CompletedProcess([], 1, "", "evidence collection failed")
+            self._record_runner_error(error)
+            self._write_minimal_evidence("evidence.collection")
+        if self.result is None:
+            self.result = subprocess.CompletedProcess([], 1, "", "runner produced no result")
+            self._write_minimal_evidence("runner.result")
+        _write_junit(
+            self.context.artifact_root / "junit.xml", self.context.case_id, self.result
+        )
+        if self.result.returncode == 0:
+            (self.context.artifact_root / "runner-error.txt").unlink(missing_ok=True)
         return self.result.returncode if self.result is not None else 1
+
+    def _write_minimal_evidence(self, field: str) -> None:
+        scenarios = list(self.context.case.scenarios)
+        _write_json(
+            self.context.artifact_root / "evidence.json",
+            {
+                "schemaVersion": "1",
+                "caseId": self.context.case_id,
+                "runnerAdapterId": self.context.runner_id,
+                "scenarioIds": [scenario["id"] for scenario in scenarios],
+                "exitCode": 1,
+                "durationMillis": round((time.time() - self.started_at) * 1000),
+                "artifactEvidence": self.artifact_evidence,
+                "comparison": {
+                    "status": "unavailable",
+                    "expectedOperationCount": sum(
+                        len(scenario["operationExpectations"])
+                        for scenario in scenarios
+                    ),
+                    "observedEventCount": 0,
+                },
+                "events": [],
+            },
+        )
+        _write_json(
+            self.context.artifact_root / "diff.json",
+            {
+                "schemaVersion": "1",
+                "caseId": self.context.case_id,
+                "scenarioId": None,
+                "phase": "runner",
+                "operationId": None,
+                "field": field,
+                "expected": "completed",
+                "actual": "failed",
+            },
+        )
 
     def _record_runner_error(self, error: Exception) -> None:
         self.context.artifact_root.mkdir(parents=True, exist_ok=True)
         error_text = str(error).encode("utf-8", errors="replace")
-        (self.context.artifact_root / "runner-error.txt").write_text(
-            f"error_type={type(error).__name__} error_bytes={len(error_text)} "
-            f"error_digest=sha256:{hashlib.sha256(error_text).hexdigest()}\n",
-            encoding="utf-8",
-        )
+        with (self.context.artifact_root / "runner-error.txt").open(
+            "a", encoding="utf-8"
+        ) as stream:
+            stream.write(
+                f"error_type={type(error).__name__} error_bytes={len(error_text)} "
+                f"error_digest=sha256:{hashlib.sha256(error_text).hexdigest()}\n"
+            )
 
     def _run(self, command: Sequence[str], *, environment: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         process_environment = (environment or os.environ).copy()
         process_environment["BQEMU_CONSUMER_CASE_ID"] = self.context.case_id
         process_environment["BQEMU_RUNTIME_VERSIONS_JSON"] = json.dumps(
-            self.context.versions, sort_keys=True, separators=(",", ":")
+            dict(self.context.versions), sort_keys=True, separators=(",", ":")
         )
         result = subprocess.run(
             list(command),
@@ -183,27 +232,9 @@ class RunnerAdapter(ABC):
 class PythonPytestAdapter(RunnerAdapter):
     def prepare(self) -> None:
         super().prepare()
-        wheel = _require_artifact(self.context, "python-wheel")
-        wheel_path = _materialize_artifact(self.context, wheel)
-        result = subprocess.run(
-            [
-                os.getenv("BQEMU_UV_BIN", "uv"),
-                "pip",
-                "install",
-                "--python",
-                sys.executable,
-                "--force-reinstall",
-                "--no-deps",
-                str(wheel_path),
-            ],
-            cwd=self.context.repository_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise ContractError("installing the case-declared Python wheel failed")
+        wheel = require_artifact(self.context.case, "python-wheel")
+        wheel_path = _materialize_case_artifact(self.context, wheel)
+        _install_case_python_artifact(self.context, wheel_path, "Python client")
         evidence = _materialized_evidence(wheel, wheel_path)
         evidence["installed"] = True
         self.artifact_evidence.append(evidence)
@@ -241,16 +272,39 @@ class BQCLIAdapter(RunnerAdapter):
             raise ContractError("bq version command failed")
         expected = f"This is BigQuery CLI {self.context.versions['bq']}"
         _require_equal("bq", result.stdout.strip(), expected)
-        artifact = _require_artifact(self.context, "cloud-sdk-image")
+        cloud_sdk = self._run(
+            [os.getenv("BQEMU_GCLOUD_BIN", "gcloud"), "version", "--format=json"]
+        )
+        if cloud_sdk.returncode != 0:
+            raise ContractError("gcloud version command failed")
+        try:
+            cloud_versions = json.loads(cloud_sdk.stdout)
+        except json.JSONDecodeError as error:
+            raise ContractError("gcloud version command returned invalid JSON") from error
+        if not isinstance(cloud_versions, dict):
+            raise ContractError("gcloud version command returned an invalid shape")
+        _require_equal(
+            "Google Cloud SDK",
+            str(cloud_versions.get("Google Cloud SDK", "")),
+            self.context.versions["cloudSdk"],
+        )
+        _require_equal(
+            "gcloud bq component",
+            str(cloud_versions.get("bq", "")),
+            self.context.versions["bq"],
+        )
+        artifact = require_artifact(
+            self.context.case, "cloud-sdk-release-provenance"
+        )
         self.artifact_evidence.append(
             {
-                "id": artifact["id"],
-                "role": artifact["role"],
-                "usage": artifact["usage"],
-                "sha256": artifact["sha256"],
+                "id": artifact.artifact_id,
+                "role": artifact.role,
+                "usage": artifact.usage,
+                "sha256": artifact.sha256,
                 "status": "tool-version-identity-matched",
                 "materialized": False,
-                "note": "The OCI digest is release provenance; setup-gcloud supplies the version-verified executable.",
+                "note": "The OCI digest is release provenance; setup-gcloud supplies executables whose Cloud SDK and bq identities are verified separately.",
             }
         )
 
@@ -274,20 +328,38 @@ class SparkAdapter(RunnerAdapter):
 
     def prepare(self) -> None:
         super().prepare()
-        artifact = _require_artifact(self.context, "spark-connector-dsv1-jar")
-        self.connector_path = _materialize_artifact(self.context, artifact)
+        bridge = require_artifact(self.context.case, "spark-python-bridge")
+        bridge_path = _materialize_case_artifact(self.context, bridge)
+        _install_case_python_artifact(
+            self.context, bridge_path, "Spark Python bridge", check_dependencies=False
+        )
+        bridge_evidence = _materialized_evidence(bridge, bridge_path)
+        bridge_evidence["installed"] = True
+        self.artifact_evidence.append(bridge_evidence)
+        runtime = require_artifact(self.context.case, "spark-runtime")
+        runtime_path = _materialize_case_artifact(self.context, runtime)
+        _install_case_python_artifact(self.context, runtime_path, "Spark runtime")
+        runtime_evidence = _materialized_evidence(runtime, runtime_path)
+        runtime_evidence["installed"] = True
+        self.artifact_evidence.append(runtime_evidence)
+        artifact = require_artifact(self.context.case, "spark-connector-dsv1-jar")
+        self.connector_path = _materialize_case_artifact(self.context, artifact)
         self.artifact_evidence.append(_materialized_evidence(artifact, self.connector_path))
         self.connector_spec = {
             "variant": "dsv1-with-dependencies-2.12",
             "output": self.connector_path.name,
             "size": self.connector_path.stat().st_size,
-            "sha256": artifact["sha256"],
+            "sha256": artifact.sha256,
             "provider": "com.google.cloud.spark.bigquery.Scala212BigQueryRelationProvider",
             "connectorVersion": self.context.versions["connector"],
         }
-        if "spark-connector-dsv2-jar" in self.context.case["runnerAdapter"]["requiredArtifactUsages"]:
-            dsv2_artifact = _require_artifact(self.context, "spark-connector-dsv2-jar")
-            self.dsv2_connector_path = _materialize_artifact(self.context, dsv2_artifact)
+        if "spark-connector-dsv2-jar" in self.context.case.required_artifact_usages:
+            dsv2_artifact = require_artifact(
+                self.context.case, "spark-connector-dsv2-jar"
+            )
+            self.dsv2_connector_path = _materialize_case_artifact(
+                self.context, dsv2_artifact
+            )
             self.artifact_evidence.append(
                 _materialized_evidence(dsv2_artifact, self.dsv2_connector_path)
             )
@@ -295,7 +367,7 @@ class SparkAdapter(RunnerAdapter):
                 "variant": "dsv2-spark-3.5-raw",
                 "output": self.dsv2_connector_path.name,
                 "size": self.dsv2_connector_path.stat().st_size,
-                "sha256": dsv2_artifact["sha256"],
+                "sha256": dsv2_artifact.sha256,
                 "provider": "com.google.cloud.spark.bigquery.v2.Spark35BigQueryTableProvider",
                 "connectorVersion": self.context.versions["connector"],
             }
@@ -317,7 +389,7 @@ class SparkAdapter(RunnerAdapter):
 class SparkPytestAdapter(SparkAdapter):
     def verify_identity(self) -> None:
         _require_equal("PySpark", importlib.metadata.version("pyspark"), self.context.versions["spark"])
-        self.artifact_evidence.extend(_verify_spark_runtime_artifacts(self.context))
+        _require_equal("Python", f"{sys.version_info.major}.{sys.version_info.minor}", self.context.versions["python"])
 
     def execute_scenario(self) -> subprocess.CompletedProcess[str]:
         result = self._run(
@@ -335,7 +407,11 @@ class SparkPytestAdapter(SparkAdapter):
 class SparkScalaShellAdapter(SparkAdapter):
     def verify_identity(self) -> None:
         _require_equal("Spark distribution", importlib.metadata.version("pyspark"), self.context.versions["spark"])
-        self.artifact_evidence.extend(_verify_spark_runtime_artifacts(self.context))
+        _require_equal(
+            "Python bootstrap",
+            f"{sys.version_info.major}.{sys.version_info.minor}",
+            self.context.versions["python"],
+        )
 
     def execute_scenario(self) -> subprocess.CompletedProcess[str]:
         result = self._run(
@@ -371,20 +447,12 @@ def _spark_pytest_command(context: CaseContext, paths: list[str]) -> list[str]:
     ]
 
 
-def load_manifest(manifest_path: Path) -> dict[str, Any]:
-    with manifest_path.open("r", encoding="utf-8") as stream:
-        manifest = json.load(stream)
-    if set(manifest) != {"schemaVersion", "cases"} or manifest["schemaVersion"] != "1":
-        raise ContractError("unsupported normalized consumer manifest")
-    return manifest
+def load_manifest(manifest_path: Path):
+    return load_normalized_manifest(manifest_path)
 
 
-def load_case(manifest_path: Path, case_id: str) -> dict[str, Any]:
-    manifest = load_manifest(manifest_path)
-    matches = [case for case in manifest["cases"] if case.get("id") == case_id]
-    if len(matches) != 1:
-        raise ContractError(f"consumer case {case_id!r} was not found exactly once")
-    return matches[0]
+def load_case(manifest_path: Path, case_id: str) -> NormalizedConsumerCase:
+    return load_normalized_case(manifest_path, case_id)
 
 
 def build_adapter(context: CaseContext) -> RunnerAdapter:
@@ -394,41 +462,47 @@ def build_adapter(context: CaseContext) -> RunnerAdapter:
     return adapter_type(context)
 
 
-def _require_artifact(context: CaseContext, usage: str) -> dict[str, str]:
-    matches = [artifact for artifact in context.case["artifacts"] if artifact["usage"] == usage]
-    if len(matches) != 1:
-        raise ContractError(
-            f"case {context.case_id} must provide exactly one artifact with usage {usage!r}; "
-            f"found {len(matches)}"
+def _install_case_python_artifact(
+    context: CaseContext,
+    artifact_path: Path,
+    label: str,
+    *,
+    check_dependencies: bool = True,
+) -> None:
+    uv = os.getenv("BQEMU_UV_BIN", "uv")
+
+    def run_checked(command: Sequence[str], operation: str) -> None:
+        result = subprocess.run(
+            list(command),
+            cwd=context.repository_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
         )
-    return matches[0]
+        if result.returncode != 0:
+            raise ContractError(f"case-declared {label} {operation} failed")
 
-
-def _verify_spark_runtime_artifacts(context: CaseContext) -> list[dict[str, Any]]:
-    lock = (context.repository_root / "tests" / "spark" / "requirements.lock").read_text(encoding="utf-8")
-    evidence: list[dict[str, Any]] = []
-    artifact = _require_artifact(context, "spark-runtime")
-    if artifact["uri"] not in lock or f"--hash=sha256:{artifact['sha256']}" not in lock:
-        raise ContractError(f"artifact {artifact['id']} is not selected by the Spark hash lock")
-    evidence.append(
-        {
-            "id": artifact["id"],
-            "role": artifact["role"],
-            "usage": artifact["usage"],
-            "status": "hash-locked-runtime-identity-matched",
-            "materialized": False,
-            "installed": True,
-            "version": importlib.metadata.version("pyspark"),
-            "sha256": artifact["sha256"],
-        }
+    install_python_artifact(
+        Path(sys.executable),
+        artifact_path,
+        "installation",
+        run_checked,
+        uv_executable=uv,
     )
-    return evidence
+    if check_dependencies:
+        check_python_dependencies(
+            Path(sys.executable),
+            "dependency check",
+            run_checked,
+            uv_executable=uv,
+        )
 
 
 def _scenario_selectors(context: CaseContext, adapter_prefix: str) -> list[str]:
     selectors: list[str] = []
     seen: set[str] = set()
-    for scenario in context.case["scenarioSet"]["scenarios"]:
+    for scenario in context.case.scenarios:
         for encoded in scenario["selectors"]:
             prefix, separator, selector = encoded.partition(":")
             if separator == "" or prefix != adapter_prefix or selector == "":
@@ -444,11 +518,11 @@ def _scenario_selectors(context: CaseContext, adapter_prefix: str) -> list[str]:
     return selectors
 
 
-def _materialized_evidence(artifact: dict[str, str], path: Path) -> dict[str, Any]:
+def _materialized_evidence(artifact: ArtifactSpec, path: Path) -> dict[str, Any]:
     return {
-        "id": artifact["id"],
-        "role": artifact["role"],
-        "usage": artifact["usage"],
+        "id": artifact.artifact_id,
+        "role": artifact.role,
+        "usage": artifact.usage,
         "status": "digest-verified",
         "materialized": True,
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -456,29 +530,14 @@ def _materialized_evidence(artifact: dict[str, str], path: Path) -> dict[str, An
     }
 
 
-def _materialize_artifact(context: CaseContext, artifact: dict[str, str]) -> Path:
-    uri = artifact["uri"]
-    if not uri.startswith("https://"):
-        raise ContractError(f"artifact {artifact['id']} is not an HTTPS download")
-    filename = uri.rsplit("/", 1)[-1]
-    cache = context.repository_root / ".artifacts" / "consumer-downloads"
-    target = cache / artifact["sha256"] / filename
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == artifact["sha256"]:
-        return target
-    temporary = target.parent / f".{target.name}.{os.getpid()}.tmp"
-    digest = hashlib.sha256()
-    try:
-        with urllib.request.urlopen(uri, timeout=float(os.getenv("BQEMU_ARTIFACT_TIMEOUT_SECONDS", "180"))) as response:
-            with temporary.open("wb") as output:
-                while chunk := response.read(1024 * 1024):
-                    digest.update(chunk)
-                    output.write(chunk)
-        _require_equal(f"artifact {artifact['id']}", digest.hexdigest(), artifact["sha256"])
-        os.replace(temporary, target)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return target
+def _materialize_case_artifact(
+    context: CaseContext, artifact: ArtifactSpec
+) -> Path:
+    return materialize_artifact(
+        context.repository_root,
+        artifact,
+        timeout_seconds=float(os.getenv("BQEMU_ARTIFACT_TIMEOUT_SECONDS", "180")),
+    )
 
 
 def collect_actual_events(context: CaseContext, scenarios: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -500,7 +559,7 @@ def collect_actual_events(context: CaseContext, scenarios: list[dict[str, Any]])
         for scenario in scenarios
         for operation_id in scenario["operationIds"]
     }
-    setup_operations = set(context.case["runnerAdapter"].get("setupOperationIds", []))
+    setup_operations = set(context.case.setup_operation_ids)
     events: list[dict[str, Any]] = []
     for log_path in sorted(context.artifact_root.rglob("server.log")):
         relative_log = str(log_path.relative_to(context.artifact_root)).encode("utf-8")
@@ -713,19 +772,21 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if options.case_id:
         cases = [load_case(options.manifest, options.case_id)]
     else:
-        manifest = load_manifest(options.manifest)
-        cases = [
-            case
-            for case in manifest["cases"]
-            if case["family"] == options.family and case["lane"] == options.lane
-        ]
+        cases = list(
+            select_normalized_cases(
+                options.manifest, family=options.family, lane=options.lane
+            )
+        )
         if not cases:
             raise ContractError(f"no consumer cases for family={options.family!r} lane={options.lane!r}")
         if len(cases) != 1 and not options.run_all:
             raise ContractError("family selection returned multiple cases; pass --all explicitly")
     exit_code = 0
     for case in cases:
-        artifact_root = options.artifact_root or REPOSITORY_ROOT / ".artifacts" / "consumers" / case["id"]
+        artifact_root = (
+            options.artifact_root
+            or REPOSITORY_ROOT / ".artifacts" / "consumers" / case.case_id
+        )
         context = CaseContext(case=case, repository_root=REPOSITORY_ROOT, artifact_root=artifact_root)
         exit_code = max(exit_code, build_adapter(context).run())
     return exit_code

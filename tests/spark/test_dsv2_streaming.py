@@ -22,7 +22,9 @@ import pytest
 
 from artifact_variants import (
     ArtifactClasspathError,
+    DSV1_VARIANT,
     DSV2_RAW_VARIANT,
+    artifact_spec_from_json,
     enforce_connector_classpath,
 )
 from conftest import (
@@ -37,6 +39,7 @@ from conftest import (
     query,
     record_capability,
     record_capability_gap,
+    runtime_versions,
 )
 
 
@@ -58,6 +61,14 @@ def test_dsv2_connector_classpath_fails_closed(
     dsv2_connector_jar: Path,
     tmp_path: Path,
 ) -> None:
+    recognized_specs = {
+        DSV1_VARIANT: artifact_spec_from_json(
+            os.environ["BQEMU_SPARK_CONNECTOR_SPEC_JSON"]
+        ),
+        DSV2_RAW_VARIANT: artifact_spec_from_json(
+            os.environ["BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON"]
+        ),
+    }
     if case == "zero":
         classpath: list[Path] = []
     elif case == "two":
@@ -65,7 +76,7 @@ def test_dsv2_connector_classpath_fails_closed(
     elif case == "mixed":
         classpath = [connector_jar, dsv2_connector_jar]
     else:
-        drifted = tmp_path / "spark-3.5-bigquery-0.44.2.jar"
+        drifted = tmp_path / "drifted-spark-bigquery.jar"
         drifted.write_bytes(b"checksum-drift")
         classpath = [drifted]
 
@@ -74,10 +85,12 @@ def test_dsv2_connector_classpath_fails_closed(
             classpath,
             expected_variant=DSV2_RAW_VARIANT,
             repository_root=REPOSITORY_ROOT,
+            recognized_specs=recognized_specs,
         )
     diagnostic = str(raised.value)
+    versions = runtime_versions()
     for fragment in (
-        "version=0.44.2",
+        f"version={versions['connector']}",
         "operation=spark-connector-classpath",
         f"stage={expected_stage}",
         f"shape={expected_shape}",
@@ -210,10 +223,11 @@ def test_raw_dsv2_exact_streaming_finalizes_without_commit(
         stage="dsv2-raw-streaming",
     )
     result = json.loads(result_path.read_text(encoding="utf-8"))
+    versions = runtime_versions()
     if (
         result.get("variant") != DSV2_RAW_VARIANT
-        or result.get("sparkVersion") != "3.5.8"
-        or result.get("scalaVersion") != "2.12.18"
+        or result.get("sparkVersion") != versions["spark"]
+        or result.get("scalaVersion") != versions["scala"]
         or result.get("provider") != "Spark35BigQueryTableProvider"
         or result.get("serviceProviderCount") != 1
         or result.get("listedJarCount") != 1
@@ -281,7 +295,8 @@ def test_raw_dsv2_exact_streaming_finalizes_without_commit(
     record_capability_gap(
         "SBQ-DSV2-RAW-STREAM-EXACT-APPEND-V1",
         (
-            "provider:Spark35BigQueryTableProvider spark:3.5.8 scala:2.12.18 "
+            f"provider:Spark35BigQueryTableProvider spark:{versions['spark']} "
+            f"scala:{versions['scala']} "
             "partitions:1 pending-streams:1 get-write-stream-calls:0 append-batches:1 "
             "finalized-streams:1 batch-commit-calls:0 visible-rows:0"
         ),

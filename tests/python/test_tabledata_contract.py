@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import json
+import os
 from typing import Any
 import uuid
 
@@ -23,7 +25,14 @@ from google.cloud import bigquery
 import pytest
 
 
-CLIENT_VERSION = "3.43.0"
+try:
+    CLIENT_VERSION = json.loads(os.environ["BQEMU_RUNTIME_VERSIONS_JSON"])["client"]
+except (KeyError, TypeError, json.JSONDecodeError) as error:
+    raise RuntimeError(
+        "BQEMU_RUNTIME_VERSIONS_JSON must come from a normalized consumer case"
+    ) from error
+if not isinstance(CLIENT_VERSION, str) or not CLIENT_VERSION:
+    raise RuntimeError("normalized Python client version is invalid")
 TABLEDATA_CONTRACT = "PY-TABLEDATA-LIST-001"
 
 

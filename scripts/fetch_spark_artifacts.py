@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import urllib.request
@@ -42,6 +43,7 @@ def _positive_seconds(name: str, default: str) -> float:
 
 def _event(
     *,
+    version: str,
     stage: str,
     shape: str,
     fingerprint: str,
@@ -53,7 +55,7 @@ def _event(
     print(
         " ".join(
             (
-                f"version=spark-bigquery-connector-0.44.2",
+                f"version=spark-bigquery-connector-{version}",
                 "operation=fetch-spark-artifact",
                 f"stage={stage}",
                 f"shape={shape}",
@@ -83,12 +85,15 @@ def _validate_existing(path: Path, expected_hash: str, expected_size: int) -> bo
     return actual_hash == expected_hash and actual_size == expected_size
 
 
-def _fetch(artifact: dict[str, object], output: Path, timeout: float) -> Path:
+def _fetch(
+    artifact: dict[str, object], output: Path, timeout: float, version: str
+) -> Path:
     target = output / str(artifact["output"])
     expected_hash = str(artifact["sha256"])
     expected_size = int(artifact["size"])
     if _validate_existing(target, expected_hash, expected_size):
         _event(
+            version=version,
             stage="cache-check",
             shape=str(artifact.get("kind", "artifact")),
             fingerprint=f"sha256:{expected_hash}",
@@ -124,6 +129,7 @@ def _fetch(artifact: dict[str, object], output: Path, timeout: float) -> Path:
             temporary.unlink(missing_ok=True)
 
     _event(
+        version=version,
         stage="checksum",
         shape=str(artifact.get("kind", "artifact")),
         fingerprint=f"sha256:{expected_hash}",
@@ -149,15 +155,20 @@ def main() -> int:
     for lock_path in arguments.lock or DEFAULT_LOCKS:
         with lock_path.open("r", encoding="utf-8") as stream:
             lock = json.load(stream)
+        connector_version = lock.get("connectorVersion")
+        source_commit = lock.get("sourceCommit")
         common_binding_valid = (
-            lock.get("connectorVersion") == "0.44.2"
-            and lock.get("sourceCommit")
-            == "719817782a214b8ca72be520870013a3e0253d92"
+            isinstance(connector_version, str)
+            and bool(connector_version)
+            and isinstance(source_commit, str)
+            and re.fullmatch(r"[0-9a-f]{40}", source_commit) is not None
         )
         dsv1_binding_valid = (
             lock.get("schemaVersion") == "1"
-            and lock.get("sparkVersion") == "3.5.8"
-            and lock.get("scalaBinaryVersion") == "2.12"
+            and isinstance(lock.get("sparkVersion"), str)
+            and bool(lock.get("sparkVersion"))
+            and isinstance(lock.get("scalaBinaryVersion"), str)
+            and bool(lock.get("scalaBinaryVersion"))
             and "artifactVariant" not in lock
             and "artifactBuild" not in lock
             and "testRuntime" not in lock
@@ -168,23 +179,28 @@ def main() -> int:
             and lock.get("artifactVariant") == "dsv2-spark-3.5-raw"
             and "sparkVersion" not in lock
             and "scalaBinaryVersion" not in lock
-            and lock.get("artifactBuild", {}).get("sparkVersion") == "3.5.0"
-            and lock.get("artifactBuild", {}).get("scalaBinaryVersion") == "2.13"
-            and lock.get("testRuntime", {}).get("sparkVersion") == "3.5.8"
-            and lock.get("testRuntime", {}).get("scalaBinaryVersion") == "2.12"
-            and lock.get("testRuntime", {}).get("scalaVersion") == "2.12.18"
+            and all(
+                isinstance(lock.get("artifactBuild", {}).get(field), str)
+                and bool(lock.get("artifactBuild", {}).get(field))
+                for field in ("sparkVersion", "scalaBinaryVersion", "javaToolchain")
+            )
+            and all(
+                isinstance(lock.get("testRuntime", {}).get(field), str)
+                and bool(lock.get("testRuntime", {}).get(field))
+                for field in ("sparkVersion", "scalaBinaryVersion", "scalaVersion", "javaVersion")
+            )
             and lock.get("executionClasspathPolicy")
             == "exactly-one-connector-variant"
         )
         if not common_binding_valid or not (dsv1_binding_valid or dsv2_binding_valid):
             raise SystemExit("unreviewed Spark artifact lock version")
         targets.extend(
-            _fetch(artifact, arguments.output, timeout)
+            _fetch(artifact, arguments.output, timeout, connector_version)
             for artifact in lock["artifacts"]
         )
         source = lock.get("artifactBuild", {}).get("source")
         if source is not None:
-            targets.append(_fetch(source, arguments.output, timeout))
+            targets.append(_fetch(source, arguments.output, timeout, connector_version))
     for target in targets:
         print(target)
     return 0
@@ -195,6 +211,7 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception as error:
         _event(
+            version="lock-validation",
             stage="download",
             shape=type(error).__name__,
             fingerprint="sha256:none",

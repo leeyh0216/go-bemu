@@ -54,7 +54,7 @@ func TestPythonClientProfilePinsQueryLifecycleAndRequestControlGap(t *testing.T)
 	})
 }
 
-func TestPythonTableDataProvenancePinsMonorepoReleaseTags(t *testing.T) {
+func TestPythonProvenancePinsMonorepoReleaseTags(t *testing.T) {
 	want := []string{
 		"https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/client.py#L4118-L4237",
 		"https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/table.py#L1838-L1995",
@@ -70,13 +70,12 @@ func TestPythonTableDataProvenancePinsMonorepoReleaseTags(t *testing.T) {
 	}
 	var sources []string
 	for _, trace := range traces {
-		if trace.Flow == "python-tabledata-list" {
-			sources = trace.SourceRefs
-			break
+		if strings.HasPrefix(trace.Flow, "python-") {
+			sources = append(sources, trace.SourceRefs...)
 		}
 	}
 	if len(sources) == 0 {
-		t.Fatal("python-tabledata-list golden provenance is missing")
+		t.Fatal("Python golden provenance is missing")
 	}
 	for _, source := range want {
 		if !containsString(profile.Sources, source) {
@@ -93,7 +92,7 @@ func TestPythonTableDataProvenancePinsMonorepoReleaseTags(t *testing.T) {
 	}
 	for _, source := range sources {
 		if strings.Contains(source, "github.com/googleapis/python-bigquery/") || strings.Contains(source, "github.com/googleapis/python-api-core/") {
-			t.Fatalf("Python tabledata golden retains unreachable legacy source %q", source)
+			t.Fatalf("Python golden retains unreachable legacy source %q", source)
 		}
 	}
 }

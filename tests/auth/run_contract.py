@@ -22,7 +22,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Mapping
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,15 +30,44 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[2]
-EXPECTED_BQ_VERSION = "2.1.31"
-EXPECTED_PYTHON_VERSION = "3.43.0"
-EXPECTED_SPARK_VERSION = "3.5.8"
-EXPECTED_CONNECTOR_VERSION = "0.44.2"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.consumer_runtime import (  # noqa: E402
+    ArtifactSpec,
+    ConsumerRuntimeError,
+    NormalizedConsumerCase,
+    check_python_dependencies,
+    install_python_artifact,
+    load_normalized_case,
+    materialize_artifact,
+    require_artifact,
+    select_normalized_cases,
+    verify_python_minor,
+)
+
+
+CONSUMER_MANIFEST = ROOT / "contract" / "consumers.normalized.json"
 MAX_CAPTURE_BYTES = 1 << 20
 MAX_BACKGROUND_LOG_BYTES = 16 << 20
 MAX_DIAGNOSTIC_FILE_BYTES = 256 << 10
 ISSUED_TOKEN_PREFIX = b"bqemu-local-issued-"
-CONSUMER_CASES = ("python", "bq", "pyspark", "scala-spark")
+AUTH_CONSUMER_BY_ADAPTER = {
+    "python-pytest-v1": "python",
+    "bq-cli-v1": "bq",
+    "spark-pyspark-pytest-v1": "pyspark",
+    "spark-scala-shell-v1": "scala-spark",
+}
+REQUIRED_VERSIONS_BY_CONSUMER = {
+    "python": frozenset({"python", "client"}),
+    "bq": frozenset({"cloudSdk", "bq"}),
+    "pyspark": frozenset(
+        {"python", "spark", "connector", "scala", "scalaBinary", "java"}
+    ),
+    "scala-spark": frozenset(
+        {"python", "spark", "connector", "scala", "scalaBinary", "java"}
+    ),
+}
 EVENT_FIELDS = frozenset(
     {
         "boundary",
@@ -69,18 +98,74 @@ class ContractError(RuntimeError):
     """A credential-free failure with a stable operation."""
 
 
-def selected_case() -> str:
-    value = os.getenv("BQEMU_AUTH_CASE", "all")
-    if value != "all" and value not in CONSUMER_CASES:
+@dataclass(frozen=True)
+class AuthConsumerCase:
+    normalized: NormalizedConsumerCase
+    consumer: str
+
+    @property
+    def case_id(self) -> str:
+        return self.normalized.case_id
+
+    @property
+    def versions(self) -> Mapping[str, str]:
+        return self.normalized.versions
+
+    @property
+    def bootstrap(self) -> Mapping[str, str]:
+        return self.normalized.bootstrap
+
+    @property
+    def artifacts(self) -> tuple[ArtifactSpec, ...]:
+        return self.normalized.artifacts
+
+
+def load_auth_cases(
+    selected: str,
+    manifest_path: Path = CONSUMER_MANIFEST,
+) -> tuple[AuthConsumerCase, ...]:
+    try:
+        if selected == "all":
+            candidates = select_normalized_cases(manifest_path, lane="required")
+        else:
+            candidate = load_normalized_case(manifest_path, selected)
+            candidates = (candidate,) if candidate.lane == "required" else ()
+    except ConsumerRuntimeError as error:
         raise ContractError(
-            "stage=config operation=select-consumer shape=unsupported-case "
-            "fix_hint=use-a-reviewed-auth-consumer-case"
+            "stage=config operation=load-consumer-manifest shape=invalid "
+            "fix_hint=run-make-contract-generate"
+        ) from error
+
+    cases: list[AuthConsumerCase] = []
+    for normalized in candidates:
+        consumer = AUTH_CONSUMER_BY_ADAPTER.get(normalized.runner_adapter_id)
+        if consumer is None:
+            raise ContractError(
+                "stage=config operation=select-auth-adapter shape=unsupported "
+                "fix_hint=implement-a-typed-auth-runner-adapter"
+            )
+        required_versions = REQUIRED_VERSIONS_BY_CONSUMER[consumer]
+        if any(
+            not isinstance(normalized.versions.get(name), str)
+            or not normalized.versions[name]
+            for name in required_versions
+        ):
+            raise ContractError(
+                "stage=config operation=decode-runtime-versions shape=incomplete "
+                "fix_hint=run-make-contract-generate"
+            )
+        cases.append(
+            AuthConsumerCase(
+                normalized=normalized,
+                consumer=consumer,
+            )
         )
-    return value
-
-
-def case_enabled(case: str, candidate: str) -> bool:
-    return case == "all" or case == candidate
+    if not cases:
+        raise ContractError(
+            "stage=config operation=select-consumer shape=no-required-cases "
+            "fix_hint=add-a-normalized-required-consumer-case"
+        )
+    return tuple(cases)
 
 
 def positive_timeout() -> float:
@@ -693,43 +778,150 @@ def wait_ready(
     )
 
 
-def verify_connector_artifact() -> Path:
-    lock_path = ROOT / "tests" / "spark" / "artifacts.lock.json"
-    lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    if (
-        lock.get("connectorVersion") != EXPECTED_CONNECTOR_VERSION
-        or lock.get("sparkVersion") != EXPECTED_SPARK_VERSION
-        or lock.get("scalaBinaryVersion") != "2.12"
-        or len(lock.get("artifacts", [])) != 1
+def require_case_artifact(
+    case: AuthConsumerCase,
+    usage: str,
+) -> ArtifactSpec:
+    try:
+        artifact = require_artifact(case.normalized, usage)
+    except ConsumerRuntimeError as error:
+        raise ContractError(
+            "stage=artifact operation=select-case-artifact shape=cardinality "
+            "fix_hint=define-exactly-one-required-artifact-usage"
+        ) from error
+    if artifact.role != "execution":
+        raise ContractError(
+            "stage=artifact operation=decode-case-artifact shape=invalid "
+            "fix_hint=run-make-contract-generate"
+        )
+    return artifact
+
+
+def materialize_case_artifact(
+    case: AuthConsumerCase,
+    usage: str,
+    configured_path: str = "",
+) -> Path:
+    artifact = require_case_artifact(case, usage)
+    try:
+        return materialize_artifact(
+            ROOT,
+            artifact,
+            configured_path=configured_path,
+            timeout_seconds=min(TIMEOUT, 180),
+        )
+    except ConsumerRuntimeError as error:
+        raise ContractError(
+            "stage=artifact operation=materialize-case-artifact shape=invalid-or-unavailable "
+            "fix_hint=verify-the-declared-execution-artifact"
+        ) from error
+
+
+def install_case_python_artifact(
+    case: AuthConsumerCase,
+    python_executable: Path,
+    usage: str,
+    operation: str,
+    *,
+    check_dependencies: bool = True,
+) -> None:
+    artifact = materialize_case_artifact(case, usage)
+    uv = os.getenv("BQEMU_UV_BIN", "uv")
+    install_python_artifact(
+        python_executable,
+        artifact,
+        operation,
+        run_process,
+        uv_executable=uv,
+    )
+    if check_dependencies:
+        check_python_dependencies(
+            python_executable,
+            operation + "-dependency-check",
+            run_process,
+            uv_executable=uv,
+        )
+
+
+def verify_python_runtime(python_executable: Path, expected: str) -> None:
+    try:
+        verify_python_minor(
+            python_executable,
+            expected,
+            "verify-python-runtime",
+            run_process,
+        )
+    except ConsumerRuntimeError as error:
+        raise ContractError(
+            "stage=assert operation=verify-python-runtime shape=version-drift-or-invalid "
+            "fix_hint=install-the-case-declared-python-runtime"
+        ) from error
+
+
+def prepare_case_python_runtime(
+    case: AuthConsumerCase, python_executable: Path
+) -> None:
+    if case.consumer == "python":
+        verify_python_runtime(python_executable, case.versions["python"])
+        install_case_python_artifact(
+            case,
+            python_executable,
+            "python-wheel",
+            "install-python-case-artifact",
+        )
+        return
+    if case.consumer not in ("pyspark", "scala-spark"):
+        return
+    expected_python = case.versions.get("python")
+    if not expected_python:
+        raise ContractError(
+            "stage=config operation=select-python-runtime shape=missing-version "
+            "fix_hint=declare-a-runtime-or-bootstrap-python-version"
+        )
+    verify_python_runtime(python_executable, expected_python)
+    install_case_python_artifact(
+        case,
+        python_executable,
+        "spark-python-bridge",
+        "install-spark-python-bridge-artifact",
+        check_dependencies=False,
+    )
+    install_case_python_artifact(
+        case,
+        python_executable,
+        "spark-runtime",
+        "install-spark-runtime-artifact",
+    )
+
+
+def verify_bq_runtime(case: AuthConsumerCase, bq: str, gcloud: str) -> None:
+    bq_output = run_process([bq, "version"], "verify-bq-runtime")
+    if bq_output.decode("ascii", errors="replace").strip() != (
+        "This is BigQuery CLI " + case.versions["bq"]
     ):
         raise ContractError(
-            "stage=artifact operation=connector-lock shape=version-drift "
-            "fix_hint=restore-the-reviewed-0.44.2-lock"
+            "stage=assert operation=verify-bq-runtime shape=version-drift "
+            "fix_hint=install-the-case-declared-cloud-sdk"
         )
-    artifact = lock["artifacts"][0]
-    configured = os.getenv("BQEMU_AUTH_CONNECTOR_JAR")
-    path = (
-        Path(configured)
-        if configured
-        else ROOT / ".artifacts" / "spark" / artifact["output"]
+    cloud_output = run_process(
+        [gcloud, "version", "--format=json"], "verify-cloud-sdk-runtime"
     )
-    if not path.is_file():
+    try:
+        versions = json.loads(cloud_output)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ContractError(
-            "stage=artifact operation=connector-jar shape=missing "
-            "fix_hint=run-scripts-fetch_spark_artifacts.py"
-        )
-    contents_digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(1 << 20):
-            contents_digest.update(chunk)
-            size += len(chunk)
-    if size != artifact["size"] or contents_digest.hexdigest() != artifact["sha256"]:
+            "stage=assert operation=verify-cloud-sdk-runtime shape=invalid-output "
+            "fix_hint=install-the-case-declared-cloud-sdk"
+        ) from error
+    if (
+        not isinstance(versions, dict)
+        or versions.get("Google Cloud SDK") != case.versions["cloudSdk"]
+        or versions.get("bq") != case.versions["bq"]
+    ):
         raise ContractError(
-            "stage=artifact operation=connector-jar shape=checksum-drift "
-            "fix_hint=remove-cache-and-refetch-reviewed-artifact"
+            "stage=assert operation=verify-cloud-sdk-runtime shape=version-drift "
+            "fix_hint=install-the-case-declared-cloud-sdk"
         )
-    return path.resolve()
 
 
 def bootstrap(
@@ -880,6 +1072,7 @@ def assert_dataset_output(output: bytes, dataset: str, operation: str) -> None:
 
 def run_python_consumer(
     python_client: Path,
+    expected_version: str,
     endpoint: str,
     project: str,
     dataset: str,
@@ -899,20 +1092,23 @@ def run_python_consumer(
             dataset,
             "--fixture-dir",
             str(fixture_dir),
+            "--expected-version",
+            expected_version,
         ],
-        "python-3.43.0",
+        "python-client-auth",
         environment=environment,
         secrets=secrets,
     )
-    if EXPECTED_PYTHON_VERSION.encode("utf-8") not in output:
+    if expected_version.encode("utf-8") not in output:
         raise ContractError(
-            "stage=assert operation=python-3.43.0 shape=success-marker-missing "
+            "stage=assert operation=python-client-auth shape=success-marker-missing "
             "fix_hint=inspect-pinned-python-runner"
         )
 
 
 def run_bq_consumer(
     bq: str,
+    expected_version: str,
     work: Path,
     endpoint: str,
     project: str,
@@ -923,10 +1119,10 @@ def run_bq_consumer(
     secrets: tuple[bytes, ...],
 ) -> None:
     version_output = run_process([bq, "version"], "bq-version")
-    if f"BigQuery CLI {EXPECTED_BQ_VERSION}".encode() not in version_output:
+    if f"BigQuery CLI {expected_version}".encode() not in version_output:
         raise ContractError(
             "stage=assert operation=bq-version shape=version-drift "
-            "fix_hint=install-bq-2.1.31"
+            "fix_hint=install-the-case-declared-bq-version"
         )
     bq_base = [
         bq,
@@ -976,6 +1172,11 @@ def run_bq_consumer(
 def run_pyspark_consumer(
     spark_python: Path,
     connector_jar: Path,
+    expected_spark_version: str,
+    expected_connector_version: str,
+    expected_scala_version: str,
+    expected_scala_binary_version: str,
+    expected_java_version: str,
     endpoint: str,
     grpc_endpoint: str,
     project: str,
@@ -1000,8 +1201,18 @@ def run_pyspark_consumer(
             table_name,
             "--fixture-dir",
             str(fixture_dir),
+            "--expected-spark-version",
+            expected_spark_version,
+            "--expected-connector-version",
+            expected_connector_version,
+            "--expected-scala-version",
+            expected_scala_version,
+            "--expected-scala-binary-version",
+            expected_scala_binary_version,
+            "--expected-java-version",
+            expected_java_version,
         ],
-        "pyspark-3.5.8-connector-0.44.2",
+        "pyspark-connector-auth",
         environment=java_environment(manifest, spark_python),
         secrets=secrets,
     )
@@ -1016,6 +1227,11 @@ def run_scala_consumer(
     spark_python: Path,
     spark_shell: Path,
     connector_jar: Path,
+    expected_spark_version: str,
+    expected_connector_version: str,
+    expected_scala_version: str,
+    expected_scala_binary_version: str,
+    expected_java_version: str,
     endpoint: str,
     grpc_endpoint: str,
     project: str,
@@ -1032,6 +1248,11 @@ def run_scala_consumer(
             "BQEMU_AUTH_FIXTURE_DIR": str(fixture_dir),
             "BQEMU_AUTH_HTTP_ENDPOINT": endpoint,
             "BQEMU_AUTH_GRPC_ENDPOINT": grpc_endpoint,
+            "BQEMU_AUTH_EXPECTED_SPARK_VERSION": expected_spark_version,
+            "BQEMU_AUTH_EXPECTED_CONNECTOR_VERSION": expected_connector_version,
+            "BQEMU_AUTH_EXPECTED_SCALA_VERSION": expected_scala_version,
+            "BQEMU_AUTH_EXPECTED_SCALA_BINARY_VERSION": expected_scala_binary_version,
+            "BQEMU_AUTH_EXPECTED_JAVA_VERSION": expected_java_version,
         }
     )
     output = run_process(
@@ -1044,7 +1265,7 @@ def run_scala_consumer(
             "-i",
             str(ROOT / "tests" / "auth" / "scala_connector.scala"),
         ],
-        "scala-spark-3.5.8-connector-0.44.2",
+        "scala-spark-connector-auth",
         environment=environment,
         secrets=secrets,
     )
@@ -1055,12 +1276,14 @@ def run_scala_consumer(
         )
 
 
-def main(case: str) -> int:
-    initialize_diagnostics()
-    verify_diagnostic_capture()
+def main(case: AuthConsumerCase) -> int:
     connector_jar = (
-        verify_connector_artifact()
-        if case_enabled(case, "pyspark") or case_enabled(case, "scala-spark")
+        materialize_case_artifact(
+            case,
+            "spark-connector-dsv1-jar",
+            os.getenv("BQEMU_AUTH_CONNECTOR_JAR", ""),
+        )
+        if case.consumer in ("pyspark", "scala-spark")
         else None
     )
     python_client = Path(
@@ -1080,21 +1303,29 @@ def main(case: str) -> int:
         )
     ).expanduser().absolute()
     bq = os.getenv("BQEMU_AUTH_BQ", "bq")
+    gcloud = os.getenv("BQEMU_AUTH_GCLOUD", "gcloud")
     required_executables: list[tuple[Path, str]] = []
-    if case_enabled(case, "python"):
+    if case.consumer == "python":
         required_executables.append((python_client, "python-client"))
-    if case_enabled(case, "pyspark"):
-        required_executables.append((spark_python, "pyspark"))
-    if case_enabled(case, "scala-spark"):
-        required_executables.extend(
-            ((spark_python, "scala-python"), (spark_shell, "scala-spark"))
-        )
+    if case.consumer in ("pyspark", "scala-spark"):
+        required_executables.append((spark_python, "spark-python"))
     for path, operation in required_executables:
         if not path.is_file():
             raise ContractError(
                 f"stage=setup operation={operation} shape=missing-executable "
                 "fix_hint=install-the-pinned-client-environment"
             )
+    if case.consumer == "python":
+        prepare_case_python_runtime(case, python_client)
+    elif case.consumer in ("pyspark", "scala-spark"):
+        prepare_case_python_runtime(case, spark_python)
+        if case.consumer == "scala-spark" and not spark_shell.is_file():
+            raise ContractError(
+                "stage=setup operation=scala-spark shape=missing-executable "
+                "fix_hint=install-the-case-declared-spark-runtime"
+            )
+    elif case.consumer == "bq":
+        verify_bq_runtime(case, bq, gcloud)
 
     with tempfile.TemporaryDirectory(prefix="bqemu-auth-contract-") as temporary:
         work = Path(temporary)
@@ -1187,9 +1418,10 @@ def main(case: str) -> int:
             bootstrap(context, endpoint, project, dataset, table)
 
             client_env = child_environment(manifest)
-            if case_enabled(case, "python"):
+            if case.consumer == "python":
                 run_python_consumer(
                     python_client,
+                    case.versions["client"],
                     endpoint,
                     project,
                     dataset,
@@ -1197,9 +1429,10 @@ def main(case: str) -> int:
                     client_env,
                     secrets,
                 )
-            if case_enabled(case, "bq"):
+            if case.consumer == "bq":
                 run_bq_consumer(
                     bq,
+                    case.versions["bq"],
                     work,
                     endpoint,
                     project,
@@ -1209,7 +1442,7 @@ def main(case: str) -> int:
                     client_env,
                     secrets,
                 )
-            if case_enabled(case, "pyspark"):
+            if case.consumer == "pyspark":
                 if connector_jar is None:
                     raise ContractError(
                         "stage=setup operation=pyspark shape=missing-connector "
@@ -1218,6 +1451,11 @@ def main(case: str) -> int:
                 run_pyspark_consumer(
                     spark_python,
                     connector_jar,
+                    case.versions["spark"],
+                    case.versions["connector"],
+                    case.versions["scala"],
+                    case.versions["scalaBinary"],
+                    case.versions["java"],
                     endpoint,
                     grpc_endpoint,
                     project,
@@ -1226,7 +1464,7 @@ def main(case: str) -> int:
                     manifest,
                     secrets,
                 )
-            if case_enabled(case, "scala-spark"):
+            if case.consumer == "scala-spark":
                 if connector_jar is None:
                     raise ContractError(
                         "stage=setup operation=scala-spark shape=missing-connector "
@@ -1236,6 +1474,11 @@ def main(case: str) -> int:
                     spark_python,
                     spark_shell,
                     connector_jar,
+                    case.versions["spark"],
+                    case.versions["connector"],
+                    case.versions["scala"],
+                    case.versions["scalaBinary"],
+                    case.versions["java"],
                     endpoint,
                     grpc_endpoint,
                     project,
@@ -1258,14 +1501,19 @@ def main(case: str) -> int:
         if cleanup_error is not None:
             raise cleanup_error from None
 
+    version_fields: dict[str, str] = {}
+    if case.consumer == "python":
+        version_fields["python"] = case.versions["client"]
+    elif case.consumer == "bq":
+        version_fields["bq"] = case.versions["bq"]
+    else:
+        version_fields["spark"] = case.versions["spark"]
+        version_fields["connector"] = case.versions["connector"]
     event(
         suite="client-credentials-and-tls",
-        consumer_case=case,
-        python=EXPECTED_PYTHON_VERSION,
-        bq=EXPECTED_BQ_VERSION,
-        spark=EXPECTED_SPARK_VERSION,
-        connector=EXPECTED_CONNECTOR_VERSION,
+        consumer_case=case.case_id,
         status="passed",
+        **version_fields,
     )
     return 0
 
@@ -1273,10 +1521,17 @@ def main(case: str) -> int:
 if __name__ == "__main__":
     started = time.monotonic()
     configured_case = os.getenv("BQEMU_AUTH_CASE", "all")
-    case_label = configured_case if configured_case in (*CONSUMER_CASES, "all") else "invalid"
+    case_label = (
+        configured_case
+        if SAFE_EVENT_TEXT.fullmatch(configured_case) is not None
+        else "invalid"
+    )
     failure: Exception | None = None
     try:
-        main(selected_case())
+        initialize_diagnostics()
+        verify_diagnostic_capture()
+        for selected in load_auth_cases(configured_case):
+            main(selected)
     except Exception as error:
         failure = error
         event(

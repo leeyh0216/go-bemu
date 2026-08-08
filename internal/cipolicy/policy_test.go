@@ -149,9 +149,14 @@ func TestCIRequiresAllValidationBeforePublish(t *testing.T) {
 	if got := requiredScalar(t, strategy, "fail-fast"); got != "false" {
 		t.Fatalf("auth-client-test.strategy.fail-fast = %q, want false", got)
 	}
-	for _, consumerCase := range []string{"python", "bq", "pyspark", "scala-spark"} {
-		if !nodeContainsScalar(authClient, consumerCase) {
-			t.Errorf("auth-client-test matrix is missing %s", consumerCase)
+	for _, contract := range []string{
+		"fromJSON(needs.consumer-matrix.outputs.auth)",
+		"matrix.runnerAdapter.runtimeKind",
+		"matrix.runtimeProfile.versions.cloudSdk",
+		"matrix.runtimeProfile.versions.java",
+	} {
+		if !nodeContainsScalar(authClient, contract) {
+			t.Errorf("auth-client-test is missing normalized matrix contract %q", contract)
 		}
 	}
 	for _, contract := range []string{
@@ -204,8 +209,10 @@ func TestConsumerWorkflowsUseNormalizedDynamicMatrices(t *testing.T) {
 		"ci.yaml": {
 			"contractctl matrix --root . --family python --lane required --output-key python",
 			"contractctl matrix --root . --family bq --lane required --output-key bq",
+			"contractctl matrix --root . --lane required --output-key auth",
 			"fromJSON(needs.consumer-matrix.outputs.python)",
 			"fromJSON(needs.consumer-matrix.outputs.bq)",
+			"fromJSON(needs.consumer-matrix.outputs.auth)",
 		},
 		"spark-contract.yaml": {
 			"contractctl matrix --root . --family spark --lane \"$BQEMU_CONSUMER_LANES\" --output-key spark",

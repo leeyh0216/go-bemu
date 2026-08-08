@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Official google-cloud-bigquery 3.43.0 credential contract."""
+"""Official google-cloud-bigquery credential contract."""
 
 from __future__ import annotations
 
@@ -12,15 +12,13 @@ from google.cloud import bigquery
 from google.oauth2.credentials import Credentials as AccessTokenCredentials
 
 
-EXPECTED_VERSION = "3.43.0"
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--project", required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--fixture-dir", type=Path, required=True)
+    parser.add_argument("--expected-version", required=True)
     return parser.parse_args()
 
 
@@ -45,9 +43,10 @@ def assert_dataset(
 
 def main() -> int:
     arguments = parse_args()
-    if bigquery.__version__ != EXPECTED_VERSION:
+    if bigquery.__version__ != arguments.expected_version:
         raise RuntimeError(
-            f"google-cloud-bigquery version={bigquery.__version__}, want {EXPECTED_VERSION}"
+            "google-cloud-bigquery version="
+            f"{bigquery.__version__}, want {arguments.expected_version}"
         )
 
     completed: list[str] = []
@@ -79,7 +78,7 @@ def main() -> int:
         json.dumps(
             {
                 "client": "google-cloud-bigquery",
-                "version": EXPECTED_VERSION,
+                "version": arguments.expected_version,
                 "profiles": completed,
                 "status": "passed",
             },

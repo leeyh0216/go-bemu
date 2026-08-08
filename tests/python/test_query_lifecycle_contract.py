@@ -1,7 +1,7 @@
 """Official Python client query lifecycle contracts over the public REST edge.
 
 Pinned client implementation and protocol sources:
-https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/_job_helpers.py#L420-L641
+https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/_job_helpers.py#L420-L641
 https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query
 https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert
 https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults
@@ -15,6 +15,8 @@ They never retain credentials, query payloads, or response rows.
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
+import os
 from typing import Any
 import uuid
 
@@ -24,7 +26,14 @@ from google.cloud import bigquery
 import pytest
 
 
-CLIENT_VERSION = "3.43.0"
+try:
+    CLIENT_VERSION = json.loads(os.environ["BQEMU_RUNTIME_VERSIONS_JSON"])["client"]
+except (KeyError, TypeError, json.JSONDecodeError) as error:
+    raise RuntimeError(
+        "BQEMU_RUNTIME_VERSIONS_JSON must come from a normalized consumer case"
+    ) from error
+if not isinstance(CLIENT_VERSION, str) or not CLIENT_VERSION:
+    raise RuntimeError("normalized Python client version is invalid")
 LIFECYCLE_CONTRACT = "PY-QUERY-LIFECYCLE-001"
 REQUEST_RETRY_CONTRACT = "PY-QUERY-REQUEST-ID-001"
 REQUEST_RETRY_GAP = "query.sync.request-controls-v1"
@@ -239,7 +248,7 @@ def test_query_destination_job_lifecycle_pagination_and_metadata_patch(
     strict=True,
     raises=RequestIDIdempotencyGap,
     reason=(
-        "google-cloud-bigquery 3.43.0 / query.sync.request-controls-v1: the "
+        f"google-cloud-bigquery {CLIENT_VERSION} / query.sync.request-controls-v1: the "
         "requestId idempotency ledger is not implemented; lost-response retries "
         "currently create a second query job"
     ),

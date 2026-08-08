@@ -350,30 +350,26 @@ go run ./cmd/bqemu-auth-fixture serve --manifest .bqemu-auth/manifest.json
 <!-- section: verification -->
 ## 지원 클라이언트 검증
 
-저장소의 계약 테스트는 고정된 Python과 Spark 의존성을 설치하고, 검토한 커넥터
-파일의 SHA-256 값을 확인합니다. TLS를 적용한 BQEMU와 발급 서버를 시작한 뒤 실제
-클라이언트 프로세스에서 모든 인증 방식을 실행합니다.
+저장소의 계약 테스트는 선택한 Python과 Spark 의존성을 설치하고, 정규화된 소비자
+사례가 선언한 실행 산출물의 SHA-256 값을 확인합니다. TLS를 적용한 BQEMU와 발급
+서버를 시작한 뒤 모든 필수 사례를 실제 클라이언트 프로세스에서 실행합니다.
 
 ```bash
 make auth-client-setup
 make auth-client-test
 ```
 
-기본 명령은 네 소비자를 모두 실행합니다. CI는 같은 진입점을 사용하면서
-`BQEMU_AUTH_CASE`에 `python`, `bq`, `pyspark`, `scala-spark` 중 하나를 지정합니다.
-따라서 실행기를 바꾸지 않고 실패한 소비자를 구분할 수 있습니다.
+기본 명령은 `contract/consumers.normalized.json`의 모든 필수 사례를 실행합니다. CI는
+같은 진입점을 사용하면서 `BQEMU_AUTH_CASE`에 정규화된 사례 ID를 지정합니다. 따라서
+실행기를 바꾸지 않고 실패한 실행 환경과 어댑터를 구분할 수 있습니다.
 `BQEMU_AUTH_JUNIT`을 지정하면 case 이름, 실행 시간, 오류 자료형, 오류 SHA-256 값만
 포함한 JUnit XML 파일을 생성합니다. `BQEMU_AUTH_DIAGNOSTICS`를 지정하면 상태, 출력
 크기, SHA-256 값처럼 허용한 필드만 NDJSON으로 기록합니다. 자식 프로세스의 원문은
 저장하지 않습니다.
 
-`PATH`에 있는 `bq` 실행 파일은 `2.1.31`이어야 합니다. 다음 조합만 정확히
-검사합니다.
-
-- google-cloud-bigquery Python `3.43.0`
-- `bq` `2.1.31`
-- PySpark와 Scala Spark `3.5.8`
-- Spark BigQuery 커넥터 `0.44.2`
+`PATH`에 있는 `bq` 실행 파일은 선택한 사례가 선언한 버전이어야 합니다. 필수 Python
+클라이언트, CLI, Spark, 커넥터, 실행 환경의 정확한 버전은 [소비자
+호환성](consumer-compatibility.md) 문서에서 자동 생성합니다.
 
 진단 정보에는 작업 이름, 종료 상태, 출력 크기, SHA-256 값만 포함됩니다. 자식
 프로세스의 각 출력은 생성한 비밀 값, 개인 키 조각, 로컬 발급 token 접두사가 있는지도

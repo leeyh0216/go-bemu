@@ -347,30 +347,28 @@ the files on one filesystem path and then move them into the container.
 <!-- section: verification -->
 ## Verify the Supported Clients
 
-The repository contract installs pinned Python and Spark dependencies, verifies
-the reviewed connector checksum, starts a TLS BQEMU and issuer, and runs every
-profile through real client processes:
+The repository contract installs the selected Python and Spark dependencies,
+verifies execution artifacts declared by the normalized consumer case, starts a
+TLS BQEMU and issuer, and runs every required profile through real client
+processes:
 
 ```bash
 make auth-client-setup
 make auth-client-test
 ```
 
-The default target runs all four consumers. CI uses the same entrypoint with
-`BQEMU_AUTH_CASE` set to `python`, `bq`, `pyspark`, or `scala-spark`, so a
-failure identifies one consumer without changing the contract runner. Set
+The default target runs every required case in
+`contract/consumers.normalized.json`. CI uses the same entrypoint with
+`BQEMU_AUTH_CASE` set to the normalized case ID, so a failure identifies one
+runtime and adapter without changing the contract runner. Set
 `BQEMU_AUTH_JUNIT` to write a case-specific JUnit XML file containing only the
 case name, duration, error type, and error digest. `BQEMU_AUTH_DIAGNOSTICS`
 writes only allowlisted NDJSON events with status, byte counts, and SHA-256
 digests; it never stores raw child output.
 
-The `bq` executable must already be version `2.1.31` on `PATH`. The contract
-checks exactly:
-
-- google-cloud-bigquery Python `3.43.0`;
-- `bq` `2.1.31`;
-- PySpark and Scala Spark `3.5.8`;
-- Spark BigQuery connector `0.44.2`.
+The `bq` executable must already be the version declared by the selected case
+on `PATH`. The exact required client, CLI, Spark, connector, and runtime
+versions are generated in [Consumer Compatibility](consumer-compatibility.md).
 
 Diagnostics contain operation names, exit status, byte counts, and SHA-256
 digests. Each child stream is also scanned for generated secret values, private

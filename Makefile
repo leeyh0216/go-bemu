@@ -16,6 +16,8 @@ BQEMU_SPARK_RPC_TIMEOUT_SECONDS ?= 30
 BQEMU_ARTIFACT_TIMEOUT_SECONDS ?= 180
 BQEMU_SPARK_VENV ?= $(CURDIR)/.artifacts/spark/venv
 BQEMU_SPARK_PYTHON ?= $(BQEMU_SPARK_VENV)/bin/python
+BQEMU_PYTHON_VERSION ?= 3.13
+BQEMU_SPARK_PYTHON_VERSION ?= 3.11
 BQEMU_AUTH_CASE ?= all
 BQEMU_AUTH_JUNIT ?=
 BQEMU_AUTH_DIAGNOSTICS ?=
@@ -25,7 +27,7 @@ IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test build run format format-check contract-generate contract-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test build run format format-check contract-generate contract-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -61,7 +63,7 @@ setup: doctor
 	go mod download
 
 python-setup:
-	uv venv --python 3.13 .venv
+	uv venv --python "$(BQEMU_PYTHON_VERSION)" .venv
 	uv pip sync --python "$(PYTHON)" --require-hashes tests/python/requirements.lock
 
 build:
@@ -73,14 +75,11 @@ auth-client-setup: python-setup auth-spark-setup
 
 auth-spark-setup:
 	@if test -x "$(BQEMU_SPARK_PYTHON)"; then \
-		"$(BQEMU_SPARK_PYTHON)" -c 'import sys; assert sys.version_info[:2] == (3, 11), "Spark contract requires Python 3.11"'; \
+		test "$$("$(BQEMU_SPARK_PYTHON)" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "$(BQEMU_SPARK_PYTHON_VERSION)"; \
 	else \
-		uv venv --python 3.11 "$(BQEMU_SPARK_VENV)"; \
+		uv venv --python "$(BQEMU_SPARK_PYTHON_VERSION)" "$(BQEMU_SPARK_VENV)"; \
 	fi
 	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
-	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
-	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py \
-		--lock tests/spark/artifacts.lock.json
 
 auth-fixtures:
 	CGO_ENABLED=0 go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
@@ -94,6 +93,9 @@ auth-client-test:
 	BQEMU_AUTH_DIAGNOSTICS="$(BQEMU_AUTH_DIAGNOSTICS)" \
 	BQEMU_AUTH_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
 	"$(PYTHON3)" tests/auth/run_contract.py
+
+auth-runner-test:
+	"$(PYTHON3)" -m unittest discover -s tests/auth -p 'test_*.py'
 
 run:
 	mkdir -p "$(BQEMU_LOCAL_DATA_DIR)" "$(BQEMU_TEMP_DIRECTORY)"
@@ -140,9 +142,9 @@ bq-test:
 spark-prepare:
 	mkdir -p "$(CURDIR)/.artifacts/spark/diagnostics"
 	@if test -x "$(BQEMU_SPARK_PYTHON)"; then \
-	  "$(BQEMU_SPARK_PYTHON)" -c 'import sys; assert sys.version_info[:2] == (3, 11), "Spark contract requires Python 3.11"'; \
+	  test "$$("$(BQEMU_SPARK_PYTHON)" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "$(BQEMU_SPARK_PYTHON_VERSION)"; \
 	else \
-	  uv venv --python 3.11 "$(BQEMU_SPARK_VENV)"; \
+	  uv venv --python "$(BQEMU_SPARK_PYTHON_VERSION)" "$(BQEMU_SPARK_VENV)"; \
 	fi
 	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
 
@@ -171,7 +173,7 @@ vet:
 github-actions-policy:
 	CGO_ENABLED=1 go test ./internal/cipolicy
 
-ci-static: github-actions-policy format-check contract-check consumer-runner-test vet config-check
+ci-static: github-actions-policy format-check contract-check consumer-runner-test auth-runner-test vet config-check
 
 ci-test-all:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...

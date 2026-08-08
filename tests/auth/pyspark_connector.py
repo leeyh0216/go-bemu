@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
-"""PySpark 3.5.8 and Spark BigQuery connector 0.44.2 auth contract."""
+"""PySpark and Spark BigQuery connector credential contract."""
 
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
-
-import pyspark
-from pyspark.sql import SparkSession
-
-
-EXPECTED_SPARK_VERSION = "3.5.8"
-EXPECTED_CONNECTOR_VERSION = "0.44.2"
+from zipfile import BadZipFile, ZipFile
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,10 +17,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project", required=True)
     parser.add_argument("--table", required=True)
     parser.add_argument("--fixture-dir", type=Path, required=True)
+    parser.add_argument("--expected-spark-version", required=True)
+    parser.add_argument("--expected-connector-version", required=True)
+    parser.add_argument("--expected-scala-version", required=True)
+    parser.add_argument("--expected-scala-binary-version", required=True)
+    parser.add_argument("--expected-java-version", required=True)
     return parser.parse_args()
 
 
-def base_reader(spark: SparkSession, arguments: argparse.Namespace):
+def connector_version(path: Path) -> str:
+    try:
+        with ZipFile(path) as archive:
+            lines = archive.read("spark-bigquery-connector.properties").decode(
+                "utf-8"
+            ).splitlines()
+    except (OSError, BadZipFile, KeyError, UnicodeDecodeError):
+        raise RuntimeError("connector JAR identity metadata is invalid") from None
+    versions = [
+        value.strip()
+        for line in lines
+        if "=" in line
+        for key, value in (line.split("=", 1),)
+        if key.strip() == "connector.version"
+    ]
+    if len(versions) != 1 or not versions[0]:
+        raise RuntimeError("connector JAR version identity is ambiguous")
+    return versions[0]
+
+
+def base_reader(spark, arguments: argparse.Namespace):
     reader = spark.read.format("bigquery")
     options = {
         "parentProject": arguments.project,
@@ -45,14 +64,20 @@ def base_reader(spark: SparkSession, arguments: argparse.Namespace):
 
 
 def main() -> int:
-    arguments = parse_args()
-    if pyspark.__version__ != EXPECTED_SPARK_VERSION:
-        raise RuntimeError(
-            f"PySpark version={pyspark.__version__}, want {EXPECTED_SPARK_VERSION}"
-        )
-    if EXPECTED_CONNECTOR_VERSION not in arguments.connector_jar.name:
-        raise RuntimeError("connector JAR filename does not contain the locked version")
+    import pyspark
+    from pyspark.sql import SparkSession
 
+    arguments = parse_args()
+    if pyspark.__version__ != arguments.expected_spark_version:
+        raise RuntimeError(
+            f"PySpark version={pyspark.__version__}, want {arguments.expected_spark_version}"
+        )
+    actual_connector_version = connector_version(arguments.connector_jar)
+    if actual_connector_version != arguments.expected_connector_version:
+        raise RuntimeError(
+            "connector JAR version="
+            f"{actual_connector_version}, want {arguments.expected_connector_version}"
+        )
     spark = (
         SparkSession.builder.master("local[1]")
         .appName("bqemu-auth-contract-pyspark")
@@ -64,9 +89,28 @@ def main() -> int:
     )
     spark.sparkContext.setLogLevel("ERROR")
     try:
-        if spark.version != EXPECTED_SPARK_VERSION:
+        if spark.version != arguments.expected_spark_version:
             raise RuntimeError(
-                f"Spark runtime={spark.version}, want {EXPECTED_SPARK_VERSION}"
+                f"Spark runtime={spark.version}, want {arguments.expected_spark_version}"
+            )
+        scala_version = (
+            spark.sparkContext._jvm.scala.util.Properties.versionNumberString()
+        )
+        if (
+            scala_version != arguments.expected_scala_version
+            or not scala_version.startswith(arguments.expected_scala_binary_version + ".")
+        ):
+            raise RuntimeError(
+                "Scala runtime="
+                f"{scala_version}, want {arguments.expected_scala_version} "
+                f"({arguments.expected_scala_binary_version}.x)"
+            )
+        java_version = spark.sparkContext._jvm.java.lang.System.getProperty(
+            "java.specification.version"
+        )
+        if java_version != arguments.expected_java_version:
+            raise RuntimeError(
+                f"Java runtime={java_version}, want {arguments.expected_java_version}"
             )
         completed: list[str] = []
         for filename in (
@@ -103,8 +147,8 @@ def main() -> int:
         json.dumps(
             {
                 "client": "pyspark",
-                "spark_version": EXPECTED_SPARK_VERSION,
-                "connector_version": EXPECTED_CONNECTOR_VERSION,
+                "spark_version": arguments.expected_spark_version,
+                "connector_version": actual_connector_version,
                 "profiles": completed,
                 "status": "passed",
             },

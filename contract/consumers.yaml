@@ -25,23 +25,21 @@ runnerAdapters:
     runtimeKind: bq-cli
     selectorPrefix: bq
     requiredVersions: [cloudSdk, bq]
-    requiredArtifactUsages: [cloud-sdk-image]
+    requiredArtifactUsages: [cloud-sdk-release-provenance]
     setupOperationIds: [bqemu.health.ready, bqemu.projects.create]
   - id: spark-pyspark-pytest-v1
     family: spark
     runtimeKind: spark-pyspark
     selectorPrefix: pytest
-    requiredVersions: [spark, connector, scalaBinary, java, python]
-    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-connector-dsv2-jar, spark-runtime]
-    bootstrap: {python: "3.11"}
+    requiredVersions: [spark, connector, scala, scalaBinary, java, python]
+    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-connector-dsv2-jar, spark-python-bridge, spark-runtime]
     setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bigquery.datasets.insert]
   - id: spark-scala-shell-v1
     family: spark
     runtimeKind: spark-scala
     selectorPrefix: pytest
-    requiredVersions: [spark, connector, scala, scalaBinary, java]
-    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-runtime]
-    bootstrap: {python: "3.11"}
+    requiredVersions: [spark, connector, scala, scalaBinary, java, python]
+    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-python-bridge, spark-runtime]
     setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bigquery.datasets.insert]
 compatibilityProfiles:
   - id: google-cloud-bigquery-python-public-v1

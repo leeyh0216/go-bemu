@@ -149,19 +149,37 @@ func TestSparkArtifactsAreExactAndHashLocked(t *testing.T) {
 	}
 
 	wantPython := map[string]string{"pyspark": "3.5.8", "py4j": "0.10.9.7"}
-	requirements, err := os.ReadFile("../tests/spark/requirements.lock")
+	normalizedContents, err := os.ReadFile("consumers.normalized.json")
 	if err != nil {
 		t.Fatal(err)
 	}
+	normalized, err := DecodeNormalizedConsumerManifest(normalizedContents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usageByID := map[string]string{"pyspark": "spark-runtime", "py4j": "spark-python-bridge"}
 	for _, artifact := range dsv1.PythonArtifacts {
 		if wantPython[artifact.ID] != artifact.Version || artifact.Size <= 0 ||
 			!strings.HasPrefix(artifact.URL, "https://files.pythonhosted.org/") ||
 			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(artifact.SHA256) {
 			t.Errorf("Python artifact is mutable or incomplete: %#v", artifact)
 		}
-		if !strings.Contains(string(requirements), artifact.ID+" @ "+artifact.URL) ||
-			!strings.Contains(string(requirements), "--hash=sha256:"+artifact.SHA256) {
-			t.Errorf("Spark process requirements drifted from artifact lock: %#v", artifact)
+		for _, consumerCase := range normalized.Cases {
+			if consumerCase.Family != "spark" {
+				continue
+			}
+			matches := 0
+			for _, caseArtifact := range consumerCase.Artifacts {
+				if caseArtifact.Usage == usageByID[artifact.ID] {
+					matches++
+					if caseArtifact.Role != "execution" || caseArtifact.URI != artifact.URL || caseArtifact.SHA256 != artifact.SHA256 {
+						t.Errorf("normalized case %s drifts from Spark artifact lock: %#v", consumerCase.ID, caseArtifact)
+					}
+				}
+			}
+			if matches != 1 {
+				t.Errorf("normalized case %s has %d artifacts for usage %s", consumerCase.ID, matches, usageByID[artifact.ID])
+			}
 		}
 		delete(wantPython, artifact.ID)
 	}

@@ -84,6 +84,7 @@ jobs:
     outputs:
       python: ${{ steps.matrix.outputs.python }}
       bq: ${{ steps.matrix.outputs.bq }}
+      auth: ${{ steps.matrix.outputs.auth }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -95,6 +96,7 @@ jobs:
         run: |
           go run ./cmd/contractctl matrix --root . --family python --lane required --output-key python >> "$GITHUB_OUTPUT"
           go run ./cmd/contractctl matrix --root . --family bq --lane required --output-key bq >> "$GITHUB_OUTPUT"
+          go run ./cmd/contractctl matrix --root . --lane required --output-key auth >> "$GITHUB_OUTPUT"
 
   python-client:
     name: Python / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
@@ -223,30 +225,18 @@ jobs:
     uses: ./.github/workflows/spark-contract.yaml
 
   auth-client-test:
-    name: Credential and TLS / ${{ matrix.case }}
+    name: Credential and TLS / ${{ matrix.id }} / ${{ matrix.runnerAdapter.id }}
+    needs: consumer-matrix
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - case: python
-            python_version: "3.13"
-            setup_target: python-setup
-          - case: bq
-            python_version: ""
-            setup_target: ""
-          - case: pyspark
-            python_version: "3.11"
-            setup_target: auth-spark-setup
-          - case: scala-spark
-            python_version: "3.11"
-            setup_target: auth-spark-setup
+      matrix: ${{ fromJSON(needs.consumer-matrix.outputs.auth) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Prepare case-specific diagnostics
         env:
-          CONSUMER_CASE: ${{ matrix.case }}
+          CONSUMER_CASE: ${{ matrix.id }}
         run: |
           mkdir -p ".artifacts/auth/$CONSUMER_CASE"
           printf '%s\n' \
@@ -258,33 +248,36 @@ jobs:
           go-version-file: go.mod
           cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        if: ${{ matrix.python_version != '' }}
+        if: ${{ matrix.runnerAdapter.runtimeKind != 'bq-cli' }}
         with:
-          python-version: ${{ matrix.python_version }}
+          python-version: ${{ matrix.runtimeProfile.versions.python }}
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        if: ${{ matrix.family == 'spark' }}
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ matrix.runtimeProfile.versions.java }}
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        if: ${{ matrix.setup_target != '' }}
+        if: ${{ matrix.runnerAdapter.runtimeKind != 'bq-cli' }}
         with:
           enable-cache: true
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-        if: ${{ matrix.case == 'bq' }}
+        if: ${{ matrix.runnerAdapter.runtimeKind == 'bq-cli' }}
         with:
-          version: 566.0.0
+          version: ${{ matrix.runtimeProfile.versions.cloudSdk }}
           install_components: bq
-      - name: Verify exact bq consumer version
-        if: ${{ matrix.case == 'bq' }}
-        run: test "$(bq version)" = "This is BigQuery CLI 2.1.31"
-      - name: Install pinned case dependencies
-        if: ${{ matrix.setup_target != '' }}
+      - name: Install Python client dependencies
+        if: ${{ matrix.runnerAdapter.runtimeKind == 'python-pytest' }}
         env:
-          SETUP_TARGET: ${{ matrix.setup_target }}
-        run: make "$SETUP_TARGET"
+          BQEMU_PYTHON_VERSION: ${{ matrix.runtimeProfile.versions.python }}
+        run: make python-setup
+      - name: Install Spark client dependencies
+        if: ${{ matrix.family == 'spark' }}
+        env:
+          BQEMU_SPARK_PYTHON_VERSION: ${{ matrix.runtimeProfile.versions.python }}
+        run: make auth-spark-setup
       - name: Run real-process credential case
         env:
-          CONSUMER_CASE: ${{ matrix.case }}
+          CONSUMER_CASE: ${{ matrix.id }}
         run: |
           make auth-client-test \
             BQEMU_AUTH_CASE="$CONSUMER_CASE" \
@@ -294,8 +287,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: auth-client-${{ matrix.case }}-diagnostics-${{ github.run_id }}
-          path: .artifacts/auth/${{ matrix.case }}
+          name: auth-client-${{ matrix.id }}-diagnostics-${{ github.run_id }}
+          path: .artifacts/auth/${{ matrix.id }}
           if-no-files-found: error
           retention-days: 7
 

@@ -27,6 +27,7 @@ const (
 var (
 	consumerCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	consumerDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	consumerCaseIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 )
 
 type ConsumerManifest struct {
@@ -376,8 +377,11 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 		if consumerCase.SchemaVersion != "1" {
 			return NormalizedConsumerManifest{}, fmt.Errorf("case %s schemaVersion = %q, want 1", consumerCase.ID, consumerCase.SchemaVersion)
 		}
-		if consumerCase.ID == "" || caseIDs[consumerCase.ID] {
-			return NormalizedConsumerManifest{}, fmt.Errorf("duplicate or empty consumer case ID %q", consumerCase.ID)
+		if !consumerCaseIDPattern.MatchString(consumerCase.ID) {
+			return NormalizedConsumerManifest{}, fmt.Errorf("invalid consumer case ID %q", consumerCase.ID)
+		}
+		if caseIDs[consumerCase.ID] {
+			return NormalizedConsumerManifest{}, fmt.Errorf("duplicate consumer case ID %q", consumerCase.ID)
 		}
 		caseIDs[consumerCase.ID] = true
 		if consumerCase.DisplayName == "" || consumerCase.Family == "" {
@@ -412,6 +416,12 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 			if consumerCase.Versions[required] == "" {
 				return NormalizedConsumerManifest{}, fmt.Errorf("case %s is missing runtime version %s required by adapter %s", consumerCase.ID, required, adapter.ID)
 			}
+		}
+		if len(consumerCase.Versions) != len(adapter.RequiredVersions) {
+			return NormalizedConsumerManifest{}, fmt.Errorf("case %s defines runtime versions outside adapter %s", consumerCase.ID, adapter.ID)
+		}
+		if consumerCase.Family == "spark" && !strings.HasPrefix(consumerCase.Versions["scala"], consumerCase.Versions["scalaBinary"]+".") {
+			return NormalizedConsumerManifest{}, fmt.Errorf("case %s Scala runtime does not match its binary version", consumerCase.ID)
 		}
 		for key, version := range consumerCase.Versions {
 			if key == "" || version == "" {
@@ -451,11 +461,11 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 			if !allowedArtifactUsages[artifact.Usage] {
 				return NormalizedConsumerManifest{}, fmt.Errorf("case %s artifact %s usage %s is not accepted by adapter %s", consumerCase.ID, artifact.ID, artifact.Usage, adapter.ID)
 			}
-			if (artifact.Usage == "cloud-sdk-image") != (artifact.Role == "tool-provenance") {
+			if (artifact.Usage == "cloud-sdk-release-provenance") != (artifact.Role == "tool-provenance") {
 				return NormalizedConsumerManifest{}, fmt.Errorf("case %s artifact %s role %s is incompatible with usage %s", consumerCase.ID, artifact.ID, artifact.Role, artifact.Usage)
 			}
-			if strings.HasPrefix(artifact.URI, "oci://") && !strings.Contains(artifact.URI, "@sha256:"+artifact.SHA256) {
-				return NormalizedConsumerManifest{}, fmt.Errorf("case %s OCI artifact %s URI digest does not match its SHA-256", consumerCase.ID, artifact.ID)
+			if err := validateConsumerArtifactURI(artifact); err != nil {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s artifact %s: %w", consumerCase.ID, artifact.ID, err)
 			}
 		}
 		if duplicate := firstDuplicate(artifactIDs); duplicate != "" {
@@ -542,7 +552,7 @@ func validateConsumerOrdering(scenario ConsumerScenario) error {
 
 func validConsumerArtifactUsage(usage string) bool {
 	switch usage {
-	case "python-wheel", "cloud-sdk-image", "spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-runtime":
+	case "python-wheel", "cloud-sdk-release-provenance", "spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-python-bridge", "spark-runtime":
 		return true
 	default:
 		return false
@@ -620,6 +630,9 @@ func MarshalNormalizedConsumerManifest(manifest NormalizedConsumerManifest) ([]b
 }
 
 func DecodeNormalizedConsumerManifest(contents []byte) (NormalizedConsumerManifest, error) {
+	if err := rejectDuplicateJSONKeys(contents); err != nil {
+		return NormalizedConsumerManifest{}, fmt.Errorf("decode normalized consumer manifest: %w", err)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var manifest NormalizedConsumerManifest
@@ -632,7 +645,200 @@ func DecodeNormalizedConsumerManifest(contents []byte) (NormalizedConsumerManife
 	if manifest.SchemaVersion != "1" {
 		return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer schemaVersion = %q, want 1", manifest.SchemaVersion)
 	}
+	seenCaseIDs := make(map[string]bool, len(manifest.Cases))
+	for _, consumerCase := range manifest.Cases {
+		if !consumerCaseIDPattern.MatchString(consumerCase.ID) {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case has unsafe ID %q", consumerCase.ID)
+		}
+		if seenCaseIDs[consumerCase.ID] {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer manifest duplicates case ID %q", consumerCase.ID)
+		}
+		seenCaseIDs[consumerCase.ID] = true
+		if consumerCase.Lane != "required" && consumerCase.Lane != "preview" && consumerCase.Lane != "nightly" {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has unknown lane %q", consumerCase.ID, consumerCase.Lane)
+		}
+		if !validNormalizedRunnerAdapterID(consumerCase.RunnerAdapter.ID) {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has unknown runner adapter %q", consumerCase.ID, consumerCase.RunnerAdapter.ID)
+		}
+		expectedAdapter, _ := normalizedRunnerAdapterContract(consumerCase.RunnerAdapter.ID)
+		if consumerCase.Family == "" || consumerCase.RuntimeProfile.Family != consumerCase.Family || consumerCase.RunnerAdapter.Family != consumerCase.Family || consumerCase.RunnerAdapter.RuntimeKind != consumerCase.RuntimeProfile.Kind {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has a runtime/adapter mismatch", consumerCase.ID)
+		}
+		if consumerCase.RunnerAdapter.Family != expectedAdapter.Family ||
+			consumerCase.RunnerAdapter.RuntimeKind != expectedAdapter.RuntimeKind ||
+			consumerCase.RunnerAdapter.SelectorPrefix != expectedAdapter.SelectorPrefix ||
+			!equalStringSlices(consumerCase.RunnerAdapter.RequiredVersions, expectedAdapter.RequiredVersions) ||
+			!equalStringSlices(consumerCase.RunnerAdapter.RequiredArtifactUsages, expectedAdapter.RequiredArtifactUsages) ||
+			!equalStringMaps(consumerCase.RunnerAdapter.Bootstrap, expectedAdapter.Bootstrap) ||
+			!equalStringSlices(consumerCase.RunnerAdapter.SetupOperationIDs, expectedAdapter.SetupOperationIDs) {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has runner adapter contract drift", consumerCase.ID)
+		}
+		artifactIDs := make(map[string]bool, len(consumerCase.Artifacts))
+		usageCounts := make(map[string]int, len(consumerCase.Artifacts))
+		for _, artifact := range consumerCase.Artifacts {
+			if artifact.ID == "" || artifactIDs[artifact.ID] || !validConsumerArtifactUsage(artifact.Usage) || !stringInSlice(expectedAdapter.RequiredArtifactUsages, artifact.Usage) || !consumerDigestPattern.MatchString(artifact.SHA256) || (artifact.Role != "execution" && artifact.Role != "tool-provenance") {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has an invalid artifact", consumerCase.ID)
+			}
+			if (artifact.Usage == "cloud-sdk-release-provenance") != (artifact.Role == "tool-provenance") {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has an artifact role/usage mismatch", consumerCase.ID)
+			}
+			if err := validateConsumerArtifactURI(artifact); err != nil {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has an invalid artifact URI: %w", consumerCase.ID, err)
+			}
+			artifactIDs[artifact.ID] = true
+			usageCounts[artifact.Usage]++
+		}
+		for _, requiredVersion := range consumerCase.RunnerAdapter.RequiredVersions {
+			if consumerCase.RuntimeProfile.Versions[requiredVersion] == "" {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s is missing runtime version %s", consumerCase.ID, requiredVersion)
+			}
+		}
+		if len(consumerCase.RuntimeProfile.Versions) != len(expectedAdapter.RequiredVersions) {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has runtime version contract drift", consumerCase.ID)
+		}
+		if consumerCase.Family == "spark" && !strings.HasPrefix(consumerCase.RuntimeProfile.Versions["scala"], consumerCase.RuntimeProfile.Versions["scalaBinary"]+".") {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has Scala binary version drift", consumerCase.ID)
+		}
+		for _, requiredUsage := range consumerCase.RunnerAdapter.RequiredArtifactUsages {
+			if !validConsumerArtifactUsage(requiredUsage) || usageCounts[requiredUsage] != 1 {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has invalid artifact cardinality for usage %s", consumerCase.ID, requiredUsage)
+			}
+		}
+	}
 	return manifest, nil
+}
+
+func rejectDuplicateJSONKeys(contents []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	var visit func() error
+	visit = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delimiter, structured := token.(json.Delim)
+		if !structured {
+			return nil
+		}
+		switch delimiter {
+		case '{':
+			seen := make(map[string]bool)
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return errors.New("JSON object key is not a string")
+				}
+				if seen[key] {
+					return fmt.Errorf("duplicate JSON key %q", key)
+				}
+				seen[key] = true
+				if err := visit(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		case '[':
+			for decoder.More() {
+				if err := visit(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		default:
+			return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+		}
+	}
+	return visit()
+}
+
+func validNormalizedRunnerAdapterID(id string) bool {
+	_, ok := normalizedRunnerAdapterContract(id)
+	return ok
+}
+
+func validateConsumerArtifactURI(artifact ConsumerArtifact) error {
+	parsed, err := url.Parse(artifact.URI)
+	if err != nil || parsed.Host == "" {
+		return errors.New("artifact URI must be absolute")
+	}
+	if artifact.Role == "execution" {
+		if parsed.Scheme != "https" {
+			return errors.New("execution artifact URI must use HTTPS")
+		}
+		return nil
+	}
+	if parsed.Scheme != "oci" || !strings.HasSuffix(artifact.URI, "@sha256:"+artifact.SHA256) {
+		return errors.New("provenance artifact must use a digest-pinned OCI URI")
+	}
+	return nil
+}
+
+func normalizedRunnerAdapterContract(id string) (RunnerAdapter, bool) {
+	contracts := map[string]RunnerAdapter{
+		"python-pytest-v1": {
+			ID: "python-pytest-v1", Family: "python", RuntimeKind: "python-pytest", SelectorPrefix: "pytest",
+			RequiredVersions: []string{"python", "client"}, RequiredArtifactUsages: []string{"python-wheel"}, Bootstrap: map[string]string{},
+			SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bqemu.projects.delete"},
+		},
+		"bq-cli-v1": {
+			ID: "bq-cli-v1", Family: "bq", RuntimeKind: "bq-cli", SelectorPrefix: "bq",
+			RequiredVersions: []string{"cloudSdk", "bq"}, RequiredArtifactUsages: []string{"cloud-sdk-release-provenance"}, Bootstrap: map[string]string{},
+			SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create"},
+		},
+		"spark-pyspark-pytest-v1": {
+			ID: "spark-pyspark-pytest-v1", Family: "spark", RuntimeKind: "spark-pyspark", SelectorPrefix: "pytest",
+			RequiredVersions:       []string{"spark", "connector", "scala", "scalaBinary", "java", "python"},
+			RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-python-bridge", "spark-runtime"},
+			Bootstrap:              map[string]string{}, SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bigquery.datasets.insert"},
+		},
+		"spark-scala-shell-v1": {
+			ID: "spark-scala-shell-v1", Family: "spark", RuntimeKind: "spark-scala", SelectorPrefix: "pytest",
+			RequiredVersions:       []string{"spark", "connector", "scala", "scalaBinary", "java", "python"},
+			RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-python-bridge", "spark-runtime"},
+			Bootstrap:              map[string]string{}, SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bigquery.datasets.insert"},
+		},
+	}
+	adapter, ok := contracts[id]
+	return adapter, ok
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringMaps(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func stringInSlice(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func ConsumerMatrix(repositoryRoot, family, lanes string) ([]byte, error) {

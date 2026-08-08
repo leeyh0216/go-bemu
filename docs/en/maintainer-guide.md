@@ -97,6 +97,16 @@ verification. A `tool-provenance` artifact identifies a release but is not
 claimed as the executable installed by CI. Artifact `usage` is a strict adapter
 contract such as `python-wheel` or `spark-connector-dsv1-jar`; the compiler requires
 exactly one artifact for every usage declared by the adapter.
+Every required case is also emitted into the credential and TLS matrix. Its
+runner adapter selects the typed auth process, and the same runtime versions and
+artifact usages drive setup and identity verification.
+
+The bq case is deliberately different: `cloud-sdk-release-provenance` is a
+`tool-provenance` OCI digest and is not executed by the runner. CI installs the
+declared Cloud SDK version through `setup-gcloud`, then the adapter requires the
+exact Cloud SDK and bq component identities from structured `gcloud version`
+output as well as the exact `bq version` identity. Evidence records this
+boundary and never claims that the OCI image is the installed executable.
 
 Required cases block image publication; preview and nightly cases are selected
 by scheduled or manually dispatched workflows and are not part of the release

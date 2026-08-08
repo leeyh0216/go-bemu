@@ -27,6 +27,7 @@ from artifact_variants import (
     DSV2_PROVIDER,
     DSV2_RAW_VARIANT,
     SERVICE_ENTRY,
+    artifact_spec_from_json,
     enforce_connector_classpath,
 )
 
@@ -37,6 +38,21 @@ DIRECT_WRITER_CONTEXT = (
     "com.google.cloud.spark.bigquery.write.context."
     "BigQueryDirectDataSourceWriterContext"
 )
+
+
+def _runtime_versions() -> dict[str, str]:
+    try:
+        versions = json.loads(os.environ["BQEMU_RUNTIME_VERSIONS_JSON"])
+    except (KeyError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            "BQEMU_RUNTIME_VERSIONS_JSON must come from a normalized consumer case"
+        ) from error
+    required = {"spark", "connector", "scala", "scalaBinary", "java", "python"}
+    if not isinstance(versions, dict) or any(
+        not isinstance(versions.get(key), str) or not versions[key] for key in required
+    ):
+        raise RuntimeError("normalized Spark runtime versions are incomplete")
+    return versions
 
 
 def _positive_seconds(value: object, field: str) -> float:
@@ -56,7 +72,7 @@ def _safe_event(*, stage: str, shape: str, status: str, fix_hint: str) -> None:
     print(
         " ".join(
             (
-                "version=0.44.2",
+                f"version={_runtime_versions()['connector']}",
                 "operation=dsv2-raw-streaming",
                 f"stage={stage}",
                 f"shape={shape}",
@@ -157,12 +173,22 @@ def _code_source_path(java_class: Any) -> Path:
 
 
 def _run(config: dict[str, Any]) -> None:
+    versions = _runtime_versions()
     timeout = _positive_seconds(config["testTimeoutSeconds"], "testTimeoutSeconds")
     rpc_timeout = _positive_seconds(config["rpcTimeoutSeconds"], "rpcTimeoutSeconds")
+    try:
+        expected_spec = artifact_spec_from_json(
+            os.environ["BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON"]
+        )
+    except KeyError:
+        raise RuntimeError(
+            "BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON must come from a normalized consumer case"
+        ) from None
     selected = enforce_connector_classpath(
         [Path(str(path)).resolve() for path in config["connectorClasspath"]],
         expected_variant=DSV2_RAW_VARIANT,
         repository_root=REPOSITORY_ROOT,
+        expected_spec=expected_spec,
     )
 
     from pyspark.sql import SparkSession
@@ -221,8 +247,9 @@ def _run(config: dict[str, Any]) -> None:
         provider_source_matches = _code_source_path(provider) == selected.path
         context_source_matches = _code_source_path(context_class) == selected.path
         if (
-            spark.version != "3.5.8"
-            or runtime_scala != "2.12.18"
+            spark.version != versions["spark"]
+            or runtime_scala != versions["scala"]
+            or not runtime_scala.startswith(versions["scalaBinary"] + ".")
             or provider.getName() != DSV2_PROVIDER
             or service_count != 1
             or other_connector_count != 0
@@ -286,8 +313,8 @@ def _run(config: dict[str, Any]) -> None:
         result = {
             "schemaVersion": "1",
             "variant": DSV2_RAW_VARIANT,
-            "sparkVersion": "3.5.8",
-            "scalaVersion": "2.12.18",
+            "sparkVersion": spark.version,
+            "scalaVersion": runtime_scala,
             "provider": "Spark35BigQueryTableProvider",
             "serviceProviderCount": service_count,
             "listedJarCount": listed_jar_count,

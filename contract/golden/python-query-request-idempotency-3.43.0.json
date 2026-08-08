@@ -5,7 +5,7 @@
   "consumerVersion": "3.43.0",
   "fixtureKind": "source-derived",
   "sourceRefs": [
-    "https://github.com/googleapis/python-bigquery/blob/v3.43.0/google/cloud/bigquery/_job_helpers.py#L499-L575",
+    "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/_job_helpers.py#L499-L575",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest"
   ],
   "flow": "python-query-request-idempotency",

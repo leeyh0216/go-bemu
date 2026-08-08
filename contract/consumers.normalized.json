@@ -25,7 +25,7 @@
           "bq"
         ],
         "requiredArtifactUsages": [
-          "cloud-sdk-image"
+          "cloud-sdk-release-provenance"
         ],
         "bootstrap": {},
         "setupOperationIds": [
@@ -181,7 +181,7 @@
         {
           "id": "google-cloud-cli-566.0.0-image-provenance",
           "role": "tool-provenance",
-          "usage": "cloud-sdk-image",
+          "usage": "cloud-sdk-release-provenance",
           "uri": "oci://gcr.io/google.com/cloudsdktool/google-cloud-cli@sha256:80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5",
           "sha256": "80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5"
         }
@@ -407,6 +407,7 @@
           "connector": "0.44.2",
           "java": "17",
           "python": "3.11",
+          "scala": "2.12.18",
           "scalaBinary": "2.12",
           "spark": "3.5.8"
         }
@@ -419,6 +420,7 @@
         "requiredVersions": [
           "spark",
           "connector",
+          "scala",
           "scalaBinary",
           "java",
           "python"
@@ -426,11 +428,10 @@
         "requiredArtifactUsages": [
           "spark-connector-dsv1-jar",
           "spark-connector-dsv2-jar",
+          "spark-python-bridge",
           "spark-runtime"
         ],
-        "bootstrap": {
-          "python": "3.11"
-        },
+        "bootstrap": {},
         "setupOperationIds": [
           "bqemu.health.ready",
           "bqemu.projects.create",
@@ -611,6 +612,13 @@
           "usage": "spark-runtime",
           "uri": "https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz",
           "sha256": "54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c"
+        },
+        {
+          "id": "py4j-0.10.9.7-wheel",
+          "role": "execution",
+          "usage": "spark-python-bridge",
+          "uri": "https://files.pythonhosted.org/packages/10/30/a58b32568f1623aaad7db22aa9eafc4c6c194b429ff35bdc55ca2726da47/py4j-0.10.9.7-py2.py3-none-any.whl",
+          "sha256": "85defdfd2b2376eb3abf5ca6474b51ab7e0de341c75a02f46dc9b5976f5a5c1b"
         }
       ]
     },
@@ -626,6 +634,7 @@
         "versions": {
           "connector": "0.44.2",
           "java": "17",
+          "python": "3.11",
           "scala": "2.12.18",
           "scalaBinary": "2.12",
           "spark": "3.5.8"
@@ -641,15 +650,15 @@
           "connector",
           "scala",
           "scalaBinary",
-          "java"
+          "java",
+          "python"
         ],
         "requiredArtifactUsages": [
           "spark-connector-dsv1-jar",
+          "spark-python-bridge",
           "spark-runtime"
         ],
-        "bootstrap": {
-          "python": "3.11"
-        },
+        "bootstrap": {},
         "setupOperationIds": [
           "bqemu.health.ready",
           "bqemu.projects.create",
@@ -741,6 +750,13 @@
           "usage": "spark-runtime",
           "uri": "https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz",
           "sha256": "54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c"
+        },
+        {
+          "id": "py4j-0.10.9.7-wheel",
+          "role": "execution",
+          "usage": "spark-python-bridge",
+          "uri": "https://files.pythonhosted.org/packages/10/30/a58b32568f1623aaad7db22aa9eafc4c6c194b429ff35bdc55ca2726da47/py4j-0.10.9.7-py2.py3-none-any.whl",
+          "sha256": "85defdfd2b2376eb3abf5ca6474b51ab7e0de341c75a02f46dc9b5976f5a5c1b"
         }
       ]
     }

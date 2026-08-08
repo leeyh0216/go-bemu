@@ -83,7 +83,7 @@ jobs:
           cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.runnerAdapter.bootstrap.python }}
+          python-version: ${{ matrix.runtimeProfile.versions.python }}
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
@@ -92,6 +92,8 @@ jobs:
         with:
           enable-cache: true
       - name: Install locked Spark test runtime
+        env:
+          BQEMU_SPARK_PYTHON_VERSION: ${{ matrix.runtimeProfile.versions.python }}
         run: make spark-prepare
       - name: Run typed TLS REST and gRPC public-edge contract
         env:

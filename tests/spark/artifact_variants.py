@@ -16,11 +16,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
+from typing import Mapping
 from zipfile import BadZipFile, ZipFile
 
 
-CONNECTOR_VERSION = "0.44.2"
 DSV1_VARIANT = "dsv1-with-dependencies-2.12"
 DSV2_RAW_VARIANT = "dsv2-spark-3.5-raw"
 DSV2_PROVIDER = "com.google.cloud.spark.bigquery.v2.Spark35BigQueryTableProvider"
@@ -47,8 +49,8 @@ class SelectedArtifact:
 class ArtifactClasspathError(RuntimeError):
     """Payload-safe connector classpath drift diagnostic."""
 
-    def __init__(self, *, stage: str, shape: str, fingerprint: str, fix_hint: str, version: str = CONNECTOR_VERSION):
-        self.version = version
+    def __init__(self, *, stage: str, shape: str, fingerprint: str, fix_hint: str, version: str | None = None):
+        self.version = version or _runtime_connector_version()
         self.operation = "spark-connector-classpath"
         self.stage = stage
         self.shape = shape
@@ -66,6 +68,86 @@ class ArtifactClasspathError(RuntimeError):
                 )
             )
         )
+
+
+def artifact_spec_from_json(raw: str) -> ArtifactSpec:
+    """Decode the normalized runner's connector spec without inferring fields."""
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        decoded: dict[str, object] = {}
+        for key, value in pairs:
+            if key in decoded:
+                raise ValueError("duplicate field")
+            decoded[key] = value
+        return decoded
+
+    try:
+        decoded = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+    except (json.JSONDecodeError, ValueError):
+        raise ArtifactClasspathError(
+            stage="normalized-spec",
+            shape="invalid-json",
+            fingerprint=_safe_fingerprint("normalized-spec", "invalid-json"),
+            fix_hint="regenerate-the-normalized-consumer-case",
+        ) from None
+    required = {
+        "variant",
+        "output",
+        "size",
+        "sha256",
+        "provider",
+        "connectorVersion",
+    }
+    if not isinstance(decoded, dict) or set(decoded) != required:
+        raise ArtifactClasspathError(
+            stage="normalized-spec",
+            shape="field-set-mismatch",
+            fingerprint=_safe_fingerprint("normalized-spec", "field-set-mismatch"),
+            fix_hint="regenerate-the-normalized-consumer-case",
+        )
+    text_fields = required - {"size"}
+    invalid_size = (
+        not isinstance(decoded["size"], int)
+        or isinstance(decoded["size"], bool)
+        or decoded["size"] <= 0
+    )
+    if (
+        any(
+            not isinstance(decoded[field], str) or not decoded[field]
+            for field in text_fields
+        )
+        or invalid_size
+    ):
+        raise ArtifactClasspathError(
+            stage="normalized-spec",
+            shape="field-type-mismatch",
+            fingerprint=_safe_fingerprint("normalized-spec", "field-type-mismatch"),
+            fix_hint="regenerate-the-normalized-consumer-case",
+        )
+    if re.fullmatch(r"[0-9a-f]{64}", decoded["sha256"]) is None:
+        raise ArtifactClasspathError(
+            stage="normalized-spec",
+            shape="invalid-sha256",
+            fingerprint=_safe_fingerprint("normalized-spec", "invalid-sha256"),
+            fix_hint="pin-the-reviewed-connector-digest",
+        )
+    return ArtifactSpec(
+        variant=decoded["variant"],
+        output=decoded["output"],
+        size=decoded["size"],
+        sha256=decoded["sha256"],
+        provider=decoded["provider"],
+        connector_version=decoded["connectorVersion"],
+    )
+
+
+def _runtime_connector_version() -> str:
+    try:
+        versions = json.loads(os.environ["BQEMU_RUNTIME_VERSIONS_JSON"])
+        version = versions["connector"]
+    except (KeyError, json.JSONDecodeError, TypeError):
+        return "normalized-case-required"
+    return version if isinstance(version, str) and version else "normalized-case-required"
 
 
 def _safe_fingerprint(*parts: str) -> str:
@@ -137,15 +219,35 @@ def load_artifact_specs(repository_root: Path) -> dict[str, ArtifactSpec]:
 
 
 def enforce_connector_classpath(
-    paths: list[Path], *, expected_variant: str, repository_root: Path, expected_spec: ArtifactSpec | None = None
+    paths: list[Path],
+    *,
+    expected_variant: str,
+    repository_root: Path,
+    expected_spec: ArtifactSpec | None = None,
+    recognized_specs: Mapping[str, ArtifactSpec] | None = None,
 ) -> SelectedArtifact:
     """Return the sole exact connector or fail without exposing local paths."""
 
-    specs = (
-        {expected_variant: expected_spec}
-        if expected_spec is not None
-        else load_artifact_specs(repository_root)
-    )
+    if recognized_specs is not None:
+        specs = dict(recognized_specs)
+        if any(key != spec.variant for key, spec in specs.items()):
+            raise ArtifactClasspathError(
+                stage="normalized-spec",
+                shape="variant-key-mismatch",
+                fingerprint=_safe_fingerprint("normalized-spec", "variant-key-mismatch"),
+                fix_hint="regenerate-the-normalized-consumer-case",
+            )
+    elif expected_spec is not None:
+        specs = {expected_variant: expected_spec}
+    else:
+        specs = load_artifact_specs(repository_root)
+    if expected_spec is not None and specs.get(expected_variant) != expected_spec:
+        raise ArtifactClasspathError(
+            stage="normalized-spec",
+            shape="expected-spec-mismatch",
+            fingerprint=_safe_fingerprint("normalized-spec", "expected-spec-mismatch"),
+            fix_hint="use-one-normalized-case-for-the-process",
+        )
     if expected_variant not in specs:
         raise ArtifactClasspathError(
             stage="variant-selection",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import copy
+from dataclasses import replace
 import hashlib
 import io
 import json
@@ -15,7 +15,6 @@ from scripts.consumer_runner import (
     DEFAULT_MANIFEST,
     CaseContext,
     ContractError,
-    _require_artifact,
     _sanitize_junit,
     _scenario_selectors,
     build_adapter,
@@ -24,6 +23,7 @@ from scripts.consumer_runner import (
     load_case,
     load_manifest,
 )
+from scripts.consumer_runtime import ArtifactSpec
 
 
 class ConsumerRunnerTest(unittest.TestCase):
@@ -31,65 +31,92 @@ class ConsumerRunnerTest(unittest.TestCase):
         manifest = load_manifest(DEFAULT_MANIFEST)
         unknown = sorted(
             {
-                case["runnerAdapter"]["id"]
-                for case in manifest["cases"]
-                if case["runnerAdapter"]["id"] not in ADAPTERS
+                case.runner_adapter_id
+                for case in manifest.cases
+                if case.runner_adapter_id not in ADAPTERS
             }
         )
         self.assertEqual(unknown, [])
 
     def test_load_case_reads_normalized_json_and_rejects_unknown_case(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "normalized.json"
-            path.write_text(
-                json.dumps({"schemaVersion": "1", "cases": [{"id": "known"}]}),
-                encoding="utf-8",
-            )
-            self.assertEqual(load_case(path, "known")["id"], "known")
-            with self.assertRaises(ContractError):
-                load_case(path, "missing")
+        known = load_manifest(DEFAULT_MANIFEST).cases[0]
+        self.assertEqual(load_case(DEFAULT_MANIFEST, known.case_id).case_id, known.case_id)
+        with self.assertRaises(ContractError):
+            load_case(DEFAULT_MANIFEST, "missing")
 
     def test_runner_adapter_is_selected_by_explicit_id_not_version(self) -> None:
-        case = {
-            "id": "case",
-            "runnerAdapter": {"id": "python-pytest-v1"},
-            "runtimeProfile": {"versions": {"client": "99.0.0", "python": "99.0"}},
-        }
+        case = replace(
+            _python_case(),
+            case_id="case",
+            versions={"client": "99.0.0", "python": "99.0"},
+        )
         context = CaseContext(case, Path("."), Path(".artifacts/test"))
         self.assertEqual(type(build_adapter(context)).__name__, "PythonPytestAdapter")
-        case["runnerAdapter"]["id"] = "version-inferred-adapter"
+        context = replace(
+            context, case=replace(case, runner_adapter_id="version-inferred-adapter")
+        )
         with self.assertRaises(ContractError):
             build_adapter(context)
 
-    def test_failed_runner_writes_structured_first_operation_diff(self) -> None:
-        case = {
-            "id": "case",
-            "runnerAdapter": {"id": "python-pytest-v1", "setupOperationIds": []},
-            "runtimeProfile": {"versions": {"client": "3.43.0", "python": "3.13"}},
-            "scenarioSet": {
-                "scenarios": [
-                    {
-                        "id": "query",
-                        "operationIds": ["bigquery.jobs.query", "bigquery.jobs.getQueryResults"],
-                        "selectors": ["pytest:tests/python/test_query_contract.py"],
-                        "operationExpectations": [
-                            {"operationId": "bigquery.jobs.query", "min": 1, "max": 0, "after": []},
-                            {
-                                "operationId": "bigquery.jobs.getQueryResults",
-                                "min": 1,
-                                "max": 0,
-                                "after": [],
-                            },
-                        ],
-                    }
-                ]
-            },
-            "artifacts": [],
+    def test_bq_adapter_verifies_bq_and_cloud_sdk_identities(self) -> None:
+        case = load_case(DEFAULT_MANIFEST, "bq-cli-2.1.31")
+        adapter = build_adapter(CaseContext(case, Path("."), Path(".artifacts/test")))
+        cloud_versions = {
+            "Google Cloud SDK": case.versions["cloudSdk"],
+            "bq": case.versions["bq"],
         }
+        with mock.patch.object(
+            adapter,
+            "_run",
+            side_effect=[
+                subprocess.CompletedProcess(
+                    [], 0, f"This is BigQuery CLI {case.versions['bq']}\n", ""
+                ),
+                subprocess.CompletedProcess([], 0, json.dumps(cloud_versions), ""),
+            ],
+        ):
+            adapter.verify_identity()
+
+        self.assertEqual(
+            adapter.artifact_evidence[0]["usage"],
+            "cloud-sdk-release-provenance",
+        )
+        self.assertEqual(
+            adapter.artifact_evidence[0]["status"],
+            "tool-version-identity-matched",
+        )
+
+    def test_failed_runner_writes_structured_first_operation_diff(self) -> None:
+        case = replace(
+            _python_case(),
+            case_id="case",
+            setup_operation_ids=(),
+            scenarios=(
+                {
+                    "id": "query",
+                    "operationIds": ["bigquery.jobs.query", "bigquery.jobs.getQueryResults"],
+                    "selectors": ["pytest:tests/python/test_query_contract.py"],
+                    "operationExpectations": [
+                        {"operationId": "bigquery.jobs.query", "min": 1, "max": 0, "after": []},
+                        {
+                            "operationId": "bigquery.jobs.getQueryResults",
+                            "min": 1,
+                            "max": 0,
+                            "after": [],
+                        },
+                    ],
+                },
+            ),
+        )
         with tempfile.TemporaryDirectory() as directory:
             context = CaseContext(case, Path("."), Path(directory))
             adapter = build_adapter(context)
-            with mock.patch.object(adapter, "verify_identity", side_effect=ContractError("drift")):
+            with (
+                mock.patch.object(adapter, "prepare"),
+                mock.patch.object(
+                    adapter, "verify_identity", side_effect=ContractError("drift")
+                ),
+            ):
                 self.assertEqual(adapter.run(), 1)
             diff = json.loads((Path(directory) / "diff.json").read_text(encoding="utf-8"))
             self.assertEqual(diff["scenarioId"], "query")
@@ -218,28 +245,24 @@ class ConsumerRunnerTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            case = {
-                "id": "case",
-                "runnerAdapter": {"id": "python-pytest-v1", "setupOperationIds": []},
-                "runtimeProfile": {"versions": {}},
-            }
+            case = replace(
+                _python_case(), case_id="case", setup_operation_ids=()
+            )
             events = collect_actual_events(CaseContext(case, root, artifacts), [scenario])
             self.assertEqual(events[0]["phase"], "unexpected-response")
             self.assertEqual(events[0]["requestShape"], "ambiguous server run boundary")
 
     def test_successful_process_fails_when_declared_operation_was_not_observed(self) -> None:
-        case = {
-            "id": "case",
-            "runnerAdapter": {"id": "python-pytest-v1", "setupOperationIds": []},
-            "runtimeProfile": {"versions": {"client": "3.43.0", "python": "3.13"}},
-            "scenarioSet": {
-                "scenarios": [
-                    _scenario(
-                        [{"operationId": "bigquery.jobs.query", "min": 1, "max": 0, "after": []}]
-                    )
-                ]
-            },
-        }
+        case = replace(
+            _python_case(),
+            case_id="case",
+            setup_operation_ids=(),
+            scenarios=(
+                _scenario(
+                    [{"operationId": "bigquery.jobs.query", "min": 1, "max": 0, "after": []}]
+                ),
+            ),
+        )
         with tempfile.TemporaryDirectory() as directory:
             context = CaseContext(case, Path("."), Path(directory))
             adapter = build_adapter(context)
@@ -251,23 +274,20 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(diff["field"], "cardinality")
 
     def test_scenario_selectors_are_deduplicated_and_adapter_typed(self) -> None:
-        case = {
-            "id": "case",
-            "runnerAdapter": {"id": "python-pytest-v1"},
-            "runtimeProfile": {"versions": {}},
-            "scenarioSet": {
-                "scenarios": [
-                    {"id": "one", "selectors": ["pytest:tests/python/test_one.py"]},
-                    {
-                        "id": "two",
-                        "selectors": [
-                            "pytest:tests/python/test_one.py",
-                            "pytest:tests/python/test_two.py",
-                        ],
-                    },
-                ]
-            },
-        }
+        case = replace(
+            _python_case(),
+            case_id="case",
+            scenarios=(
+                {"id": "one", "selectors": ["pytest:tests/python/test_one.py"]},
+                {
+                    "id": "two",
+                    "selectors": [
+                        "pytest:tests/python/test_one.py",
+                        "pytest:tests/python/test_two.py",
+                    ],
+                },
+            ),
+        )
         context = CaseContext(case, Path("."), Path(".artifacts/test"))
         self.assertEqual(
             _scenario_selectors(context, "pytest"),
@@ -276,58 +296,47 @@ class ConsumerRunnerTest(unittest.TestCase):
         with self.assertRaises(ContractError):
             _scenario_selectors(context, "bq")
 
-    def test_typed_artifact_lookup_rejects_zero_or_multiple_matches(self) -> None:
-        case = {
-            "id": "case",
-            "runnerAdapter": {"id": "python-pytest-v1"},
-            "runtimeProfile": {"versions": {}},
-            "artifacts": [],
-        }
-        context = CaseContext(case, Path("."), Path(".artifacts/test"))
-        with self.assertRaises(ContractError):
-            _require_artifact(context, "python-wheel")
-        case["artifacts"] = [
-            {"id": "one", "usage": "python-wheel"},
-            {"id": "two", "usage": "python-wheel"},
-        ]
-        with self.assertRaises(ContractError):
-            _require_artifact(context, "python-wheel")
-
     def test_new_connector_patch_row_uses_same_adapter_and_materializes_declared_jar(self) -> None:
         base = load_case(DEFAULT_MANIFEST, "spark-pyspark-3.5.8-connector-0.44.2")
-        case = copy.deepcopy(base)
-        case["id"] = "spark-pyspark-3.5.8-connector-0.44.3"
-        case["runtimeProfile"]["versions"]["connector"] = "0.44.3"
         contents = b"new connector patch"
         digest = hashlib.sha256(contents).hexdigest()
-        case["artifacts"][0] = {
-            "id": "spark-bigquery-connector-0.44.3-jar",
-            "role": "execution",
-            "usage": "spark-connector-dsv1-jar",
-            "uri": "https://example.invalid/spark-bigquery-0.44.3.jar",
-            "sha256": digest,
-        }
-        case["artifacts"][1] = {
-            "id": "spark-bigquery-connector-0.44.3-dsv2-jar",
-            "role": "execution",
-            "usage": "spark-connector-dsv2-jar",
-            "uri": "https://example.invalid/spark-bigquery-dsv2-0.44.3.jar",
-            "sha256": digest,
-        }
+        artifacts = tuple(
+            ArtifactSpec(
+                artifact_id=artifact.artifact_id + "-patch",
+                role=artifact.role,
+                usage=artifact.usage,
+                uri=f"https://example.invalid/{artifact.usage}.artifact",
+                sha256=digest,
+            )
+            for artifact in base.artifacts
+        )
+        versions = dict(base.versions)
+        versions["connector"] = "0.44.3"
+        case = replace(
+            base,
+            case_id="spark-pyspark-3.5.8-connector-0.44.3",
+            versions=versions,
+            artifacts=artifacts,
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             context = CaseContext(case, root, root / "evidence")
             adapter = build_adapter(context)
             self.assertEqual(type(adapter).__name__, "SparkPytestAdapter")
-            with mock.patch(
-                "scripts.consumer_runner.urllib.request.urlopen",
-                side_effect=[io.BytesIO(contents), io.BytesIO(contents)],
+            with (
+                mock.patch(
+                    "scripts.consumer_runtime.urllib.request.urlopen",
+                    side_effect=[io.BytesIO(contents) for _ in artifacts],
+                ),
+                mock.patch("scripts.consumer_runner._install_case_python_artifact"),
             ):
                 adapter.prepare()
             self.assertEqual(adapter.connector_path.read_bytes(), contents)
-            self.assertEqual(adapter.artifact_evidence[0]["sha256"], digest)
+            self.assertEqual(adapter.artifact_evidence[0]["usage"], "spark-python-bridge")
+            self.assertEqual(adapter.artifact_evidence[1]["usage"], "spark-runtime")
+            self.assertEqual(adapter.artifact_evidence[2]["sha256"], digest)
             self.assertEqual(adapter.dsv2_connector_path.read_bytes(), contents)
-            self.assertEqual(adapter.artifact_evidence[1]["sha256"], digest)
+            self.assertEqual(adapter.artifact_evidence[3]["sha256"], digest)
 
     def test_junit_redaction_never_persists_consumer_output(self) -> None:
         secret = "authorization: Bearer future-credential"
@@ -359,11 +368,7 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertIn("output_digest=sha256:", contents)
 
     def test_cleanup_runs_when_evidence_collection_fails(self) -> None:
-        case = {
-            "id": "case",
-            "runnerAdapter": {"id": "python-pytest-v1"},
-            "runtimeProfile": {"versions": {}},
-        }
+        case = replace(_python_case(), case_id="case")
         with tempfile.TemporaryDirectory() as directory:
             context = CaseContext(case, Path("."), Path(directory))
             adapter = build_adapter(context)
@@ -383,8 +388,64 @@ class ConsumerRunnerTest(unittest.TestCase):
                 self.assertEqual(adapter.run(), 1)
             cleanup.assert_called_once_with()
             self.assertTrue((Path(directory) / "junit.xml").is_file())
+            evidence = json.loads(
+                (Path(directory) / "evidence.json").read_text(encoding="utf-8")
+            )
+            difference = json.loads(
+                (Path(directory) / "diff.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(evidence["exitCode"], 1)
+            self.assertEqual(evidence["comparison"]["status"], "unavailable")
+            self.assertEqual(difference["field"], "evidence.collection")
+            self.assertIn('failures="1"', (Path(directory) / "junit.xml").read_text())
             error = (Path(directory) / "runner-error.txt").read_text(encoding="utf-8")
             self.assertNotIn("evidence secret", error)
+
+    def test_cleanup_failure_is_reflected_in_evidence_diff_and_junit(self) -> None:
+        scenario = _scenario(
+            [
+                {
+                    "operationId": "bigquery.jobs.query",
+                    "min": 0,
+                    "max": 0,
+                    "after": [],
+                }
+            ]
+        )
+        case = replace(_python_case(), case_id="case", scenarios=(scenario,))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "contract").mkdir()
+            (root / "contract" / "operations.normalized.json").write_text(
+                json.dumps({"operations": []}), encoding="utf-8"
+            )
+            context = CaseContext(case, root, root / "artifacts")
+            adapter = build_adapter(context)
+            with (
+                mock.patch.object(adapter, "prepare"),
+                mock.patch.object(adapter, "verify_identity"),
+                mock.patch.object(
+                    adapter,
+                    "execute_scenario",
+                    return_value=subprocess.CompletedProcess([], 0, "", ""),
+                ),
+                mock.patch.object(
+                    adapter, "cleanup", side_effect=ContractError("cleanup secret")
+                ),
+            ):
+                self.assertEqual(adapter.run(), 1)
+
+            evidence = json.loads(
+                (context.artifact_root / "evidence.json").read_text(encoding="utf-8")
+            )
+            difference = json.loads(
+                (context.artifact_root / "diff.json").read_text(encoding="utf-8")
+            )
+            junit = (context.artifact_root / "junit.xml").read_text(encoding="utf-8")
+            self.assertEqual(evidence["exitCode"], 1)
+            self.assertEqual(difference["field"], "process.exitCode")
+            self.assertIn('failures="1"', junit)
+            self.assertNotIn("cleanup secret", junit)
 
 
 def _scenario(expectations: list[dict[str, object]]) -> dict[str, object]:
@@ -394,6 +455,10 @@ def _scenario(expectations: list[dict[str, object]]) -> dict[str, object]:
         "selectors": ["pytest:tests/python/test_query_contract.py"],
         "operationExpectations": expectations,
     }
+
+
+def _python_case():
+    return load_case(DEFAULT_MANIFEST, "google-cloud-bigquery-python-3.43.0")
 
 
 def _event(operation_id: str, *, run_id: str = "run", run_seq: int = 1) -> dict[str, object]:
