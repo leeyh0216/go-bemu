@@ -115,14 +115,11 @@ fails without starting a physical write.
 <!-- section: query-storage -->
 ## Query and Storage Ports
 
-Connector-version-specific SQL semantics do not belong in a storage engine
-adapter. The [Spark BigQuery connector
-`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)
-analyzer lives in
-[`internal/adapters/sparkbigquery/v0442`](../../internal/adapters/sparkbigquery/v0442).
-It creates a typed operation bound to the raw-text digest, profile, default
-dataset, and options. The engine executor accepts that operation and does not
-reparse the raw SQL.
+SQL enters through the GoogleSQL gateway once. The gateway returns an immutable,
+engine-neutral semantic statement whose relations and expression types are
+already bound to canonical catalog metadata. An engine adapter visits that
+statement and creates a private physical plan; it must not tokenize, reparse, or
+infer unresolved table paths from the original SQL.
 
 Storage Read and Storage Write implementations also satisfy consumer-owned
 resolver and factory ports. Keep the new engine concrete type from crossing

@@ -107,13 +107,11 @@
 <!-- section: query-storage -->
 ## 쿼리와 Storage 포트
 
-커넥터 버전에 종속된 SQL 의미 분석은 저장 엔진 어댑터에 두지 않습니다. [Spark
-BigQuery 커넥터 `0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)
-분석기는
-[`internal/adapters/sparkbigquery/v0442`](../../internal/adapters/sparkbigquery/v0442)에
-있습니다. 분석기는 원문 지문, 프로필, 기본 데이터 세트와 옵션을 결합한 타입 기반
-작업을 만듭니다. 엔진 실행기는 이 작업을 받아 실행하며 원문 SQL을 다시 해석하지
-않습니다.
+SQL은 GoogleSQL gateway에서 한 번만 해석합니다. Gateway는 relation과 expression
+type이 canonical catalog metadata에 이미 결합된 불변의 engine-neutral semantic
+statement를 반환합니다. 엔진 어댑터는 이 statement를 방문해 비공개 물리 plan을
+만들며, 원문 SQL을 tokenize 또는 재파싱하거나 미해결 table path를 추론해서는 안
+됩니다.
 
 Storage Read와 Storage Write 구현도 소비자가 소유한 `resolver`와 `factory` 포트를
 구현합니다. 새 엔진의 구체 타입이 `cmd/emulator`의 조립 함수 밖으로 넘어가지 않도록

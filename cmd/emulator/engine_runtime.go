@@ -29,7 +29,6 @@ type engineRuntimeDescriptor struct {
 	DDL                   ports.DDLStorage
 	Query                 ports.QueryEngine
 	QueryAnalyzer         ports.QueryAnalyzer
-	QueryOperations       ports.QueryOperationEngine
 	QueryMaterializer     ports.QueryMaterializer
 	StatementExecutor     ports.StatementExecutor
 	StatementMaterializer ports.StatementMaterializer
@@ -47,7 +46,6 @@ type engineRuntime struct {
 	ddl                   ports.DDLStorage
 	query                 ports.QueryEngine
 	queryAnalyzer         ports.QueryAnalyzer
-	queryOperations       ports.QueryOperationEngine
 	queryMaterializer     ports.QueryMaterializer
 	statementExecutor     ports.StatementExecutor
 	statementMaterializer ports.StatementMaterializer
@@ -72,7 +70,6 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 		{name: "DDL storage", value: descriptor.DDL},
 		{name: "query engine", value: descriptor.Query},
 		{name: "query analyzer", value: descriptor.QueryAnalyzer},
-		{name: "semantic query executor", value: descriptor.QueryOperations},
 		{name: "query materializer", value: descriptor.QueryMaterializer},
 		{name: "analyzed statement executor", value: descriptor.StatementExecutor},
 		{name: "analyzed statement materializer", value: descriptor.StatementMaterializer},
@@ -90,7 +87,7 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 		capabilities: capabilities,
 		health:       descriptor.Health, catalog: descriptor.Catalog, ddl: descriptor.DDL,
 		query: descriptor.Query, queryAnalyzer: descriptor.QueryAnalyzer,
-		queryOperations: descriptor.QueryOperations, queryMaterializer: descriptor.QueryMaterializer,
+		queryMaterializer: descriptor.QueryMaterializer,
 		statementExecutor: descriptor.StatementExecutor, statementMaterializer: descriptor.StatementMaterializer,
 		tableData: descriptor.TableData, loader: descriptor.Loader,
 		readFactory: descriptor.ReadFactory, writeFactory: descriptor.WriteFactory,
@@ -106,7 +103,7 @@ func composeDuckDBEngine(dsn string) (*engineRuntime, error) {
 	runtime, err := newEngineRuntime(engineRuntimeDescriptor{
 		Capabilities: warehouse.Capabilities(),
 		Health:       warehouse, Catalog: warehouse, DDL: warehouse,
-		Query: warehouse, QueryAnalyzer: warehouse, QueryOperations: warehouse, QueryMaterializer: warehouse,
+		Query: warehouse, QueryAnalyzer: warehouse, QueryMaterializer: warehouse,
 		StatementExecutor: warehouse, StatementMaterializer: warehouse,
 		TableData: warehouse, Loader: warehouse, ReadFactory: warehouse, WriteFactory: warehouse,
 		Lifecycle: warehouse,

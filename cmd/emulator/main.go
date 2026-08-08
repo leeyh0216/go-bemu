@@ -26,7 +26,6 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
-	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/admin"
 	"github.com/leeyh0216/go-bemu/internal/application"
@@ -102,7 +101,6 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	ddlStorage := storageEngine.ddl
 	queryEngine := storageEngine.query
 	queryFallbackAnalyzer := storageEngine.queryAnalyzer
-	queryOperationEngine := storageEngine.queryOperations
 	queryMaterializer := storageEngine.queryMaterializer
 	statementExecutor := storageEngine.statementExecutor
 	statementMaterializer := storageEngine.statementMaterializer
@@ -134,18 +132,14 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := ensureDefaultProject(ctx, catalogService, cfg.Defaults.ProjectID); err != nil {
 		return fmt.Errorf("initialize default project: %w", err)
 	}
-	queryAnalyzer, err := v0442.NewAnalyzer(queryFallbackAnalyzer)
-	if err != nil {
-		return fmt.Errorf("configure Spark BigQuery query profiles: %w", err)
-	}
 	googleSQLGateway, err := googlesqladapter.NewGateway(catalogService)
 	if err != nil {
 		return fmt.Errorf("configure GoogleSQL analyzer gateway: %w", err)
 	}
 	queryService, err := application.NewQueryService(
-		jobRepository, queryEngine, queryAnalyzer, queryOperationEngine, catalogService, clock, system.IDGenerator{},
+		jobRepository, queryEngine, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
-		application.WithQueryAnalyzer(queryAnalyzer),
+		application.WithQueryAnalyzer(queryFallbackAnalyzer),
 		application.WithGoogleSQLGateway(googleSQLGateway),
 		application.WithStatementExecutor(statementExecutor),
 		application.WithStatementMaterializer(statementMaterializer),

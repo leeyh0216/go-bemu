@@ -8,9 +8,8 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
-// WithQueryDDLParser installs the GoogleSQL syntax boundary. Connector-owned
-// operations are recognized first so their pinned version adapters keep
-// ownership of their generated scripts.
+// WithQueryDDLParser installs the legacy DDL syntax boundary for test-only
+// compositions that have not installed GoogleSQLGateway.
 func WithQueryDDLParser(parser ports.DDLParser) QueryOption {
 	return func(service *QueryService) { service.ddlParser = parser }
 }
@@ -24,16 +23,6 @@ func (s *QueryService) analyzeQueryAdmission(
 	ctx context.Context,
 	request ports.QueryRequest,
 ) (ports.QueryAnalysis, error) {
-	operation, operationMatched, err := s.operationAnalyzer.AnalyzeQueryOperation(ctx, request)
-	if err != nil {
-		return ports.QueryAnalysis{}, err
-	}
-	if operationMatched {
-		return ports.QueryAnalysis{
-			ReferencedTables: []domain.TableReference{operation.Destination(), operation.Source()},
-			MutationTargets:  []domain.TableReference{operation.Destination()},
-		}, nil
-	}
 	if s.ddlParser != nil {
 		command, matched, err := s.ddlParser.ParseDDL(ctx, request)
 		if err != nil {
@@ -85,4 +74,16 @@ func (s *QueryService) executeDDLOrGenericQuery(
 		}
 	}
 	return s.warehouse.Query(ctx, request)
+}
+
+func (s *QueryService) executeQueryWithoutDestination(ctx context.Context, request ports.QueryRequest) (domain.QueryResult, error) {
+	return s.executeQueryWithoutDestinationForJob(ctx, request, "query")
+}
+
+func (s *QueryService) executeQueryWithoutDestinationForJob(
+	ctx context.Context,
+	request ports.QueryRequest,
+	correlationID string,
+) (domain.QueryResult, error) {
+	return s.executeDDLOrGenericQuery(ctx, request, correlationID)
 }

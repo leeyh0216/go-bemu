@@ -1,17 +1,7 @@
 package rest
 
-// End-to-end contract for the REST half of Spark direct overwrite.
-//
-// The connector commits its temporary table through Storage Write first, then
-// submits the constant-false MERGE as a query job, polls that job, and deletes
-// the temporary table. This test starts at the public HTTP transport and uses a
-// real DuckDB warehouse so routing, job state, the versioned SQL adapter, and
-// cleanup cannot drift independently.
-//
-// Sources:
-//   - connector 0.44.2: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java
-//   - jobs.insert: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert
-//   - jobs.get: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/get
+// Public REST contract for a constant-false GoogleSQL MERGE submitted through
+// the standard query job lifecycle.
 
 import (
 	"bytes"
@@ -26,12 +16,12 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
-	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/application"
 )
 
-func TestSparkStaticOverwriteCrossesRESTJobLifecycle(t *testing.T) {
+func TestConstantFalseMergeCrossesRESTJobLifecycle(t *testing.T) {
 	ctx, cancel := staticOverwriteRESTTestContext(t)
 	defer cancel()
 	warehouse, err := duckdb.New("")
@@ -41,14 +31,17 @@ func TestSparkStaticOverwriteCrossesRESTJobLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = warehouse.Close() })
 	clock := testClock{value: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
-	analyzer, err := v0442.NewAnalyzer(warehouse)
+	gateway, err := googlesqladapter.NewGateway(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
 	queries, err := application.NewQueryService(
-		memory.NewJobRepository(), warehouse, analyzer, warehouse, catalog, clock, &testIDs{},
-		application.WithQueryAnalyzer(analyzer), application.WithQueryDestinationCatalog(catalog),
-		application.WithQueryMaterializer(warehouse),
+		memory.NewJobRepository(), warehouse, clock, &testIDs{},
+		application.WithGoogleSQLGateway(gateway),
+		application.WithStatementExecutor(warehouse),
+		application.WithStatementMaterializer(warehouse),
+		application.WithQueryDDLExecutor(catalog),
+		application.WithQueryDestinationCatalog(catalog),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +77,7 @@ func TestSparkStaticOverwriteCrossesRESTJobLifecycle(t *testing.T) {
 		"WHEN NOT MATCHED THEN INSERT ROW\n" +
 		"WHEN NOT MATCHED BY SOURCE THEN DELETE"
 	jobBody, err := json.Marshal(map[string]any{
-		"jobReference":  map[string]any{"projectId": "test-project", "jobId": "spark-overwrite-0442", "location": "US"},
+		"jobReference":  map[string]any{"projectId": "test-project", "jobId": "merge-overwrite", "location": "US"},
 		"configuration": map[string]any{"query": map[string]any{"query": merge, "useLegacySql": false}},
 	})
 	if err != nil {
@@ -93,7 +86,7 @@ func TestSparkStaticOverwriteCrossesRESTJobLifecycle(t *testing.T) {
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", string(jobBody), http.StatusOK)
 
 	for {
-		job := request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs/spark-overwrite-0442?location=US", "", http.StatusOK)
+		job := request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs/merge-overwrite?location=US", "", http.StatusOK)
 		status := job["status"].(map[string]any)
 		if status["state"] == "DONE" {
 			if status["errorResult"] != nil {

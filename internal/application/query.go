@@ -47,9 +47,6 @@ type QueryService struct {
 	jobs                  ports.JobRepository
 	warehouse             ports.QueryEngine
 	analyzer              ports.QueryAnalyzer
-	operationAnalyzer     ports.QueryOperationAnalyzer
-	operationExecutor     ports.QueryOperationEngine
-	operationCatalog      ports.QueryOperationCatalog
 	googleSQLGateway      ports.GoogleSQLGateway
 	statementExecutor     ports.StatementExecutor
 	statementMaterializer ports.StatementMaterializer
@@ -165,14 +162,11 @@ func WithQueryCompensationTimeout(timeout time.Duration) QueryOption {
 	}
 }
 
-// NewQueryService requires connector semantic ports explicitly. Generic query
-// execution and connector command parsing remain independently replaceable.
+// NewQueryService owns the query job lifecycle. GoogleSQL analysis and typed
+// execution are installed explicitly through options at the composition root.
 func NewQueryService(
 	jobs ports.JobRepository,
 	warehouse ports.QueryEngine,
-	operationAnalyzer ports.QueryOperationAnalyzer,
-	operationExecutor ports.QueryOperationEngine,
-	operationCatalog ports.QueryOperationCatalog,
 	clock ports.Clock,
 	ids ports.IDGenerator,
 	options ...QueryOption,
@@ -183,9 +177,6 @@ func NewQueryService(
 	}{
 		{name: "job repository", value: jobs},
 		{name: "query engine", value: warehouse},
-		{name: "semantic query analyzer", value: operationAnalyzer},
-		{name: "semantic query executor", value: operationExecutor},
-		{name: "semantic query catalog", value: operationCatalog},
 		{name: "clock", value: clock},
 		{name: "ID generator", value: ids},
 	} {
@@ -203,7 +194,6 @@ func NewQueryService(
 	close(idle)
 	service := &QueryService{
 		jobs: jobs, warehouse: warehouse,
-		operationAnalyzer: operationAnalyzer, operationExecutor: operationExecutor, operationCatalog: operationCatalog,
 		clock: clock, ids: ids,
 		defaultLocation: "US", anonymousTTL: 24 * time.Hour,
 		operationTimeout: 2 * time.Minute, compensationTimeout: 30 * time.Second,
