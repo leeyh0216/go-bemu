@@ -104,6 +104,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	queryFallbackAnalyzer := storageEngine.queryAnalyzer
 	queryOperationEngine := storageEngine.queryOperations
 	queryMaterializer := storageEngine.queryMaterializer
+	statementExecutor := storageEngine.statementExecutor
+	statementMaterializer := storageEngine.statementMaterializer
 	tableDataReader := storageEngine.tableData
 	loader := storageEngine.loader
 	readFactory := storageEngine.readFactory
@@ -140,10 +142,17 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure GoogleSQL DDL parser: %w", err)
 	}
+	googleSQLGateway, err := googlesqladapter.NewGateway(catalogService)
+	if err != nil {
+		return fmt.Errorf("configure GoogleSQL analyzer gateway: %w", err)
+	}
 	queryService, err := application.NewQueryService(
 		jobRepository, queryEngine, queryAnalyzer, queryOperationEngine, catalogService, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
 		application.WithQueryAnalyzer(queryAnalyzer),
+		application.WithGoogleSQLGateway(googleSQLGateway),
+		application.WithStatementExecutor(statementExecutor),
+		application.WithStatementMaterializer(statementMaterializer),
 		application.WithQueryDDLParser(ddlParser),
 		application.WithQueryDDLExecutor(catalogService),
 		application.WithQueryMaterializer(queryMaterializer),

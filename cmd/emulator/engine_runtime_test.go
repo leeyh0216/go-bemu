@@ -53,18 +53,20 @@ func TestEngineRuntimeRejectsZeroAndTypedNilDependencies(t *testing.T) {
 
 	var typedNil *duckdb.Warehouse
 	for name, mutate := range map[string]func(*engineRuntimeDescriptor){
-		"health":             func(value *engineRuntimeDescriptor) { value.Health = typedNil },
-		"catalog":            func(value *engineRuntimeDescriptor) { value.Catalog = typedNil },
-		"DDL":                func(value *engineRuntimeDescriptor) { value.DDL = typedNil },
-		"query":              func(value *engineRuntimeDescriptor) { value.Query = typedNil },
-		"query analyzer":     func(value *engineRuntimeDescriptor) { value.QueryAnalyzer = typedNil },
-		"query operations":   func(value *engineRuntimeDescriptor) { value.QueryOperations = typedNil },
-		"query materializer": func(value *engineRuntimeDescriptor) { value.QueryMaterializer = typedNil },
-		"table data":         func(value *engineRuntimeDescriptor) { value.TableData = typedNil },
-		"loader":             func(value *engineRuntimeDescriptor) { value.Loader = typedNil },
-		"read factory":       func(value *engineRuntimeDescriptor) { value.ReadFactory = typedNil },
-		"write factory":      func(value *engineRuntimeDescriptor) { value.WriteFactory = typedNil },
-		"lifecycle":          func(value *engineRuntimeDescriptor) { value.Lifecycle = typedNil },
+		"health":                 func(value *engineRuntimeDescriptor) { value.Health = typedNil },
+		"catalog":                func(value *engineRuntimeDescriptor) { value.Catalog = typedNil },
+		"DDL":                    func(value *engineRuntimeDescriptor) { value.DDL = typedNil },
+		"query":                  func(value *engineRuntimeDescriptor) { value.Query = typedNil },
+		"query analyzer":         func(value *engineRuntimeDescriptor) { value.QueryAnalyzer = typedNil },
+		"query operations":       func(value *engineRuntimeDescriptor) { value.QueryOperations = typedNil },
+		"query materializer":     func(value *engineRuntimeDescriptor) { value.QueryMaterializer = typedNil },
+		"statement executor":     func(value *engineRuntimeDescriptor) { value.StatementExecutor = typedNil },
+		"statement materializer": func(value *engineRuntimeDescriptor) { value.StatementMaterializer = typedNil },
+		"table data":             func(value *engineRuntimeDescriptor) { value.TableData = typedNil },
+		"loader":                 func(value *engineRuntimeDescriptor) { value.Loader = typedNil },
+		"read factory":           func(value *engineRuntimeDescriptor) { value.ReadFactory = typedNil },
+		"write factory":          func(value *engineRuntimeDescriptor) { value.WriteFactory = typedNil },
+		"lifecycle":              func(value *engineRuntimeDescriptor) { value.Lifecycle = typedNil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			descriptor := baseline
@@ -83,6 +85,7 @@ func descriptorFromRuntime(runtime *engineRuntime) engineRuntimeDescriptor {
 		Health:       runtime.health, Catalog: runtime.catalog, DDL: runtime.ddl,
 		Query: runtime.query, QueryAnalyzer: runtime.queryAnalyzer,
 		QueryOperations: runtime.queryOperations, QueryMaterializer: runtime.queryMaterializer,
+		StatementExecutor: runtime.statementExecutor, StatementMaterializer: runtime.statementMaterializer,
 		TableData: runtime.tableData, Loader: runtime.loader,
 		ReadFactory: runtime.readFactory, WriteFactory: runtime.writeFactory,
 		Lifecycle: runtime.lifecycle,
