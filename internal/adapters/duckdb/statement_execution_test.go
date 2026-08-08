@@ -355,6 +355,57 @@ func TestMaterializeStatementUsesCanonicalAnonymousOutputName(t *testing.T) {
 	}
 }
 
+func TestExecuteStatementBindsExactNumericAndBigNumericLiterals(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	fixture := newRendererASTFixture(t)
+	const numeric = "12345678901234567890123456789.123456789"
+	const bigNumeric = "12345678901234567890.123456789012345678"
+	body := fixture.selectBody(
+		fixture.selectItem(fixture.decimal(queryast.TypeNumeric, numeric), "numeric_value"),
+		fixture.selectItem(fixture.decimal(queryast.TypeBigNumeric, bigNumeric), "bignumeric_value"),
+	)
+	query, err := queryast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syntax, err := queryast.NewSelectStatement(fixture.source(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := fixture.semanticStatementWithOutput(syntax, nil, []semantic.ColumnDescriptor{
+		semanticScalarColumn(t, "numeric_value", semantic.TypeNumeric),
+		semanticScalarColumn(t, "bignumeric_value", semantic.TypeBigNumeric),
+	})
+	plan, err := lowerDuckDBStatement(statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, literal := range []string{numeric, bigNumeric} {
+		if strings.Contains(plan.statementSQL(), literal) {
+			t.Fatalf("decimal literal leaked into generated SQL: %s", plan.statementSQL())
+		}
+	}
+	if want := `SELECT CAST(? AS DECIMAL(38,9)) AS "numeric_value", CAST(? AS DECIMAL(38,18)) AS "bignumeric_value"`; plan.statementSQL() != want {
+		t.Fatalf("decimal plan = %q, want %q", plan.statementSQL(), want)
+	}
+
+	result, err := warehouse.ExecuteStatement(ctx, statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != numeric || result.Rows[0][1] != bigNumeric {
+		t.Fatalf("exact decimal result = %#v", result.Rows)
+	}
+	if len(result.Columns) != 2 || result.Columns[0].Type != "NUMERIC" || result.Columns[1].Type != "BIGNUMERIC" ||
+		result.Columns[0].Precision != nil || result.Columns[0].Scale != nil ||
+		result.Columns[1].Precision != nil || result.Columns[1].Scale != nil {
+		t.Fatalf("exact decimal schema identity = %#v", result.Columns)
+	}
+}
+
 func newStatementExecutionWarehouse(t *testing.T, ctx context.Context) *Warehouse {
 	t.Helper()
 	warehouse, err := New("")

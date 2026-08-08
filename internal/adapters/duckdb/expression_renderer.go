@@ -87,6 +87,17 @@ func (visitor *duckDBExpressionVisitor) VisitFloatLiteral(literal *queryast.Floa
 	return nil
 }
 
+func (visitor *duckDBExpressionVisitor) VisitDecimalLiteral(literal *queryast.DecimalLiteral) error {
+	field := domain.Field{Name: "decimal_literal", Type: string(literal.Type())}
+	parameters, err := field.EffectiveDecimalParameters()
+	if err != nil {
+		return unsupportedDuckDBLowering("decimal literal", literal.Type())
+	}
+	physicalType := fmt.Sprintf("DECIMAL(%d,%d)", parameters.Precision, parameters.Scale)
+	visitor.result = "CAST(" + visitor.renderer.bindArgument(literal.CanonicalValue()) + " AS " + physicalType + ")"
+	return nil
+}
+
 func (visitor *duckDBExpressionVisitor) VisitStringLiteral(literal *queryast.StringLiteral) error {
 	visitor.result = visitor.renderer.bindArgument(literal.Value())
 	return nil

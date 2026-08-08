@@ -506,6 +506,15 @@ func (fixture *rendererASTFixture) stringLiteral(value string) queryast.Expressi
 	return literal
 }
 
+func (fixture *rendererASTFixture) decimal(kind queryast.TypeKind, value string) queryast.Expression {
+	fixture.t.Helper()
+	literal, err := queryast.NewDecimalLiteral(fixture.key("decimal"), kind, value)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return literal
+}
+
 func (fixture *rendererASTFixture) temporal(kind queryast.TypeKind, value string) queryast.Expression {
 	fixture.t.Helper()
 	literal, err := queryast.NewTemporalLiteral(fixture.key("temporal"), kind, value)
