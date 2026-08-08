@@ -222,16 +222,37 @@ Spark `3.5.8` 프로세스 테스트에서는 `PENDING` 스트림 4개, 그룹 �
 | BigQuery 자료형 | DuckDB 테이블 생성 | REST 쿼리 값 | 상태 |
 | --- | --- | --- | --- |
 | BOOL/INT64/FLOAT64/STRING/BYTES | 기본 자료형으로 변환 | 스칼라 값으로 인코딩 | 부분 지원 |
-| NUMERIC | `DECIMAL(38,9)` | 드라이버 동작에 따라 달라짐 | 부분 지원 |
-| BIGNUMERIC | 텍스트로 보존 | 엔진에서 원래 자료형 정보가 사라짐 | 산술 연산 미지원 |
+| NUMERIC | `DECIMAL(P,S)`, 기본값 `DECIMAL(38,9)` | 정확한 10진수 문자열 | 부분 지원 |
+| BIGNUMERIC | `DECIMAL(P,S)`, 기본값 `DECIMAL(38,18)` | 정확한 10진수 문자열 | 정밀도 38까지 부분 지원 |
 | DATE/DATETIME/TIME/TIMESTAMP | 엔진 자료형으로 변환 | 날짜 및 시간 형식 변환 미완성 | 부분 지원 |
-| JSON/GEOGRAPHY | JSON 또는 텍스트로 변환 | 의미를 완전하게 보존하지 못함 | 부분 지원/미지원 |
-| RECORD/REPEATED | STRUCT 또는 LIST로 변환 | 복합 REST 구조와 호환되지 않음 | 부분 지원 |
+| JSON | JSON으로 변환 | 의미를 완전하게 보존하지 못함 | 부분 지원 |
+| GEOGRAPHY | 저장소를 변경하기 전에 거부 | 사용할 수 없음 | 미지원 |
+| RECORD/REPEATED | 재귀적인 STRUCT 또는 LIST로 변환 | 스키마에 따라 중첩 및 반복 셀 인코딩 | 부분 지원 |
 
 자료형 호환성은 [BigQuery data
 types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)를
-기준으로 평가합니다. REST, Arrow, Avro, 직접 Proto 쓰기, 간접 로드를 모두 연결해
-처음부터 끝까지 검증한 자료형은 아직 없습니다.
+기준으로 평가합니다. 카탈로그와 REST 메타데이터는 두 10진수 자료형의 매개변수 생략
+여부를 그대로 보존합니다. 실제 기본값은 저장 엔진이나 전송 형식으로 변환할 때만
+적용합니다.
+
+정밀도가 38보다 크면 테이블, 로드 작업, 행 데이터를 변경하기 전에 요청을
+거부합니다. Spark의 `DecimalType`이 더 큰 정밀도를 표현할 수 없기 때문입니다.
+`GEOGRAPHY`도 저장소를 변경하기 전에 거부합니다.
+
+NUMERIC과 지원 범위 안의 BIGNUMERIC은 REST 테이블, 쿼리, `tabledata` 셀에서
+동작합니다. Storage Read의 Arrow/Avro 스키마와 값도 지원합니다. 직접 ProtoRows
+쓰기와 스칼라 Parquet 로드도 지원합니다. REST, Storage Read, Storage Write에서는
+STRUCT 내부와 REPEATED 필드의 10진수 메타데이터를 재귀적으로 유지합니다.
+
+Spark `3.5.8`과 커넥터 `0.44.2`로 Arrow 및 AVRO 읽기 스키마와 직접 스칼라 10진수
+쓰기를 검증했습니다. 커넥터 설정은 매개변수를 생략한 BIGNUMERIC에 정밀도 38과 소수부
+자릿수 18을 적용합니다.
+
+새 쿼리 결과에는 한 가지 제한이 있습니다. DuckDB의 `DECIMAL(P,S)`만으로는 소수부
+자릿수가 9 이하인 값의 원래 자료형이 NUMERIC인지 BIGNUMERIC인지 알 수 없습니다.
+기존 대상 테이블이 있으면 카탈로그 스키마에서 자료형을 복원합니다. 새 임의 쿼리
+대상은 계보 메타데이터를 제공하기 전까지 물리 정밀도와 소수부 자릿수가 NUMERIC 범위에
+들어가면 NUMERIC으로 처리합니다. 이 범위를 벗어나면 BIGNUMERIC으로 처리합니다.
 
 <!-- section: storage-read -->
 ## Storage Read

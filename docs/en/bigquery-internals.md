@@ -205,12 +205,16 @@ and ranges are in [BigQuery data
 types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types).
 Important cases include NUMERIC/BIGNUMERIC precision, TIMESTAMP versus DATETIME,
 TIME microseconds, special floating values, BYTES base64, JSON null versus SQL
-NULL, GEOGRAPHY transport, nested STRUCT, repeated fields, empty arrays, and
+NULL, nested STRUCT, repeated fields, empty arrays, and
 nullability.
 
-DuckDB may store BIGNUMERIC as text or GEOGRAPHY as text, but canonical metadata
-must remain BIGNUMERIC or GEOGRAPHY. Query result encoding must use schema-aware
-conversion; `fmt.Sprint` of lists or structs is not a BigQuery REST row.
+The current engine adapter stores both NUMERIC and the supported BIGNUMERIC
+subset as `DECIMAL(P,S)`. Canonical metadata remains responsible for their
+distinct logical identities and parameter-presence information. Precision is
+limited to Spark's maximum of 38. GEOGRAPHY has no local semantic
+implementation and is rejected before storage mutation. Query result encoding
+uses schema-aware conversion; `fmt.Sprint` of lists or structs is not a
+BigQuery REST row.
 
 <!-- section: authentication -->
 ## Authentication and Authorization

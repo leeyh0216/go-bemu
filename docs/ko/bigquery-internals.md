@@ -220,13 +220,16 @@ JSON 셀 구조가 필요합니다. 공식 리소스는
 
 `NUMERIC`/`BIGNUMERIC` 정밀도, `TIMESTAMP`와 `DATETIME`의 차이, `TIME`의 마이크로초
 정밀도를 처리해야 합니다. 특수 부동소수점 값, `BYTES`의 base64 표현, JSON null과
-SQL NULL의 차이도 처리해야 합니다. `GEOGRAPHY` 전송, 중첩 `STRUCT`, 반복 필드, 빈
-배열, null 허용 여부도 중요합니다.
+SQL NULL의 차이도 처리해야 합니다. 중첩 `STRUCT`, 반복 필드, 빈 배열, null 허용
+여부도 중요합니다.
 
-DuckDB가 `BIGNUMERIC`이나 `GEOGRAPHY`를 문자열로 저장하더라도 기준 메타데이터는
-`BIGNUMERIC` 또는 `GEOGRAPHY`를 유지해야 합니다. 쿼리 결과는 스키마에 따라
-인코딩해야 합니다. 목록이나 구조체에 `fmt.Sprint`를 적용한 값은 BigQuery REST 행
-표현이 아닙니다.
+현재 엔진 어댑터는 NUMERIC과 지원 범위 안의 BIGNUMERIC을 모두 `DECIMAL(P,S)`로
+저장합니다. 기준 메타데이터는 두 자료형의 논리적 구분과 매개변수 생략 여부를
+유지합니다. 정밀도는 Spark가 지원하는 최대값인 38로 제한합니다.
+
+`GEOGRAPHY`는 로컬에서 의미를 보존할 수 없으므로 저장소를 변경하기 전에
+거부합니다. 쿼리 결과는 스키마에 따라 인코딩합니다. 목록이나 구조체에
+`fmt.Sprint`를 적용한 값은 BigQuery REST 행 표현이 아닙니다.
 
 <!-- section: authentication -->
 ## 인증과 인가

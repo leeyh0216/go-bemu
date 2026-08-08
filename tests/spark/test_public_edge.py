@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from decimal import Decimal
 
 import pytest
 
@@ -292,6 +293,104 @@ def test_storage_read_arrow_and_avro(
     record_capability(
         capability_ids[(wire_format, requested_streams)],
         f"{wire_format.lower()}-rows+streams:{requested_streams}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("wire_format", "capability_id"),
+    [
+        pytest.param(
+            "ARROW",
+            "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
+            marks=pytest.mark.capability("SBQ-READ-ARROW-DECIMAL-TYPES-V1"),
+            id="arrow",
+        ),
+        pytest.param(
+            "AVRO",
+            "SBQ-READ-DECIMAL-TYPES-V1",
+            marks=pytest.mark.capability("SBQ-READ-DECIMAL-TYPES-V1"),
+            id="avro",
+        ),
+    ],
+)
+def test_decimal_schema_through_public_storage_read_edge(
+    spark_session,
+    public_edge: PublicEdge,
+    test_timeout: float,
+    wire_format: str,
+    capability_id: str,
+) -> None:
+    from pyspark.sql.types import ArrayType, DecimalType, StructType
+
+    table_id = f"decimal_schema_{uuid.uuid4().hex[:8]}"
+    create_table(
+        public_edge,
+        test_timeout,
+        table_id,
+        [
+            {"name": "numeric_default", "type": "NUMERIC"},
+            {"name": "bignumeric_default", "type": "BIGNUMERIC"},
+            {
+                "name": "numeric_explicit",
+                "type": "NUMERIC",
+                "precision": "20",
+                "scale": "4",
+            },
+            {
+                "name": "bignumeric_explicit",
+                "type": "BIGNUMERIC",
+                "precision": "10",
+                "scale": "2",
+            },
+            {
+                "name": "details",
+                "type": "RECORD",
+                "fields": [{"name": "amount", "type": "BIGNUMERIC"}],
+            },
+            {
+                "name": "amounts",
+                "type": "NUMERIC",
+                "mode": "REPEATED",
+                "precision": "12",
+                "scale": "3",
+            },
+        ],
+    )
+    destination = f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}"
+    frame = load_connector_source(
+        spark_session,
+        public_edge,
+        source=destination,
+        source_kind="table",
+        wire_format=wire_format,
+        requested_streams=1,
+    )
+
+    fields = {field.name: field.dataType for field in frame.schema.fields}
+    expected_scalars = {
+        "numeric_default": DecimalType(38, 9),
+        "bignumeric_default": DecimalType(38, 18),
+        "numeric_explicit": DecimalType(20, 4),
+        "bignumeric_explicit": DecimalType(10, 2),
+    }
+    for name, expected in expected_scalars.items():
+        if fields.get(name) != expected:
+            pytest.fail(
+                f"decimal schema mismatch shape=field:{name},actual:{fields.get(name)},expected:{expected}"
+            )
+    if not isinstance(fields.get("details"), StructType) or fields["details"][
+        "amount"
+    ].dataType != DecimalType(38, 18):
+        pytest.fail("nested BIGNUMERIC schema mismatch shape=details.amount")
+    if not isinstance(fields.get("amounts"), ArrayType) or fields[
+        "amounts"
+    ].elementType != DecimalType(12, 3):
+        pytest.fail("repeated NUMERIC schema mismatch shape=amounts[]")
+    if frame.collect() != []:
+        pytest.fail("empty decimal schema fixture returned rows")
+    record_capability(
+        capability_id,
+        f"{wire_format.lower()} decimal-defaults:38,9+38,18 explicit:20,4+10,2 nested:verified repeated:verified",
     )
 
 
@@ -723,6 +822,77 @@ def test_direct_pending_exact_append(
             f"finalize-calls:{logical_partitions} "
             "get-write-stream-calls:0 batch-commit-calls:1 committed-rows:8"
         ),
+    )
+
+
+@pytest.mark.capability("SBQ-WRITE-DIRECT-DECIMAL-V1")
+def test_direct_decimal_write_through_public_proto_rows_edge(
+    spark_session,
+    public_edge: PublicEdge,
+    test_timeout: float,
+) -> None:
+    from pyspark.sql.types import DecimalType, StructField, StructType
+
+    table_id = f"decimal_write_{uuid.uuid4().hex[:8]}"
+    destination = f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}"
+    create_table(
+        public_edge,
+        test_timeout,
+        table_id,
+        [
+            {
+                "name": "numeric_value",
+                "type": "NUMERIC",
+                "precision": "20",
+                "scale": "4",
+            },
+            {
+                "name": "bignumeric_value",
+                "type": "BIGNUMERIC",
+                "precision": "38",
+                "scale": "18",
+            },
+        ],
+    )
+    schema = StructType(
+        [
+            StructField("numeric_value", DecimalType(20, 4), True),
+            StructField("bignumeric_value", DecimalType(38, 18), True),
+        ]
+    )
+    frame = spark_session.createDataFrame(
+        [
+            (
+                Decimal("12.3400"),
+                Decimal("12345678901234567890.123456789012345678"),
+            )
+        ],
+        schema,
+    ).repartition(1)
+    writer = frame.write.format("bigquery")
+    for key, value in connector_options(public_edge).items():
+        writer = writer.option(key, value)
+    (
+        writer.option("writeMethod", "direct")
+        .option("writeAtLeastOnce", "false")
+        .mode("append")
+        .save(destination)
+    )
+
+    result = query(
+        public_edge,
+        test_timeout,
+        f"SELECT numeric_value, bignumeric_value FROM `{destination}`",
+    )
+    values = [Decimal(str(cell["v"])) for cell in result["rows"][0]["f"]]
+    if values != [
+        Decimal("12.3400"),
+        Decimal("12345678901234567890.123456789012345678"),
+    ]:
+        pytest.fail("direct decimal value mismatch shape=single-row-two-decimals")
+    record_capability(
+        "SBQ-WRITE-DIRECT-DECIMAL-V1",
+        "proto-rows numeric:20,4 bignumeric:38,18 committed-rows:1",
     )
 
 

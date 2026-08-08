@@ -806,6 +806,30 @@
       "limitation": "Integer-range partition metadata and pruning are not implemented."
     },
     {
+      "id": "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
+      "flow": "read-storage",
+      "axes": {
+        "operation": "read",
+        "transport": "rest+storage-read",
+        "execution": "batch",
+        "format": "ARROW",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "projection",
+        "typeFamily": "numeric-bignumeric",
+        "auth": "static-access-token",
+        "parallelism": "read-stream-negotiated",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "partial",
+      "officialSourceRefs": [
+        "connector-readme",
+        "schema-converters"
+      ],
+      "issueRef": "types",
+      "limitation": "Spark 3.5.8 verifies connector 0.44.2 Arrow schemas for default, parameterized, nested, and repeated decimals. Precision above 38 is intentionally unsupported; nested and repeated values remain covered below the released-Spark boundary."
+    },
+    {
       "id": "SBQ-READ-DECIMAL-TYPES-V1",
       "flow": "read-storage",
       "axes": {
@@ -827,7 +851,7 @@
         "schema-converters"
       ],
       "issueRef": "types",
-      "limitation": "Decimal conversion is bounded by Spark precision; parameterized and oversized BIGNUMERIC cases remain unverified."
+      "limitation": "Spark 3.5.8 verifies connector 0.44.2 AVRO schemas for default, parameterized, nested, and repeated decimals. Precision above 38 is intentionally unsupported; nested and repeated values remain covered below the released-Spark boundary."
     },
     {
       "id": "SBQ-READ-JSON-TYPE-V1",
@@ -899,7 +923,7 @@
         "schema-converters"
       ],
       "issueRef": "types",
-      "limitation": "GEOGRAPHY wire and Spark string conversion is not verified."
+      "limitation": "GEOGRAPHY is intentionally unsupported and schema creation is rejected before physical side effects."
     },
     {
       "id": "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
@@ -1401,7 +1425,7 @@
         "direct-partition-writer"
       ],
       "issueRef": "types",
-      "limitation": "Basic decimal encoding exists; parameterized NUMERIC and Spark precision boundaries are not exhaustive."
+      "limitation": "Spark 3.5.8 verifies connector 0.44.2 direct ProtoRows for scalar NUMERIC(20,4) and BIGNUMERIC(38,18). Recursive decimal ProtoRows are covered below the released-Spark boundary."
     },
     {
       "id": "SBQ-WRITE-DIRECT-NESTED-V1",
@@ -1497,7 +1521,7 @@
         "schema-converters"
       ],
       "issueRef": "types",
-      "limitation": "GEOGRAPHY schema metadata and value validation are not implemented."
+      "limitation": "GEOGRAPHY is intentionally unsupported and destination schema validation rejects it before a row mutation."
     },
     {
       "id": "SBQ-WRITE-INDIRECT-PARQUET-APPEND-V1",

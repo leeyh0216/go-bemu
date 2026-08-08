@@ -1303,6 +1303,11 @@ def connector_options(edge: PublicEdge) -> dict[str, str]:
         "bigQueryHttpEndpoint": edge.http_endpoint,
         "bigQueryStorageGrpcEndpoint": edge.grpc_endpoint,
         "gcpAccessToken": STATIC_ACCESS_TOKEN,
+        # bqemu deliberately exposes only Spark-representable BIGNUMERIC values.
+        # Preserve omitted REST parameters while giving connector 0.44.2 the
+        # same effective default used by the emulator's schema planner.
+        "bigNumericDefaultPrecision": "38",
+        "bigNumericDefaultScale": "18",
         "createReadSessionTimeoutInSeconds": str(math.ceil(rpc_seconds)),
         "httpConnectTimeout": str(math.ceil(rpc_seconds * 1000)),
         "httpReadTimeout": str(math.ceil(rpc_seconds * 1000)),

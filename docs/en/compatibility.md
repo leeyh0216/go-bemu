@@ -195,16 +195,35 @@ time/range partition overwrite and general BigQuery `MERGE` parity remain gaps.
 | BigQuery type group | Physical table creation | REST query value | Overall |
 | --- | --- | --- | --- |
 | BOOL/INT64/FLOAT64/STRING/BYTES | basic mapping | scalar encoding | Partial |
-| NUMERIC | `DECIMAL(38,9)` | driver-dependent | Partial |
-| BIGNUMERIC | text preservation | loses engine type identity | Unsupported arithmetic |
+| NUMERIC | `DECIMAL(P,S)`, default `DECIMAL(38,9)` | exact decimal string | Partial |
+| BIGNUMERIC | `DECIMAL(P,S)`, default `DECIMAL(38,18)` | exact decimal string | Partial, precision limited to 38 |
 | DATE/DATETIME/TIME/TIMESTAMP | engine mapping | temporal formatting incomplete | Partial |
-| JSON/GEOGRAPHY | JSON/text mapping | incomplete semantics | Partial/Unsupported |
-| RECORD/REPEATED | STRUCT/LIST mapping | composite REST shape incompatible | Partial |
+| JSON | JSON mapping | incomplete semantics | Partial |
+| GEOGRAPHY | rejected before storage mutation | not available | Unsupported |
+| RECORD/REPEATED | recursive STRUCT/LIST mapping | schema-aware nested and repeated cells | Partial |
 
 Compatibility is assessed against [BigQuery data
 types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types).
-No type is yet verified end to end across REST, Arrow, Avro, direct Proto write,
-and indirect load.
+Both decimal families retain omitted versus explicit parameters in catalog and
+REST metadata. Effective parameters are applied only at an engine or wire
+boundary. Precision above 38 is rejected before table, load-job, or row
+mutation because Spark `DecimalType` cannot represent it. `GEOGRAPHY` is also
+rejected before a physical side effect.
+
+NUMERIC and the supported BIGNUMERIC subset are covered by REST table/query and
+tabledata cells, Arrow/Avro Storage Read schemas and values, direct ProtoRows,
+and scalar Parquet loads. Recursive STRUCT and REPEATED decimal metadata is
+covered for REST, Storage Read, and Storage Write. Spark `3.5.8` with connector
+`0.44.2` verifies Arrow and AVRO read schemas and direct scalar decimal writes. The
+connector options set omitted BIGNUMERIC parameters to the emulator default of
+precision 38 and scale 18.
+
+One query limitation remains. A new DuckDB result typed only as
+`DECIMAL(P,S)` cannot reveal whether a scale of 9 or less originated as
+NUMERIC or BIGNUMERIC. An existing destination restores the identity from its
+catalog schema. A new arbitrary query destination uses NUMERIC when the
+physical precision and scale fit NUMERIC's range and BIGNUMERIC otherwise,
+until query lineage metadata is available.
 
 <!-- section: storage-read -->
 ## Storage Read
