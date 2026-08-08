@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -78,6 +79,9 @@ func NewTableMutation(descriptor TableMutationDescriptor) (TableMutation, error)
 	before := domain.CloneFields(descriptor.BeforeSchema)
 	after := domain.CloneFields(descriptor.AfterSchema)
 	changes := cloneFieldChangeDescriptors(descriptor.FieldChanges)
+	if err := canonicalizeFieldChangePaths(descriptor.Kind, before, after, changes); err != nil {
+		return TableMutation{}, err
+	}
 	if err := validateMutationSchemas(descriptor.Kind, descriptor.Target, before, after, changes); err != nil {
 		return TableMutation{}, err
 	}
@@ -338,6 +342,7 @@ func normalizeRequirements(input PlanRequirements) (PlanRequirements, error) {
 		}
 		seenTransactions[scope] = struct{}{}
 	}
+	sort.Slice(result.Transactions, func(left, right int) bool { return result.Transactions[left] < result.Transactions[right] })
 	seenReplacement := make(map[AtomicReplacementScope]struct{}, len(result.AtomicReplacements))
 	for _, scope := range result.AtomicReplacements {
 		if !validAtomicReplacementScope(scope) {
@@ -348,6 +353,9 @@ func normalizeRequirements(input PlanRequirements) (PlanRequirements, error) {
 		}
 		seenReplacement[scope] = struct{}{}
 	}
+	sort.Slice(result.AtomicReplacements, func(left, right int) bool {
+		return result.AtomicReplacements[left] < result.AtomicReplacements[right]
+	})
 	seenInspection := make(map[InspectionScope]struct{}, len(result.Inspection))
 	for _, scope := range result.Inspection {
 		if !validInspectionScope(scope) {
@@ -358,20 +366,21 @@ func normalizeRequirements(input PlanRequirements) (PlanRequirements, error) {
 		}
 		seenInspection[scope] = struct{}{}
 	}
+	sort.Slice(result.Inspection, func(left, right int) bool { return result.Inspection[left] < result.Inspection[right] })
 	return result, nil
 }
 
-func invalidRequirement(kind, value string) error {
+func invalidRequirement(kind, _ string) error {
 	return newPlanningError(
 		PlanningCodeInvalidDescriptor, "table-plan", "requirement."+kind,
-		fmt.Sprintf("unknown %s requirement %q", kind, value), nil,
+		"plan requirements contain an unknown value", nil,
 	)
 }
 
-func duplicateRequirement(kind, value string) error {
+func duplicateRequirement(kind, _ string) error {
 	return newPlanningError(
 		PlanningCodeInvalidDescriptor, "table-plan", "requirement."+kind,
-		fmt.Sprintf("duplicate %s requirement %q", kind, value), nil,
+		"plan requirements contain a duplicate value", nil,
 	)
 }
 
@@ -603,6 +612,47 @@ func cloneFieldChangeDescriptors(input []FieldChangeDescriptor) []FieldChange {
 		}
 	}
 	return result
+}
+
+func canonicalizeFieldChangePaths(
+	kind TableMutationKind,
+	before, after []domain.Field,
+	changes []FieldChange,
+) error {
+	if len(changes) == 0 {
+		return nil
+	}
+	schema := before
+	if kind == TableMutationAddColumn {
+		schema = after
+	}
+	for index := range changes {
+		canonical, ok := canonicalFieldPath(schema, changes[index].path)
+		if !ok {
+			return invalidFieldChange(kind, "field path is absent from the canonical schema")
+		}
+		changes[index].path = canonical
+	}
+	return nil
+}
+
+func canonicalFieldPath(fields []domain.Field, path []string) ([]string, bool) {
+	if len(path) == 0 {
+		return nil, false
+	}
+	index := fieldIndex(fields, path[0])
+	if index < 0 {
+		return nil, false
+	}
+	canonical := []string{fields[index].Name}
+	if len(path) == 1 {
+		return canonical, true
+	}
+	nested, ok := canonicalFieldPath(fields[index].Fields, path[1:])
+	if !ok {
+		return nil, false
+	}
+	return append(canonical, nested...), true
 }
 
 func cloneFieldChanges(input []FieldChange) []FieldChange {

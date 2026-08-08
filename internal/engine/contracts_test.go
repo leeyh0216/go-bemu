@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -69,6 +70,15 @@ func TestCapabilitiesRejectZeroAndInvalidDescriptors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := NewCapabilities(test.descriptor)
+			assertPlanningCode(t, err, PlanningCodeInvalidDescriptor)
+		})
+	}
+}
+
+func TestIdentityRejectsWhitespaceAndControlCharacters(t *testing.T) {
+	for _, version := range []string{"", " 1.4.4", "1.4.4 ", "1.4\t4", "1/4", "v1:secret"} {
+		t.Run(version, func(t *testing.T) {
+			_, err := NewIdentity("duckdb", version)
 			assertPlanningCode(t, err, PlanningCodeInvalidDescriptor)
 		})
 	}
@@ -258,6 +268,72 @@ func TestTableMutationKindMustExactlyMatchTypedFieldDelta(t *testing.T) {
 		},
 	})
 	assertPlanningCode(t, err, PlanningCodeInvalidDescriptor)
+}
+
+func TestLogicalAndPlanFingerprintsCanonicalizeSetAndPathInputs(t *testing.T) {
+	target := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "events"}
+	before := []domain.Field{{Name: "Payload", Type: "STRUCT", Fields: []domain.Field{{Name: "Amount", Type: "NUMERIC"}}}}
+	after := domain.CloneFields(before)
+	after[0].Fields[0].Precision = pointerInt64(37)
+	after[0].Fields[0].Scale = pointerInt64(8)
+	mutation := func(path []string) TableMutation {
+		return mustTableMutation(t, TableMutationDescriptor{
+			Kind: TableMutationChangeColumnType, Target: target, BeforeSchema: before, AfterSchema: after,
+			FieldChanges: []FieldChangeDescriptor{{
+				Path: path, Before: before[0].Fields[0], After: after[0].Fields[0],
+			}},
+		})
+	}
+	canonical := mutation([]string{"Payload", "Amount"})
+	caseVariant := mutation([]string{"payload", "AMOUNT"})
+	if canonical.LogicalFingerprint() != caseVariant.LogicalFingerprint() ||
+		caseVariant.FieldChanges()[0].Path()[0] != "Payload" || caseVariant.FieldChanges()[0].Path()[1] != "Amount" {
+		t.Fatal("logical fingerprint or stored path depends on caller path casing")
+	}
+
+	capabilityDescriptor := testCapabilitiesDescriptor(t, "duckdb", "1.4.4")
+	capabilityDescriptor.Transactions[TransactionScopeMultiTable] = true
+	planner := mustPlanner(t, mustCapabilities(t, capabilityDescriptor), acceptingMutationValidator())
+	first, err := planner.PlanTableChange(context.Background(), canonical, PlanRequirements{
+		Transactions:       []TransactionScope{TransactionScopeMultiTable, TransactionScopeSingleTable},
+		AtomicReplacements: []AtomicReplacementScope{AtomicReplacementTable, AtomicReplacementPartition},
+		Inspection:         []InspectionScope{InspectionTables, InspectionDatasets},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := planner.PlanTableChange(context.Background(), caseVariant, PlanRequirements{
+		Transactions:       []TransactionScope{TransactionScopeSingleTable, TransactionScopeMultiTable},
+		AtomicReplacements: []AtomicReplacementScope{AtomicReplacementPartition, AtomicReplacementTable},
+		Inspection:         []InspectionScope{InspectionDatasets, InspectionTables},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Fingerprint() != second.Fingerprint() {
+		t.Fatal("plan fingerprint depends on requirement set order")
+	}
+}
+
+func TestPlanningErrorsDoNotEchoUnknownDescriptorValues(t *testing.T) {
+	const secret = "PRINTABLE_SECRET_MARKER"
+	descriptor := testCapabilitiesDescriptor(t, "duckdb", "1.4.4")
+	descriptor.Transactions[TransactionScope(secret)] = true
+	_, err := NewCapabilities(descriptor)
+	assertPlanningCode(t, err, PlanningCodeInvalidDescriptor)
+	if strings.Contains(err.Error(), secret) {
+		t.Fatal("capability planning error echoed an unknown descriptor value")
+	}
+
+	capabilities := mustCapabilities(t, testCapabilitiesDescriptor(t, "duckdb", "1.4.4"))
+	planner := mustPlanner(t, capabilities, acceptingMutationValidator())
+	_, err = planner.PlanTableChange(context.Background(), testTypeChangeMutation(t), PlanRequirements{
+		Inspection: []InspectionScope{InspectionScope(secret)},
+	})
+	assertPlanningCode(t, err, PlanningCodeInvalidDescriptor)
+	if strings.Contains(err.Error(), secret) {
+		t.Fatal("requirement planning error echoed an unknown descriptor value")
+	}
 }
 
 func TestPlannerEnforcesRecursiveLogicalBoundsAndAlterScope(t *testing.T) {

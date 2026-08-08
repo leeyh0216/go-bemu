@@ -222,10 +222,10 @@ func (capabilities Capabilities) validate() error {
 	return nil
 }
 
-func invalidCapabilityDescriptor(kind, value string) error {
+func invalidCapabilityDescriptor(kind, _ string) error {
 	return newPlanningError(
 		PlanningCodeInvalidDescriptor, "capabilities", "capability."+kind,
-		fmt.Sprintf("unknown %s capability %q", kind, value), nil,
+		"capability descriptor contains an unknown or invalid value", nil,
 	)
 }
 
