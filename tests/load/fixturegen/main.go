@@ -216,7 +216,22 @@ func generate(ctx context.Context, outputRoot string, locked manifest, observe b
 		}
 		fmt.Printf("{\"boundary\":\"fixture\",\"bytes\":%d,\"object\":%q,\"rows\":%d,\"sha256\":%q}\n", len(payload), object.Name, object.Rows, actualSHA)
 	}
-	return nil
+	return makeFixtureTreeReadable(root)
+}
+
+func makeFixtureTreeReadable(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		mode := os.FileMode(0o644)
+		if entry.IsDir() {
+			mode = 0o755
+		} else if !entry.Type().IsRegular() {
+			return errors.New("generated fixture tree contains an unsupported entry")
+		}
+		return os.Chmod(path, mode)
+	})
 }
 
 func safeSegment(value string) bool {
