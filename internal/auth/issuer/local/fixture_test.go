@@ -3,10 +3,13 @@ package local
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -16,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,6 +39,7 @@ func TestGenerateCreatesProtectedStrictClientCredentials(t *testing.T) {
 			manifest.ServerKey, manifest.ServiceAccount, manifest.AuthorizedUser,
 			manifest.ExternalAccount, manifest.SubjectToken, manifest.AccessToken,
 			manifest.JavaTruststore, filepath.Join(directory, "manifest.json"),
+			filepath.Join(directory, generationMarker),
 		} {
 			assertMode(t, path, 0o600)
 		}
@@ -43,6 +48,9 @@ func TestGenerateCreatesProtectedStrictClientCredentials(t *testing.T) {
 	}
 	if manifest.TruststorePassword != "changeit" {
 		t.Fatalf("truststore password=%q, want documented local default", manifest.TruststorePassword)
+	}
+	if manifest.IssuerListen != "127.0.0.1:9052" {
+		t.Fatalf("issuer listen address=%q, want generated loopback address", manifest.IssuerListen)
 	}
 	accessToken, err := os.ReadFile(manifest.AccessToken)
 	if err != nil {
@@ -126,7 +134,12 @@ func TestGenerateCreatesProtectedStrictClientCredentials(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := google.CredentialsFromJSON(context.Background(), contents, "https://www.googleapis.com/auth/bigquery"); err != nil {
-			t.Errorf("official Google credential parser rejected %s: %v", filepath.Base(path), err)
+			t.Errorf(
+				"official Google credential parser rejected %s: error_type=%T error_digest=%s",
+				filepath.Base(path),
+				err,
+				diagnosticDigest(err.Error()),
+			)
 		}
 	}
 }
@@ -255,32 +268,243 @@ func TestGenerateFailsBeforeWritingWithoutKeytool(t *testing.T) {
 	}
 }
 
-func TestGenerateForceRejectsSymlinkTarget(t *testing.T) {
+func TestGenerateForceDoesNotFollowPreviousGenerationSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink setup requires additional Windows privileges")
 	}
 	directory := filepath.Join(t.TempDir(), "credentials")
-	if err := os.Mkdir(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	manifest := generateTestFixture(t, directory, "https://localhost:9052")
 	target := filepath.Join(t.TempDir(), "outside.txt")
 	if err := os.WriteFile(target, []byte("unchanged\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(directory, "access-token.txt")); err != nil {
+	if err := os.Remove(manifest.AccessToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, manifest.AccessToken); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := Generate(GenerateOptions{
+		OutputDir: directory,
+		BaseURL:   "https://localhost:9052",
+		Force:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, readErr := os.ReadFile(target)
+	if readErr != nil || string(contents) != "unchanged\n" {
+		t.Fatalf("symlink target changed: read_error=%v bytes=%d", readErr, len(contents))
+	}
+	info, err := os.Lstat(replacement.AccessToken)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("replacement access token is not a regular file: %v", err)
+	}
+}
+
+func TestGenerateForceFailureKeepsPreviousGeneration(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "credentials")
+	generateTestFixture(t, directory, "https://localhost:9052")
+	before := generationFingerprint(t, directory)
+
+	_, err := Generate(GenerateOptions{
+		OutputDir: directory,
+		BaseURL:   "https://localhost:9052",
+		Force:     true,
+		testHook: func(stage string) error {
+			if stage == "staged-authorized-user.json" {
+				return errors.New("injected failure")
+			}
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "staged-authorized-user.json") {
+		t.Fatalf("Generate error_type=%T, want injected staged-write failure", err)
+	}
+	after := generationFingerprint(t, directory)
+	if before != after {
+		t.Fatalf("generation changed after failed replacement: before=%x after=%x", before, after)
+	}
+	assertNoStagingDirectories(t, directory)
+}
+
+func TestGenerateForceCrashKeepsPreviousGeneration(t *testing.T) {
+	if os.Getenv("BQEMU_AUTH_CRASH_HELPER") == "1" {
+		_, err := Generate(GenerateOptions{
+			OutputDir: os.Getenv("BQEMU_AUTH_CRASH_OUTPUT"),
+			BaseURL:   "https://localhost:9052",
+			Force:     true,
+			testHook: func(stage string) error {
+				if stage == "staged-authorized-user.json" {
+					os.Exit(91)
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			os.Exit(92)
+		}
+		os.Exit(93)
+	}
+
+	directory := filepath.Join(t.TempDir(), "credentials")
+	generateTestFixture(t, directory, "https://localhost:9052")
+	before := generationFingerprint(t, directory)
+	command := exec.Command(os.Args[0], "-test.run=^TestGenerateForceCrashKeepsPreviousGeneration$")
+	command.Env = append(
+		os.Environ(),
+		"BQEMU_AUTH_CRASH_HELPER=1",
+		"BQEMU_AUTH_CRASH_OUTPUT="+directory,
+	)
+	output, err := command.CombinedOutput()
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 91 {
+		t.Fatalf(
+			"crash helper exit_type=%T exit_code=%d output_bytes=%d output_digest=%s",
+			err,
+			exitCode(exitError),
+			len(output),
+			diagnosticDigest(string(output)),
+		)
+	}
+	after := generationFingerprint(t, directory)
+	if before != after {
+		t.Fatalf("generation changed after crash: before=%x after=%x", before, after)
+	}
+	if matches := stagingDirectories(t, directory); len(matches) == 0 {
+		t.Fatal("crash regression did not leave a recoverable staging directory")
+	}
+	if _, err := Generate(GenerateOptions{
+		OutputDir: directory,
+		BaseURL:   "https://localhost:9052",
+		Force:     true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoStagingDirectories(t, directory)
+}
+
+func TestGenerateSerializesConcurrentStagingAndCleanup(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "credentials")
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := Generate(GenerateOptions{
+			OutputDir: directory,
+			BaseURL:   "https://localhost:9052",
+			testHook: func(stage string) error {
+				if stage == "staged-ca.pem" {
+					close(ready)
+					<-release
+				}
+				return nil
+			},
+		})
+		firstResult <- err
+	}()
+
+	select {
+	case <-ready:
+	case err := <-firstResult:
+		t.Fatalf("first generation ended before staging: error_type=%T", err)
+	case <-time.After(30 * time.Second):
+		close(release)
+		err := <-firstResult
+		t.Fatalf("first generation did not reach staging: error_type=%T", err)
+	}
+	_, concurrentErr := Generate(GenerateOptions{
+		OutputDir: directory,
+		BaseURL:   "https://localhost:9052",
+		Force:     true,
+	})
+	close(release)
+	firstErr := <-firstResult
+	if firstErr != nil {
+		t.Fatalf("first generation error_type=%T error_digest=%s", firstErr, diagnosticDigest(firstErr.Error()))
+	}
+	if concurrentErr == nil || !strings.Contains(concurrentErr.Error(), "already active") {
+		t.Fatalf("concurrent generation error_type=%T, want active-generation diagnostic", concurrentErr)
+	}
+	if _, err := LoadManifest(filepath.Join(directory, "manifest.json")); err != nil {
+		t.Fatal("completed generation manifest is invalid")
+	}
+	assertNoStagingDirectories(t, directory)
+}
+
+func TestGenerateDoesNotFollowGenerationLockSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires additional Windows privileges")
+	}
+	parent := t.TempDir()
+	directory := filepath.Join(parent, "credentials")
+	target := filepath.Join(t.TempDir(), "outside-lock-target")
+	if err := os.WriteFile(target, []byte("unchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(parent, generationLockName(filepath.Base(directory)))
+	if err := os.Symlink(target, lockPath); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Generate(GenerateOptions{
 		OutputDir: directory,
 		BaseURL:   "https://localhost:9052",
-		Force:     true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "target must be a regular file") {
-		t.Fatalf("Generate error=%v, want symlink rejection", err)
+	if err == nil {
+		t.Fatal("generation unexpectedly followed a lock-file symlink")
 	}
 	contents, readErr := os.ReadFile(target)
-	if readErr != nil || string(contents) != "unchanged\n" {
-		t.Fatalf("symlink target changed: read_error=%v bytes=%d", readErr, len(contents))
+	info, statErr := os.Stat(target)
+	if readErr != nil || statErr != nil || string(contents) != "unchanged\n" || info.Mode().Perm() != 0o644 {
+		t.Fatalf(
+			"lock symlink target changed: read_error_type=%T stat_error_type=%T bytes=%d mode=%#o",
+			readErr,
+			statErr,
+			len(contents),
+			infoMode(info),
+		)
+	}
+	if _, statErr := os.Lstat(directory); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("output directory exists after lock rejection: error_type=%T", statErr)
+	}
+}
+
+func TestGeneratedManifestServesCustomIssuerPortByDefault(t *testing.T) {
+	port := freeLoopbackPort(t)
+	directory := filepath.Join(t.TempDir(), "credentials")
+	manifest := generateTestFixture(
+		t,
+		directory,
+		"https://localhost:"+strconv.Itoa(port),
+	)
+	issuer, err := NewServer(filepath.Join(directory, "manifest.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer, err := issuer.HTTPServer("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAddress := "127.0.0.1:" + strconv.Itoa(port)
+	if httpServer.Addr != wantAddress || manifest.IssuerListen != wantAddress {
+		t.Fatalf(
+			"issuer address mismatch: server=%q manifest=%q want=%q",
+			httpServer.Addr,
+			manifest.IssuerListen,
+			wantAddress,
+		)
+	}
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- issuer.ServeTLS(httpServer) }()
+	client := trustedClient(t, manifest.CACertificate)
+	waitForHealth(t, client, manifest.BaseURL+"/healthz")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serveResult; !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("issuer serve error_type=%T error_digest=%s", err, diagnosticDigest(errorText(err)))
 	}
 }
 
@@ -323,11 +547,21 @@ func TestTLSServerSupportsOfficialOAuthAndSTSFlows(t *testing.T) {
 		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
 		credentials, err := google.CredentialsFromJSON(ctx, contents, "https://www.googleapis.com/auth/bigquery")
 		if err != nil {
-			t.Fatalf("parse %s: %v", filepath.Base(path), err)
+			t.Fatalf(
+				"parse %s: error_type=%T error_digest=%s",
+				filepath.Base(path),
+				err,
+				diagnosticDigest(err.Error()),
+			)
 		}
 		token, err := credentials.TokenSource.Token()
 		if err != nil {
-			t.Fatalf("exchange %s: %v", filepath.Base(path), err)
+			t.Fatalf(
+				"exchange %s: error_type=%T error_digest=%s",
+				filepath.Base(path),
+				err,
+				diagnosticDigest(err.Error()),
+			)
 		}
 		if token.AccessToken == "" || token.TokenType != "Bearer" || !token.Expiry.After(time.Now()) {
 			t.Errorf("invalid token returned for %s", filepath.Base(path))
@@ -432,13 +666,131 @@ func assertExactFields(t *testing.T, object map[string]any, fields ...string) {
 		wanted[field] = true
 	}
 	if len(object) != len(wanted) {
-		t.Errorf("field count=%d, want %d: %v", len(object), len(wanted), object)
+		t.Error(fieldSetDiagnostic(object, wanted))
 	}
 	for field := range object {
 		if !wanted[field] {
 			t.Errorf("unexpected field %q", field)
 		}
 	}
+}
+
+func fieldSetDiagnostic(object map[string]any, wanted map[string]bool) string {
+	actualFields := make([]string, 0, len(object))
+	for field := range object {
+		actualFields = append(actualFields, field)
+	}
+	sort.Strings(actualFields)
+	digest := diagnosticDigest(strings.Join(actualFields, "\x00"))
+	return fmt.Sprintf(
+		"field count=%d, want=%d actual_fields=%v field_name_digest=%s",
+		len(object),
+		len(wanted),
+		actualFields,
+		digest,
+	)
+}
+
+func TestFieldSetDiagnosticDoesNotContainCredentialValues(t *testing.T) {
+	secret := "credential-value-that-must-never-appear"
+	diagnostic := fieldSetDiagnostic(
+		map[string]any{"type": "service_account", "private_key": secret},
+		map[string]bool{"type": true},
+	)
+	if strings.Contains(diagnostic, secret) {
+		t.Fatal("field-set diagnostic disclosed a credential value")
+	}
+}
+
+func generationFingerprint(t *testing.T, root string) [sha256.Size]byte {
+	t.Helper()
+	hash := sha256.New()
+	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(hash, "%s\x00%o\x00", filepath.ToSlash(relative), info.Mode())
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(hash, file)
+		closeErr := file.Close()
+		return errors.Join(copyErr, closeErr)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result [sha256.Size]byte
+	copy(result[:], hash.Sum(nil))
+	return result
+}
+
+func stagingDirectories(t *testing.T, outputDir string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(
+		filepath.Join(
+			filepath.Dir(outputDir),
+			stagingPrefix(filepath.Base(outputDir))+"*",
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matches
+}
+
+func assertNoStagingDirectories(t *testing.T, outputDir string) {
+	t.Helper()
+	if matches := stagingDirectories(t, outputDir); len(matches) != 0 {
+		t.Fatalf("staging directory count=%d, want=0", len(matches))
+	}
+}
+
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func diagnosticDigest(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("sha256:%x", digest)
+}
+
+func exitCode(error *exec.ExitError) int {
+	if error == nil {
+		return -1
+	}
+	return error.ExitCode()
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func infoMode(info os.FileInfo) os.FileMode {
+	if info == nil {
+		return 0
+	}
+	return info.Mode().Perm()
 }
 
 func trustedClient(t *testing.T, caPath string) *http.Client {

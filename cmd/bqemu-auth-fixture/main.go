@@ -59,7 +59,7 @@ func run(arguments []string) error {
 	case "serve":
 		flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 		manifestPath := flags.String("manifest", ".bqemu-auth/manifest.json", "generated manifest path")
-		address := flags.String("listen", "127.0.0.1:9052", "loopback listen address")
+		address := flags.String("listen", "", "loopback issuer address; defaults to the generated manifest")
 		proxyAddress := flags.String("proxy-listen", "", "loopback OAuth proxy address; defaults to the manifest")
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
@@ -82,7 +82,7 @@ func run(arguments []string) error {
 				return err
 			}
 		}
-		proxyServer, err := issuer.ProxyHTTPServer(*proxyAddress, *address)
+		proxyServer, err := issuer.ProxyHTTPServer(*proxyAddress, server.Addr)
 		if err != nil {
 			return err
 		}

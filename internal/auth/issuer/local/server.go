@@ -32,6 +32,7 @@ const (
 	accessTokenType      = "urn:ietf:params:oauth:token-type:access_token"
 	googleOAuthAudience  = "https://oauth2.googleapis.com/token"
 	legacyOAuthAudience  = "https://accounts.google.com/o/oauth2/token"
+	issuedTokenPrefix    = "bqemu-local-issued-"
 )
 
 type tokenResponse struct {
@@ -125,6 +126,13 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) HTTPServer(address string) (*http.Server, error) {
+	if address == "" {
+		var err error
+		address, err = s.IssuerListenAddress()
+		if err != nil {
+			return nil, err
+		}
+	}
 	host, _, err := net.SplitHostPort(address)
 	if err != nil || !loopbackHost(host) {
 		return nil, errors.New("issuer address must be a loopback host and port")
@@ -137,6 +145,16 @@ func (s *Server) HTTPServer(address string) (*http.Server, error) {
 		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second,
 		IdleTimeout: 30 * time.Second, MaxHeaderBytes: 32 << 10,
 	}, nil
+}
+
+func (s *Server) IssuerListenAddress() (string, error) {
+	if !validLoopbackAddress(s.manifest.IssuerListen) {
+		return "", errors.New("manifest issuer listen address must be a loopback host and port")
+	}
+	if err := issuerAddressMismatch(s.manifest.IssuerListen, s.manifest.BaseURL); err != nil {
+		return "", err
+	}
+	return s.manifest.IssuerListen, nil
 }
 
 func (s *Server) ServeTLS(httpServer *http.Server) error {
@@ -195,7 +213,7 @@ func (s *Server) writeToken(writer http.ResponseWriter, sts bool, scope string) 
 		writeOAuthError(writer, http.StatusInternalServerError, "server_error")
 		return
 	}
-	accessToken := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	accessToken := issuedTokenPrefix + base64.RawURLEncoding.EncodeToString(tokenBytes)
 	if !s.rememberToken(accessToken, time.Now().Add(time.Hour)) {
 		writeOAuthError(writer, http.StatusInternalServerError, "server_error")
 		return

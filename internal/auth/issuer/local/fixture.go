@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -21,16 +22,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 )
 
 const (
-	ManifestVersion     = "auth-fixture.bqemu.dev/v1alpha2"
+	ManifestVersion     = "auth-fixture.bqemu.dev/v1alpha3"
 	defaultBaseURL      = "https://localhost:9052"
 	defaultProxyURL     = "http://127.0.0.1:9053"
 	maxFixtureFileBytes = 1 << 20
 	truststorePassword  = "changeit"
+	generationMarker    = ".bqemu-auth-generation"
+	stagingInfix        = ".stage-"
 )
 
 type GenerateOptions struct {
@@ -41,11 +46,13 @@ type GenerateOptions struct {
 	Now       time.Time
 	Keytool   string
 	DNSNames  []string
+	testHook  func(string) error
 }
 
 type Manifest struct {
 	Version            string   `json:"version"`
 	BaseURL            string   `json:"base_url"`
+	IssuerListen       string   `json:"issuer_listen_address"`
 	OAuthTokenURL      string   `json:"oauth_token_url"`
 	STSTokenURL        string   `json:"sts_token_url"`
 	OAuthProxyURL      string   `json:"oauth_proxy_url"`
@@ -133,16 +140,25 @@ func Generate(options GenerateOptions) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-
 	outputDir, err := filepath.Abs(options.OutputDir)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("resolve output directory: %w", err)
 	}
-	if err := os.MkdirAll(outputDir, 0o700); err != nil {
-		return Manifest{}, fmt.Errorf("create output directory: %w", err)
+	parentDir := filepath.Dir(outputDir)
+	if err := os.MkdirAll(parentDir, 0o700); err != nil {
+		return Manifest{}, fmt.Errorf("create output parent directory: %w", err)
 	}
-	if err := os.Chmod(outputDir, 0o700); err != nil {
-		return Manifest{}, fmt.Errorf("protect output directory: %w", err)
+	generationLock, err := acquireGenerationLock(parentDir, filepath.Base(outputDir))
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer generationLock.Close()
+	replacing, err := inspectOutputDirectory(outputDir, options.Force)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if err := cleanupStaleGenerations(parentDir, filepath.Base(outputDir)); err != nil {
+		return Manifest{}, err
 	}
 
 	now := options.Now.UTC()
@@ -195,9 +211,18 @@ func Generate(options GenerateOptions) (Manifest, error) {
 		return Manifest{}, err
 	}
 
+	issuerHost := parsedBaseURL.Hostname()
+	if strings.EqualFold(issuerHost, "localhost") {
+		issuerHost = "127.0.0.1"
+	}
+	issuerPort := parsedBaseURL.Port()
+	if issuerPort == "" {
+		issuerPort = "443"
+	}
 	manifest := Manifest{
 		Version:            ManifestVersion,
 		BaseURL:            baseURL,
+		IssuerListen:       net.JoinHostPort(issuerHost, issuerPort),
 		OAuthTokenURL:      baseURL + "/oauth/token",
 		STSTokenURL:        baseURL + "/sts/token",
 		OAuthProxyURL:      proxyURL,
@@ -238,38 +263,58 @@ func Generate(options GenerateOptions) (Manifest, error) {
 		QuotaProject:     "bqemu-local",
 	}
 
+	stagingDir, err := os.MkdirTemp(parentDir, stagingPrefix(filepath.Base(outputDir)))
+	if err != nil {
+		return Manifest{}, fmt.Errorf("create staging directory: %w", err)
+	}
+	defer os.RemoveAll(stagingDir)
+	if err := os.Chmod(stagingDir, 0o700); err != nil {
+		return Manifest{}, fmt.Errorf("protect staging directory: %w", err)
+	}
+	if err := writeFile(filepath.Join(stagingDir, generationMarker), []byte(ManifestVersion+"\n"), 0o600, false); err != nil {
+		return Manifest{}, err
+	}
+
 	writes := []struct {
-		path string
+		name string
 		data []byte
 		mode os.FileMode
 	}{
-		{manifest.CACertificate, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o644},
-		{manifest.ServerCertificate, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}), 0o644},
-		{manifest.ServerKey, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(serverKey)}), 0o600},
-		{manifest.ServiceAccount, mustJSON(account), 0o600},
-		{manifest.AuthorizedUser, mustJSON(authorized), 0o600},
-		{manifest.ExternalAccount, mustJSON(external), 0o600},
-		{manifest.SubjectToken, []byte(subjectToken), 0o600},
-		{manifest.AccessToken, []byte(accessToken + "\n"), 0o600},
-	}
-	manifestPath := filepath.Join(outputDir, "manifest.json")
-	paths := make([]string, 0, len(writes)+2)
-	for _, write := range writes {
-		paths = append(paths, write.path)
-	}
-	paths = append(paths, manifest.JavaTruststore, manifestPath)
-	if err := validateWriteTargets(paths, options.Force); err != nil {
-		return Manifest{}, err
+		{"ca.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o644},
+		{"server.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}), 0o644},
+		{"server-key.pem", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(serverKey)}), 0o600},
+		{"service-account.json", mustJSON(account), 0o600},
+		{"authorized-user.json", mustJSON(authorized), 0o600},
+		{"wif.json", mustJSON(external), 0o600},
+		{"subject-token.txt", []byte(subjectToken), 0o600},
+		{"access-token.txt", []byte(accessToken + "\n"), 0o600},
 	}
 	for _, write := range writes {
-		if err := writeFile(write.path, write.data, write.mode, options.Force); err != nil {
+		if err := writeFile(filepath.Join(stagingDir, write.name), write.data, write.mode, false); err != nil {
+			return Manifest{}, err
+		}
+		if err := runGenerationHook(options, "staged-"+write.name); err != nil {
 			return Manifest{}, err
 		}
 	}
-	if err := createJavaTruststore(keytool, manifest.JavaTruststore, manifest.CACertificate, options.Force); err != nil {
+	stagedCA := filepath.Join(stagingDir, "ca.pem")
+	stagedTruststore := filepath.Join(stagingDir, "truststore.p12")
+	if err := createJavaTruststore(keytool, stagedTruststore, stagedCA, false); err != nil {
 		return Manifest{}, err
 	}
-	if err := writeFile(manifestPath, mustJSON(manifest), 0o600, options.Force); err != nil {
+	if err := runGenerationHook(options, "staged-truststore.p12"); err != nil {
+		return Manifest{}, err
+	}
+	if err := writeFile(filepath.Join(stagingDir, "manifest.json"), mustJSON(manifest), 0o600, false); err != nil {
+		return Manifest{}, err
+	}
+	if err := validateStagedGeneration(stagingDir, manifest, keytool); err != nil {
+		return Manifest{}, err
+	}
+	if err := runGenerationHook(options, "before-install"); err != nil {
+		return Manifest{}, err
+	}
+	if err := installGeneration(stagingDir, outputDir, replacing); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil
@@ -280,7 +325,8 @@ func LoadManifest(path string) (Manifest, error) {
 	if err := readStrictJSON(path, &manifest); err != nil {
 		return Manifest{}, fmt.Errorf("read manifest: %w", err)
 	}
-	if manifest.Version != ManifestVersion || manifest.BaseURL == "" || manifest.OAuthTokenURL == "" ||
+	if manifest.Version != ManifestVersion || manifest.BaseURL == "" || manifest.IssuerListen == "" ||
+		manifest.OAuthTokenURL == "" ||
 		manifest.STSTokenURL == "" || manifest.OAuthProxyURL == "" ||
 		manifest.CACertificate == "" || manifest.ServerCertificate == "" ||
 		manifest.ServerKey == "" || manifest.ServiceAccount == "" || manifest.AuthorizedUser == "" ||
@@ -290,6 +336,282 @@ func LoadManifest(path string) (Manifest, error) {
 		return Manifest{}, errors.New("manifest is incomplete or has an unsupported version")
 	}
 	return manifest, nil
+}
+
+func inspectOutputDirectory(path string, force bool) (bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect output directory: %w", err)
+	}
+	if !force {
+		return false, errors.New("output directory already exists; use --force to replace it")
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, errors.New("replace output directory: target must be a generated directory")
+	}
+	markerPath := filepath.Join(path, generationMarker)
+	markerInfo, err := os.Lstat(markerPath)
+	if err != nil || !markerInfo.Mode().IsRegular() {
+		return false, errors.New("replace output directory: generation marker is missing")
+	}
+	marker, err := readBoundedFile(markerPath)
+	if err != nil || string(marker) != ManifestVersion+"\n" {
+		return false, errors.New("replace output directory: generation marker is invalid")
+	}
+	return true, nil
+}
+
+func cleanupStaleGenerations(parentDir, outputBase string) error {
+	entries, err := os.ReadDir(parentDir)
+	if err != nil {
+		return fmt.Errorf("find stale staging directories: %w", err)
+	}
+	prefix := stagingPrefix(outputBase)
+	removed := false
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		candidate := filepath.Join(parentDir, entry.Name())
+		info, statErr := os.Lstat(candidate)
+		if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		markerInfo, markerErr := os.Lstat(filepath.Join(candidate, generationMarker))
+		if markerErr != nil || !markerInfo.Mode().IsRegular() {
+			continue
+		}
+		marker, readErr := readBoundedFile(filepath.Join(candidate, generationMarker))
+		if readErr != nil || string(marker) != ManifestVersion+"\n" {
+			continue
+		}
+		if err := os.RemoveAll(candidate); err != nil {
+			return fmt.Errorf("remove stale staging directory: %w", err)
+		}
+		removed = true
+	}
+	if removed {
+		if err := syncDirectory(parentDir); err != nil {
+			return fmt.Errorf("sync stale staging cleanup: %w", err)
+		}
+	}
+	return nil
+}
+
+func stagingPrefix(outputBase string) string {
+	return "." + normalizedOutputBase(outputBase) + stagingInfix
+}
+
+func generationLockName(outputBase string) string {
+	return "." + normalizedOutputBase(outputBase) + ".lock"
+}
+
+func normalizedOutputBase(outputBase string) string {
+	normalized := strings.TrimLeft(outputBase, ".")
+	if normalized == "" {
+		return "credentials"
+	}
+	return normalized
+}
+
+func runGenerationHook(options GenerateOptions, stage string) error {
+	if options.testHook == nil {
+		return nil
+	}
+	if err := options.testHook(stage); err != nil {
+		return fmt.Errorf("generation interrupted at %s: %w", stage, err)
+	}
+	return nil
+}
+
+func validateStagedGeneration(stagingDir string, expected Manifest, keytool string) error {
+	expectedModes := map[string]os.FileMode{
+		generationMarker:       0o600,
+		"manifest.json":        0o600,
+		"ca.pem":               0o644,
+		"server.pem":           0o644,
+		"server-key.pem":       0o600,
+		"service-account.json": 0o600,
+		"authorized-user.json": 0o600,
+		"wif.json":             0o600,
+		"subject-token.txt":    0o600,
+		"access-token.txt":     0o600,
+		"truststore.p12":       0o600,
+	}
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		return fmt.Errorf("read staged generation: %w", err)
+	}
+	actualNames := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		actualNames = append(actualNames, entry.Name())
+	}
+	sort.Strings(actualNames)
+	expectedNames := make([]string, 0, len(expectedModes))
+	for name := range expectedModes {
+		expectedNames = append(expectedNames, name)
+	}
+	sort.Strings(expectedNames)
+	if !reflect.DeepEqual(actualNames, expectedNames) {
+		return fmt.Errorf(
+			"staged generation file set is incomplete: actual_count=%d expected_count=%d",
+			len(actualNames),
+			len(expectedNames),
+		)
+	}
+	for name, mode := range expectedModes {
+		path := filepath.Join(stagingDir, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("staged %s is not a regular file", name)
+		}
+		if info.Mode().Perm() != mode {
+			return fmt.Errorf("staged %s has an invalid file mode", name)
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open staged %s: %w", name, err)
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if syncErr != nil || closeErr != nil {
+			return fmt.Errorf("sync staged %s: %w", name, errors.Join(syncErr, closeErr))
+		}
+	}
+
+	var observed Manifest
+	if err := readStrictJSON(filepath.Join(stagingDir, "manifest.json"), &observed); err != nil {
+		return fmt.Errorf("validate staged manifest: %w", err)
+	}
+	if !reflect.DeepEqual(observed, expected) {
+		return errors.New("staged manifest does not match the generated file set")
+	}
+	var account serviceAccountCredential
+	if err := readStrictJSON(filepath.Join(stagingDir, "service-account.json"), &account); err != nil {
+		return errors.New("validate staged service-account credential")
+	}
+	var user authorizedUserCredential
+	if err := readStrictJSON(filepath.Join(stagingDir, "authorized-user.json"), &user); err != nil {
+		return errors.New("validate staged authorized-user credential")
+	}
+	var external externalAccountCredential
+	if err := readStrictJSON(filepath.Join(stagingDir, "wif.json"), &external); err != nil {
+		return errors.New("validate staged external-account credential")
+	}
+	if account.TokenURI != expected.OAuthTokenURL || user.TokenURI != expected.OAuthTokenURL ||
+		external.TokenURL != expected.STSTokenURL ||
+		external.CredentialSource["file"] != expected.SubjectToken {
+		return errors.New("staged credential endpoints do not match the manifest")
+	}
+
+	if _, err := tls.LoadX509KeyPair(
+		filepath.Join(stagingDir, "server.pem"),
+		filepath.Join(stagingDir, "server-key.pem"),
+	); err != nil {
+		return errors.New("validate staged TLS certificate and key")
+	}
+	caPEM, err := readBoundedFile(filepath.Join(stagingDir, "ca.pem"))
+	if err != nil {
+		return errors.New("validate staged CA certificate")
+	}
+	serverPEM, err := readBoundedFile(filepath.Join(stagingDir, "server.pem"))
+	if err != nil {
+		return errors.New("validate staged server certificate")
+	}
+	caBlock, _ := pem.Decode(caPEM)
+	serverBlock, _ := pem.Decode(serverPEM)
+	if caBlock == nil || serverBlock == nil {
+		return errors.New("validate staged certificate chain")
+	}
+	caCertificate, caErr := x509.ParseCertificate(caBlock.Bytes)
+	serverCertificate, serverErr := x509.ParseCertificate(serverBlock.Bytes)
+	if caErr != nil || serverErr != nil || serverCertificate.CheckSignatureFrom(caCertificate) != nil {
+		return errors.New("validate staged certificate chain")
+	}
+
+	for _, name := range []string{"subject-token.txt", "access-token.txt"} {
+		value, err := readBoundedFile(filepath.Join(stagingDir, name))
+		trimmed := strings.TrimSpace(string(value))
+		if err != nil || trimmed == "" || strings.ContainsAny(trimmed, " \t\r\n") {
+			return fmt.Errorf("validate staged %s", name)
+		}
+	}
+	if err := verifyJavaTruststore(keytool, filepath.Join(stagingDir, "truststore.p12")); err != nil {
+		return err
+	}
+	if err := syncDirectory(stagingDir); err != nil {
+		return fmt.Errorf("sync staged generation: %w", err)
+	}
+	return nil
+}
+
+func verifyJavaTruststore(keytool, truststore string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(
+		ctx,
+		keytool,
+		"-list",
+		"-alias", "bqemu-local-ca",
+		"-keystore", truststore,
+		"-storetype", "PKCS12",
+		"-storepass", truststorePassword,
+	)
+	command.Stdout = io.Discard
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return errors.New("keytool timed out while validating truststore.p12")
+		}
+		return errors.New("keytool failed while validating truststore.p12")
+	}
+	return nil
+}
+
+func installGeneration(stagingDir, outputDir string, replacing bool) error {
+	parentDir := filepath.Dir(outputDir)
+	if !replacing {
+		if err := os.Rename(stagingDir, outputDir); err != nil {
+			return fmt.Errorf("install generated directory: %w", err)
+		}
+		if err := syncDirectory(parentDir); err != nil {
+			rollbackErr := os.Rename(outputDir, stagingDir)
+			syncErr := syncDirectory(parentDir)
+			return fmt.Errorf(
+				"sync generated directory: %w",
+				errors.Join(err, rollbackErr, syncErr),
+			)
+		}
+		return nil
+	}
+
+	if err := atomicSwapDirectories(stagingDir, outputDir); err != nil {
+		return fmt.Errorf("atomically replace generated directory: %w", err)
+	}
+	if err := syncDirectory(parentDir); err != nil {
+		rollbackErr := atomicSwapDirectories(stagingDir, outputDir)
+		syncErr := syncDirectory(parentDir)
+		return fmt.Errorf(
+			"sync replaced generated directory: %w",
+			errors.Join(err, rollbackErr, syncErr),
+		)
+	}
+	if err := os.RemoveAll(stagingDir); err == nil {
+		_ = syncDirectory(parentDir)
+	}
+	return nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func makeCA(now time.Time, key *rsa.PrivateKey) ([]byte, *x509.Certificate, error) {
@@ -451,6 +773,10 @@ func writeFile(path string, data []byte, mode os.FileMode, force bool) error {
 		file.Close()
 		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return fmt.Errorf("sync %s: %w", filepath.Base(path), err)
+	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", filepath.Base(path), err)
 	}
@@ -467,25 +793,6 @@ func resolveKeytool(configured string) (string, error) {
 		return "", errors.New("keytool is required to generate truststore.p12")
 	}
 	return path, nil
-}
-
-func validateWriteTargets(paths []string, force bool) error {
-	for _, path := range paths {
-		info, err := os.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("inspect %s: %w", filepath.Base(path), err)
-		}
-		if !force {
-			return fmt.Errorf("create %s: file exists", filepath.Base(path))
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("replace %s: target must be a regular file", filepath.Base(path))
-		}
-	}
-	return nil
 }
 
 func createJavaTruststore(keytool, target, caPath string, force bool) error {

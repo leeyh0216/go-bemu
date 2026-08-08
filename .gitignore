@@ -2,6 +2,8 @@
 /data/
 /.artifacts/
 /.bqemu-auth/
+/.bqemu-auth.stage-*/
+/.bqemu-auth.lock
 *.duckdb
 *.duckdb.wal
 coverage.out

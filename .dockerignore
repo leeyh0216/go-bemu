@@ -2,6 +2,8 @@
 .github
 .artifacts
 .bqemu-auth
+.bqemu-auth.stage-*
+.bqemu-auth.lock
 .local
 .venv
 bin
