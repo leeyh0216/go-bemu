@@ -157,7 +157,7 @@ func TestStorageWriteProtoRowsLifecycleAndConnectionInheritance(t *testing.T) {
 	}
 }
 
-func TestStorageWriteRejectsDeprecatedDefaultStreamAlias(t *testing.T) {
+func TestStorageWriteCanonicalizesAlternateDefaultStreamName(t *testing.T) {
 	ctx, cancel := grpcStorageWriteTestContext(t)
 	defer cancel()
 	coordinator := newWireWriteCoordinator()
@@ -181,13 +181,13 @@ func TestStorageWriteRejectsDeprecatedDefaultStreamAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.GetWriteStream() != parent+"/_default" || response.GetError().GetCode() != int32(codes.InvalidArgument) {
-		t.Fatalf("unexpected deprecated alias response: %#v", response)
+	if response.GetWriteStream() != parent+"/streams/_default" || response.GetAppendResult().GetOffset() != nil {
+		t.Fatalf("unexpected default append response: %#v", response)
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
-	if coordinator.visibleRows != 0 {
-		t.Fatalf("got %d visible rows, want 0", coordinator.visibleRows)
+	if coordinator.visibleRows != 1 {
+		t.Fatalf("got %d visible rows, want 1", coordinator.visibleRows)
 	}
 }
 
