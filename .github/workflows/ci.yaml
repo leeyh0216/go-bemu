@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -19,8 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  go-contract:
-    name: Go contract, race, and vet
+  static-validation:
+    name: Static validation and workflow policy
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -29,12 +30,52 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Check formatting
-        run: make format-check
-      - name: Test with race detector
-        run: go test -race -timeout "$BQEMU_GO_TEST_TIMEOUT" ./...
-      - name: Vet
-        run: go vet ./...
+      - name: Validate static contracts
+        run: make ci-static
+
+  go-tests:
+    name: Go / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Core and application
+            target: ci-test-core
+          - name: Engine adapters
+            target: ci-test-adapters
+          - name: Storage Read
+            target: ci-test-storage-read
+          - name: Storage Write
+            target: ci-test-storage-write
+          - name: REST and gRPC transport
+            target: ci-test-transport
+          - name: Composition and contracts
+            target: ci-test-composition
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run bounded race tests
+        env:
+          CI_TARGET: ${{ matrix.target }}
+        run: make "$CI_TARGET"
+
+  go-smoke:
+    name: Go / Complete package smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test every Go package
+        run: make ci-test-all
 
   python-client:
     name: Official Python client contract
@@ -102,7 +143,6 @@ jobs:
 
   container-smoke:
     name: Non-root container and Compose smoke
-    needs: go-contract
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -144,3 +184,65 @@ jobs:
       - name: Stop Compose service
         if: always()
         run: docker compose down --volumes --remove-orphans
+
+  spark-contract:
+    name: Spark BigQuery Connector contract
+    permissions:
+      contents: read
+    uses: ./.github/workflows/spark-contract.yaml
+
+  validation-complete:
+    name: All required validation succeeded
+    if: ${{ always() }}
+    needs:
+      - static-validation
+      - go-smoke
+      - go-tests
+      - python-client
+      - bq-cli
+      - spark-contract
+      - container-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reject failed, cancelled, or skipped validation
+        env:
+          STATIC_RESULT: ${{ needs.static-validation.result }}
+          GO_SMOKE_RESULT: ${{ needs.go-smoke.result }}
+          GO_RESULT: ${{ needs.go-tests.result }}
+          PYTHON_RESULT: ${{ needs.python-client.result }}
+          BQ_RESULT: ${{ needs.bq-cli.result }}
+          SPARK_RESULT: ${{ needs.spark-contract.result }}
+          CONTAINER_RESULT: ${{ needs.container-smoke.result }}
+        run: |
+          failed=0
+          for result in \
+            "static-validation:$STATIC_RESULT" \
+            "go-smoke:$GO_SMOKE_RESULT" \
+            "go-tests:$GO_RESULT" \
+            "python-client:$PYTHON_RESULT" \
+            "bq-cli:$BQ_RESULT" \
+            "spark-contract:$SPARK_RESULT" \
+            "container-smoke:$CONTAINER_RESULT"
+          do
+            job=${result%%:*}
+            status=${result#*:}
+            printf '%s\n' "required_job=$job result=$status"
+            if test "$status" != success; then
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+  publish:
+    name: Publish validated image
+    needs: validation-complete
+    if: >-
+      ${{
+        github.event_name == 'push' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-ghcr.yaml
