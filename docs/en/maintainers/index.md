@@ -14,8 +14,8 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 
 - [Architecture](../architecture.md): package boundaries, dependency direction,
   runtime composition, and persistence ownership.
-- [BigQuery and connector internals](../bigquery-internals.md): protocol flows,
-  connector behavior, types, and translation boundaries.
+- [BigQuery protocol internals](../bigquery-internals.md): protocol flows,
+  types, and translation boundaries.
 - [Architecture decisions](../adr/): decisions that constrain implementation.
 
 <!-- section: implementation -->

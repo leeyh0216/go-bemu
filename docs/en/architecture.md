@@ -153,7 +153,7 @@ The execution ceiling follows the same bounded-job intent as official
 [`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms),
 while exact request-level `timeoutMs` behavior remains a separate compatibility
 gap.
-Connector-required `configuration.query.priority` and `configuration.labels`
+Query `configuration.query.priority` and `configuration.labels`
 are domain data rather than scheduler policy: priority is enum-validated, labels
 are validated and round-tripped (including an empty map), and both participate
 in the configuration fingerprint. Logs expose only priority, label count, and a

@@ -5,8 +5,8 @@
 
 # User Documentation
 
-These documents are for people running BQEMU from an application, CLI, or
-connector. BigQuery resources follow the public [BigQuery REST API
+These documents are for people running BQEMU through its public endpoints.
+BigQuery resources follow the public [BigQuery REST API
 reference](https://cloud.google.com/bigquery/docs/reference/rest).
 
 <!-- section: start -->

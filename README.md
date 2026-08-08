@@ -6,7 +6,7 @@
 # go-bemu
 
 `go-bemu` provides a local BigQuery-compatible endpoint for application and
-connector tests. Run BQEMU beside your test process, create an emulator project,
+protocol integration tests. Run BQEMU beside your test process, create an emulator project,
 and point the client at the local REST or Storage gRPC endpoint.
 
 The exact API and RPC surface is listed in [Compatibility](docs/en/compatibility.md).

@@ -31,16 +31,13 @@ gRPC 호출이나 메시지, SQL 규칙, 전송 형식 중 무엇을 구현하�
   확인하는 `--set` 경로, 예제를 함께 수정합니다.
   `defaults < file < environment < --set` 우선순위를 유지합니다. 숨은 플래그나
   테스트에만 통하는 특수값을 추가하지 않습니다.
-- 비밀 정보는 마운트한 파일의 경로로 참조합니다. 최종 설정, 로그, 시험 데이터,
-  예제에 비밀 정보의 실제 내용을 넣지 않습니다.
 
 <!-- section: provenance -->
 ## 출처 규칙
 
-- 1차 출처를 사용합니다. 커넥터에 의존하는 동작은 변경될 수 있는 브랜치가 아니라
-  정확한 [`0.44.2`
-  태그](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)를
-  연결합니다.
+- 제품 근거에는 공식 REST, Storage RPC, GoogleSQL 계약을 사용합니다.
+- 실행 파일 버전별 관찰 결과와 변경되지 않는 상위 소스 revision은
+  `tests/integration`에서만 관리하며 제품 실행 계약으로 만들지 않습니다.
 - 이전 에뮬레이터와 비교할 때는 정확한 [goccy BigQuery 에뮬레이터 `v0.8.1`
   태그](https://github.com/goccy/bigquery-emulator/tree/v0.8.1)를 연결합니다. 소스 코드를
   복사하거나 빌드 의존성으로 추가하지 않습니다.
@@ -82,7 +79,7 @@ make ci-test-all
 DuckDB가 SQL을 받아들였다는 사실만으로는 BigQuery 동작을 재현했다고 볼 수
 없습니다.
 
-개발 중에는 관련 패키지나 소비자 테스트를 먼저 실행합니다. 커밋하기 전에는
+개발 중에는 관련 패키지나 통합 사례를 먼저 실행합니다. 커밋하기 전에는
 저장소의 필수 검증을 모두 실행합니다. 생성된 매니페스트와 문서, 검증 자료는
 원본과 같은 커밋에 포함해야 합니다. CI는 오래된 생성 파일을 거부합니다.
 
@@ -92,17 +89,15 @@ DuckDB가 SQL을 받아들였다는 사실만으로는 BigQuery 동작을 재현
 동작은 다음 순서로 추가합니다.
 
 ```text
-protocol profile -> adapter -> capability -> golden -> E2E
+operation contract -> domain use case -> port/adapter -> product test
 ```
 
-프로필은 공개 클라이언트와 버전, 관찰한 전송 계약을 고정합니다. 어댑터에는 꼭
-필요한 변환만 둡니다. 지원 기능 선언에는 정확한 지원 수준을 적습니다. 민감한
-정보를 제거한 검증 기준 데이터에는 데이터 구조를 기록합니다. E2E 테스트는 배포된
-클라이언트가 공개 API까지 정상적으로 요청을 전달하는지 검증합니다. 차이
-보고서에는
-`version`, `operation`, `shape`, `fingerprint`, `fix_hint`가 반드시 포함되어야
-합니다. 이 절차가 [BigQuery API
-계약](https://cloud.google.com/bigquery/docs/reference)과의 비교를 대신하지는 않습니다.
+operation 매니페스트는 공개 계약을 식별합니다. 도메인과 애플리케이션은 동작의
+의미를 소유하고, 포트는 엔진과 외부 시스템을 분리합니다. 제품 테스트는 공개 경계와
+미지원 요청을 검증합니다. 실행 파일의 정확한 버전, 아티팩트, scenario, 프로세스
+증거는 [통합 프레임워크](tests/integration/docs/ko/framework.md)에 별도로 추가합니다.
+어느 절차도 [BigQuery API
+계약](https://cloud.google.com/bigquery/docs/reference)과의 비교를 대신하지 않습니다.
 
 <!-- section: issue-workflow -->
 ## 이슈 단위 작업 절차
@@ -139,7 +134,8 @@ protocol profile -> adapter -> capability -> golden -> E2E
 <!-- section: change-description -->
 ## 변경 설명
 
-지원하는 커넥터 및 클라이언트 버전, 지원 기능 ID, 공식 근거, 확인한 차이,
-선택한 경계, 오류 동작, 남은 제약을 적습니다. 모든 완료 조건을 실제로
+operation 또는 지원 기능 ID, 공식 근거, 확인한 차이, 선택한 경계, 오류 동작,
+남은 제약을 적습니다. 통합 사례에는 실행 파일의 정확한 버전과 변경되지 않는
+아티팩트도 적습니다. 모든 완료 조건을 실제로
 충족하기 전에는 `refs #N`을 사용합니다. 풀 리퀘스트에는 주 이슈 하나만 지정하고,
 의존 커밋이 있다면 범위를 섞지 말고 그 관계를 설명합니다.

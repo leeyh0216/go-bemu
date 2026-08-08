@@ -87,16 +87,14 @@ append that was staged before an acknowledgement timeout must be replayed with
 the same offset/schema/payload receipt before Finalize; that receipt is
 idempotent. DEFAULT streams retain
 their official at-least-once ambiguity. The official limit applies to the full
-request; the pinned Java 3.22.1 client batches by `ProtoData` size. The
-compatibility setting `maxAppendRequestBytes` models that client-visible
-payload, while transient admission charges the complete `AppendRowsRequest`.
+request. The compatibility setting `maxAppendRequestBytes` bounds the serialized
+row payload, while transient admission charges the complete
+`AppendRowsRequest`.
 Startup also requires `server.grpc.maxReceiveMessageBytes`
 to fit the configured payload plus the file-configured
 `maxAppendEnvelopeBytes` (default 64 KiB). Its environment override is
 `BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES`. These rules follow the official
 [`AppendRows` request and retry contract](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows).
-The exact pinned client source is retained in the
-[`google-cloud-bigquerystorage` 3.22.1 source artifact](https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar).
 `maxConcurrentAppendRequests` (default `16`, environment
 `BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`) is acquired before gRPC
 `Recv`, bounding concurrent protobuf decode, clone, and digest memory across
@@ -132,9 +130,8 @@ body, headers, encoding, accepted/rejected outcome, byte counts, SHA-256
 digests, status, and reason. This follows Go's [`Request` body
 contract](https://pkg.go.dev/net/http#Request),
 [`MaxBytesReader`](https://pkg.go.dev/net/http#MaxBytesReader), and
-[`gzip.NewReader`](https://pkg.go.dev/compress/gzip#NewReader), the official
-[`tables.insert` method](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert),
-and the pinned connector's [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java).
+[`gzip.NewReader`](https://pkg.go.dev/compress/gzip#NewReader), and the official
+[`tables.insert` method](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert).
 
 Unknown YAML fields, multiple documents, ambiguous numeric durations, unknown
 override paths, and invalid cross-field combinations fail before listeners
@@ -283,13 +280,11 @@ their units and scope:
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go duration, `5s` | one Storage Read application-test context |
 | `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go duration, `5s` | Storage Write application, adapter, and public gRPC test contexts |
 | `BQEMU_REST_TEST_TIMEOUT` | Go duration, `5s` | REST request, gzip boundary, pagination, and overwrite test contexts |
-| `BQEMU_PYTEST_TIMEOUT_SECONDS` | positive seconds, suite default `90`; direnv default `300` | official Python-client build, readiness, request, and shutdown budget |
-| `BQEMU_BQCLI_TIMEOUT_SECONDS` | positive seconds, `300` | each bq CLI subprocess plus emulator readiness budget |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | positive seconds, `120` | `docker compose --wait` startup budget |
 
-On Python startup failure the fixture includes only a bounded tail of the local
-process log. The suite-wide Python budget is configurable but deliberately
-classified as coarse. A future per-phase split is:
+External process timeout controls belong to the [integration test
+framework](../../tests/integration/docs/en/framework.md). A future common
+per-phase split is:
 
 | Control | Purpose | Diagnostic on expiry |
 | --- | --- | --- |

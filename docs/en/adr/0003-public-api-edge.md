@@ -13,9 +13,9 @@ Accepted.
 <!-- section: context -->
 ## Context
 
-SDKs, `bq`, Spark, contract tests, and an optional console should observe the same
-resources and errors. A private UI-only API would bypass compatibility work and
-could report success while public clients fail. Public resource shapes are
+Public REST/gRPC callers, contract tests, and an optional console should observe
+the same resources and errors. A private UI-only API would bypass compatibility
+work and could report success while public callers fail. Public resource shapes are
 defined by the [BigQuery REST
 reference](https://cloud.google.com/bigquery/docs/reference/rest/v2).
 

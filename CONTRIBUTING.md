@@ -29,15 +29,13 @@ or [GoogleSQL reference](https://cloud.google.com/bigquery/docs/reference/standa
   `--set` path, and sample together. Preserve
   `defaults < file < environment < --set`; do not add a hidden flag or magic
   test value.
-- Reference secret material by mounted file path. Never add secret bytes to the
-  effective configuration, logs, fixtures, or examples.
 
 <!-- section: provenance -->
 ## Provenance Rules
 
-- Use primary sources. For connector-dependent behavior, link the exact
-  [`0.44.2` tag](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2),
-  not a mutable branch.
+- Use the official REST, Storage RPC, and GoogleSQL contracts as product sources.
+- Keep executable-version observations and immutable upstream revisions inside
+  `tests/integration`; do not make them product runtime contracts.
 - Historical emulator comparisons must link the exact [goccy BigQuery emulator
   `v0.8.1` tag](https://github.com/goccy/bigquery-emulator/tree/v0.8.1); do not
   copy its source or make it an upstream build dependency.
@@ -72,7 +70,7 @@ Add domain state tests, application tests with fake outbound adapters, public
 REST/gRPC contract tests, and malformed/boundary cases. A test that only proves
 DuckDB accepts SQL is not proof that BigQuery semantics are reproduced.
 
-Run the narrow package or consumer test while developing, then run the required
+Run the narrow package or integration case while developing, then run the required
 repository checks before committing. Generated manifests, documentation, and
 evidence belong in the same commit as their source. CI rejects stale generated
 artifacts.
@@ -83,15 +81,16 @@ artifacts.
 Introduce behavior in this order:
 
 ```text
-protocol profile -> adapter -> capability -> golden -> E2E
+operation contract -> domain use case -> port/adapter -> product test
 ```
 
-The profile pins a public client/version and observed wire contract. The adapter
-contains the smallest translation. The capability names its exact support
-level. A sanitized golden captures shape, and an end-to-end test proves the
-released client reaches the public edge. Drift reports must include
-`version`, `operation`, `shape`, `fingerprint`, and `fix_hint`. This does not
-replace comparison with the [BigQuery API contract](https://cloud.google.com/bigquery/docs/reference).
+The operation manifest identifies the public contract. Domain and application
+code own semantics, while ports isolate engines and external systems. Product
+tests prove the public boundary and unsupported cases. Exact executable
+versions, artifacts, scenarios, and process evidence are added separately to
+the [integration framework](tests/integration/docs/en/framework.md). Neither
+path replaces comparison with the [BigQuery API
+contract](https://cloud.google.com/bigquery/docs/reference).
 
 <!-- section: issue-workflow -->
 ## Issue-Scoped Workflow
@@ -128,7 +127,8 @@ editing shared files before another issue rebases onto its commit.
 <!-- section: change-description -->
 ## Change Description
 
-State the supported connector/client version, capability ID, authoritative
-source, observed difference, chosen boundary, failure behavior, and remaining
-limitations. A pull request must identify one primary issue and explain any
-dependency commits without absorbing their scope.
+State the operation or capability ID, authoritative source, observed difference,
+chosen boundary, failure behavior, and remaining limitations. An integration
+case also states the exact executable version and immutable artifact. A pull
+request must identify one primary issue and explain dependency commits without
+absorbing their scope.

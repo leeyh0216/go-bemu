@@ -117,19 +117,15 @@ REST 계층에서 검사합니다. 이어받기 토큰은 아직 보내지 않�
 ### Storage Write 요청 크기
 
 기본 스트림은 공식 at-least-once 동작의 모호성을 유지합니다. 공식 제한은 전체 요청에
-적용되지만, 고정한 Java 3.22.1 클라이언트는 `ProtoData` 크기를 기준으로 배치를
-구성합니다. 호환성 설정 `maxAppendRequestBytes`는 클라이언트에 보이는 이 데이터의
-크기를 나타냅니다. 처리 중 메모리 제한은 전체 `AppendRowsRequest`를 기준으로
-계산합니다.
+적용됩니다. 호환성 설정 `maxAppendRequestBytes`는 직렬화한 행 데이터의 크기를
+제한합니다. 처리 중 메모리 제한은 전체 `AppendRowsRequest`를 기준으로 계산합니다.
 
 시작할 때 `server.grpc.maxReceiveMessageBytes`가 설정된 전송 데이터와 파일에서 읽은
 `maxAppendEnvelopeBytes`를 함께 수용할 수 있는지 검사합니다.
 `maxAppendEnvelopeBytes`의 기본값은 64 KiB이고 환경 변수는
 `BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES`입니다. 이 규칙은 공식
 [`AppendRows` 요청 및 재시도 계약](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows)을
-따릅니다. 클라이언트 동작은 특정 버전의
-[`google-cloud-bigquerystorage` 3.22.1 소스 아티팩트](https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar)를
-기준으로 확인합니다.
+따릅니다.
 
 `maxConcurrentAppendRequests`의 기본값은 `16`이며 환경 변수는
 `BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`입니다. gRPC `Recv` 전에 허가를
@@ -178,8 +174,7 @@ HTTP API는 `identity`와 `gzip`으로 인코딩한 요청 본문을 허용합�
 [`Request` 본문 계약](https://pkg.go.dev/net/http#Request),
 [`MaxBytesReader`](https://pkg.go.dev/net/http#MaxBytesReader),
 [`gzip.NewReader`](https://pkg.go.dev/compress/gzip#NewReader), 공식
-[`tables.insert` 메서드](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert),
-고정된 커넥터의 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)를
+[`tables.insert` 메서드](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert)를
 기준으로 합니다.
 
 ### 설정 검증과 민감정보
@@ -342,13 +337,11 @@ Storage Write의 공개 시점은 공식
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go 기간, `5s` | Storage Read 애플리케이션 테스트 컨텍스트 하나 |
 | `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go 기간, `5s` | Storage Write 애플리케이션, 어댑터, 공개 gRPC 테스트 컨텍스트 |
 | `BQEMU_REST_TEST_TIMEOUT` | Go 기간, `5s` | REST 요청, gzip 경계, 페이지 나누기, 덮어쓰기 테스트 컨텍스트 |
-| `BQEMU_PYTEST_TIMEOUT_SECONDS` | 양의 초, 테스트 모음 `90`, direnv `300` | 공식 Python 클라이언트 빌드, 준비 상태, 요청, 종료 |
-| `BQEMU_BQCLI_TIMEOUT_SECONDS` | 양의 초, `300` | 각 `bq` CLI 하위 프로세스와 에뮬레이터 준비 상태 |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | 양의 초, `120` | `docker compose --wait` 시작 과정 |
 
-Python 시작 오류에는 로컬 프로세스 로그의 마지막 일부만 정해진 크기만큼 포함합니다.
-Python 테스트 모음 전체의 제한 시간은 설정할 수 있지만, 현재는 세부 단계별로 나누지
-않습니다. 이후에는 다음과 같이 분리할 계획입니다.
+외부 프로세스 제한 시간은 [통합 테스트
+프레임워크](../../tests/integration/docs/ko/framework.md)에서 관리합니다. 이후 공통
+단계별 제한은 다음과 같이 분리할 계획입니다.
 
 | 설정 | 목적 | 시간 만료 시 진단 정보 |
 | --- | --- | --- |
