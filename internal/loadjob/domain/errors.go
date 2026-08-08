@@ -10,4 +10,7 @@ var (
 	ErrUnsupported  = errors.New("load job feature is not implemented")
 )
 
-const CapabilityParquetNestedRepeatedV1 = "load.parquet.nested-repeated.unsupported-v1"
+const (
+	CapabilityParquetNestedRepeatedV1 = "load.parquet.nested-repeated.unsupported-v1"
+	CapabilityDecimalRoundingV1       = "load.decimal-rounding.unsupported-v1"
+)

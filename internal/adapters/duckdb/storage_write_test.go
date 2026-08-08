@@ -1,6 +1,7 @@
 package duckdb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -115,7 +116,7 @@ func TestStorageWriteRejectsDecimalOverflowBeforeRowMutation(t *testing.T) {
 		StreamName: table.Name() + "/streams/_default", Table: table,
 		Descriptor: descriptor, Rows: [][]byte{row}, SchemaFingerprint: "decimal", PayloadDigest: "overflow",
 	})
-	if err == nil || !strings.Contains(err.Error(), "exceeds precision 5") {
+	if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueOverflowV1) || strings.Contains(err.Error(), "1234.56") {
 		t.Fatalf("decimal overflow error = %v", err)
 	}
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
@@ -124,7 +125,7 @@ func TestStorageWriteRejectsDecimalOverflowBeforeRowMutation(t *testing.T) {
 }
 
 func TestStorageWriteRejectsNonBigQueryDecimalGrammarBeforeRowMutation(t *testing.T) {
-	for _, value := range []string{"1/2", "0x10", "0b10"} {
+	for _, value := range []string{"secret-marker/2", "0xsecret-marker", "0bsecret-marker"} {
 		t.Run(value, func(t *testing.T) {
 			ctx, cancel := duckDBStorageWriteTestContext(t)
 			defer cancel()
@@ -139,13 +140,93 @@ func TestStorageWriteRejectsNonBigQueryDecimalGrammarBeforeRowMutation(t *testin
 				StreamName: table.Name() + "/streams/_default", Table: table,
 				Descriptor: descriptor, Rows: [][]byte{row}, SchemaFingerprint: "decimal", PayloadDigest: value,
 			})
-			if err == nil || !strings.Contains(err.Error(), "invalid value") {
+			if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueInvalidV1) || strings.Contains(err.Error(), value) || strings.Contains(err.Error(), "secret-marker") {
 				t.Fatalf("decimal grammar error = %v", err)
 			}
 			if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
 				t.Fatalf("invalid decimal inserted %d rows", got)
 			}
 		})
+	}
+}
+
+func TestStorageWritePublicGRPCRedactsInvalidDecimalAndReturnsInvalidArgument(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "amount", Type: "NUMERIC"}})
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	previousLogger := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	service, err := writeapp.New(writeapp.Config{
+		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		MaxStreams: 2, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 2,
+		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
+	}, coordinator, storageWriteRetryClock{}, storageWriteRetryIDs{}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := bufconn.Listen(4 * 1024 * 1024)
+	server := grpc.NewServer()
+	storagepb.RegisterBigQueryWriteServer(server, grpcserver.NewStorageWriteServer(service))
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	descriptorBytes := storageWriteDescriptor(t,
+		protoField("amount", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+	)
+	descriptor := new(descriptorpb.DescriptorProto)
+	if err := proto.Unmarshal(descriptorBytes, descriptor); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "storage-write-secret-marker/2"
+	row := storageWriteRow(t, descriptorBytes, map[string]any{"amount": secret})
+	client := newDuckDBStorageWriteClient(t, listener)
+	created, err := client.CreateWriteStream(ctx, &storagepb.CreateWriteStreamRequest{
+		Parent: table.Name(), WriteStream: &storagepb.WriteStream{Type: storagepb.WriteStream_PENDING},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendClient, err := client.AppendRows(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appendClient.Send(&storagepb.AppendRowsRequest{
+		WriteStream: created.GetName(), Offset: wrapperspb.Int64(0),
+		Rows: &storagepb.AppendRowsRequest_ProtoRows{ProtoRows: &storagepb.AppendRowsRequest_ProtoData{
+			WriterSchema: &storagepb.ProtoSchema{ProtoDescriptor: descriptor},
+			Rows:         &storagepb.ProtoRows{SerializedRows: [][]byte{row}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := appendClient.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetError().GetCode() != int32(codes.InvalidArgument) {
+		t.Fatalf("AppendRows status = %#v, want INVALID_ARGUMENT", response.GetError())
+	}
+	if strings.Contains(response.String(), secret) || strings.Contains(response.String(), "secret-marker") {
+		t.Fatalf("AppendRows response exposed the decimal payload: %s", response)
+	}
+	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), "secret-marker") {
+		t.Fatalf("Storage Write logs exposed the decimal payload: %s", logs.String())
+	}
+	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
+		t.Fatalf("invalid public ProtoRow inserted %d rows", got)
+	}
+	stream, err := service.GetStream(ctx, created.GetName())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream.NextOffset != 0 || stream.RowCount != 0 || coordinator.stagedBytes.Load() != 0 {
+		t.Fatalf("invalid public ProtoRow changed pending state: offset=%d rows=%d staged_bytes=%d", stream.NextOffset, stream.RowCount, coordinator.stagedBytes.Load())
 	}
 }
 
@@ -989,11 +1070,12 @@ func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{
 		{Name: "payload", Type: "RECORD", Fields: []domain.Field{
 			{Name: "code", Type: "INT64"}, {Name: "label", Type: "STRING"},
-			{Name: "amount", Type: "BIGNUMERIC", Precision: &precision10, Scale: &scale2},
+			{Name: "amount", Type: "BIGNUMERIC", Precision: &precision10, Scale: &scale2, RoundingMode: domain.RoundingModeHalfEven},
 		}},
 		{Name: "payloads", Type: "RECORD", Mode: "REPEATED", Fields: []domain.Field{
 			{Name: "code", Type: "INT64"}, {Name: "amount", Type: "NUMERIC", Precision: &precision6, Scale: &scale2},
 		}},
+		{Name: "amounts", Type: "NUMERIC", Mode: "REPEATED", Precision: &precision6, Scale: &scale2, RoundingMode: domain.RoundingModeHalfEven},
 	})
 	optional, repeated := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL, descriptorpb.FieldDescriptorProto_LABEL_REPEATED
 	messageType, intType, stringType := descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_TYPE_STRING
@@ -1006,6 +1088,7 @@ func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 		Field: []*descriptorpb.FieldDescriptorProto{
 			{Name: &payloadFieldName, Number: &payloadNumber, Type: &messageType, Label: &optional, TypeName: &payloadTypeName},
 			{Name: &payloadsFieldName, Number: &payloadsNumber, Type: &messageType, Label: &repeated, TypeName: &payloadsTypeName},
+			protoField("amounts", 3, stringType, repeated),
 		},
 		NestedType: []*descriptorpb.DescriptorProto{
 			{Name: &payloadName, Field: []*descriptorpb.FieldDescriptorProto{
@@ -1027,14 +1110,17 @@ func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 	payload := dynamicpb.NewMessage(payloadField.Message())
 	payload.Set(payload.Descriptor().Fields().ByName("code"), protoreflect.ValueOfInt64(7))
 	payload.Set(payload.Descriptor().Fields().ByName("label"), protoreflect.ValueOfString("primary"))
-	payload.Set(payload.Descriptor().Fields().ByName("amount"), protoreflect.ValueOfString("12345678.90"))
+	payload.Set(payload.Descriptor().Fields().ByName("amount"), protoreflect.ValueOfString("12345678.905"))
 	row.Set(payloadField, protoreflect.ValueOfMessage(payload))
 	payloadsField := message.Fields().ByName("payloads")
 	for index, code := range []int64{8, 9} {
 		item := dynamicpb.NewMessage(payloadsField.Message())
 		item.Set(item.Descriptor().Fields().ByName("code"), protoreflect.ValueOfInt64(code))
-		item.Set(item.Descriptor().Fields().ByName("amount"), protoreflect.ValueOfString([]string{"12.34", "56.78"}[index]))
+		item.Set(item.Descriptor().Fields().ByName("amount"), protoreflect.ValueOfString([]string{"12.345", "-56.785"}[index]))
 		row.Mutable(payloadsField).List().Append(protoreflect.ValueOfMessage(item))
+	}
+	for _, amount := range []string{"1.025", "-1.035"} {
+		row.Mutable(message.Fields().ByName("amounts")).List().Append(protoreflect.ValueOfString(amount))
 	}
 	serializedRow, err := proto.Marshal(row)
 	if err != nil {
@@ -1052,18 +1138,38 @@ func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	if schema.Fields[0].Fields[2].Type != "BIGNUMERIC" || schema.Fields[0].Fields[2].Precision == nil || *schema.Fields[0].Fields[2].Precision != 10 ||
-		schema.Fields[1].Mode != "REPEATED" || schema.Fields[1].Fields[1].Type != "NUMERIC" {
+		schema.Fields[0].Fields[2].RoundingMode != domain.RoundingModeHalfEven ||
+		schema.Fields[1].Mode != "REPEATED" || schema.Fields[1].Fields[1].Type != "NUMERIC" ||
+		schema.Fields[2].Mode != "REPEATED" || schema.Fields[2].RoundingMode != domain.RoundingModeHalfEven {
 		t.Fatalf("canonical Storage Write schema lost recursive decimal identity: %#v", schema)
 	}
-	statement := `SELECT "payload"."code", "payload"."label", CAST("payload"."amount" AS VARCHAR), "payloads"[1]."code", "payloads"[2]."code", CAST("payloads"[2]."amount" AS VARCHAR) FROM ` +
+	statement := `SELECT "payload"."code", "payload"."label", CAST("payload"."amount" AS VARCHAR), "payloads"[1]."code", "payloads"[2]."code", CAST("payloads"[2]."amount" AS VARCHAR), CAST("amounts"[1] AS VARCHAR), CAST("amounts"[2] AS VARCHAR) FROM ` +
 		quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + `.` + quoteIdentifier(table.TableID)
 	var code, first, second int64
-	var label, amount, repeatedAmount string
-	if err := warehouse.db.QueryRowContext(ctx, statement).Scan(&code, &label, &amount, &first, &second, &repeatedAmount); err != nil {
+	var label, amount, repeatedAmount, firstScalarAmount, secondScalarAmount string
+	if err := warehouse.db.QueryRowContext(ctx, statement).Scan(&code, &label, &amount, &first, &second, &repeatedAmount, &firstScalarAmount, &secondScalarAmount); err != nil {
 		t.Fatal(err)
 	}
-	if code != 7 || label != "primary" || amount != "12345678.90" || first != 8 || second != 9 || repeatedAmount != "56.78" {
-		t.Fatalf("unexpected nested row: %d %q %q %d %d %q", code, label, amount, first, second, repeatedAmount)
+	if code != 7 || label != "primary" || amount != "12345678.90" || first != 8 || second != 9 || repeatedAmount != "-56.79" || firstScalarAmount != "1.02" || secondScalarAmount != "-1.04" {
+		t.Fatalf("unexpected nested row: %d %q %q %d %d %q %q %q", code, label, amount, first, second, repeatedAmount, firstScalarAmount, secondScalarAmount)
+	}
+	const invalidMarker = "nested-repeated-secret-marker/2"
+	invalid := dynamicpb.NewMessage(message)
+	invalid.Mutable(message.Fields().ByName("amounts")).List().Append(protoreflect.ValueOfString(invalidMarker))
+	serializedInvalid, err := proto.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = coordinator.AppendDefault(ctx, writeports.AppendBatch{
+		StreamName: table.Name() + "/streams/_default", Table: table,
+		Descriptor: serializedDescriptor, Rows: [][]byte{serializedInvalid},
+		SchemaFingerprint: "nested-schema", PayloadDigest: "invalid-nested-row",
+	})
+	if !errors.Is(err, writeports.ErrInvalidRows) || !strings.Contains(err.Error(), domain.DecimalValueInvalidV1) || strings.Contains(err.Error(), invalidMarker) {
+		t.Fatalf("invalid nested/repeated decimal error = %v", err)
+	}
+	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 1 {
+		t.Fatalf("invalid nested/repeated decimal changed row count to %d", got)
 	}
 }
 

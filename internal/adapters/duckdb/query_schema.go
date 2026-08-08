@@ -80,6 +80,12 @@ func parseDuckDBResultTypeWithHint(input string, hint *domain.Field) (domain.Fie
 				return domain.Field{}, err
 			}
 			if parameters.Precision != precision || parameters.Scale != scale {
+				if scale > parameters.Scale || precision-scale > parameters.Precision-parameters.Scale {
+					return domain.Field{}, fmt.Errorf(
+						"%w: capability=%s decimal result requires narrowing or rounding for canonical destination field %q",
+						domain.ErrUnsupported, domain.CapabilityQueryDecimalRoundingV1, hint.Name,
+					)
+				}
 				return domain.Field{}, fmt.Errorf(
 					"%w: decimal result shape differs from canonical destination field %q",
 					domain.ErrPrecondition, hint.Name,
@@ -93,6 +99,9 @@ func parseDuckDBResultTypeWithHint(input string, hint *domain.Field) (domain.Fie
 			)
 		}
 		field := domain.Field{Type: fieldType, Mode: mode, Precision: &precision, Scale: &scale}
+		if hint != nil {
+			field.RoundingMode = hint.RoundingMode
+		}
 		if _, err := field.EffectiveDecimalParameters(); err != nil {
 			return domain.Field{}, err
 		}

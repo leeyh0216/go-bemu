@@ -142,6 +142,47 @@ func TestParquetLoadPreservesNumericAndBigNumericPhysicalDecimals(t *testing.T) 
 	}
 }
 
+func TestParquetLoadRejectsDecimalRoundingBeforeDestinationMutation(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	precision, scale := int64(5), int64(2)
+	fields := []catalogDomain.Field{{Name: "amount", Type: "NUMERIC", Precision: &precision, Scale: &scale}}
+	if err := warehouse.CreateTable(ctx, catalogDomain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "items", Schema: fields,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO "bq_746573742d70726f6a656374_64617461736574"."items" VALUES (9.99)`); err != nil {
+		t.Fatal(err)
+	}
+	parquet := createLoadParquet(t, warehouse, "SELECT 1.025::DECIMAL(6,3) AS amount")
+	_, err = warehouse.Load(ctx, loadports.LoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Schema: fields,
+		},
+		Schema: fields, Objects: []loadports.LocalObject{{Path: parquet}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteTruncate,
+	})
+	if !errors.Is(err, loadDomain.ErrUnsupported) || !strings.Contains(err.Error(), loadDomain.CapabilityDecimalRoundingV1) {
+		t.Fatalf("decimal rounding error = %v", err)
+	}
+	var amount string
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT CAST(amount AS VARCHAR) FROM "bq_746573742d70726f6a656374_64617461736574"."items"`).Scan(&amount); err != nil {
+		t.Fatal(err)
+	}
+	if amount != "9.99" {
+		t.Fatalf("rejected decimal load changed destination to %q", amount)
+	}
+	assertNoLoadStagingTables(t, warehouse)
+}
+
 func TestParquetLoadRejectsUnsupportedSchemaBeforeReadingObjects(t *testing.T) {
 	warehouse, err := New("")
 	if err != nil {

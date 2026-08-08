@@ -86,3 +86,12 @@ func TestValidateSchemaEvolutionRejectsDecimalParameterChanges(t *testing.T) {
 		t.Fatalf("expected decimal parameter change to be rejected, got %v", err)
 	}
 }
+
+func TestValidateSchemaEvolutionRejectsRoundingModeChanges(t *testing.T) {
+	current := []Field{{Name: "payload", Type: "STRUCT", Fields: []Field{{Name: "amount", Type: "NUMERIC"}}}}
+	proposed := CloneFields(current)
+	proposed[0].Fields[0].RoundingMode = RoundingModeHalfEven
+	if _, err := ValidateSchemaEvolution(current, proposed); err == nil || !strings.Contains(err.Error(), "rounding mode change") {
+		t.Fatalf("expected rounding mode change to be rejected, got %v", err)
+	}
+}

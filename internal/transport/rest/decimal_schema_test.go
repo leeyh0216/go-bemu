@@ -12,8 +12,8 @@ func TestQueryResultRESTPreservesRecursiveDecimalSchemaAndRows(t *testing.T) {
 		State: domain.JobDone,
 		Result: &domain.QueryResult{
 			Columns: []domain.Field{
-				{Name: "amount", Type: "BIGNUMERIC", Precision: &precision10, Scale: &scale2},
-				{Name: "details", Type: "STRUCT", Fields: []domain.Field{{Name: "nested", Type: "NUMERIC"}}},
+				{Name: "amount", Type: "BIGNUMERIC", Precision: &precision10, Scale: &scale2, RoundingMode: domain.RoundingModeHalfEven},
+				{Name: "details", Type: "STRUCT", Fields: []domain.Field{{Name: "nested", Type: "NUMERIC", RoundingMode: domain.RoundingModeHalfAwayFromZero}}},
 				{Name: "amounts", Type: "BIGNUMERIC", Mode: "REPEATED"},
 			},
 			Rows: [][]any{{
@@ -31,10 +31,10 @@ func TestQueryResultRESTPreservesRecursiveDecimalSchemaAndRows(t *testing.T) {
 		t.Fatalf("query schema = %#v", response.Schema)
 	}
 	decimal := response.Schema.Fields[0]
-	if decimal.Type != "BIGNUMERIC" || decimal.Precision == nil || *decimal.Precision != 10 || decimal.Scale == nil || *decimal.Scale != 2 {
+	if decimal.Type != "BIGNUMERIC" || decimal.Precision == nil || *decimal.Precision != 10 || decimal.Scale == nil || *decimal.Scale != 2 || decimal.RoundingMode != domain.RoundingModeHalfEven {
 		t.Fatalf("query decimal schema = %#v", decimal)
 	}
-	if response.Schema.Fields[1].Fields[0].Type != "NUMERIC" || response.Schema.Fields[2].Mode != "REPEATED" {
+	if response.Schema.Fields[1].Fields[0].Type != "NUMERIC" || response.Schema.Fields[1].Fields[0].RoundingMode != domain.RoundingModeHalfAwayFromZero || response.Schema.Fields[2].Mode != "REPEATED" {
 		t.Fatalf("recursive query schema = %#v", response.Schema.Fields)
 	}
 	cells := response.Rows[0].Fields
@@ -48,5 +48,21 @@ func TestQueryResultRESTPreservesRecursiveDecimalSchemaAndRows(t *testing.T) {
 	repeated := cells[2].Value.([]tableCell)
 	if len(repeated) != 2 || repeated[1].Value != "3.000000000000000000" {
 		t.Fatalf("repeated decimal row = %#v", repeated)
+	}
+}
+
+func TestLoadSchemaWireConversionPreservesRecursiveRoundingMode(t *testing.T) {
+	wire := []tableFieldSchema{{
+		Name: "items", Type: "STRUCT", Mode: "REPEATED", Fields: []tableFieldSchema{{
+			Name: "amount", Type: "NUMERIC", RoundingMode: domain.RoundingModeHalfEven,
+		}},
+	}}
+	canonical := loadFieldsFromWire(wire)
+	if canonical[0].Fields[0].RoundingMode != domain.RoundingModeHalfEven {
+		t.Fatalf("load wire conversion lost rounding mode: %#v", canonical)
+	}
+	roundTrip := loadFieldsToWire(canonical)
+	if roundTrip[0].Fields[0].RoundingMode != domain.RoundingModeHalfEven {
+		t.Fatalf("load response conversion lost rounding mode: %#v", roundTrip)
 	}
 }

@@ -18,6 +18,10 @@ var (
 	ErrResourceExhausted = errors.New("storage write byte admission exhausted")
 	ErrQueueWaitTimeout  = errors.New("storage write coordinator queue wait timed out")
 	ErrOperationTimeout  = errors.New("storage write coordinator operation timed out")
+	// ErrInvalidRows classifies adapter validation failures caused by the
+	// caller's ProtoSchema, ProtoRows, or decimal values. Application and
+	// transport layers must preserve this as INVALID_ARGUMENT.
+	ErrInvalidRows = errors.New("storage write rows are invalid")
 )
 
 type Clock interface {

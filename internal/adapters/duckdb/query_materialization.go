@@ -203,31 +203,52 @@ func validateExistingQueryDestinationShape(columns []domain.Column, fields []dom
 	}
 	for index := range fields {
 		field := fields[index]
-		if !strings.EqualFold(columns[index].Name, field.Name) || !queryDestinationFieldsCompatible(columns[index], field) {
+		if !strings.EqualFold(columns[index].Name, field.Name) {
+			return fmt.Errorf("%w: query output and destination schemas differ; capability=%s field_index=%d writeDisposition=%s fix_hint=use the Spark 0.44.2 SELECT-star copyData shape or pre-create an exact schema", domain.ErrPrecondition, domain.CapabilityQueryDestinationExactSchemaV1, index, disposition)
+		}
+		compatible, requiresRounding := queryDestinationFieldsCompatible(columns[index], field)
+		if requiresRounding {
+			return fmt.Errorf("%w: capability=%s field_index=%d writeDisposition=%s decimal narrowing or rounding is not implemented", domain.ErrUnsupported, domain.CapabilityQueryDecimalRoundingV1, index, disposition)
+		}
+		if !compatible {
 			return fmt.Errorf("%w: query output and destination schemas differ; capability=%s field_index=%d writeDisposition=%s fix_hint=use the Spark 0.44.2 SELECT-star copyData shape or pre-create an exact schema", domain.ErrPrecondition, domain.CapabilityQueryDestinationExactSchemaV1, index, disposition)
 		}
 	}
 	return nil
 }
 
-func queryDestinationFieldsCompatible(output, destination domain.Field) bool {
+func queryDestinationFieldsCompatible(output, destination domain.Field) (compatible, requiresRounding bool) {
 	outputType := canonicalQueryDestinationType(output.Type)
 	destinationType := canonicalQueryDestinationType(destination.Type)
 	if (outputType == "NUMERIC" || outputType == "BIGNUMERIC") && (destinationType == "NUMERIC" || destinationType == "BIGNUMERIC") {
 		outputParameters, outputErr := output.EffectiveDecimalParameters()
 		destinationParameters, destinationErr := destination.EffectiveDecimalParameters()
-		return outputErr == nil && destinationErr == nil && outputParameters == destinationParameters &&
-			strings.EqualFold(output.Mode, "REPEATED") == strings.EqualFold(destination.Mode, "REPEATED")
+		if outputErr != nil || destinationErr != nil || strings.EqualFold(output.Mode, "REPEATED") != strings.EqualFold(destination.Mode, "REPEATED") {
+			return false, false
+		}
+		if outputParameters != destinationParameters {
+			narrowing := outputParameters.Scale > destinationParameters.Scale ||
+				outputParameters.Precision-outputParameters.Scale > destinationParameters.Precision-destinationParameters.Scale
+			return false, narrowing
+		}
+		return true, false
 	}
 	if outputType != destinationType || strings.EqualFold(output.Mode, "REPEATED") != strings.EqualFold(destination.Mode, "REPEATED") || len(output.Fields) != len(destination.Fields) {
-		return false
+		return false, false
 	}
 	for index := range output.Fields {
-		if !strings.EqualFold(output.Fields[index].Name, destination.Fields[index].Name) || !queryDestinationFieldsCompatible(output.Fields[index], destination.Fields[index]) {
-			return false
+		if !strings.EqualFold(output.Fields[index].Name, destination.Fields[index].Name) {
+			return false, false
+		}
+		nestedCompatible, nestedRounding := queryDestinationFieldsCompatible(output.Fields[index], destination.Fields[index])
+		if nestedRounding {
+			return false, true
+		}
+		if !nestedCompatible {
+			return false, false
 		}
 	}
-	return true
+	return true, false
 }
 
 func queryResultSchemaFromDestination(fields []domain.Field) []domain.Field {

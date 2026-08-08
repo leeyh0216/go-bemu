@@ -44,6 +44,9 @@ func validateSchemaLevel(current, proposed []Field, parent []string) ([]SchemaAd
 		if !sameOptionalInt64(candidate.Precision, existing.Precision) || !sameOptionalInt64(candidate.Scale, existing.Scale) {
 			return nil, schemaEvolutionError(path, "decimal precision or scale change is not supported")
 		}
+		if candidate.RoundingMode != existing.RoundingMode {
+			return nil, schemaEvolutionError(path, "decimal rounding mode change is not supported")
+		}
 		if canonicalFieldMode(candidate.Mode) != canonicalFieldMode(existing.Mode) {
 			return nil, schemaEvolutionError(path, fmt.Sprintf("mode change %s -> %s is not supported", canonicalFieldMode(existing.Mode), canonicalFieldMode(candidate.Mode)))
 		}

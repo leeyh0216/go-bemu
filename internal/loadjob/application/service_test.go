@@ -416,6 +416,67 @@ func TestServiceReportsStableNestedRepeatedParquetCapabilityBeforeObjectAccess(t
 	}
 }
 
+func TestLoadSchemaIdentityIncludesDecimalPresenceValuesAndRoundingRecursively(t *testing.T) {
+	precision38, precision20, precision19, scale0, scale2 := int64(38), int64(20), int64(19), int64(0), int64(2)
+	base := []domain.Field{{Name: "items", Type: "STRUCT", Mode: "REPEATED", Fields: []domain.Field{{
+		Name: "amount", Type: "NUMERIC",
+	}}}}
+	tests := []struct {
+		name   string
+		mutate func([]domain.Field)
+	}{
+		{name: "precision presence", mutate: func(fields []domain.Field) { fields[0].Fields[0].Precision = &precision38 }},
+		{name: "precision value", mutate: func(fields []domain.Field) { fields[0].Fields[0].Precision = &precision20 }},
+		{name: "scale presence", mutate: func(fields []domain.Field) {
+			fields[0].Fields[0].Precision = &precision20
+			fields[0].Fields[0].Scale = &scale0
+		}},
+		{name: "scale value", mutate: func(fields []domain.Field) {
+			fields[0].Fields[0].Precision = &precision20
+			fields[0].Fields[0].Scale = &scale2
+		}},
+		{name: "rounding mode", mutate: func(fields []domain.Field) { fields[0].Fields[0].RoundingMode = catalogdomain.RoundingModeHalfEven }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := catalogdomain.CloneFields(base)
+			test.mutate(changed)
+			if schemasEqual(base, changed) {
+				t.Fatalf("schemasEqual ignored %s", test.name)
+			}
+			if schemaDigest(base) == schemaDigest(changed) {
+				t.Fatalf("schemaDigest ignored %s", test.name)
+			}
+		})
+	}
+	clone := catalogdomain.CloneFields(base)
+	if !schemasEqual(base, clone) || schemaDigest(base) != schemaDigest(clone) {
+		t.Fatal("identical recursive schema did not retain stable identity")
+	}
+	assertDifferent := func(name string, left, right []domain.Field) {
+		t.Helper()
+		if schemasEqual(left, right) || schemaDigest(left) == schemaDigest(right) {
+			t.Fatalf("schema identity ignored differing %s", name)
+		}
+	}
+	left := catalogdomain.CloneFields(base)
+	right := catalogdomain.CloneFields(base)
+	left[0].Fields[0].Precision, right[0].Fields[0].Precision = &precision20, &precision19
+	assertDifferent("precision values", left, right)
+	left = catalogdomain.CloneFields(base)
+	right = catalogdomain.CloneFields(base)
+	left[0].Fields[0].Precision, right[0].Fields[0].Precision = &precision20, &precision20
+	left[0].Fields[0].Scale, right[0].Fields[0].Scale = &scale0, &scale2
+	assertDifferent("scale values", left, right)
+}
+
+func TestTerminalErrorPreservesDecimalRoundingCapability(t *testing.T) {
+	reason, message := terminalError(fmt.Errorf("%w: capability=%s", domain.ErrUnsupported, domain.CapabilityDecimalRoundingV1))
+	if reason != "notImplemented" || !strings.Contains(message, domain.CapabilityDecimalRoundingV1) {
+		t.Fatalf("terminal decimal capability = %q %q", reason, message)
+	}
+}
+
 func newTestService(t *testing.T, objects ports.ObjectStore, loader ports.Loader, timeout time.Duration) *Service {
 	t.Helper()
 	table := domain.Table{

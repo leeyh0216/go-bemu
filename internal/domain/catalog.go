@@ -74,7 +74,11 @@ type Field struct {
 	// Storage adapters resolve omitted parameters without mutating this model.
 	Precision *int64
 	Scale     *int64
-	Fields    []Field
+	// RoundingMode retains the REST enum exactly. The empty value means the
+	// client omitted roundingMode; ROUNDING_MODE_UNSPECIFIED remains a distinct
+	// explicit value even though both use BigQuery's half-away default.
+	RoundingMode RoundingMode
+	Fields       []Field
 }
 
 func (f Field) Validate() error {
@@ -93,8 +97,11 @@ func (f Field) Validate() error {
 		if _, err := f.EffectiveDecimalParameters(); err != nil {
 			return err
 		}
-	} else if f.Precision != nil || f.Scale != nil {
-		return fmt.Errorf("%w: precision and scale are valid only for NUMERIC or BIGNUMERIC field %q", ErrInvalid, f.Name)
+		if _, err := f.EffectiveRoundingMode(); err != nil {
+			return err
+		}
+	} else if f.Precision != nil || f.Scale != nil || f.RoundingMode != "" {
+		return fmt.Errorf("%w: precision, scale, and rounding mode are valid only for NUMERIC or BIGNUMERIC field %q", ErrInvalid, f.Name)
 	}
 	mode := strings.ToUpper(f.Mode)
 	if mode != "" && mode != "NULLABLE" && mode != "REQUIRED" && mode != "REPEATED" {

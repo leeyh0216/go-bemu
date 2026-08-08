@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,5 +31,14 @@ func TestNewJobRejectsUnsupportedSchemaBeforePublication(t *testing.T) {
 				t.Fatalf("NewJob error = %v, want ErrUnsupported", err)
 			}
 		})
+	}
+}
+
+func TestDecimalLoadCapabilityIDsAreStable(t *testing.T) {
+	if CapabilityParquetNestedRepeatedV1 != "load.parquet.nested-repeated.unsupported-v1" {
+		t.Fatalf("nested/repeated capability = %q", CapabilityParquetNestedRepeatedV1)
+	}
+	if CapabilityDecimalRoundingV1 != "load.decimal-rounding.unsupported-v1" || !strings.HasSuffix(CapabilityDecimalRoundingV1, "-v1") {
+		t.Fatalf("decimal rounding capability = %q", CapabilityDecimalRoundingV1)
 	}
 }

@@ -144,7 +144,7 @@ func loadFieldsToWire(fields []loadDomain.Field) []tableFieldSchema {
 	for index, field := range fields {
 		result[index] = tableFieldSchema{
 			Name: field.Name, Type: field.Type, Mode: field.Mode,
-			Description: field.Description, Precision: field.Precision, Scale: field.Scale,
+			Description: field.Description, Precision: field.Precision, Scale: field.Scale, RoundingMode: field.RoundingMode,
 			Fields: loadFieldsToWire(field.Fields),
 		}
 	}
@@ -156,7 +156,7 @@ func loadFieldsFromWire(fields []tableFieldSchema) []loadDomain.Field {
 	for index, field := range fields {
 		result[index] = loadDomain.Field{
 			Name: field.Name, Type: field.Type, Mode: field.Mode,
-			Description: field.Description, Precision: field.Precision, Scale: field.Scale,
+			Description: field.Description, Precision: field.Precision, Scale: field.Scale, RoundingMode: field.RoundingMode,
 			Fields: loadFieldsFromWire(field.Fields),
 		}
 	}

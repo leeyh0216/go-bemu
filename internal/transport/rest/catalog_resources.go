@@ -67,13 +67,14 @@ type tableReference struct {
 }
 
 type tableFieldSchema struct {
-	Name        string             `json:"name"`
-	Type        string             `json:"type"`
-	Mode        string             `json:"mode,omitempty"`
-	Description string             `json:"description,omitempty"`
-	Precision   *int64             `json:"precision,omitempty,string"`
-	Scale       *int64             `json:"scale,omitempty,string"`
-	Fields      []tableFieldSchema `json:"fields,omitempty"`
+	Name         string              `json:"name"`
+	Type         string              `json:"type"`
+	Mode         string              `json:"mode,omitempty"`
+	Description  string              `json:"description,omitempty"`
+	Precision    *int64              `json:"precision,omitempty,string"`
+	Scale        *int64              `json:"scale,omitempty,string"`
+	RoundingMode domain.RoundingMode `json:"roundingMode,omitempty"`
+	Fields       []tableFieldSchema  `json:"fields,omitempty"`
 }
 
 type tableSchema struct {
@@ -102,23 +103,24 @@ type clusteringResource struct {
 }
 
 type tableResource struct {
-	Kind              string                     `json:"kind,omitempty"`
-	ETag              string                     `json:"etag,omitempty"`
-	ID                string                     `json:"id,omitempty"`
-	SelfLink          string                     `json:"selfLink,omitempty"`
-	TableReference    tableReference             `json:"tableReference"`
-	FriendlyName      string                     `json:"friendlyName,omitempty"`
-	Description       string                     `json:"description,omitempty"`
-	Labels            map[string]string          `json:"labels,omitempty"`
-	Type              string                     `json:"type,omitempty"`
-	Schema            tableSchema                `json:"schema"`
-	Location          string                     `json:"location,omitempty"`
-	ExpirationTime    string                     `json:"expirationTime,omitempty"`
-	TimePartitioning  *timePartitioningResource  `json:"timePartitioning,omitempty"`
-	RangePartitioning *rangePartitioningResource `json:"rangePartitioning,omitempty"`
-	Clustering        *clusteringResource        `json:"clustering,omitempty"`
-	CreationTime      string                     `json:"creationTime,omitempty"`
-	LastModifiedTime  string                     `json:"lastModifiedTime,omitempty"`
+	Kind                string                     `json:"kind,omitempty"`
+	ETag                string                     `json:"etag,omitempty"`
+	ID                  string                     `json:"id,omitempty"`
+	SelfLink            string                     `json:"selfLink,omitempty"`
+	TableReference      tableReference             `json:"tableReference"`
+	FriendlyName        string                     `json:"friendlyName,omitempty"`
+	Description         string                     `json:"description,omitempty"`
+	Labels              map[string]string          `json:"labels,omitempty"`
+	Type                string                     `json:"type,omitempty"`
+	Schema              tableSchema                `json:"schema"`
+	Location            string                     `json:"location,omitempty"`
+	ExpirationTime      string                     `json:"expirationTime,omitempty"`
+	TimePartitioning    *timePartitioningResource  `json:"timePartitioning,omitempty"`
+	RangePartitioning   *rangePartitioningResource `json:"rangePartitioning,omitempty"`
+	Clustering          *clusteringResource        `json:"clustering,omitempty"`
+	DefaultRoundingMode *domain.RoundingMode       `json:"defaultRoundingMode,omitempty"`
+	CreationTime        string                     `json:"creationTime,omitempty"`
+	LastModifiedTime    string                     `json:"lastModifiedTime,omitempty"`
 }
 
 func projectFromDomain(project domain.Project) projectResource {
@@ -207,7 +209,7 @@ func fieldsFromDomain(fields []domain.Field) []tableFieldSchema {
 	for i, field := range fields {
 		out[i] = tableFieldSchema{
 			Name: field.Name, Type: field.Type, Mode: field.Mode,
-			Description: field.Description, Precision: field.Precision, Scale: field.Scale,
+			Description: field.Description, Precision: field.Precision, Scale: field.Scale, RoundingMode: field.RoundingMode,
 			Fields: fieldsFromDomain(field.Fields),
 		}
 		if out[i].Mode == "" {
@@ -222,7 +224,7 @@ func fieldsToDomain(fields []tableFieldSchema) []domain.Field {
 	for i, field := range fields {
 		out[i] = domain.Field{
 			Name: field.Name, Type: field.Type, Mode: field.Mode,
-			Description: field.Description, Precision: field.Precision, Scale: field.Scale,
+			Description: field.Description, Precision: field.Precision, Scale: field.Scale, RoundingMode: field.RoundingMode,
 			Fields: fieldsToDomain(field.Fields),
 		}
 	}

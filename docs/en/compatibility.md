@@ -206,10 +206,34 @@ time/range partition overwrite and general BigQuery `MERGE` parity remain gaps.
 Compatibility is assessed against [BigQuery data
 types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types).
 Both decimal families retain omitted versus explicit parameters in catalog and
-REST metadata. Effective parameters are applied only at an engine or wire
+REST metadata. The same applies to `roundingMode`: omission,
+`ROUNDING_MODE_UNSPECIFIED`, `ROUND_HALF_AWAY_FROM_ZERO`, and
+`ROUND_HALF_EVEN` remain distinct canonical metadata values. Effective
+parameters are applied only at an engine or wire
 boundary. Precision above 38 is rejected before table, load-job, or row
 mutation because Spark `DecimalType` cannot represent it. `GEOGRAPHY` is also
 rejected before a physical side effect.
+
+ProtoRows writes apply BigQuery's default half-away-from-zero rounding and the
+explicit half-even mode with exact decimal arithmetic, including recursive
+STRUCT and REPEATED values. Parquet load accepts source decimal shapes that fit
+the destination without narrowing. A source that would need narrowing is
+rejected before destination mutation with
+`load.decimal-rounding.unsupported-v1` and is tracked by
+[issue #5](https://github.com/leeyh0216/go-bemu/issues/5). Existing query
+destinations require the exact effective decimal shape; a narrowing attempt is
+rejected with `query.destination.decimal-rounding.unsupported-v1`, while other
+shape differences use `query.destination.exact-schema-v1`. Query rounding and
+decimal lineage remain tracked by
+[issue #27](https://github.com/leeyh0216/go-bemu/issues/27).
+
+The table-level `defaultRoundingMode` changes the effective mode of newly added
+decimal fields. Until canonical table defaults and recovery are implemented by
+[issue #21](https://github.com/leeyh0216/go-bemu/issues/21) and
+[issue #26](https://github.com/leeyh0216/go-bemu/issues/26), tables.insert,
+tables.patch, and tables.update reject that property before a catalog or engine
+mutation with `schema.table-default-rounding-mode.unsupported-v1`. Omitting the
+table default and using explicit field modes remains supported.
 
 NUMERIC and the supported BIGNUMERIC subset are covered by REST table/query and
 tabledata cells, Arrow/Avro Storage Read schemas and values, direct ProtoRows,
@@ -282,7 +306,7 @@ service and connector
 | --- | --- |
 | filesystem object-store adapter | Verified only behind explicit local opt-in |
 | GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
-| Parquet load into an existing table | Partial; scalar fields only, with explicit schema/cast validation; nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1` |
+| Parquet load into an existing table | Partial; scalar fields only, with explicit schema/cast validation; nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1`, and decimal narrowing fails before destination mutation with `load.decimal-rounding.unsupported-v1` |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |

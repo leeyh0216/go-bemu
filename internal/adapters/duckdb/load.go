@@ -275,7 +275,9 @@ func validatedTargetType(field loadDomain.Field, sourceType string) (string, err
 			if scale <= int(parameters.Scale) && precision-scale <= int(parameters.Precision-parameters.Scale) {
 				return targetType, nil
 			}
+			return "", fmt.Errorf("%w: capability=%s Parquet field %q requires decimal narrowing or rounding", loadDomain.ErrUnsupported, loadDomain.CapabilityDecimalRoundingV1, field.Name)
 		}
+		return "", fmt.Errorf("%w: capability=%s Parquet field %q requires an unsupported decimal conversion", loadDomain.ErrUnsupported, loadDomain.CapabilityDecimalRoundingV1, field.Name)
 	case "STRING":
 		if source == "VARCHAR" {
 			return "VARCHAR", nil

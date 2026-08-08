@@ -534,6 +534,8 @@ func coordinatorErrorCode(err error, fallback domain.ErrorCode) domain.ErrorCode
 		return domain.ErrorResourceExhausted
 	case errors.Is(err, ports.ErrOperationTimeout), errors.Is(err, context.DeadlineExceeded):
 		return domain.ErrorDeadlineExceeded
+	case errors.Is(err, ports.ErrInvalidRows):
+		return domain.ErrorInvalidArgument
 	default:
 		return fallback
 	}

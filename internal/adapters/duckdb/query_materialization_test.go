@@ -177,7 +177,7 @@ func TestExistingDestinationRestoresAmbiguousBigNumericIdentity(t *testing.T) {
 	defer cancel()
 	warehouse, _ := newQueryMaterializationFixture(t, ctx)
 	precision, scale := int64(10), int64(2)
-	schema := []domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale}}
+	schema := []domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale, RoundingMode: domain.RoundingModeHalfEven}}
 	for _, tableID := range []string{"ambiguous_source", "ambiguous_destination"} {
 		if err := warehouse.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: tableID, Schema: schema}); err != nil {
 			t.Fatal(err)
@@ -195,8 +195,43 @@ func TestExistingDestinationRestoresAmbiguousBigNumericIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	field := result.QueryResult.Columns[0]
-	if field.Type != "BIGNUMERIC" || field.Precision == nil || *field.Precision != 10 || field.Scale == nil || *field.Scale != 2 {
+	if field.Type != "BIGNUMERIC" || field.Precision == nil || *field.Precision != 10 || field.Scale == nil || *field.Scale != 2 || field.RoundingMode != domain.RoundingModeHalfEven {
 		t.Fatalf("destination metadata did not restore BIGNUMERIC identity: %#v", field)
+	}
+}
+
+func TestQueryDestinationRejectsDecimalRoundingBeforeMutation(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, _ := newQueryMaterializationFixture(t, ctx)
+	sourcePrecision, sourceScale := int64(6), int64(3)
+	destinationPrecision, destinationScale := int64(5), int64(2)
+	sourceSchema := []domain.Field{{Name: "amount", Type: "NUMERIC", Precision: &sourcePrecision, Scale: &sourceScale}}
+	destinationSchema := []domain.Field{{Name: "amount", Type: "NUMERIC", Precision: &destinationPrecision, Scale: &destinationScale}}
+	for tableID, schema := range map[string][]domain.Field{"rounding_source": sourceSchema, "rounding_destination": destinationSchema} {
+		if err := warehouse.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: tableID, Schema: schema}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	physical := quoteIdentifier(physicalSchema("test-project", "analytics"))
+	if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO `+physical+`."rounding_source" VALUES (1.025)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO `+physical+`."rounding_destination" VALUES (9.99)`); err != nil {
+		t.Fatal(err)
+	}
+	request := queryMaterializationRequest("SELECT amount FROM `test-project.analytics.rounding_source`", domain.WriteTruncate, true, destinationSchema)
+	request.Destination.TableID = "rounding_destination"
+	_, err := warehouse.MaterializeQuery(ctx, request)
+	if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), domain.CapabilityQueryDecimalRoundingV1) {
+		t.Fatalf("query decimal rounding error = %v", err)
+	}
+	var amount string
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT CAST(amount AS VARCHAR) FROM `+physical+`."rounding_destination"`).Scan(&amount); err != nil {
+		t.Fatal(err)
+	}
+	if amount != "9.99" {
+		t.Fatalf("rejected query rounding changed destination to %q", amount)
 	}
 }
 

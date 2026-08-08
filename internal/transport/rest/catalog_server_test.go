@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,9 +146,9 @@ func TestCatalogRESTPreservesDecimalParametersAndRejectsUnsupportedTypesBeforeSt
 		"tableReference":{"tableId":"decimals"},
 		"schema":{"fields":[
 			{"name":"numeric_default","type":"NUMERIC"},
-			{"name":"big_explicit","type":"BIGNUMERIC","precision":"38","scale":"18"},
+			{"name":"big_explicit","type":"BIGNUMERIC","precision":"38","scale":"18","roundingMode":"ROUND_HALF_AWAY_FROM_ZERO"},
 			{"name":"items","type":"STRUCT","mode":"REPEATED","fields":[
-				{"name":"amount","type":"NUMERIC","precision":"20","scale":"2"}
+				{"name":"amount","type":"NUMERIC","precision":"20","scale":"2","roundingMode":"ROUND_HALF_EVEN"}
 			]}
 		]}
 	}`, http.StatusOK)
@@ -157,16 +158,69 @@ func TestCatalogRESTPreservesDecimalParametersAndRejectsUnsupportedTypesBeforeSt
 	if _, present := defaultDecimal["precision"]; present {
 		t.Fatalf("omitted precision was synthesized in REST metadata: %#v", defaultDecimal)
 	}
+	if _, present := defaultDecimal["roundingMode"]; present {
+		t.Fatalf("omitted roundingMode was synthesized in REST metadata: %#v", defaultDecimal)
+	}
 	explicitDecimal := fields[1].(map[string]any)
 	if explicitDecimal["precision"] != "38" || explicitDecimal["scale"] != "18" {
 		t.Fatalf("explicit decimal parameters were not preserved: %#v", explicitDecimal)
+	}
+	if explicitDecimal["roundingMode"] != "ROUND_HALF_AWAY_FROM_ZERO" {
+		t.Fatalf("explicit rounding mode was not preserved: %#v", explicitDecimal)
 	}
 	nested := fields[2].(map[string]any)
 	if nested["mode"] != "REPEATED" || nested["type"] != "STRUCT" {
 		t.Fatalf("nested repeated identity was not preserved: %#v", nested)
 	}
+	nestedAmount := nested["fields"].([]any)[0].(map[string]any)
+	if nestedAmount["roundingMode"] != "ROUND_HALF_EVEN" {
+		t.Fatalf("nested rounding mode was not preserved: %#v", nestedAmount)
+	}
+
+	table = catalogRequestWithETag(t, server.URL, http.MethodPatch,
+		"/bigquery/v2/projects/test-project/datasets/analytics/tables/decimals", `{
+		"schema":{"fields":[
+			{"name":"numeric_default","type":"NUMERIC","mode":"NULLABLE"},
+			{"name":"big_explicit","type":"BIGNUMERIC","mode":"NULLABLE","precision":"38","scale":"18","roundingMode":"ROUND_HALF_AWAY_FROM_ZERO"},
+			{"name":"items","type":"STRUCT","mode":"REPEATED","fields":[
+				{"name":"amount","type":"NUMERIC","mode":"NULLABLE","precision":"20","scale":"2","roundingMode":"ROUND_HALF_EVEN"}
+			]},
+			{"name":"bankers","type":"NUMERIC","mode":"NULLABLE","roundingMode":"ROUND_HALF_EVEN"}
+		]}
+	}`, table["etag"].(string), http.StatusOK)
+	patchedFields := table["schema"].(map[string]any)["fields"].([]any)
+	if patchedFields[1].(map[string]any)["roundingMode"] != "ROUND_HALF_AWAY_FROM_ZERO" ||
+		patchedFields[2].(map[string]any)["fields"].([]any)[0].(map[string]any)["roundingMode"] != "ROUND_HALF_EVEN" ||
+		patchedFields[3].(map[string]any)["roundingMode"] != "ROUND_HALF_EVEN" {
+		t.Fatalf("tables.patch silently discarded a rounding mode: %#v", patchedFields)
+	}
+	got := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics/tables/decimals", "", http.StatusOK)
+	gotFields := got["schema"].(map[string]any)["fields"].([]any)
+	if gotFields[3].(map[string]any)["roundingMode"] != "ROUND_HALF_EVEN" {
+		t.Fatalf("tables.get silently discarded patched rounding mode: %#v", gotFields)
+	}
 
 	createdBefore := len(warehouse.tables)
+	unsupportedDefault := request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"table_default_rounding"},
+		"defaultRoundingMode":"ROUND_HALF_EVEN",
+		"schema":{"fields":[{"name":"amount","type":"NUMERIC"}]}
+	}`, http.StatusNotImplemented)
+	if !strings.Contains(unsupportedDefault["error"].(map[string]any)["message"].(string), domain.GapTableDefaultRoundingV1) || len(warehouse.tables) != createdBefore {
+		t.Fatalf("table default rounding create crossed a side-effect boundary: response=%#v tables=%#v", unsupportedDefault, warehouse.tables)
+	}
+	additionsBefore := len(warehouse.additions)
+	etagBefore := got["etag"].(string)
+	unsupportedDefault = catalogRequestWithETag(t, server.URL, http.MethodPatch,
+		"/bigquery/v2/projects/test-project/datasets/analytics/tables/decimals",
+		`{"defaultRoundingMode":"ROUND_HALF_AWAY_FROM_ZERO"}`, etagBefore, http.StatusNotImplemented)
+	if !strings.Contains(unsupportedDefault["error"].(map[string]any)["message"].(string), domain.GapTableDefaultRoundingV1) || len(warehouse.additions) != additionsBefore {
+		t.Fatalf("table default rounding patch crossed a side-effect boundary: response=%#v additions=%#v", unsupportedDefault, warehouse.additions)
+	}
+	if after := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics/tables/decimals", "", http.StatusOK); after["etag"] != etagBefore {
+		t.Fatalf("rejected table default rounding changed canonical metadata: before=%q after=%#v", etagBefore, after)
+	}
+
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
 		"tableReference":{"tableId":"too_wide"},
 		"schema":{"fields":[{"name":"amount","type":"BIGNUMERIC","precision":"39","scale":"1"}]}
@@ -189,6 +243,18 @@ func TestCatalogRESTPreservesDecimalParametersAndRejectsUnsupportedTypesBeforeSt
 	}`, http.StatusBadRequest)
 	if len(warehouse.tables) != createdBefore {
 		t.Fatal("scalar field with nested children reached the physical warehouse")
+	}
+
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"invalid_rounding"},
+		"schema":{"fields":[{"name":"amount","type":"NUMERIC","roundingMode":"ROUND_DOWN"}]}
+	}`, http.StatusBadRequest)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"nond_decimal_rounding"},
+		"schema":{"fields":[{"name":"label","type":"STRING","roundingMode":"ROUND_HALF_EVEN"}]}
+	}`, http.StatusBadRequest)
+	if len(warehouse.tables) != createdBefore {
+		t.Fatal("invalid rounding mode reached the physical warehouse")
 	}
 }
 

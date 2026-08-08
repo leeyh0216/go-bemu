@@ -173,6 +173,13 @@ func (s *Server) mutateDataset(w http.ResponseWriter, r *http.Request, replace b
 	writeJSON(w, http.StatusOK, datasetFromDomain(updated, s.baseURLFor(r)))
 }
 
+func rejectTableDefaultRoundingMode(present bool) error {
+	if !present {
+		return nil
+	}
+	return fmt.Errorf("%w: capability=%s table defaultRoundingMode inheritance is not implemented", domain.ErrUnsupported, domain.GapTableDefaultRoundingV1)
+}
+
 func (s *Server) getDataset(w http.ResponseWriter, r *http.Request) {
 	dataset, err := s.catalog.GetDataset(r.Context(), r.PathValue("projectId"), r.PathValue("datasetId"))
 	if err != nil {
@@ -233,7 +240,12 @@ func (s *Server) deleteDataset(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createTable(w http.ResponseWriter, r *http.Request) {
 	var request tableResource
-	if err := decodeJSON(r, &request); err != nil {
+	fields, err := decodeJSONWithFields(r, &request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := rejectTableDefaultRoundingMode(hasField(fields, "defaultRoundingMode")); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -309,6 +321,10 @@ func (s *Server) mutateTable(w http.ResponseWriter, r *http.Request, replace boo
 	var request tableResource
 	fields, err := decodeJSONWithFields(r, &request)
 	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := rejectTableDefaultRoundingMode(hasField(fields, "defaultRoundingMode")); err != nil {
 		writeError(w, err)
 		return
 	}

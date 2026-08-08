@@ -35,7 +35,7 @@ func loadFieldsFromCatalog(fields []catalogDomain.Field) []loadDomain.Field {
 	for index, field := range fields {
 		result[index] = loadDomain.Field{
 			Name: field.Name, Type: field.Type, Mode: field.Mode,
-			Description: field.Description, Precision: catalogDomain.CloneOptionalInt64(field.Precision), Scale: catalogDomain.CloneOptionalInt64(field.Scale),
+			Description: field.Description, Precision: catalogDomain.CloneOptionalInt64(field.Precision), Scale: catalogDomain.CloneOptionalInt64(field.Scale), RoundingMode: field.RoundingMode,
 			Fields: loadFieldsFromCatalog(field.Fields),
 		}
 	}

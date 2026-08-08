@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -386,6 +387,9 @@ func terminalError(err error) (string, string) {
 		if strings.Contains(err.Error(), domain.CapabilityParquetNestedRepeatedV1) {
 			return "notImplemented", "the requested load-job feature is not implemented; capability=" + domain.CapabilityParquetNestedRepeatedV1
 		}
+		if strings.Contains(err.Error(), domain.CapabilityDecimalRoundingV1) {
+			return "notImplemented", "the requested load-job feature is not implemented; capability=" + domain.CapabilityDecimalRoundingV1
+		}
 		return "notImplemented", "the requested load-job feature is not implemented"
 	case errors.Is(err, domain.ErrInvalid):
 		return "invalid", "the load configuration or source schema is invalid"
@@ -416,6 +420,9 @@ func schemasEqual(left, right []domain.Field) bool {
 		}
 		if !strings.EqualFold(left[index].Name, right[index].Name) ||
 			!strings.EqualFold(left[index].Type, right[index].Type) || leftMode != rightMode ||
+			!sameOptionalInt64(left[index].Precision, right[index].Precision) ||
+			!sameOptionalInt64(left[index].Scale, right[index].Scale) ||
+			left[index].RoundingMode != right[index].RoundingMode ||
 			!schemasEqual(left[index].Fields, right[index].Fields) {
 			return false
 		}
@@ -423,17 +430,38 @@ func schemasEqual(left, right []domain.Field) bool {
 	return true
 }
 
+func sameOptionalInt64(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func schemaDigest(schema []domain.Field) string {
 	parts := make([]string, 0, len(schema))
 	var appendFields func([]domain.Field, string)
 	appendFields = func(fields []domain.Field, prefix string) {
 		for _, field := range fields {
-			parts = append(parts, prefix+field.Name+":"+strings.ToUpper(field.Type)+":"+strings.ToUpper(field.Mode))
+			parts = append(parts, strings.Join([]string{
+				prefix + field.Name,
+				strings.ToUpper(field.Type),
+				strings.ToUpper(field.Mode),
+				optionalInt64Digest(field.Precision),
+				optionalInt64Digest(field.Scale),
+				string(field.RoundingMode),
+			}, ":"))
 			appendFields(field.Fields, prefix+field.Name+".")
 		}
 	}
 	appendFields(schema, "")
 	return observability.Digest([]byte(strings.Join(parts, "\x00")))
+}
+
+func optionalInt64Digest(value *int64) string {
+	if value == nil {
+		return "omitted"
+	}
+	return "set=" + strconv.FormatInt(*value, 10)
 }
 
 func objectSetDigest(objects []ports.ObjectInfo) string {

@@ -15,6 +15,21 @@ const (
 	CapabilityEngineSchemaV1   = "schema.engine-capabilities-v1"
 	GapQueryDecimalLineageV1   = "query.results.decimal-lineage-v1"
 	GapGeographyUnsupportedV1  = "schema.geography.unsupported-v1"
+	DecimalValueInvalidV1      = "decimal.value.invalid-v1"
+	DecimalValueOverflowV1     = "decimal.value.overflow-v1"
+	GapTableDefaultRoundingV1  = "schema.table-default-rounding-mode.unsupported-v1"
+)
+
+// RoundingMode is the canonical BigQuery roundingMode enum. Its zero value is
+// intentionally reserved for an omitted field so persistence can distinguish
+// omission from an explicitly supplied enum value.
+// https://cloud.google.com/bigquery/docs/reference/rest/v2/RoundingMode
+type RoundingMode string
+
+const (
+	RoundingModeUnspecified      RoundingMode = "ROUNDING_MODE_UNSPECIFIED"
+	RoundingModeHalfAwayFromZero RoundingMode = "ROUND_HALF_AWAY_FROM_ZERO"
+	RoundingModeHalfEven         RoundingMode = "ROUND_HALF_EVEN"
 )
 
 var decimalLiteralPattern = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
@@ -27,36 +42,89 @@ type DecimalParameters struct {
 	Scale     int64
 }
 
-// ValidateDecimalValue verifies that a decimal literal fits the field without
-// rounding or narrowing. Adapters call it before any row mutation.
-func (f Field) ValidateDecimalValue(input string) error {
+// EffectiveRoundingMode applies BigQuery's default without changing the
+// canonical omission state stored in Field.RoundingMode.
+func (f Field) EffectiveRoundingMode() (RoundingMode, error) {
+	if fieldType := strings.ToUpper(f.Type); fieldType != "NUMERIC" && fieldType != "BIGNUMERIC" {
+		return "", fmt.Errorf("%w: field %q is not a decimal type", ErrInvalid, f.Name)
+	}
+	switch f.RoundingMode {
+	case "", RoundingModeUnspecified, RoundingModeHalfAwayFromZero:
+		return RoundingModeHalfAwayFromZero, nil
+	case RoundingModeHalfEven:
+		return RoundingModeHalfEven, nil
+	default:
+		return "", fmt.Errorf("%w: decimal field %q has unsupported rounding mode %q", ErrInvalid, f.Name, f.RoundingMode)
+	}
+}
+
+// NormalizeDecimalValue parses only BigQuery's base-10 decimal literal
+// grammar, rounds exactly to the field scale, verifies post-round precision,
+// and returns a deterministic fixed-scale decimal string.
+func (f Field) NormalizeDecimalValue(input string) (string, error) {
 	parameters, err := f.EffectiveDecimalParameters()
 	if err != nil {
-		return err
+		return "", err
 	}
-	// big.Rat also accepts fractions, base-prefixed integers, and hexadecimal
-	// floats. BigQuery decimal values use only base-10 integer/fraction syntax
-	// with an optional base-10 exponent, so reject the wider Go grammar first.
+	roundingMode, err := f.EffectiveRoundingMode()
+	if err != nil {
+		return "", err
+	}
 	if !decimalLiteralPattern.MatchString(input) {
-		return fmt.Errorf("%w: decimal field %q has invalid value %q", ErrInvalid, f.Name, input)
+		return "", decimalValueError(f, DecimalValueInvalidV1, len(input), "does not use the supported base-10 grammar")
 	}
 	rational, ok := new(big.Rat).SetString(input)
 	if !ok {
-		return fmt.Errorf("%w: decimal field %q has invalid value %q", ErrInvalid, f.Name, input)
+		return "", decimalValueError(f, DecimalValueInvalidV1, len(input), "cannot be parsed as a base-10 decimal")
 	}
 	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(parameters.Scale), nil)
-	rational.Mul(rational, new(big.Rat).SetInt(factor))
-	if rational.Denom().Cmp(big.NewInt(1)) != 0 {
-		return fmt.Errorf("%w: decimal field %q value %q exceeds scale %d", ErrInvalid, f.Name, input, parameters.Scale)
+	scaled := new(big.Rat).Mul(rational, new(big.Rat).SetInt(factor))
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(scaled.Num(), scaled.Denom(), remainder)
+	if remainder.Sign() != 0 {
+		twiceRemainder := new(big.Int).Lsh(new(big.Int).Abs(remainder), 1)
+		comparison := twiceRemainder.Cmp(scaled.Denom())
+		increment := comparison > 0
+		if comparison == 0 {
+			increment = roundingMode == RoundingModeHalfAwayFromZero || quotient.Bit(0) == 1
+		}
+		if increment {
+			if scaled.Sign() < 0 {
+				quotient.Sub(quotient, big.NewInt(1))
+			} else {
+				quotient.Add(quotient, big.NewInt(1))
+			}
+		}
 	}
-	digits := len(new(big.Int).Abs(rational.Num()).String())
-	if rational.Num().Sign() == 0 {
+	digits := len(new(big.Int).Abs(quotient).String())
+	if quotient.Sign() == 0 {
 		digits = 1
 	}
 	if int64(digits) > parameters.Precision {
-		return fmt.Errorf("%w: decimal field %q value %q exceeds precision %d", ErrInvalid, f.Name, input, parameters.Precision)
+		return "", decimalValueError(f, DecimalValueOverflowV1, len(input), fmt.Sprintf("exceeds precision %d after rounding", parameters.Precision))
 	}
-	return nil
+	return formatScaledDecimal(quotient, parameters.Scale), nil
+}
+
+func decimalValueError(field Field, code string, valueBytes int, reason string) error {
+	return fmt.Errorf("%w: code=%s decimal field %q value_bytes=%d %s", ErrInvalid, code, field.Name, valueBytes, reason)
+}
+
+func formatScaledDecimal(value *big.Int, scale int64) string {
+	negative := value.Sign() < 0
+	digits := new(big.Int).Abs(value).String()
+	if scale > 0 {
+		minimum := int(scale) + 1
+		if len(digits) < minimum {
+			digits = strings.Repeat("0", minimum-len(digits)) + digits
+		}
+		point := len(digits) - int(scale)
+		digits = digits[:point] + "." + digits[point:]
+	}
+	if negative {
+		return "-" + digits
+	}
+	return digits
 }
 
 // EffectiveDecimalParameters applies BigQuery's parameter omission rules and

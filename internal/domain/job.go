@@ -30,6 +30,7 @@ const (
 // bilingual compatibility contract. Renaming one is a contract change.
 const (
 	CapabilityQueryDestinationExactSchemaV1 = "query.destination.exact-schema-v1"
+	CapabilityQueryDecimalRoundingV1        = "query.destination.decimal-rounding.unsupported-v1"
 	CapabilityQueryAnonymousDestinationV1   = "query.destination.anonymous-v1"
 	CapabilityQueryDatasetLocationV1        = "query.location.dataset-inference-v1"
 	CapabilityQueryBoundedExecutionV1       = "query.execution.bounded-v1"

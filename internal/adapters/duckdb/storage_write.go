@@ -443,7 +443,7 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer stor
 	}
 	message, err := messageDescriptor(batch.Descriptor)
 	if err != nil {
-		return preparedBatch{}, err
+		return preparedBatch{}, invalidRowsError("invalid ProtoSchema: %v", err)
 	}
 	columnsByName := make(map[string]columnLayout, len(layout.columns))
 	for _, column := range layout.columns {
@@ -457,7 +457,7 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer stor
 		field := fields.Get(index)
 		target, exists := columnsByName[strings.ToLower(string(field.Name()))]
 		if !exists {
-			return preparedBatch{}, fmt.Errorf("ProtoSchema field %q is not present in destination table", field.Name())
+			return preparedBatch{}, invalidRowsError("ProtoSchema field %q is not present in destination table", field.Name())
 		}
 		columns[index] = target.field.Name
 		columnTypes[index] = target.duckDBType
@@ -467,31 +467,31 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer stor
 	for rowIndex, serialized := range batch.Rows {
 		row := dynamicpb.NewMessage(message)
 		if err := proto.Unmarshal(serialized, row); err != nil {
-			return preparedBatch{}, fmt.Errorf("decode ProtoRow %d: %w", rowIndex, err)
+			return preparedBatch{}, invalidRowsError("decode ProtoRow %d: %v", rowIndex, err)
 		}
 		if err := proto.CheckInitialized(row); err != nil {
-			return preparedBatch{}, fmt.Errorf("ProtoRow %d misses a required field: %w", rowIndex, err)
+			return preparedBatch{}, invalidRowsError("ProtoRow %d misses a required field: %v", rowIndex, err)
 		}
 		if len(row.GetUnknown()) != 0 {
-			return preparedBatch{}, fmt.Errorf("ProtoRow %d contains fields absent from ProtoSchema", rowIndex)
+			return preparedBatch{}, invalidRowsError("ProtoRow %d contains fields absent from ProtoSchema", rowIndex)
 		}
 		values := make([]any, fields.Len())
 		for fieldIndex := 0; fieldIndex < fields.Len(); fieldIndex++ {
 			field := fields.Get(fieldIndex)
 			if !field.IsList() && !row.Has(field) {
 				if !targets[fieldIndex].isNullable {
-					return preparedBatch{}, fmt.Errorf("required destination column %q is absent", targets[fieldIndex].field.Name)
+					return preparedBatch{}, invalidRowsError("required destination column %q is absent", targets[fieldIndex].field.Name)
 				}
 				values[fieldIndex] = nil
 				continue
 			}
 			converted, convertErr := convertProtoValue(field, row.Get(field), targets[fieldIndex])
 			if convertErr != nil {
-				return preparedBatch{}, fmt.Errorf("convert ProtoRow %d field %q: %w", rowIndex, field.Name(), convertErr)
+				return preparedBatch{}, invalidRowsError("convert ProtoRow %d field %q: %v", rowIndex, field.Name(), convertErr)
 			}
 			bindable, bindErr := storageWriteBindableValue(targets[fieldIndex].field, converted)
 			if bindErr != nil {
-				return preparedBatch{}, fmt.Errorf("bind ProtoRow %d field %q: %w", rowIndex, field.Name(), bindErr)
+				return preparedBatch{}, invalidRowsError("bind ProtoRow %d field %q: %v", rowIndex, field.Name(), bindErr)
 			}
 			values[fieldIndex] = bindable
 		}
@@ -501,6 +501,10 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer stor
 		streamName: batch.StreamName, table: batch.Table, startOffset: batch.StartOffset,
 		columns: columns, columnTypes: columnTypes, rows: decodedRows,
 	}, nil
+}
+
+func invalidRowsError(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", writeports.ErrInvalidRows, fmt.Sprintf(format, args...))
 }
 
 func (c *StorageWriteCoordinator) describeTable(ctx context.Context, queryer storageWriteQueryer, table writedomain.TableReference) (tableLayout, error) {
@@ -751,11 +755,7 @@ func convertProtoScalar(field protoreflect.FieldDescriptor, value protoreflect.V
 		if field.Kind() != protoreflect.StringKind {
 			return nil, fmt.Errorf("%s requires a protobuf string", targetType)
 		}
-		text := value.String()
-		if err := target.field.ValidateDecimalValue(text); err != nil {
-			return nil, err
-		}
-		return text, nil
+		return target.field.NormalizeDecimalValue(value.String())
 	}
 	switch field.Kind() {
 	case protoreflect.BoolKind:
@@ -795,10 +795,7 @@ func storageWriteBindableValue(field writedomain.Field, value any) (any, error) 
 		if !ok {
 			return nil, fmt.Errorf("decimal value has Go type %T", value)
 		}
-		if err := field.ValidateDecimalValue(text); err != nil {
-			return nil, err
-		}
-		return text, nil
+		return field.NormalizeDecimalValue(text)
 	}
 	return value, nil
 }

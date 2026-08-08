@@ -236,6 +236,29 @@ types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)
 여부를 그대로 보존합니다. 실제 기본값은 저장 엔진이나 전송 형식으로 변환할 때만
 적용합니다.
 
+`roundingMode`도 생략 여부와 `ROUNDING_MODE_UNSPECIFIED`,
+`ROUND_HALF_AWAY_FROM_ZERO`, `ROUND_HALF_EVEN`을 구분하여 메타데이터에
+보존합니다. ProtoRows 쓰기는 정확한 10진수 연산으로 BigQuery의 기본 방식인
+0에서 먼 쪽 반올림과 명시적인 짝수 쪽 반올림을 적용합니다. STRUCT와 REPEATED 내부의
+값에도 같은 규칙을 적용합니다.
+
+Parquet 로드는 대상 스키마에 자릿수를 줄이지 않고 넣을 수 있는 10진수 원본을
+허용합니다. 원본의 자릿수를 줄여야 하면 대상을 변경하기 전에
+`load.decimal-rounding.unsupported-v1`로 거부합니다. 쿼리 결과를 대상 스키마에
+쓸 때는 유효 정밀도와 소수부 자릿수가 정확히 같아야 합니다. 자릿수를 줄여야 하면
+`query.destination.decimal-rounding.unsupported-v1`, 그 밖의 스키마 차이는
+`query.destination.exact-schema-v1`로 거부합니다. Parquet 제한은
+[이슈 #5](https://github.com/leeyh0216/go-bemu/issues/5),
+쿼리 반올림과 10진수 계보는 [이슈 #27](https://github.com/leeyh0216/go-bemu/issues/27)에서
+관리합니다.
+
+테이블의 `defaultRoundingMode`는 이후 추가하는 10진수 필드가 생략한 반올림 방식을
+바꿉니다. [이슈 #21](https://github.com/leeyh0216/go-bemu/issues/21)과
+[이슈 #26](https://github.com/leeyh0216/go-bemu/issues/26)에서 테이블 기본값과 복구를
+구현하기 전까지 tables.insert, tables.patch, tables.update는 이 속성을 카탈로그나
+엔진에 반영하기 전에 `schema.table-default-rounding-mode.unsupported-v1`로 거부합니다.
+테이블 기본값을 생략하고 필드별 반올림 방식을 명시하는 동작은 지원합니다.
+
 정밀도가 38보다 크면 테이블, 로드 작업, 행 데이터를 변경하기 전에 요청을
 거부합니다. Spark의 `DecimalType`이 더 큰 정밀도를 표현할 수 없기 때문입니다.
 `GEOGRAPHY`도 저장소를 변경하기 전에 거부합니다.
@@ -311,7 +334,7 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 | --- | --- |
 | 파일 시스템 객체 저장소 어댑터 | 로컬에서 별도로 활성화한 경우만 검증했습니다. |
 | GCS 및 fake GCS JSON 어댑터 | 목록, 조회, 미디어 요청의 크기에 상한을 둡니다. URI 글로브 확장은 부분 지원입니다. |
-| 기존 테이블로 Parquet 로드 | 스칼라 필드만 부분 지원합니다. 명시한 스키마와 형 변환을 검사하며 중첩 또는 반복 필드는 객체를 읽기 전에 `load.parquet.nested-repeated.unsupported-v1`로 거부합니다. |
+| 기존 테이블로 Parquet 로드 | 스칼라 필드만 부분 지원합니다. 명시한 스키마와 형 변환을 검사합니다. 중첩 또는 반복 필드는 객체를 읽기 전에 `load.parquet.nested-repeated.unsupported-v1`로 거부하며, 10진수 자릿수 축소는 대상을 변경하기 전에 `load.decimal-rounding.unsupported-v1`로 거부합니다. |
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
 | 대상 생성, 자동 감지, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |

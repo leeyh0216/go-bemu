@@ -51,6 +51,7 @@ func TestFailedJobIsTerminalDoneWithErrorResult(t *testing.T) {
 func TestQueryCapabilityAndGapIDsAreStable(t *testing.T) {
 	want := map[string]string{
 		"exact_schema":          "query.destination.exact-schema-v1",
+		"decimal_rounding":      "query.destination.decimal-rounding.unsupported-v1",
 		"result_memory":         "query.results.unbounded-memory-v1",
 		"complex_result_schema": "query.results.complex-schema-v1",
 		"execution_timeout":     "query.execution.bounded-v1",
@@ -67,6 +68,7 @@ func TestQueryCapabilityAndGapIDsAreStable(t *testing.T) {
 	}
 	got := map[string]string{
 		"exact_schema":          CapabilityQueryDestinationExactSchemaV1,
+		"decimal_rounding":      CapabilityQueryDecimalRoundingV1,
 		"result_memory":         GapQueryResultsUnboundedMemoryV1,
 		"complex_result_schema": GapQueryComplexResultSchemaV1,
 		"execution_timeout":     CapabilityQueryBoundedExecutionV1,
