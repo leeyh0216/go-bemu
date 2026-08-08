@@ -77,6 +77,19 @@ jobs:
       - name: Test every Go package
         run: make ci-test-all
 
+  sql-regression:
+    name: GoogleSQL data-driven regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run data-driven SQL regression cases
+        run: make ci-test-sql-regression
+
   consumer-matrix:
     name: Normalize required consumer matrix
     runs-on: ubuntu-latest
@@ -369,6 +382,7 @@ jobs:
       - consumer-matrix
       - go-smoke
       - go-tests
+      - sql-regression
       - python-client
       - bq-cli
       - load-contract
@@ -384,6 +398,7 @@ jobs:
           CONSUMER_MATRIX_RESULT: ${{ needs.consumer-matrix.result }}
           GO_SMOKE_RESULT: ${{ needs.go-smoke.result }}
           GO_RESULT: ${{ needs.go-tests.result }}
+          SQL_REGRESSION_RESULT: ${{ needs.sql-regression.result }}
           PYTHON_RESULT: ${{ needs.python-client.result }}
           BQ_RESULT: ${{ needs.bq-cli.result }}
           LOAD_RESULT: ${{ needs.load-contract.result }}
@@ -397,6 +412,7 @@ jobs:
             "consumer-matrix:$CONSUMER_MATRIX_RESULT" \
             "go-smoke:$GO_SMOKE_RESULT" \
             "go-tests:$GO_RESULT" \
+            "sql-regression:$SQL_REGRESSION_RESULT" \
             "python-client:$PYTHON_RESULT" \
             "bq-cli:$BQ_RESULT" \
             "load-contract:$LOAD_RESULT" \

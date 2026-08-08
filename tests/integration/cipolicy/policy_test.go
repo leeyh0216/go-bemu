@@ -30,6 +30,7 @@ var requiredValidationJobs = []string{
 	"consumer-matrix",
 	"go-smoke",
 	"go-tests",
+	"sql-regression",
 	"python-client",
 	"bq-cli",
 	"load-contract",
@@ -142,6 +143,10 @@ func TestCIRequiresAllValidationBeforePublish(t *testing.T) {
 	requireSequenceContains(t, requiredValue(t, push, "tags"), "v*", "push tags")
 
 	jobs := requiredMapping(t, workflow, "jobs")
+	sqlRegression := requiredMapping(t, jobs, "sql-regression")
+	if !nodeContainsScalar(sqlRegression, "make ci-test-sql-regression") {
+		t.Fatal("sql-regression job must use the stable Makefile entrypoint")
+	}
 	authClient := requiredMapping(t, jobs, "auth-client-test")
 	if !nodeContainsScalar(authClient, "make auth-client-test") {
 		t.Fatal("auth-client-test job must use the stable Makefile entrypoint")
