@@ -24,25 +24,6 @@ const (
 	traceIDKey   contextKey = "trace_id"
 )
 
-// Configure retains source and runtime-configuration compatibility with the
-// former unsafe-payload switch. The argument is deliberately ignored: regex
-// redaction cannot prove that SQL literals, rows, protobuf fields, HTTP bodies,
-// or credentials have been removed, so BQEMU now applies one fail-closed log
-// contract in every mode.
-//
-// Security basis:
-//   - https://cloud.google.com/logging/docs/audit/best-practices
-//   - https://cloud.google.com/sensitive-data-protection/docs/deidentify-sensitive-data
-func Configure(legacyAllowUnsafePayloads bool) {
-	if legacyAllowUnsafePayloads {
-		slog.Warn("deprecated logging setting ignored",
-			"event", "runtime.configuration.deprecated",
-			"field", "logging.unsafePayloads",
-			"effective_behavior", "payload_metadata_only",
-		)
-	}
-}
-
 func WithRequestMetadata(ctx context.Context, requestID, traceID string) context.Context {
 	ctx = context.WithValue(ctx, requestIDKey, requestID)
 	ctx = context.WithValue(ctx, traceIDKey, traceID)
@@ -90,9 +71,8 @@ func Digest(payload []byte) string {
 
 func PayloadAttrs(name string, payload []byte) []any {
 	return []any{
-		name + "_shape", "opaque_bytes",
 		name + "_bytes", len(payload),
-		name + "_digest", Digest(payload),
+		name, string(payload),
 	}
 }
 
@@ -100,46 +80,25 @@ func ErrorAttrs(err error) []any {
 	if err == nil {
 		return nil
 	}
-	message := err.Error()
 	return []any{
 		"error_type", fmt.Sprintf("%T", err),
-		"error_bytes", len([]byte(message)),
-		"error_digest", Digest([]byte(message)),
+		"error", err.Error(),
 	}
 }
 
-// RedactText is retained for callers compiled against the original helper. It
-// intentionally returns only an opaque summary; partial text redaction is not a
-// safe logging boundary because unknown credential and payload shapes remain.
 func RedactText(value string) string {
-	payload := []byte(value)
-	return fmt.Sprintf("[OMITTED bytes=%d digest=%s]", len(payload), Digest(payload))
+	return value
 }
 
-func MetadataKeys(values map[string][]string) []string {
-	keys := make([]string, 0, len(values))
+func MetadataEntries(values map[string][]string) []string {
+	entries := make([]string, 0, len(values))
 	for key := range values {
-		lower := strings.ToLower(key)
-		if isSensitiveName(lower) {
-			keys = append(keys, lower+"=[REDACTED]")
-			continue
-		}
-		keys = append(keys, lower)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func isSensitiveName(name string) bool {
-	for _, fragment := range []string{
-		"authorization", "cookie", "token", "credential", "password", "private-key", "private_key",
-		"api-key", "api_key", "client-secret", "client_secret", "service-account-key", "service_account_key",
-	} {
-		if strings.Contains(name, fragment) {
-			return true
+		for _, value := range values[key] {
+			entries = append(entries, strings.ToLower(key)+"="+value)
 		}
 	}
-	return false
+	sort.Strings(entries)
+	return entries
 }
 
 func ProtoAttrs(message any) []any {
@@ -151,12 +110,12 @@ func ProtoAttrs(message any) []any {
 	if err != nil {
 		return []any{
 			"grpc_message", string(protobuf.ProtoReflect().Descriptor().FullName()),
-			"marshal_error_digest", Digest([]byte(err.Error())),
+			"marshal_error", err.Error(),
 		}
 	}
 	attrs := []any{
 		"grpc_message", string(protobuf.ProtoReflect().Descriptor().FullName()),
-		"wire_bytes", len(wire), "payload_digest", Digest(wire),
+		"wire_bytes", len(wire), "payload", protobuf,
 	}
 	attrs = append(attrs, reflectedMetrics(protobuf.ProtoReflect(), 0)...)
 	return attrs

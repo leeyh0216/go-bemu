@@ -170,7 +170,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"load.enabled=true", "load.gcsEndpoint=http://fake-gcs:4443", "load.allowFileSources=true",
 		"load.operationTimeout=30s", "load.maxObjects=20", "load.maxObjectBytes=1048576",
 		"load.maxTotalBytes=2097152", "load.maxMetadataBytes=65536", "load.maxListedObjects=30",
-		"logging.level=debug", "logging.format=text", "logging.unsafePayloads=true",
+		"logging.level=debug", "logging.format=text",
 		"admin.enabled=true", "admin.address=0.0.0.0:19051", "admin.tokenFile=admin-token", "admin.readHeaderTimeout=2s", "admin.maxStackBytes=65536",
 		"ui.enabled=true", "ui.directory=web/dist",
 		"contracts.profileDirectory=contract/profiles",

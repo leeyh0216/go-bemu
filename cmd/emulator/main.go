@@ -76,7 +76,6 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	slog.SetDefault(logger)
-	observability.Configure(cfg.Logging.UnsafePayloads)
 	logger.InfoContext(ctx, "configuration loaded",
 		"event", "runtime.configuration.loaded",
 		"model_version", config.APIVersion,

@@ -15,204 +15,107 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-func TestPayloadAndErrorSummariesNeverIncludeRawText(t *testing.T) {
-	const payload = `SELECT 'sql-secret' AS payload /* Bearer token-secret */`
-	const errorMessage = `request failed: {"rows":["row-secret"],"password":"credential-secret"}`
-	for _, legacyUnsafeSetting := range []bool{false, true} {
-		t.Run(fmt.Sprintf("legacy-unsafe-%t", legacyUnsafeSetting), func(t *testing.T) {
-			Configure(legacyUnsafeSetting)
-			attrs := fmt.Sprint(
-				PayloadAttrs("query", []byte(payload)),
-				ErrorAttrs(fmt.Errorf("%s", errorMessage)),
-				RedactText(payload),
-			)
-			for _, raw := range []string{"sql-secret", "token-secret", "row-secret", "credential-secret", "SELECT"} {
-				if strings.Contains(attrs, raw) {
-					t.Fatalf("legacy unsafe setting %t exposed %q: %s", legacyUnsafeSetting, raw, attrs)
-				}
-			}
-			for _, expected := range []string{
-				"query_shape opaque_bytes", "query_bytes", "query_digest sha256:",
-				"error_type", "error_bytes", "error_digest sha256:", "OMITTED bytes=",
-			} {
-				if !strings.Contains(attrs, expected) {
-					t.Fatalf("legacy unsafe setting %t missing %q: %s", legacyUnsafeSetting, expected, attrs)
-				}
-			}
-		})
+func TestPayloadAndErrorAttributesRetainRawDiagnostics(t *testing.T) {
+	payload := `SELECT 'diagnostic-value'`
+	errorMessage := `request failed: {"row":"invalid-value"}`
+	attrs := fmt.Sprint(
+		PayloadAttrs("query", []byte(payload)),
+		ErrorAttrs(fmt.Errorf("%s", errorMessage)),
+		RedactText(payload),
+	)
+	for _, expected := range []string{payload, errorMessage, "query_bytes", "error_type"} {
+		if !strings.Contains(attrs, expected) {
+			t.Fatalf("diagnostic attributes omitted %q: %s", expected, attrs)
+		}
 	}
 }
 
-func TestDefaultPayloadLoggingUsesDigestOnly(t *testing.T) {
-	Configure(false)
-	attrs := fmt.Sprint(PayloadAttrs("rows", []byte("private-row")))
-	if strings.Contains(attrs, "private-row") || !strings.Contains(attrs, "sha256:") {
-		t.Fatalf("unexpected safe payload attrs: %s", attrs)
-	}
-}
-
-func TestProtoSummaryNeverIncludesRawFieldsInAnyConfiguration(t *testing.T) {
+func TestProtoAttributesRetainMessageAndResolvedMetrics(t *testing.T) {
 	request := &storagepb.CreateReadSessionRequest{
 		Parent: "projects/reader-project",
 		ReadSession: &storagepb.ReadSession{
 			Table: "projects/data-project/datasets/analytics/tables/events",
 			ReadOptions: &storagepb.ReadSession_TableReadOptions{
-				SelectedFields: []string{"selected-field-secret"},
-				RowRestriction: "payload = 'restriction-secret'",
+				SelectedFields: []string{"selected_field"},
+				RowRestriction: "payload = 'diagnostic-value'",
 			},
 		},
 	}
-	for _, legacyUnsafeSetting := range []bool{false, true} {
-		Configure(legacyUnsafeSetting)
-		attrs := fmt.Sprint(ProtoAttrs(request))
-		for _, raw := range []string{"selected-field-secret", "restriction-secret", "payload =", "data-project"} {
-			if strings.Contains(attrs, raw) {
-				t.Fatalf("legacy unsafe setting %t exposed protobuf field %q: %s", legacyUnsafeSetting, raw, attrs)
-			}
-		}
-		for _, expected := range []string{
-			"CreateReadSessionRequest", "wire_bytes", "payload_digest",
-			"selected_fields_count 1", "row_restriction_bytes", "row_restriction_digest",
-		} {
-			if !strings.Contains(attrs, expected) {
-				t.Fatalf("legacy unsafe setting %t missing %q: %s", legacyUnsafeSetting, expected, attrs)
-			}
+	attrs := fmt.Sprint(ProtoAttrs(request))
+	for _, expected := range []string{
+		"CreateReadSessionRequest", "wire_bytes", "selected_field", "diagnostic-value",
+		"selected_fields_count 1", "row_restriction_bytes",
+	} {
+		if !strings.Contains(attrs, expected) {
+			t.Fatalf("protobuf attributes omitted %q: %s", expected, attrs)
 		}
 	}
 }
 
-func TestMetadataNeverContainsAuthorizationValue(t *testing.T) {
-	keys := fmt.Sprint(MetadataKeys(map[string][]string{
-		"authorization": {"Bearer secret"},
+func TestMetadataEntriesRetainValues(t *testing.T) {
+	entries := fmt.Sprint(MetadataEntries(map[string][]string{
+		"authorization": {"Bearer diagnostic-token"},
 		"content-type":  {"application/grpc"},
 	}))
-	if strings.Contains(keys, "secret") || !strings.Contains(keys, "authorization=[REDACTED]") {
-		t.Fatalf("unexpected metadata summary: %s", keys)
-	}
-}
-
-func TestProtoMetricsIncludeOffsetAndResourceFingerprint(t *testing.T) {
-	attrs := fmt.Sprint(ProtoAttrs(&storagepb.ReadRowsRequest{ReadStream: "streams/one", Offset: 42}))
-	if strings.Contains(attrs, "streams/one") {
-		t.Fatalf("raw read stream leaked in %s", attrs)
-	}
-	for _, expected := range []string{"read_stream_shape resource_name", "read_stream_fingerprint sha256:", "offset", "42", "wire_bytes", "payload_digest"} {
-		if !strings.Contains(attrs, expected) {
-			t.Fatalf("missing %q in %s", expected, attrs)
+	for _, expected := range []string{"authorization=Bearer diagnostic-token", "content-type=application/grpc"} {
+		if !strings.Contains(entries, expected) {
+			t.Fatalf("metadata entries omitted %q: %s", expected, entries)
 		}
 	}
 }
 
-func TestProtoMetricsExposeKnownEnumsWithoutResourceOrPayloadValues(t *testing.T) {
-	const stream = "projects/resource-secret/datasets/private/tables/raw/streams/hidden"
-	getAttrs := fmt.Sprint(ProtoAttrs(&storagepb.GetWriteStreamRequest{
-		Name: stream,
-		View: storagepb.WriteStreamView_BASIC,
-	}))
-	createAttrs := fmt.Sprint(ProtoAttrs(&storagepb.CreateWriteStreamRequest{
-		Parent: "projects/resource-secret/datasets/private/tables/raw",
-		WriteStream: &storagepb.WriteStream{
-			Type: storagepb.WriteStream_PENDING,
-		},
-	}))
-	combined := getAttrs + createAttrs
-	for _, secret := range []string{stream, "resource-secret", "SELECT secret", "row-secret", "Bearer token-secret"} {
-		if strings.Contains(combined, secret) {
-			t.Fatalf("protobuf boundary exposed %q: %s", secret, combined)
-		}
-	}
-	for _, expected := range []string{
-		"view BASIC", "type PENDING", "name_shape resource_name", "name_fingerprint sha256:",
-		"parent_shape resource_name", "parent_fingerprint sha256:",
-	} {
-		if !strings.Contains(combined, expected) {
-			t.Fatalf("protobuf enum/resource summary omitted %q: %s", expected, combined)
-		}
-	}
-}
-
-func TestHTTPBoundaryLogNeverIncludesHeaderQueryOrBodyValues(t *testing.T) {
+func TestHTTPBoundaryLogsRawQueryAndHeaderContext(t *testing.T) {
 	logs, restore := captureLogs(t)
 	defer restore()
-	Configure(true)
 	handler := HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("raw-response-secret"))
+		_, _ = w.Write([]byte("response-body"))
 	}))
-	request := httptest.NewRequest(http.MethodPost, "/bigquery/v2/projects/p?access_token=query-secret&maxResults=10", strings.NewReader("raw-request-secret"))
-	request.Header.Set("Authorization", "Bearer header-secret")
+	request := httptest.NewRequest(http.MethodPost, "/bigquery/v2/projects/p?access_token=query-value&maxResults=10", nil)
+	request.Header.Set("Authorization", "Bearer header-value")
 	request.Header.Set("X-Request-Id", "request-one")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 
 	output := logs.String()
-	for _, secret := range []string{"query-secret", "header-secret", "raw-request-secret", "raw-response-secret"} {
-		if strings.Contains(output, secret) {
-			t.Fatalf("secret %q leaked in HTTP log: %s", secret, output)
-		}
-	}
 	for _, expected := range []string{
-		"boundary.enter", "boundary.exit", "request-one", "authorization=[REDACTED]", "access_token=[REDACTED]",
-		`"response_bytes":19`, `"response_digest":"sha256:3d9fd8a2374dc5bb0d47be58937fe93c743ee67c756fdf590ad21f6f6856ef10"`,
+		"boundary.enter", "boundary.exit", "request-one",
+		"access_token=query-value", "authorization=Bearer header-value", `"response_bytes":13`,
 	} {
 		if !strings.Contains(output, expected) {
-			t.Fatalf("missing %q in HTTP log: %s", expected, output)
+			t.Fatalf("HTTP log omitted %q: %s", expected, output)
 		}
 	}
 }
 
-func TestGRPCBoundaryNeverLogsRawProtoOrErrorWithDeprecatedFlag(t *testing.T) {
+func TestGRPCBoundaryLogsRawProtoErrorAndMetadataContext(t *testing.T) {
 	logs, restore := captureLogs(t)
 	defer restore()
-	Configure(true)
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"authorization", "Bearer grpc-token",
+		"x-request-id", "grpc-request",
+	))
 	request := &storagepb.CreateReadSessionRequest{
 		Parent: "projects/reader-project",
 		ReadSession: &storagepb.ReadSession{ReadOptions: &storagepb.ReadSession_TableReadOptions{
-			SelectedFields: []string{"grpc-field-secret"},
-			RowRestriction: "payload = 'grpc-row-secret'",
+			SelectedFields: []string{"diagnostic_field"},
+			RowRestriction: "payload = 'diagnostic-row'",
 		}},
 	}
-	_, err := UnaryServerInterceptor(context.Background(), request, &grpc.UnaryServerInfo{
+	_, err := UnaryServerInterceptor(ctx, request, &grpc.UnaryServerInfo{
 		FullMethod: "/google.cloud.bigquery.storage.v1.BigQueryRead/CreateReadSession",
 	}, func(context.Context, any) (any, error) {
-		return nil, fmt.Errorf("backend error contains grpc-error-secret")
+		return nil, fmt.Errorf("backend diagnostic error")
 	})
 	if err == nil {
 		t.Fatal("expected handler error")
 	}
 	output := logs.String()
-	for _, secret := range []string{"grpc-field-secret", "grpc-row-secret", "grpc-error-secret", "payload ="} {
-		if strings.Contains(output, secret) {
-			t.Fatalf("raw value %q leaked in gRPC log: %s", secret, output)
-		}
-	}
-	for _, expected := range []string{"selected_fields_count", "row_restriction_digest", "error_bytes", "error_digest"} {
+	for _, expected := range []string{
+		"diagnostic_field", "diagnostic-row", "backend diagnostic error",
+		"authorization=Bearer grpc-token", "grpc-request",
+	} {
 		if !strings.Contains(output, expected) {
-			t.Fatalf("missing %q in gRPC log: %s", expected, output)
-		}
-	}
-}
-
-func TestGRPCBoundaryLogNeverIncludesAuthorizationMetadata(t *testing.T) {
-	logs, restore := captureLogs(t)
-	defer restore()
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		"authorization", "Bearer grpc-secret",
-		"x-request-id", "grpc-request",
-	))
-	request := &storagepb.ReadRowsRequest{ReadStream: "streams/one", Offset: 7}
-	_, err := UnaryServerInterceptor(ctx, request, &grpc.UnaryServerInfo{FullMethod: "/google.cloud.bigquery.storage.v1.BigQueryRead/ReadRows"}, func(ctx context.Context, request any) (any, error) {
-		return &storagepb.ReadRowsResponse{RowCount: 2}, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	output := logs.String()
-	if strings.Contains(output, "grpc-secret") {
-		t.Fatalf("gRPC credential leaked: %s", output)
-	}
-	for _, expected := range []string{"boundary.enter", "boundary.exit", "grpc-request", "authorization=[REDACTED]", "read_stream_fingerprint", "offset"} {
-		if !strings.Contains(output, expected) {
-			t.Fatalf("missing %q in gRPC log: %s", expected, output)
+			t.Fatalf("gRPC log omitted %q: %s", expected, output)
 		}
 	}
 }

@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
-	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
@@ -379,11 +378,9 @@ func TestQueryMaterializationLogsShapeAndDigestWithoutRawSQLOrRows(t *testing.T)
 	warehouse, _ := newQueryMaterializationFixture(t, ctx)
 	var logs bytes.Buffer
 	previous := slog.Default()
-	observability.Configure(false)
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(func() {
 		slog.SetDefault(previous)
-		observability.Configure(false)
 	})
 
 	const marker = "raw-query-and-row-marker-7f42"

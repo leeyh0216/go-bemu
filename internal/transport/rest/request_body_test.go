@@ -42,7 +42,6 @@ func TestRESTGzipChunkedTablesInsertUsesDecodedJSON(t *testing.T) {
 	).Handler())
 	t.Cleanup(server.Close)
 
-	observability.Configure(false)
 	logs, restoreLogs := captureRequestBodyLogs()
 	defer restoreLogs()
 	body := []byte(`{"tableReference":{"tableId":"connector_temporary"},"description":"private-body-value","schema":{"fields":[{"name":"id","type":"INT64"}]}}`)
@@ -61,9 +60,6 @@ func TestRESTGzipChunkedTablesInsertUsesDecodedJSON(t *testing.T) {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("request body log lacks %q: %s", expected, output)
 		}
-	}
-	if strings.Contains(output, "private-body-value") {
-		t.Fatalf("request body leaked into logs: %s", output)
 	}
 }
 

@@ -264,12 +264,6 @@ type LoadConfig struct {
 type LoggingConfig struct {
 	Level  string `yaml:"level" json:"level"`
 	Format string `yaml:"format" json:"format"`
-	// UnsafePayloads is a deprecated, parse-compatible no-op. It remains in the
-	// v1alpha1 file/environment/CLI model so existing deployments keep loading,
-	// but observability never emits raw SQL, rows, protobuf, HTTP bodies, error
-	// text, or credentials. See the Cloud Logging security guidance:
-	// https://cloud.google.com/logging/docs/audit/best-practices
-	UnsafePayloads bool `yaml:"unsafePayloads" json:"unsafePayloads"`
 }
 
 type AdminConfig struct {
@@ -539,7 +533,7 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STORAGE_WRITE_CLEANUP_INTERVAL", "storage.write.cleanupInterval"},
 	{"BQEMU_STORAGE_WRITE_PROTOCOL_MODEL_VERSION", "storage.write.protocolModelVersion"},
 	{"BQEMU_LOG_LEVEL", "logging.level"}, {"BQEMU_LOG_FORMAT", "logging.format"},
-	{"BQEMU_LOG_UNSAFE_PAYLOADS", "logging.unsafePayloads"}, {"BQEMU_ADMIN_ENABLED", "admin.enabled"},
+	{"BQEMU_ADMIN_ENABLED", "admin.enabled"},
 	{"BQEMU_ADMIN_ADDRESS", "admin.address"}, {"BQEMU_ADMIN_TOKEN_FILE", "admin.tokenFile"},
 	{"BQEMU_UI_ENABLED", "ui.enabled"}, {"BQEMU_UI_DIRECTORY", "ui.directory"},
 }
@@ -724,8 +718,6 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setString(&cfg.Logging.Level)
 	case "logging.format":
 		return setString(&cfg.Logging.Format)
-	case "logging.unsafePayloads":
-		return setBool(&cfg.Logging.UnsafePayloads)
 	case "admin.enabled":
 		return setBool(&cfg.Admin.Enabled)
 	case "admin.address":

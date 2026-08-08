@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
-	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
@@ -24,10 +23,8 @@ func TestAnalyzeQueryFindsStructuralRelationsWithoutPayloadLogging(t *testing.T)
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
-	observability.Configure(true)
 	t.Cleanup(func() {
 		slog.SetDefault(previous)
-		observability.Configure(false)
 	})
 	const secretLiteral = "analysis-secret-must-not-appear"
 	analysis, err := warehouse.AnalyzeQuery(ctx, ports.QueryRequest{

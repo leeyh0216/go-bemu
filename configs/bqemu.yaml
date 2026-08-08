@@ -115,10 +115,6 @@ load:
 logging:
   level: info
   format: json
-  # Deprecated compatibility-only key: true is accepted but never enables raw
-  # SQL, row, protobuf, HTTP body, error-text, or credential logging.
-  # https://cloud.google.com/logging/docs/audit/best-practices
-  unsafePayloads: false
 
 admin:
   enabled: false

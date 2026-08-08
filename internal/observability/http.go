@@ -1,17 +1,12 @@
 package observability
 
-// HTTP boundary logs intentionally record query/header names, never values.
 // Trace identifiers follow the W3C traceparent shape when supplied, while
 // malformed identifiers are replaced locally rather than echoed into logs.
 // Official source: https://www.w3.org/TR/trace-context/
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"hash"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 )
@@ -20,7 +15,6 @@ type responseRecorder struct {
 	http.ResponseWriter
 	status int
 	bytes  int
-	digest hash.Hash
 }
 
 func (r *responseRecorder) WriteHeader(status int) {
@@ -36,9 +30,6 @@ func (r *responseRecorder) Write(payload []byte) (int, error) {
 		r.WriteHeader(http.StatusOK)
 	}
 	written, err := r.ResponseWriter.Write(payload)
-	if written > 0 {
-		_, _ = r.digest.Write(payload[:written])
-	}
 	r.bytes += written
 	return written, err
 }
@@ -55,22 +46,13 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		traceID := traceIDFromHTTP(r)
 		ctx := WithRequestMetadata(r.Context(), requestID, traceID)
 		r = r.WithContext(ctx)
-		queryKeys := make([]string, 0, len(r.URL.Query()))
-		for key := range r.URL.Query() {
-			if isSensitiveName(strings.ToLower(key)) {
-				queryKeys = append(queryKeys, strings.ToLower(key)+"=[REDACTED]")
-			} else {
-				queryKeys = append(queryKeys, key)
-			}
-		}
-		sort.Strings(queryKeys)
 		attrs := append(ContextAttrs(ctx),
 			"event", "boundary.enter", "boundary", "http", "method", r.Method,
-			"path", r.URL.Path, "query_keys", queryKeys, "header_keys", MetadataKeys(r.Header),
+			"path", r.URL.Path, "query", MetadataEntries(r.URL.Query()), "headers", MetadataEntries(r.Header),
 			"remote_addr", r.RemoteAddr, "content_length", r.ContentLength,
 		)
 		slog.InfoContext(ctx, "request", attrs...)
-		recorder := &responseRecorder{ResponseWriter: w, digest: sha256.New()}
+		recorder := &responseRecorder{ResponseWriter: w}
 		next.ServeHTTP(recorder, r)
 		if recorder.status == 0 {
 			recorder.status = http.StatusOK
@@ -78,7 +60,6 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		exitAttrs := append(ContextAttrs(ctx),
 			"event", "boundary.exit", "boundary", "http", "method", r.Method,
 			"path", r.URL.Path, "status", recorder.status, "response_bytes", recorder.bytes,
-			"response_digest", "sha256:"+hex.EncodeToString(recorder.digest.Sum(nil)),
 			"duration_ms", time.Since(started).Milliseconds(),
 		)
 		slog.InfoContext(ctx, "response", exitAttrs...)

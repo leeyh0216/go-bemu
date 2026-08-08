@@ -1,8 +1,7 @@
 package observability
 
 // The interceptors observe official protobuf messages without copying generated
-// types. Safe mode logs resource fingerprints, enum symbols, offsets, counts,
-// byte sizes, and schema fingerprints; names and serialized rows remain opaque.
+// types. Logs retain the original message together with structural metrics.
 // Official source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1
 
 import (
@@ -140,7 +139,7 @@ func grpcMetadataAttrs(ctx context.Context) []any {
 		for key, value := range incoming {
 			values[key] = value
 		}
-		attrs = append(attrs, "metadata_keys", MetadataKeys(values))
+		attrs = append(attrs, "metadata", MetadataEntries(values))
 	}
 	if remote, ok := peer.FromContext(ctx); ok {
 		attrs = append(attrs, "peer", remote.Addr.String())
