@@ -16,8 +16,23 @@ func Relations(statement Statement) ([]Relation, error) {
 	return append([]Relation(nil), collector.relations...), nil
 }
 
+// Expressions returns every expression occurrence in deterministic pre-order.
+// Semantic analysis uses this to prove a complete type binding before an
+// engine visitor is allowed to lower the tree.
+func Expressions(statement Statement) ([]Expression, error) {
+	if statement == nil {
+		return nil, fmt.Errorf("statement is nil")
+	}
+	collector := &relationCollector{}
+	if err := collector.statement(statement); err != nil {
+		return nil, err
+	}
+	return append([]Expression(nil), collector.expressions...), nil
+}
+
 type relationCollector struct {
-	relations []Relation
+	relations   []Relation
+	expressions []Expression
 }
 
 func (collector *relationCollector) statement(statement Statement) error {
@@ -184,6 +199,7 @@ func (collector *relationCollector) expression(expression Expression) error {
 	if expression == nil {
 		return nil
 	}
+	collector.expressions = append(collector.expressions, expression)
 	switch value := expression.(type) {
 	case *IdentifierExpression, *StarExpression, *NullLiteral, *BooleanLiteral,
 		*IntegerLiteral, *FloatLiteral, *StringLiteral, *TemporalLiteral:
