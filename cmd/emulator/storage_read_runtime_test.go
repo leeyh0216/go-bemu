@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/application"
@@ -54,9 +55,17 @@ func TestStorageReadRuntimeServesEightLogicalStreamsFromDuckDB(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := warehouse.Query(ctx, ports.QueryRequest{
+	gateway, err := googlesqladapter.NewGateway(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert, err := gateway.Analyze(ctx, ports.QueryRequest{
 		ProjectID: "reader-project", SQL: "INSERT INTO `reader-project.analytics.events` VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four')",
-	}); err != nil {
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.ExecuteStatement(ctx, insert); err != nil {
 		t.Fatal(err)
 	}
 

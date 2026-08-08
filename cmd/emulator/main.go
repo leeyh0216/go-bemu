@@ -99,9 +99,6 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	health := storageEngine.health
 	catalogStorage := storageEngine.catalog
 	ddlStorage := storageEngine.ddl
-	queryEngine := storageEngine.query
-	queryFallbackAnalyzer := storageEngine.queryAnalyzer
-	queryMaterializer := storageEngine.queryMaterializer
 	statementExecutor := storageEngine.statementExecutor
 	statementMaterializer := storageEngine.statementMaterializer
 	tableDataReader := storageEngine.tableData
@@ -137,14 +134,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("configure GoogleSQL analyzer gateway: %w", err)
 	}
 	queryService, err := application.NewQueryService(
-		jobRepository, queryEngine, clock, system.IDGenerator{},
+		jobRepository, nil, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
-		application.WithQueryAnalyzer(queryFallbackAnalyzer),
 		application.WithGoogleSQLGateway(googleSQLGateway),
 		application.WithStatementExecutor(statementExecutor),
 		application.WithStatementMaterializer(statementMaterializer),
 		application.WithQueryDDLExecutor(catalogService),
-		application.WithQueryMaterializer(queryMaterializer),
 		application.WithQueryDestinationCatalog(catalogService),
 		application.WithQueryOperationTimeout(cfg.Query.OperationTimeout.Value()),
 		application.WithQueryCompensationTimeout(cfg.Query.CompensationTimeout.Value()),

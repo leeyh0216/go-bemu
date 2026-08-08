@@ -20,10 +20,9 @@ func TestComposeDuckDBEngineBuildsValidatedNarrowRuntime(t *testing.T) {
 		t.Fatalf("runtime capabilities = %#v", runtime.capabilities.Descriptor())
 	}
 	for name, dependency := range map[string]any{
-		"health": runtime.health, "catalog": runtime.catalog, "DDL": runtime.ddl, "query": runtime.query,
-		"query analyzer":     runtime.queryAnalyzer,
-		"query materializer": runtime.queryMaterializer, "table data": runtime.tableData,
-		"loader": runtime.loader, "read factory": runtime.readFactory, "write factory": runtime.writeFactory,
+		"health": runtime.health, "catalog": runtime.catalog, "DDL": runtime.ddl,
+		"table data": runtime.tableData,
+		"loader":     runtime.loader, "read factory": runtime.readFactory, "write factory": runtime.writeFactory,
 	} {
 		if runtimeDependencyIsNil(dependency) {
 			t.Fatalf("runtime %s port is nil", name)
@@ -56,9 +55,6 @@ func TestEngineRuntimeRejectsZeroAndTypedNilDependencies(t *testing.T) {
 		"health":                 func(value *engineRuntimeDescriptor) { value.Health = typedNil },
 		"catalog":                func(value *engineRuntimeDescriptor) { value.Catalog = typedNil },
 		"DDL":                    func(value *engineRuntimeDescriptor) { value.DDL = typedNil },
-		"query":                  func(value *engineRuntimeDescriptor) { value.Query = typedNil },
-		"query analyzer":         func(value *engineRuntimeDescriptor) { value.QueryAnalyzer = typedNil },
-		"query materializer":     func(value *engineRuntimeDescriptor) { value.QueryMaterializer = typedNil },
 		"statement executor":     func(value *engineRuntimeDescriptor) { value.StatementExecutor = typedNil },
 		"statement materializer": func(value *engineRuntimeDescriptor) { value.StatementMaterializer = typedNil },
 		"table data":             func(value *engineRuntimeDescriptor) { value.TableData = typedNil },
@@ -82,8 +78,6 @@ func descriptorFromRuntime(runtime *engineRuntime) engineRuntimeDescriptor {
 	return engineRuntimeDescriptor{
 		Capabilities: runtime.capabilities,
 		Health:       runtime.health, Catalog: runtime.catalog, DDL: runtime.ddl,
-		Query: runtime.query, QueryAnalyzer: runtime.queryAnalyzer,
-		QueryMaterializer: runtime.queryMaterializer,
 		StatementExecutor: runtime.statementExecutor, StatementMaterializer: runtime.statementMaterializer,
 		TableData: runtime.tableData, Loader: runtime.loader,
 		ReadFactory: runtime.readFactory, WriteFactory: runtime.writeFactory,

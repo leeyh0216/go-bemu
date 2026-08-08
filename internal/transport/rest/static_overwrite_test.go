@@ -36,7 +36,7 @@ func TestConstantFalseMergeCrossesRESTJobLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	queries, err := application.NewQueryService(
-		memory.NewJobRepository(), warehouse, clock, &testIDs{},
+		memory.NewJobRepository(), nil, clock, &testIDs{},
 		application.WithGoogleSQLGateway(gateway),
 		application.WithStatementExecutor(warehouse),
 		application.WithStatementMaterializer(warehouse),

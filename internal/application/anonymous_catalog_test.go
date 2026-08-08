@@ -249,8 +249,11 @@ func TestExpiredTableCleanupRetriesAfterMetadataDeletionFailure(t *testing.T) {
 	if _, err := service.GetTable(ctx, "test-project", "_bqemu_anonymous_eu", "_bqemu_query_retry"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("retry cleanup error = %v, want not found", err)
 	}
-	if _, err := warehouse.Query(ctx, ports.QueryRequest{
-		SQL: "SELECT * FROM `test-project._bqemu_anonymous_eu._bqemu_query_retry`",
+	if _, err := warehouse.ListTableData(ctx, ports.TableDataReadRequest{
+		Reference: domain.TableReference{
+			ProjectID: "test-project", DatasetID: "_bqemu_anonymous_eu", TableID: "_bqemu_query_retry",
+		},
+		Schema: []domain.Field{{Name: "value", Type: "INT64"}}, Limit: 1,
 	}); err == nil {
 		t.Fatal("retry cleanup left physical table queryable")
 	}

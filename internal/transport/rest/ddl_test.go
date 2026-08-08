@@ -27,15 +27,16 @@ func TestGoogleSQLDDLMutatesCatalogAndStorageThroughPublicREST(t *testing.T) {
 		memory.NewCatalogRepository(), warehouse, clock,
 		application.WithDDLStorage(warehouse), application.WithTableDataReader(warehouse),
 	)
-	parser, err := googlesqladapter.NewParser()
+	gateway, err := googlesqladapter.NewGateway(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
 	queries := newRESTTestQueryService(
 		memory.NewJobRepository(), warehouse, clock, &testIDs{},
-		application.WithQueryAnalyzer(warehouse),
+		application.WithGoogleSQLGateway(gateway),
+		application.WithStatementExecutor(warehouse),
+		application.WithStatementMaterializer(warehouse),
 		application.WithQueryDestinationCatalog(catalog),
-		application.WithQueryDDLParser(parser),
 		application.WithQueryDDLExecutor(catalog),
 	)
 	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "", WithTableDataAPI(catalog)).Handler())

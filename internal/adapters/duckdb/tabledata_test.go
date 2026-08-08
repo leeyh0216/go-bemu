@@ -143,7 +143,16 @@ func newDuckDBTableDataFixture(t *testing.T, ctx context.Context) (*Warehouse, d
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := warehouse.Query(ctx, ports.QueryRequest{SQL: "INSERT INTO `private-project.sensitive_dataset.private_table` VALUES (1, 'row-secret-marker', true), (2, 'second', false), (3, NULL, true)"}); err != nil {
+	physical, err := renderPhysicalTable(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx,
+		"INSERT INTO "+physical+" VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)",
+		int64(1), "row-secret-marker", true,
+		int64(2), "second", false,
+		int64(3), nil, true,
+	); err != nil {
 		t.Fatal(err)
 	}
 	return warehouse, reference

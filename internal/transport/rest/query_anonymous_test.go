@@ -7,10 +7,6 @@ package rest
 //     https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored
 //   - omitted locations are inferred from referenced/default/destination
 //     datasets: https://cloud.google.com/bigquery/docs/locations#specify_locations
-//   - connector 0.44.2 reads the completed job's generated destination here:
-//     https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L1150-L1240
-//   - connector 0.44.2 default materialization expiration is 24 hours:
-//     https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/MaterializationConfiguration.java
 
 import (
 	"fmt"
@@ -23,6 +19,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -59,9 +56,15 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 		memory.NewCatalogRepository(), warehouse, clock,
 		application.WithTableDataReader(warehouse),
 	)
+	gateway, err := googlesqladapter.NewGateway(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
 	queries := newRESTTestQueryService(
 		memory.NewJobRepository(), warehouse, clock, &testIDs{},
-		application.WithQueryAnalyzer(warehouse), application.WithQueryMaterializer(warehouse),
+		application.WithGoogleSQLGateway(gateway),
+		application.WithStatementExecutor(warehouse),
+		application.WithStatementMaterializer(warehouse),
 		application.WithQueryDestinationCatalog(catalog), application.WithAnonymousQueryTTL(24*time.Hour),
 	)
 	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "", WithTableDataAPI(catalog)).Handler())
@@ -99,8 +102,8 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 	jobCountBeforeScripts := len(jobsBeforeScripts["jobs"].([]any))
 	scripts := []string{
 		"SELECT 1; DROP TABLE `test-project.eu_source.events`",
-		"SELECT 1; ALTER TABLE `test-project.eu_source.events` ADD COLUMN note VARCHAR",
-		"INSERT INTO `test-project.eu_source.events` VALUES (99); CREATE TABLE `test-project.eu_source.created_by_script` (id BIGINT)",
+		"SELECT 1; ALTER TABLE `test-project.eu_source.events` ADD COLUMN note STRING",
+		"INSERT INTO `test-project.eu_source.events` VALUES (99); CREATE TABLE `test-project.eu_source.created_by_script` (id INT64)",
 	}
 	for index, script := range scripts {
 		syncFailure := request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", fmt.Sprintf(
@@ -194,7 +197,7 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 func assertQueryScriptGap(t *testing.T, response map[string]any) {
 	t.Helper()
 	errorResource := response["error"].(map[string]any)
-	if !strings.Contains(errorResource["message"].(string), domain.GapQueryScriptsUnsupportedV1) {
+	if !strings.Contains(errorResource["message"].(string), googlesqladapter.CapabilityGoogleSQLScriptV1) {
 		t.Fatalf("script error lacks stable capability: %#v", response)
 	}
 }

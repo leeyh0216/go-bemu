@@ -6,11 +6,15 @@ import (
 
 func newTestQueryService(
 	jobs ports.JobRepository,
-	warehouse ports.QueryEngine,
+	backend any,
 	clock ports.Clock,
 	ids ports.IDGenerator,
 	options ...QueryOption,
 ) *QueryService {
+	var warehouse ports.QueryEngine
+	if candidate, ok := backend.(ports.QueryEngine); ok {
+		warehouse = candidate
+	}
 	service, err := NewQueryService(jobs, warehouse, clock, ids, options...)
 	if err != nil {
 		panic(err)

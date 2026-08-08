@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -323,21 +324,8 @@ func TestTableDataListDoesNotUseDuckDBColumnNamesAsWireBytes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := warehouse.Query(ctx, ports.QueryRequest{
-		SQL: "INSERT INTO `test-project.long_fields.tiny_values` VALUES ('a', 'b', 'c', 'd', 'e')",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	backendProbe, err := warehouse.Query(ctx, ports.QueryRequest{
-		SQL: "SELECT octet_length(CAST(to_json(data) AS BLOB)) > 1024 AS exceeds " +
-			"FROM (SELECT * FROM `test-project.long_fields.tiny_values`) AS data",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(backendProbe.Rows) != 1 || len(backendProbe.Rows[0]) != 1 || backendProbe.Rows[0][0] != true {
-		t.Fatalf("DuckDB JSON regression precondition = %#v, want backend bytes over 1024", backendProbe.Rows)
-	}
+	executeTableDataGoogleSQL(t, ctx, catalog, warehouse,
+		"INSERT INTO `test-project.long_fields.tiny_values` VALUES ('a', 'b', 'c', 'd', 'e')")
 
 	server := httptest.NewServer(NewCatalogServer(catalog, warehouse, "", WithTableDataAPI(catalog)).Handler())
 	t.Cleanup(server.Close)
@@ -488,12 +476,35 @@ func createTableDataRESTFixture(t *testing.T, ctx context.Context, catalog *appl
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := warehouse.Query(ctx, ports.QueryRequest{SQL: `
-		INSERT INTO ` + "`test-project.analytics.events`" + ` VALUES
-		(1, 'first', {'score': 3, 'name': 'nested-one', 'amount': 1.000000000000000001}, ['alpha', 'beta'], TIMESTAMPTZ '2026-08-08 01:02:03.123456+00', 12.34, [2.000000000000000002, 3.000000000000000003]),
-		(2, NULL, {'score': NULL, 'name': 'nested-two', 'amount': NULL}, [], TIMESTAMPTZ '1969-12-31 23:59:59.000001+00', NULL, [])
-	`})
+	executeTableDataGoogleSQL(t, ctx, catalog, warehouse, `
+		INSERT INTO `+"`test-project.analytics.events`"+` VALUES
+		(1, 'first', STRUCT(3 AS score, 'nested-one' AS name, BIGNUMERIC '1.000000000000000001' AS amount),
+		 ['alpha', 'beta'], TIMESTAMP '2026-08-08 01:02:03.123456+00', NUMERIC '12.34',
+		 [BIGNUMERIC '2.000000000000000002', BIGNUMERIC '3.000000000000000003']),
+		(2, NULL, STRUCT(NULL AS score, 'nested-two' AS name, NULL AS amount),
+		 ARRAY<STRING>[], TIMESTAMP '1969-12-31 23:59:59.000001+00', NULL, ARRAY<BIGNUMERIC>[])
+	`)
+}
+
+func executeTableDataGoogleSQL(
+	t *testing.T,
+	ctx context.Context,
+	catalog *application.CatalogService,
+	warehouse *duckdb.Warehouse,
+	sql string,
+) domain.QueryResult {
+	t.Helper()
+	gateway, err := googlesqladapter.NewGateway(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
+	statement, err := gateway.Analyze(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: sql})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := warehouse.ExecuteStatement(ctx, statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

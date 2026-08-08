@@ -176,7 +176,6 @@ func NewQueryService(
 		value any
 	}{
 		{name: "job repository", value: jobs},
-		{name: "query engine", value: warehouse},
 		{name: "clock", value: clock},
 		{name: "ID generator", value: ids},
 	} {
@@ -207,9 +206,15 @@ func NewQueryService(
 			cancelRuntime()
 			return nil, fmt.Errorf("%w: analyzed statement executor is required with the GoogleSQL gateway", domain.ErrPrecondition)
 		}
-	} else if !queryServiceDependencyIsNil(service.statementExecutor) || !queryServiceDependencyIsNil(service.statementMaterializer) {
-		cancelRuntime()
-		return nil, fmt.Errorf("%w: analyzed statement ports require the GoogleSQL gateway", domain.ErrPrecondition)
+	} else {
+		if queryServiceDependencyIsNil(service.warehouse) {
+			cancelRuntime()
+			return nil, fmt.Errorf("%w: query service requires the GoogleSQL gateway", domain.ErrPrecondition)
+		}
+		if !queryServiceDependencyIsNil(service.statementExecutor) || !queryServiceDependencyIsNil(service.statementMaterializer) {
+			cancelRuntime()
+			return nil, fmt.Errorf("%w: analyzed statement ports require the GoogleSQL gateway", domain.ErrPrecondition)
+		}
 	}
 	return service, nil
 }

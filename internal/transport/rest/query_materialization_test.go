@@ -3,8 +3,6 @@ package rest
 // Query destination and polling contract sources:
 //   - JobConfigurationQuery: https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 //   - getQueryResults: https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults
-//   - connector 0.44.2 copyData/materialization:
-//     https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L315-L331
 
 import (
 	"encoding/json"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/application"
 )
@@ -30,9 +29,16 @@ func TestQueryDestinationAndPagingCrossPublicRESTEdge(t *testing.T) {
 	t.Cleanup(func() { _ = warehouse.Close() })
 	clock := testClock{value: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
+	gateway, err := googlesqladapter.NewGateway(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
 	queries := newRESTTestQueryService(
 		memory.NewJobRepository(), warehouse, clock, &testIDs{},
-		application.WithQueryMaterializer(warehouse), application.WithQueryDestinationCatalog(catalog),
+		application.WithGoogleSQLGateway(gateway),
+		application.WithStatementExecutor(warehouse),
+		application.WithStatementMaterializer(warehouse),
+		application.WithQueryDestinationCatalog(catalog),
 	)
 	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "").Handler())
 	t.Cleanup(server.Close)
@@ -56,15 +62,15 @@ func TestQueryDestinationAndPagingCrossPublicRESTEdge(t *testing.T) {
 		"query":"INSERT INTO `+"`test-project.analytics.destination`"+` VALUES (1, 'one')","useLegacySql":false
 	}`, http.StatusOK)
 
-	appendBody := queryDestinationJobBody(t, "spark-copy-0442", "US",
+	appendBody := queryDestinationJobBody(t, "query-copy", "US",
 		"SELECT * FROM `test-project.analytics.source` WHERE id = 2", "destination", "WRITE_APPEND")
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", appendBody, http.StatusOK)
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", appendBody, http.StatusConflict)
-	driftedBody := queryDestinationJobBody(t, "spark-copy-0442", "US",
+	driftedBody := queryDestinationJobBody(t, "query-copy", "US",
 		"SELECT * FROM `test-project.analytics.source` WHERE id = 3", "destination", "WRITE_APPEND")
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", driftedBody, http.StatusConflict)
-	request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs/spark-copy-0442?location=EU", "", http.StatusNotFound)
-	completed := waitForRESTQueryJob(t, ctx, request, "spark-copy-0442", "US")
+	request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs/query-copy?location=EU", "", http.StatusNotFound)
+	completed := waitForRESTQueryJob(t, ctx, request, "query-copy", "US")
 	queryConfiguration := completed["configuration"].(map[string]any)["query"].(map[string]any)
 	jobConfiguration := completed["configuration"].(map[string]any)
 	destination := queryConfiguration["destinationTable"].(map[string]any)
@@ -74,7 +80,7 @@ func TestQueryDestinationAndPagingCrossPublicRESTEdge(t *testing.T) {
 		t.Fatalf("jobs.get did not round-trip destination configuration: %#v", queryConfiguration)
 	}
 	if labels, present := jobConfiguration["labels"].(map[string]any); !present || len(labels) != 0 {
-		t.Fatalf("jobs.get did not preserve connector empty labels: %#v", jobConfiguration)
+		t.Fatalf("jobs.get did not preserve empty labels: %#v", jobConfiguration)
 	}
 	assertRESTQueryIDs(t, request, "destination", []string{"1", "2"})
 
@@ -117,7 +123,7 @@ func TestQueryDestinationAndPagingCrossPublicRESTEdge(t *testing.T) {
 	if rows, ok := second["rows"].([]any); !ok || len(rows) != 1 {
 		t.Fatalf("second result page = %#v", second)
 	}
-	request(http.MethodGet, fmt.Sprintf("/bigquery/v2/projects/test-project/queries/spark-copy-0442?location=US&pageToken=%s", url.QueryEscape(pageToken)), "", http.StatusBadRequest)
+	request(http.MethodGet, fmt.Sprintf("/bigquery/v2/projects/test-project/queries/query-copy?location=US&pageToken=%s", url.QueryEscape(pageToken)), "", http.StatusBadRequest)
 
 	jobsPage := request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs?location=US&maxResults=1", "", http.StatusOK)
 	jobsToken, ok := jobsPage["nextPageToken"].(string)

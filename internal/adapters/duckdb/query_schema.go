@@ -12,6 +12,38 @@ import (
 
 var queryDecimalTypePattern = regexp.MustCompile(`(?i)^DECIMAL\(([0-9]+),\s*([0-9]+)\)$`)
 
+func bigQueryType(databaseType string) string {
+	upper := strings.ToUpper(databaseType)
+	switch {
+	case strings.HasSuffix(upper, "[]"), strings.HasPrefix(upper, "LIST("):
+		return "ARRAY"
+	case strings.Contains(upper, "BOOL"):
+		return "BOOLEAN"
+	case strings.Contains(upper, "INT"):
+		return "INTEGER"
+	case strings.Contains(upper, "DOUBLE"), strings.Contains(upper, "FLOAT"):
+		return "FLOAT"
+	case strings.Contains(upper, "DECIMAL"):
+		return "NUMERIC"
+	case strings.Contains(upper, "TIMESTAMP WITH TIME ZONE"), strings.Contains(upper, "TIMESTAMPTZ"):
+		return "TIMESTAMP"
+	case strings.Contains(upper, "TIMESTAMP"):
+		return "DATETIME"
+	case strings.Contains(upper, "DATE"):
+		return "DATE"
+	case strings.Contains(upper, "TIME"):
+		return "TIME"
+	case strings.Contains(upper, "BLOB"):
+		return "BYTES"
+	case strings.Contains(upper, "JSON"):
+		return "JSON"
+	case strings.Contains(upper, "STRUCT"):
+		return "RECORD"
+	default:
+		return "STRING"
+	}
+}
+
 func bigQueryResultField(name, databaseType string, hint *domain.Field) (domain.Field, error) {
 	field, err := parseDuckDBResultTypeWithHint(strings.TrimSpace(databaseType), hint)
 	if err != nil {

@@ -27,9 +27,6 @@ type engineRuntimeDescriptor struct {
 	Health                ports.HealthChecker
 	Catalog               ports.CatalogStorage
 	DDL                   ports.DDLStorage
-	Query                 ports.QueryEngine
-	QueryAnalyzer         ports.QueryAnalyzer
-	QueryMaterializer     ports.QueryMaterializer
 	StatementExecutor     ports.StatementExecutor
 	StatementMaterializer ports.StatementMaterializer
 	TableData             ports.TableDataReader
@@ -44,9 +41,6 @@ type engineRuntime struct {
 	health                ports.HealthChecker
 	catalog               ports.CatalogStorage
 	ddl                   ports.DDLStorage
-	query                 ports.QueryEngine
-	queryAnalyzer         ports.QueryAnalyzer
-	queryMaterializer     ports.QueryMaterializer
 	statementExecutor     ports.StatementExecutor
 	statementMaterializer ports.StatementMaterializer
 	tableData             ports.TableDataReader
@@ -68,9 +62,6 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 		{name: "health checker", value: descriptor.Health},
 		{name: "catalog storage", value: descriptor.Catalog},
 		{name: "DDL storage", value: descriptor.DDL},
-		{name: "query engine", value: descriptor.Query},
-		{name: "query analyzer", value: descriptor.QueryAnalyzer},
-		{name: "query materializer", value: descriptor.QueryMaterializer},
 		{name: "analyzed statement executor", value: descriptor.StatementExecutor},
 		{name: "analyzed statement materializer", value: descriptor.StatementMaterializer},
 		{name: "table data reader", value: descriptor.TableData},
@@ -86,8 +77,6 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 	return &engineRuntime{
 		capabilities: capabilities,
 		health:       descriptor.Health, catalog: descriptor.Catalog, ddl: descriptor.DDL,
-		query: descriptor.Query, queryAnalyzer: descriptor.QueryAnalyzer,
-		queryMaterializer: descriptor.QueryMaterializer,
 		statementExecutor: descriptor.StatementExecutor, statementMaterializer: descriptor.StatementMaterializer,
 		tableData: descriptor.TableData, loader: descriptor.Loader,
 		readFactory: descriptor.ReadFactory, writeFactory: descriptor.WriteFactory,
@@ -103,7 +92,6 @@ func composeDuckDBEngine(dsn string) (*engineRuntime, error) {
 	runtime, err := newEngineRuntime(engineRuntimeDescriptor{
 		Capabilities: warehouse.Capabilities(),
 		Health:       warehouse, Catalog: warehouse, DDL: warehouse,
-		Query: warehouse, QueryAnalyzer: warehouse, QueryMaterializer: warehouse,
 		StatementExecutor: warehouse, StatementMaterializer: warehouse,
 		TableData: warehouse, Loader: warehouse, ReadFactory: warehouse, WriteFactory: warehouse,
 		Lifecycle: warehouse,

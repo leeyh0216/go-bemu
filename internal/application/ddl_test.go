@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
@@ -49,10 +50,18 @@ func TestCatalogServiceExecutesSemanticDDLThroughPlannedStorage(t *testing.T) {
 	if err := execute("create", domain.DDLCommandDescriptor{Kind: domain.DDLCreateTable, Schema: schema}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := warehouse.Query(ctx, ports.QueryRequest{
+	gateway, err := googlesqladapter.NewGateway(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert, err := gateway.Analyze(ctx, ports.QueryRequest{
 		ProjectID: "test-project",
 		SQL:       "INSERT INTO `test-project.analytics.events` VALUES (1, 'not-an-integer', '7')",
-	}); err != nil {
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.ExecuteStatement(ctx, insert); err != nil {
 		t.Fatal(err)
 	}
 	precision, scale := int64(10), int64(2)
