@@ -41,7 +41,7 @@ go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
 | 파일 | 클라이언트 용도 | Unix 권한 |
 | --- | --- | --- |
 | `manifest.json` | 절대 파일 경로, 발급 서버 주소, 프록시 주소, trust store 암호 | `0600` |
-| `ca.pem` | Python, `bq`, curl, BQEMU 상태 확인용 CA | `0644` |
+| `ca.pem` | HTTP 호출, curl, BQEMU 상태 확인용 CA | `0644` |
 | `server.pem` | BQEMU와 로컬 발급 서버의 TLS 인증서 | `0644` |
 | `server-key.pem` | TLS 개인 키 | `0600` |
 | `service-account.json` | 로컬 JWT bearer 교환 | `0600` |
@@ -49,7 +49,7 @@ go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
 | `wif.json` | 파일 기반 external account STS 교환 | `0600` |
 | `subject-token.txt` | `wif.json`에서 참조하는 subject token | `0600` |
 | `access-token.txt` | 교환 없이 직접 전달하는 token | `0600` |
-| `truststore.p12` | Java와 Spark용 PKCS12 trust store | `0600` |
+| `truststore.p12` | JVM용 PKCS12 trust store | `0600` |
 
 출력 디렉터리 권한은 `0700`입니다. `wif.json`에는 `subject-token.txt`의 절대
 경로가 기록되므로 최종 사용할 위치에서 파일을 생성해야 합니다. 기존 파일과 심볼릭
@@ -125,12 +125,12 @@ go run ./cmd/bqemu-auth-fixture serve --manifest .bqemu-auth/manifest.json
 | `https://localhost:9052/healthz` | 발급 서버 준비 상태 |
 | `http://127.0.0.1:9053` | 고정된 Google OAuth token 주소용 CONNECT 프록시 |
 
-일부 공식 클라이언트는 authorized user 파일의 `token_uri`를 무시하거나 고정된
+일부 인증 정보 라이브러리는 authorized user 파일의 `token_uri`를 무시하거나 고정된
 Google OAuth audience를 사용합니다. 프록시는 `oauth2.googleapis.com:443`과
 `accounts.google.com:443`에 대한 CONNECT 요청만 허용하며, TLS 연결을 로컬 발급
 서버로 전달합니다. 다른 인터넷 주소로 요청을 전달할 수 없습니다.
 
-JSON 인증 파일을 사용하는 Python과 `bq` 프로세스에 다음 환경 변수를 지정합니다.
+JSON 인증 파일을 사용하는 프로세스에 다음 환경 변수를 지정합니다.
 
 ```bash
 export AUTH_DIR="$PWD/.bqemu-auth"
@@ -164,119 +164,13 @@ BQEMU는 임의의 bearer 값을 허용하므로 direct token 방식의 설정�
 세 가지 중 하나를 사용합니다. REST와 Storage gRPC 주소는 인증 방식과 별도로
 지정해야 합니다.
 
-<!-- section: python -->
-## Python 3.43.0
+<!-- section: integration-guides -->
+## 통합 가이드
 
-공식 [google-cloud-bigquery Python
-클라이언트](https://cloud.google.com/python/docs/reference/bigquery/latest)를
-설치해서 사용합니다. 생성한 JSON 파일을 scope 없이 읽고 프로젝트와 엔드포인트를
-명시합니다. 이렇게 설정하면 WIF 인증 정보가 프로젝트를 자동으로 찾기 위해 외부
-API를 호출하지 않습니다.
-
-```python
-from google.auth import load_credentials_from_file
-from google.cloud import bigquery
-
-credentials, _ = load_credentials_from_file(
-    ".bqemu-auth/wif.json",
-)
-client = bigquery.Client(
-    project="test-project",
-    credentials=credentials,
-    client_options={"api_endpoint": "https://localhost:9050"},
-)
-print([item.dataset_id for item in client.list_datasets()])
-client.close()
-```
-
-`wif.json` 대신 `service-account.json` 또는 `authorized-user.json`을 지정하면
-다른 교환 절차를 사용할 수 있습니다. Direct token은 다음과 같이 전달합니다.
-
-```python
-from pathlib import Path
-from google.cloud import bigquery
-from google.oauth2.credentials import Credentials
-
-token = Path(".bqemu-auth/access-token.txt").read_text().strip()
-client = bigquery.Client(
-    project="test-project",
-    credentials=Credentials(token=token),
-    client_options={"api_endpoint": "https://localhost:9050"},
-)
-print([item.dataset_id for item in client.list_datasets()])
-client.close()
-```
-
-Python 프로세스에는 앞 절의 `REQUESTS_CA_BUNDLE`, 프록시, `NO_PROXY` 설정이
-필요합니다.
-
-<!-- section: bq -->
-## bq CLI 2.1.31
-
-공식 [`bq` CLI](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)를
-별도의 Cloud SDK 설정 디렉터리와 함께 사용합니다. 로컬 테스트 인증 정보가 평소
-사용하는 gcloud 설정을 바꾸지 않도록 분리할 수 있습니다.
-
-```bash
-export CLOUDSDK_CONFIG="$(mktemp -d)"
-export CLOUDSDK_CORE_DISABLE_PROMPTS=1
-export CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK=true
-export CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE="$AUTH_DIR/ca.pem"
-export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$AUTH_DIR/service-account.json"
-
-bq --api=https://localhost:9050 --project_id=test-project --ca_certificates_file="$AUTH_DIR/ca.pem" --format=json ls
-```
-
-`CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE`를 `authorized-user.json`이나
-`wif.json`으로 바꾸면 다른 인증 파일을 사용할 수 있습니다. 발급 서버를 실행하지
-않고 token 파일을 직접 전달할 수도 있습니다.
-
-```bash
-bq --api=https://localhost:9050 --project_id=test-project --ca_certificates_file="$AUTH_DIR/ca.pem" --oauth_access_token="$(tr -d '\r\n' < "$AUTH_DIR/access-token.txt")" --format=json ls
-```
-
-테스트가 끝나면 임시 `CLOUDSDK_CONFIG` 디렉터리를 삭제합니다.
-
-<!-- section: spark -->
-## PySpark와 Scala Spark
-
-지원 계약은 Spark `3.5.8`과 [Spark BigQuery 커넥터
-`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)입니다.
-생성 도구가 PKCS12 trust store도 함께 만듭니다. PySpark나 `spark-shell`을
-시작하기 전에 JVM trust store와 루프백 프록시를 지정합니다.
-
-```bash
-export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=$AUTH_DIR/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=9053 -Dhttp.nonProxyHosts=localhost|127.*"
-export SPARK_LOCAL_IP=127.0.0.1
-```
-
-PySpark에서 JSON 인증 파일로 테이블을 읽는 예시는 다음과 같습니다.
-
-```python
-df = (
-    spark.read.format("bigquery")
-    .option("parentProject", "test-project")
-    .option("billingProject", "test-project")
-    .option("project", "test-project")
-    .option("bigQueryHttpEndpoint", "https://localhost:9050")
-    .option("bigQueryStorageGrpcEndpoint", "localhost:9060")
-    .option("credentialsFile", "/absolute/path/.bqemu-auth/service-account.json")
-    .load("test-project.analytics.events")
-)
-df.show()
-```
-
-`credentialsFile`에 authorized user 또는 WIF 파일 경로를 지정할 수도 있습니다.
-Direct token을 사용하려면 `credentialsFile`을 제거하고 `access-token.txt`의
-앞뒤 공백을 제거한 값을 `gcpAccessToken`에 지정합니다.
-
-Scala의 `DataFrameReader`에도 같은 옵션을 적용합니다. 예를 들어
-`spark.read.format("bigquery").option("credentialsFile", path).load(table)`로 JSON
-인증 파일을 사용할 수 있습니다. 메타데이터 요청은 HTTPS를 사용하고 테이블 읽기는
-Storage gRPC를 사용하므로 두 엔드포인트 옵션을 모두 유지해야 합니다.
-
-커넥터가 내부 의존성으로 가져오는 Java BigQuery SDK 버전은 구현 세부사항입니다.
-`google-cloud-bigquery 2.60.0`을 별도의 호환성 기준이나 테스트 대상으로 사용하지
+실행 파일별 설정은 통합 테스트 범위입니다. 버전을 고정한 예제, endpoint 옵션,
+인증 정보 옵션, JVM trust store 설정은 [통합
+가이드](../../tests/integration/docs/ko/index.md)에서 관리합니다. 해당 문서는 여기서
+설명한 파일을 사용하지만 특정 실행 파일이나 버전을 제품 의존성으로 만들지는
 않습니다.
 
 <!-- section: bqemu-tls -->
@@ -340,7 +234,7 @@ go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth --tls-dns-name bqe
 go run ./cmd/bqemu-auth-fixture serve --manifest .bqemu-auth/manifest.json
 ```
 
-커넥터 REST 엔드포인트에는 `https://bqemu:9050` 주소를 사용하고 Storage gRPC에는
+공개 REST 엔드포인트에는 `https://bqemu:9050` 주소를 사용하고 Storage gRPC에는
 `bqemu:9060` 주소를 사용합니다. `NO_PROXY`에도 `bqemu`를 추가합니다. Token 교환에는
 매니페스트에 기록된 주소를 사용합니다. 기본값은 `localhost:9052`입니다. 개발
 컨테이너에는 Go 1.26 이상과 `keytool`이
@@ -348,11 +242,11 @@ go run ./cmd/bqemu-auth-fixture serve --manifest .bqemu-auth/manifest.json
 안 됩니다.
 
 <!-- section: verification -->
-## 지원 클라이언트 검증
+## 통합 인증 방식 검증
 
-저장소의 계약 테스트는 선택한 Python과 Spark 의존성을 설치하고, 정규화된 소비자
-사례가 선언한 실행 산출물의 SHA-256 값을 확인합니다. TLS를 적용한 BQEMU와 발급
-서버를 시작한 뒤 모든 필수 사례를 실제 클라이언트 프로세스에서 실행합니다.
+통합 계약은 정규화된 사례가 선택한 의존성을 설치하고 선언한 실행 산출물의 SHA-256
+값을 확인합니다. TLS를 적용한 BQEMU와 발급 서버를 시작한 뒤 모든 필수 인증 방식을
+공개 프로세스에서 실행합니다.
 
 ```bash
 make auth-client-setup
@@ -367,9 +261,10 @@ make auth-client-test
 크기, 상관관계 확인용 SHA-256 값과 보관한 자식 및 백그라운드 프로세스 원문을
 NDJSON으로 기록합니다.
 
-`PATH`에 있는 `bq` 실행 파일은 선택한 사례가 선언한 버전이어야 합니다. 필수 Python
-클라이언트, CLI, Spark, 커넥터, 실행 환경의 정확한 버전은 [소비자
-호환성](../../tests/integration/docs/ko/consumer-compatibility.md) 문서에서 자동 생성합니다.
+실행 파일과 실행 환경의 정확한 버전은 [소비자
+호환성](../../tests/integration/docs/ko/consumer-compatibility.md) 문서에서 자동
+생성합니다. 사례 선택, 증거, CI 동작은 [통합 테스트
+프레임워크](../../tests/integration/docs/ko/framework.md)에서 정의합니다.
 
 진단 정보에는 작업 이름, 종료 상태, 출력 크기, 상관관계 확인용 SHA-256 값과
 클라이언트 및 서버 원문 출력이 포함됩니다. 따라서 로컬 산출물에 인증 정보나 token이
