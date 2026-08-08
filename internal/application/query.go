@@ -44,24 +44,26 @@ type QueryInput struct {
 }
 
 type QueryService struct {
-	jobs                  ports.JobRepository
-	googleSQLGateway      ports.GoogleSQLGateway
-	statementExecutor     ports.StatementExecutor
-	statementMaterializer ports.StatementMaterializer
-	ddlExecutor           ports.DDLExecutor
-	destinations          ports.QueryDestinationCatalog
-	clock                 ports.Clock
-	ids                   ports.IDGenerator
-	defaultLocation       string
-	anonymousTTL          time.Duration
-	operationTimeout      time.Duration
-	compensationTimeout   time.Duration
-	runtimeCtx            context.Context
-	cancelRuntime         context.CancelFunc
-	runtimeMu             sync.Mutex
-	closing               bool
-	activeWork            int
-	idle                  chan struct{}
+	jobs                      ports.JobRepository
+	googleSQLGateway          ports.GoogleSQLGateway
+	statementExecutor         ports.StatementExecutor
+	statementMaterializer     ports.StatementMaterializer
+	ddlExecutor               ports.DDLExecutor
+	destinations              ports.QueryDestinationCatalog
+	clock                     ports.Clock
+	ids                       ports.IDGenerator
+	defaultLocation           string
+	materializationProjectID  string
+	materializationDatasetID  string
+	materializationExpiration time.Duration
+	operationTimeout          time.Duration
+	compensationTimeout       time.Duration
+	runtimeCtx                context.Context
+	cancelRuntime             context.CancelFunc
+	runtimeMu                 sync.Mutex
+	closing                   bool
+	activeWork                int
+	idle                      chan struct{}
 }
 
 // ErrQueryServiceClosed rejects execution admission once shutdown begins.
@@ -110,15 +112,14 @@ func WithStatementMaterializer(materializer ports.StatementMaterializer) QueryOp
 	return func(service *QueryService) { service.statementMaterializer = materializer }
 }
 
-// WithAnonymousQueryTTL overrides the documented approximately 24-hour
-// lifetime of anonymous query-result tables. Composition keeps the official
-// default; tests can inject a shorter deterministic policy.
-// https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored
-func WithAnonymousQueryTTL(ttl time.Duration) QueryOption {
+// WithQueryMaterialization configures the optional catalog target and lifetime
+// for generated query results. An empty project/dataset pair retains the
+// internal hidden-dataset fallback.
+func WithQueryMaterialization(projectID, datasetID string, expiration time.Duration) QueryOption {
 	return func(service *QueryService) {
-		if ttl > 0 {
-			service.anonymousTTL = ttl
-		}
+		service.materializationProjectID = projectID
+		service.materializationDatasetID = datasetID
+		service.materializationExpiration = expiration
 	}
 }
 
@@ -175,7 +176,7 @@ func NewQueryService(
 	service := &QueryService{
 		jobs:  jobs,
 		clock: clock, ids: ids,
-		defaultLocation: "US", anonymousTTL: 24 * time.Hour,
+		defaultLocation: "US", materializationExpiration: 24 * time.Hour,
 		operationTimeout: 2 * time.Minute, compensationTimeout: 30 * time.Second,
 		runtimeCtx: runtimeCtx, cancelRuntime: cancelRuntime, idle: idle,
 	}
@@ -189,6 +190,25 @@ func NewQueryService(
 	if queryServiceDependencyIsNil(service.statementExecutor) {
 		cancelRuntime()
 		return nil, fmt.Errorf("%w: analyzed statement executor is required with the GoogleSQL gateway", domain.ErrPrecondition)
+	}
+	if service.materializationExpiration <= 0 {
+		cancelRuntime()
+		return nil, fmt.Errorf("%w: query materialization expiration must be positive", domain.ErrInvalid)
+	}
+	if (service.materializationProjectID == "") != (service.materializationDatasetID == "") {
+		cancelRuntime()
+		return nil, fmt.Errorf("%w: query materialization project and dataset must be configured together", domain.ErrInvalid)
+	}
+	if service.materializationProjectID != "" {
+		target := domain.Dataset{ProjectID: service.materializationProjectID, ID: service.materializationDatasetID}
+		if err := target.Validate(); err != nil {
+			cancelRuntime()
+			return nil, fmt.Errorf("query materialization target: %w", err)
+		}
+		if queryServiceDependencyIsNil(service.destinations) {
+			cancelRuntime()
+			return nil, fmt.Errorf("%w: configured query materialization requires destination catalog port", domain.ErrPrecondition)
+		}
 	}
 	return service, nil
 }
@@ -347,12 +367,30 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 	if analysis.RequiresCatalogMutation && input.Destination != nil {
 		return nil, preparedQuery{}, false, fmt.Errorf("%w: destinationTable is not valid for catalog DDL", domain.ErrInvalid)
 	}
+	anonymousDestination := false
+	internalAnonymousDestination := false
+	if analysis.ProducesRows && input.Destination == nil && s.materializationProjectID != "" {
+		if s.statementMaterializer == nil || s.destinations == nil {
+			return nil, preparedQuery{}, false, fmt.Errorf("%w: generated query results require statement materializer and destination catalog ports", domain.ErrPrecondition)
+		}
+		if err := ValidateQueryMaterializationTarget(
+			ctx, s.destinations, s.materializationProjectID, s.materializationDatasetID,
+		); err != nil {
+			return nil, preparedQuery{}, false, err
+		}
+		destination := configuredQueryDestination(
+			s.materializationProjectID, s.materializationDatasetID, input.ProjectID, input.JobID,
+		)
+		input.Destination = &destination
+		input.WriteDisposition = domain.WriteEmpty
+		input.CreateDisposition = domain.CreateIfNeeded
+		anonymousDestination = true
+	}
 	location, err := s.resolveQueryLocation(ctx, input, analysis)
 	if err != nil {
 		return nil, preparedQuery{}, false, err
 	}
 	input.Location = location
-	anonymousDestination := false
 	if analysis.ProducesRows && input.Destination == nil {
 		if s.statementMaterializer == nil || s.destinations == nil {
 			return nil, preparedQuery{}, false, fmt.Errorf("%w: anonymous query results require statement materializer and destination catalog ports", domain.ErrPrecondition)
@@ -362,6 +400,7 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		input.WriteDisposition = domain.WriteEmpty
 		input.CreateDisposition = domain.CreateIfNeeded
 		anonymousDestination = true
+		internalAnonymousDestination = true
 	}
 	job, err := domain.NewConfiguredQueryJob(domain.JobReference{
 		ProjectID: input.ProjectID,
@@ -372,6 +411,7 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		DefaultDataset: input.DefaultDataset, Destination: input.Destination,
 		WriteDisposition: input.WriteDisposition, CreateDisposition: input.CreateDisposition,
 		Priority: input.Priority, Labels: input.Labels, AnonymousDestination: anonymousDestination,
+		InternalAnonymousDestination: internalAnonymousDestination,
 	}, s.clock.Now())
 	if err != nil {
 		return nil, preparedQuery{}, false, err
@@ -483,7 +523,7 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job, prepar
 	destination := *configuration.Destination
 	var dataset domain.Dataset
 	var err error
-	if configuration.AnonymousDestination {
+	if configuration.InternalAnonymousDestination {
 		dataset, err = s.destinations.EnsureAnonymousDataset(ctx, destination.ProjectID, destination.DatasetID, job.Reference.Location)
 	} else {
 		dataset, err = s.destinations.GetDataset(ctx, destination.ProjectID, destination.DatasetID)
@@ -537,7 +577,7 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job, prepar
 		Type: "TABLE", Schema: fields, Location: dataset.Location,
 	}
 	if configuration.AnonymousDestination {
-		expires := s.clock.Now().Add(s.anonymousTTL)
+		expires := s.clock.Now().Add(s.materializationExpiration)
 		table.ExpirationTime = &expires
 	}
 	if publishErr := s.destinations.PublishMaterializedTable(ctx, table); publishErr != nil {

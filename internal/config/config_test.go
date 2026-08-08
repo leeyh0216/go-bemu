@@ -241,7 +241,9 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"state.dsn=/tmp/bqemu-state.sqlite",
 		"runtime.shutdownTimeout=9s", "runtime.serverDrainTimeout=4s", "runtime.storageCloseTimeout=4s",
 		"runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
-		"query.operationTimeout=45s", "query.compensationTimeout=10s", "query.anonymousResultTtl=12h",
+		"query.operationTimeout=45s", "query.compensationTimeout=10s",
+		"query.materialization.projectId=materialization-project",
+		"query.materialization.datasetId=query_results", "query.materialization.expiration=12h",
 		"tableData.operationTimeout=11s", "tableData.maxPageRows=1234",
 		"tableData.maxResponseBytes=1048576", "tableData.maxRowBytes=2097152",
 		"storage.read.enabled=true", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
@@ -305,21 +307,33 @@ func TestStateDSNLoadsIndependentlyFromEngineDatabase(t *testing.T) {
 
 func TestQueryPolicyLoadsFromEnvironmentAndRejectsNonPositiveValues(t *testing.T) {
 	result, err := load(nil, lookup(map[string]string{
-		"BQEMU_QUERY_OPERATION_TIMEOUT":    "45s",
-		"BQEMU_QUERY_COMPENSATION_TIMEOUT": "10s",
-		"BQEMU_QUERY_ANONYMOUS_RESULT_TTL": "12h",
+		"BQEMU_QUERY_OPERATION_TIMEOUT":          "45s",
+		"BQEMU_QUERY_COMPENSATION_TIMEOUT":       "10s",
+		"BQEMU_QUERY_MATERIALIZATION_PROJECT_ID": "materialization-project",
+		"BQEMU_QUERY_MATERIALIZATION_DATASET_ID": "query_results",
+		"BQEMU_QUERY_MATERIALIZATION_EXPIRATION": "12h",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Config.Query.OperationTimeout.Value() != 45*time.Second ||
 		result.Config.Query.CompensationTimeout.Value() != 10*time.Second ||
-		result.Config.Query.AnonymousResultTTL.Value() != 12*time.Hour {
+		result.Config.Query.Materialization.ProjectID != "materialization-project" ||
+		result.Config.Query.Materialization.DatasetID != "query_results" ||
+		result.Config.Query.Materialization.Expiration.Value() != 12*time.Hour {
 		t.Fatalf("query policy = %#v", result.Config.Query)
 	}
-	for _, path := range []string{"query.operationTimeout", "query.compensationTimeout", "query.anonymousResultTtl"} {
+	for _, path := range []string{"query.operationTimeout", "query.compensationTimeout", "query.materialization.expiration"} {
 		if _, err := load([]string{"--set", path + "=0s"}, lookup(nil)); err == nil {
 			t.Fatalf("expected positive-duration validation for %s", path)
+		}
+	}
+	for _, overrides := range [][]string{
+		{"--set", "query.materialization.projectId=materialization-project"},
+		{"--set", "query.materialization.datasetId=query_results"},
+	} {
+		if _, err := load(overrides, lookup(nil)); err == nil || !strings.Contains(err.Error(), "must be configured together") {
+			t.Fatalf("incomplete materialization target error = %v", err)
 		}
 	}
 }

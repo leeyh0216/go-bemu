@@ -68,8 +68,13 @@ query:
   # Bounds physical cleanup after metadata publication failures, even when the
   # originating request has already been cancelled.
   compensationTimeout: "30s"
-  # BigQuery documents anonymous cached result tables as approximately 24h.
-  anonymousResultTtl: "24h"
+  # Generated query results use this dataset when both IDs are set. The target
+  # must exist after bootstrap and share the query location. Leave both empty
+  # to use an internal hidden dataset instead.
+  materialization:
+    projectId: ""
+    datasetId: ""
+    expiration: "24h"
 
 tableData:
   # Bounds catalog admission, TTL resolution, and one count-and-page transaction.

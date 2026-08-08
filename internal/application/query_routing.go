@@ -23,6 +23,39 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
+// ValidateQueryMaterializationTarget performs startup admission for a
+// configured generated-result dataset. It is intentionally read-only: catalog
+// bootstrap owns creation, while query execution owns table publication.
+func ValidateQueryMaterializationTarget(
+	ctx context.Context,
+	catalog ports.QueryDestinationCatalog,
+	projectID, datasetID string,
+) error {
+	if projectID == "" && datasetID == "" {
+		return nil
+	}
+	if projectID == "" || datasetID == "" {
+		return fmt.Errorf("%w: query materialization project and dataset must be configured together", domain.ErrInvalid)
+	}
+	if queryServiceDependencyIsNil(catalog) {
+		return fmt.Errorf("%w: query materialization destination catalog is required", domain.ErrPrecondition)
+	}
+	if err := (domain.Dataset{ProjectID: projectID, ID: datasetID}).Validate(); err != nil {
+		return fmt.Errorf("query materialization target: %w", err)
+	}
+	dataset, err := catalog.GetDataset(ctx, projectID, datasetID)
+	if err != nil {
+		return fmt.Errorf("query materialization target %s.%s: %w", projectID, datasetID, err)
+	}
+	if dataset.Hidden {
+		return fmt.Errorf("%w: query materialization target must be a public configured dataset", domain.ErrPrecondition)
+	}
+	if strings.TrimSpace(dataset.Location) == "" {
+		return fmt.Errorf("%w: query materialization target has no location metadata", domain.ErrPrecondition)
+	}
+	return nil
+}
+
 func (s *QueryService) resolveQueryLocation(ctx context.Context, input QueryInput, analysis ports.QueryAnalysis) (string, error) {
 	references := analysis.ReferencedTables
 	type datasetReference struct {
@@ -132,6 +165,16 @@ func anonymousQueryDestination(projectID, location, jobID string) domain.TableRe
 		ProjectID: projectID,
 		DatasetID: "_bqemu_anonymous_" + locationFingerprint,
 		TableID:   "_bqemu_query_" + tableFingerprint,
+	}
+}
+
+func configuredQueryDestination(targetProjectID, targetDatasetID, queryProjectID, jobID string) domain.TableReference {
+	return domain.TableReference{
+		ProjectID: targetProjectID,
+		DatasetID: targetDatasetID,
+		TableID: "_bqemu_query_" + queryRoutingFingerprint(
+			targetProjectID, targetDatasetID, queryProjectID, jobID,
+		),
 	}
 }
 

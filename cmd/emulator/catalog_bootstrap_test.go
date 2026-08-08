@@ -5,13 +5,16 @@ import (
 	"testing"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
+	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/config"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 )
 
-func TestBootstrapCatalogCreatesConfiguredResourcesAndLegacyDefault(t *testing.T) {
+func TestBootstrapCatalogCreatesConfiguredResourcesAndImplicitDefault(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Defaults.ProjectID = "default-project"
+	cfg.Query.Materialization.ProjectID = "analytics-project"
+	cfg.Query.Materialization.DatasetID = "events"
 	cfg.Bootstrap.Projects = []config.BootstrapProjectConfig{
 		{
 			ID: "analytics-project", FriendlyName: "Analytics",
@@ -45,6 +48,12 @@ func TestBootstrapCatalogCreatesConfiguredResourcesAndLegacyDefault(t *testing.T
 	archive, err := catalog.GetDataset(t.Context(), "analytics-project", "archive")
 	if err != nil || archive.Location != "EU" {
 		t.Fatalf("archive dataset = %#v, %v", archive, err)
+	}
+	if err := application.ValidateQueryMaterializationTarget(
+		t.Context(), catalog,
+		cfg.Query.Materialization.ProjectID, cfg.Query.Materialization.DatasetID,
+	); err != nil {
+		t.Fatalf("bootstrapped materialization target = %v", err)
 	}
 }
 

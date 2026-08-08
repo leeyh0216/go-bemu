@@ -45,9 +45,17 @@ YAML 파일이 소유합니다. Docker용 전체 예시는
 `BQEMU_QUERY_OPERATION_TIMEOUT`입니다. 서버가 소유한 동기 쿼리와 비동기 쿼리의
 전체 실행 시간에 이 상한을 적용합니다.
 
-`query.anonymousResultTtl`의 기본값은 `24h`이며 환경 변수는
-`BQEMU_QUERY_ANONYMOUS_RESULT_TTL`입니다. 이 값은 생성된 결과 테이블의 만료 시간을
-제어합니다. 두 설정은 양수여야 하며 설정 파일이나 `--set`으로 변경할 수 있습니다.
+`query.materialization`은 서버가 생성하는 결과 테이블의 대상과 수명을 관리합니다.
+`projectId`와 `datasetId`는 둘 다 비우거나, `bootstrap`에서 조정한 공개 데이터 세트
+(또는 영속 카탈로그에 이미 존재하는 데이터 세트)를 함께 지정해야 합니다. 둘 다
+비우면 내부 숨김 데이터 세트를 사용합니다. `expiration`의 기본값은 `24h`이며
+`BQEMU_QUERY_MATERIALIZATION_EXPIRATION`에 매핑됩니다. 선택 대상은
+`BQEMU_QUERY_MATERIALIZATION_PROJECT_ID`와
+`BQEMU_QUERY_MATERIALIZATION_DATASET_ID`로 덮어쓸 수 있습니다. 프로세스는 공개
+listener를 열기 전과 작업을 저장하기 전에 대상을 확인하며, 대상 위치는 모든 원본과
+명시한 작업 위치에 일치해야 합니다. 요청의 `destinationTable`이 항상 우선하며 이
+경우 생성 결과 만료 시간을 적용하지 않습니다. 기간 설정은 양수여야 하며 모든
+스칼라 항목을 `--set`으로 변경할 수 있습니다.
 관련 프로토콜은 공식 [`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms)와
 [anonymous cached-result lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)을
 기준으로 합니다.

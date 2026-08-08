@@ -65,7 +65,7 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 		application.WithGoogleSQLGateway(gateway),
 		application.WithStatementExecutor(warehouse),
 		application.WithStatementMaterializer(warehouse),
-		application.WithQueryDestinationCatalog(catalog), application.WithAnonymousQueryTTL(24*time.Hour),
+		application.WithQueryDestinationCatalog(catalog), application.WithQueryMaterialization("", "", 24*time.Hour),
 	)
 	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "", WithTableDataAPI(catalog)).Handler())
 	t.Cleanup(server.Close)

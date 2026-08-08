@@ -86,7 +86,7 @@ relaxation, and job-driven evolution are not implied.
 | `jobs.getQueryResults` | Partial | location-aware lookup, `startIndex`, `maxResults`, and job/result-bound opaque page tokens |
 | explicit destination table | Partial | scalar exact-schema `WRITE_EMPTY`/`WRITE_APPEND`/`WRITE_TRUNCATE`; capability `query.destination.exact-schema-v1` |
 | query metadata | Verified basic | `INTERACTIVE`/`BATCH` priority and validated labels, including an explicitly empty label map, are fingerprinted and round-tripped |
-| anonymous destination table | Partial | row-producing query jobs publish a generated hidden-dataset destination with 24-hour lazy expiration; capability `query.destination.anonymous-v1` |
+| generated destination table | Partial | row-producing jobs prefer the configured materialization dataset, then fall back to a hidden internal dataset; expiration is configurable and SQLite-durable; capability `query.destination.anonymous-v1` |
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset only; gap `query.destination.truncate-schema-replacement-v1` |
 | semantic SQL DDL | Partial | GoogleSQL AST plans execute `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, top-level `ADD`/`RENAME`/`DROP COLUMN`, and `ALTER COLUMN SET DATA TYPE`; unsupported clauses fail before mutation under `query.ddl.catalog-sync-v1`, while crash recovery between SQLite and the engine remains #26 |
 | multi-statement queries | Partial | transactional `DECLARE`, `SET`, and supported query/DML statements; control flow, dynamic SQL, and temporary routines remain unsupported under the official [multi-statement query contract](https://cloud.google.com/bigquery/docs/multi-statement-queries) |
@@ -129,18 +129,21 @@ fingerprint alongside the raw configuration for drift diagnostics. See the offic
 For a row-producing query without `destinationTable`, BQEMU generates the
 destination before `JobRepository.CreateOrGet`, returns it in
 `configuration.query.destinationTable`, and materializes the result with
-`WRITE_EMPTY`/`CREATE_IF_NEEDED`.
-The generated dataset starts with `_`, is omitted from `datasets.list` unless
-[`all=true`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/list),
-and its tables expose an expiration 24 hours after publication, matching
-BigQuery's approximate [anonymous-table
+`WRITE_EMPTY`/`CREATE_IF_NEEDED`. A configured `query.materialization` dataset
+takes precedence over the internal fallback. It must exist at startup and must
+share the resolved query location. An explicit request destination takes
+precedence over both and receives no generated-result expiration.
+
+When no configured target exists, the generated dataset starts with `_` and is
+omitted from `datasets.list` unless
+[`all=true`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/list).
+Generated tables expose the configured expiration (24 hours by default),
+matching BigQuery's approximate [anonymous-table
 lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored).
-Cleanup is lazy at `tables.get`, `tables.list`, and Storage Read resolution; the
-hidden dataset is retained for later results. There is no cleanup goroutine or
-`Close` ordering: each request completes its cleanup synchronously. A known
-hidden dataset follows normal delete rules: live tables require
-`deleteContents=true`; after lazy expiration empties it, a normal dataset delete
-succeeds. There is no cache-hit reuse, background sweeper, or restart-durable TTL ledger.
+The expiration and destination ownership survive restart in SQLite. Cleanup is
+lazy at `tables.get`, `tables.list`, and Storage Read resolution; only the table
+is removed, while configured and hidden datasets are retained. There is no
+cleanup goroutine or cache-hit reuse.
 
 Before a job is inserted, the official GoogleSQL analyzer resolves supported
 quoted and unquoted table paths, cross-project `defaultDataset.projectId`, and

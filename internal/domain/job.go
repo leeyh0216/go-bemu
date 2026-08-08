@@ -133,6 +133,11 @@ type QueryConfiguration struct {
 	// generated destinationTable as BigQuery does for cached query results.
 	// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 	AnonymousDestination bool
+	// InternalAnonymousDestination distinguishes the hidden emulator-owned
+	// fallback dataset from a configured materialization dataset. Both are
+	// generated query results and expire, but only the fallback may be created
+	// implicitly by the application.
+	InternalAnonymousDestination bool `json:",omitempty"`
 }
 
 type JobError struct {
@@ -251,7 +256,7 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 		}
 	}
 	if configuration.Destination == nil {
-		if configuration.AnonymousDestination {
+		if configuration.AnonymousDestination || configuration.InternalAnonymousDestination {
 			return fmt.Errorf("%w: anonymous query destination metadata requires destinationTable", ErrInvalid)
 		}
 		if configuration.WriteDisposition != "" || configuration.CreateDisposition != "" {
@@ -281,6 +286,9 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 	if configuration.AnonymousDestination &&
 		(configuration.WriteDisposition != WriteEmpty || configuration.CreateDisposition != CreateIfNeeded) {
 		return fmt.Errorf("%w: anonymous query destinations require WRITE_EMPTY and CREATE_IF_NEEDED", ErrInvalid)
+	}
+	if configuration.InternalAnonymousDestination && !configuration.AnonymousDestination {
+		return fmt.Errorf("%w: internal anonymous destination requires generated destination metadata", ErrInvalid)
 	}
 	return nil
 }

@@ -83,9 +83,11 @@ physical deletion before metadata deletion. A crash between steps can create
 drift. Durable metadata and one transaction boundary are required before restart
 or atomic catalog claims.
 
-Anonymous query results reuse one emulator-owned hidden dataset per
-project/location and one collision-resistant table identity per job. Metadata
-publication attaches the file-configured expiration (24 hours by default).
+Generated query results use the configured materialization dataset when one is
+present; otherwise they reuse one emulator-owned hidden dataset per
+project/location. Each job receives a collision-resistant table identity.
+Metadata publication attaches the file-configured expiration (24 hours by
+default), and SQLite preserves that identity and expiration across restart.
 `CatalogService` serializes physical/metadata resource mutations in one process,
 rechecks expiration under that boundary, drops physical storage first, and deletes metadata second
 when `tables.get`, `tables.list`, or Storage Read resolves the table. This models
@@ -107,7 +109,9 @@ PENDING -> RUNNING -> DONE(result)
 BigQuery reports both successful and failed jobs as `DONE`; clients inspect
 `status.errorResult`, per the official [JobStatus
 resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatus).
-The current repository stores state and materialized results in memory.
+SQLite stores job state, configuration, result schema, and generated destination
+ownership. Result row payloads remain process-local memory and are reported as
+unavailable after restart instead of being synthesized.
 Query job identity is `(project, location, jobId)` plus a canonical configuration
 fingerprint. Every reused ID returns `409 duplicate`; the fingerprint only makes
 same-versus-different configuration drift visible alongside the logged SQL. This
@@ -277,8 +281,9 @@ that every flow succeeds.
 5. Extend the load port with missing-table create, schema-update options,
    non-Parquet formats, and multipart/resumable transfer while retaining bounded
    staging.
-6. Persist anonymous-result ownership/expiration and add a bounded background
-   sweeper while preserving physical-first cleanup and retryable metadata.
+6. Add an optional bounded background expiration sweep while preserving the
+   current restart-durable metadata, physical-first cleanup, and retryable
+   metadata deletion.
 
 These changes preserve the dependency rule; DuckDB remains replaceable rather
 than becoming the application API.

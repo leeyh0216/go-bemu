@@ -90,8 +90,8 @@ type DefaultsConfig struct {
 }
 
 // BootstrapConfig declares canonical catalog resources that must exist before
-// public listeners become ready. An empty project list preserves the legacy
-// behavior of creating defaults.projectId only.
+// public listeners become ready. An empty project list still creates
+// defaults.projectId as the required root catalog resource.
 type BootstrapConfig struct {
 	Projects []BootstrapProjectConfig `yaml:"projects" json:"projects"`
 }
@@ -188,9 +188,18 @@ type RuntimeConfig struct {
 //   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms
 //   - https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored
 type QueryConfig struct {
-	OperationTimeout    Duration `yaml:"operationTimeout" json:"operationTimeout"`
-	CompensationTimeout Duration `yaml:"compensationTimeout" json:"compensationTimeout"`
-	AnonymousResultTTL  Duration `yaml:"anonymousResultTtl" json:"anonymousResultTtl"`
+	OperationTimeout    Duration                   `yaml:"operationTimeout" json:"operationTimeout"`
+	CompensationTimeout Duration                   `yaml:"compensationTimeout" json:"compensationTimeout"`
+	Materialization     QueryMaterializationConfig `yaml:"materialization" json:"materialization"`
+}
+
+// QueryMaterializationConfig owns server-generated result destinations. When
+// projectId and datasetId are empty, the application uses an internal hidden
+// dataset in the resolved query location.
+type QueryMaterializationConfig struct {
+	ProjectID  string   `yaml:"projectId" json:"projectId"`
+	DatasetID  string   `yaml:"datasetId" json:"datasetId"`
+	Expiration Duration `yaml:"expiration" json:"expiration"`
 }
 
 // TableDataConfig bounds the REST tabledata.list adapter independently from
@@ -352,7 +361,7 @@ func Defaults() Config {
 		},
 		Query: QueryConfig{
 			OperationTimeout: Duration(2 * time.Minute), CompensationTimeout: Duration(30 * time.Second),
-			AnonymousResultTTL: Duration(24 * time.Hour),
+			Materialization: QueryMaterializationConfig{Expiration: Duration(24 * time.Hour)},
 		},
 		TableData: TableDataConfig{
 			OperationTimeout: Duration(30 * time.Second), MaxPageRows: 10_000,
@@ -512,7 +521,9 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STATE_DSN", "state.dsn"},
 	{"BQEMU_QUERY_OPERATION_TIMEOUT", "query.operationTimeout"},
 	{"BQEMU_QUERY_COMPENSATION_TIMEOUT", "query.compensationTimeout"},
-	{"BQEMU_QUERY_ANONYMOUS_RESULT_TTL", "query.anonymousResultTtl"},
+	{"BQEMU_QUERY_MATERIALIZATION_PROJECT_ID", "query.materialization.projectId"},
+	{"BQEMU_QUERY_MATERIALIZATION_DATASET_ID", "query.materialization.datasetId"},
+	{"BQEMU_QUERY_MATERIALIZATION_EXPIRATION", "query.materialization.expiration"},
 	{"BQEMU_TABLE_DATA_OPERATION_TIMEOUT", "tableData.operationTimeout"},
 	{"BQEMU_TABLE_DATA_MAX_PAGE_ROWS", "tableData.maxPageRows"},
 	{"BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES", "tableData.maxResponseBytes"},
@@ -646,8 +657,12 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setDuration(&cfg.Query.OperationTimeout)
 	case "query.compensationTimeout":
 		return setDuration(&cfg.Query.CompensationTimeout)
-	case "query.anonymousResultTtl":
-		return setDuration(&cfg.Query.AnonymousResultTTL)
+	case "query.materialization.projectId":
+		return setString(&cfg.Query.Materialization.ProjectID)
+	case "query.materialization.datasetId":
+		return setString(&cfg.Query.Materialization.DatasetID)
+	case "query.materialization.expiration":
+		return setDuration(&cfg.Query.Materialization.Expiration)
 	case "tableData.operationTimeout":
 		return setDuration(&cfg.TableData.OperationTimeout)
 	case "tableData.maxPageRows":
@@ -784,26 +799,36 @@ func (cfg Config) Validate() error {
 		return errors.New("server.http request byte limits must be positive")
 	}
 	for name, value := range map[string]Duration{
-		"server.http.readHeaderTimeout": cfg.Server.HTTP.ReadHeaderTimeout,
-		"server.http.readTimeout":       cfg.Server.HTTP.ReadTimeout,
-		"server.http.writeTimeout":      cfg.Server.HTTP.WriteTimeout,
-		"server.http.idleTimeout":       cfg.Server.HTTP.IdleTimeout,
-		"runtime.shutdownTimeout":       cfg.Runtime.ShutdownTimeout,
-		"runtime.serverDrainTimeout":    cfg.Runtime.ServerDrainTimeout,
-		"runtime.storageCloseTimeout":   cfg.Runtime.StorageCloseTimeout,
-		"runtime.jobPollInterval":       cfg.Runtime.JobPollInterval,
-		"runtime.readSessionTtl":        cfg.Runtime.ReadSessionTTL,
-		"runtime.cleanupInterval":       cfg.Runtime.CleanupInterval,
-		"query.operationTimeout":        cfg.Query.OperationTimeout,
-		"query.compensationTimeout":     cfg.Query.CompensationTimeout,
-		"query.anonymousResultTtl":      cfg.Query.AnonymousResultTTL,
-		"tableData.operationTimeout":    cfg.TableData.OperationTimeout,
-		"load.operationTimeout":         cfg.Load.OperationTimeout,
-		"storage.write.orphanTtl":       cfg.Storage.Write.OrphanTTL,
-		"storage.write.cleanupInterval": cfg.Storage.Write.CleanupInterval,
+		"server.http.readHeaderTimeout":    cfg.Server.HTTP.ReadHeaderTimeout,
+		"server.http.readTimeout":          cfg.Server.HTTP.ReadTimeout,
+		"server.http.writeTimeout":         cfg.Server.HTTP.WriteTimeout,
+		"server.http.idleTimeout":          cfg.Server.HTTP.IdleTimeout,
+		"runtime.shutdownTimeout":          cfg.Runtime.ShutdownTimeout,
+		"runtime.serverDrainTimeout":       cfg.Runtime.ServerDrainTimeout,
+		"runtime.storageCloseTimeout":      cfg.Runtime.StorageCloseTimeout,
+		"runtime.jobPollInterval":          cfg.Runtime.JobPollInterval,
+		"runtime.readSessionTtl":           cfg.Runtime.ReadSessionTTL,
+		"runtime.cleanupInterval":          cfg.Runtime.CleanupInterval,
+		"query.operationTimeout":           cfg.Query.OperationTimeout,
+		"query.compensationTimeout":        cfg.Query.CompensationTimeout,
+		"query.materialization.expiration": cfg.Query.Materialization.Expiration,
+		"tableData.operationTimeout":       cfg.TableData.OperationTimeout,
+		"load.operationTimeout":            cfg.Load.OperationTimeout,
+		"storage.write.orphanTtl":          cfg.Storage.Write.OrphanTTL,
+		"storage.write.cleanupInterval":    cfg.Storage.Write.CleanupInterval,
 	} {
 		if value.Value() <= 0 {
 			return fmt.Errorf("%s must be positive", name)
+		}
+	}
+	materializationProject := strings.TrimSpace(cfg.Query.Materialization.ProjectID)
+	materializationDataset := strings.TrimSpace(cfg.Query.Materialization.DatasetID)
+	if (materializationProject == "") != (materializationDataset == "") {
+		return errors.New("query.materialization.projectId and datasetId must be configured together")
+	}
+	if materializationProject != "" {
+		if err := (domain.Dataset{ProjectID: materializationProject, ID: materializationDataset}).Validate(); err != nil {
+			return fmt.Errorf("query.materialization target is invalid: %w", err)
 		}
 	}
 	if cfg.TableData.MaxPageRows < 1 || cfg.TableData.MaxPageRows > 100_000 {

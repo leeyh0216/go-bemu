@@ -99,7 +99,7 @@ limit](https://cloud.google.com/bigquery/docs/paging-results#api-limits)을 재�
 | --- | --- | --- |
 | 명시적 대상 테이블 | 부분 지원 | 스칼라 결과와 같은 스키마에서 `WRITE_EMPTY`, `WRITE_APPEND`, `WRITE_TRUNCATE`를 지원합니다. ID는 `query.destination.exact-schema-v1`입니다. |
 | 쿼리 메타데이터 | 기본 검증 | `INTERACTIVE` 및 `BATCH` 우선순위와 검증한 라벨을 해시와 왕복 결과에 반영합니다. 빈 라벨 맵도 보존합니다. |
-| 익명 대상 테이블 | 부분 지원 | 행을 반환하는 쿼리는 24시간 뒤 만료되는 숨김 데이터 세트의 테이블을 만들고 공개합니다. ID는 `query.destination.anonymous-v1`입니다. |
+| 생성 대상 테이블 | 부분 지원 | 행을 반환하는 작업은 설정한 materialization 데이터 세트를 우선 사용하고 없으면 내부 숨김 데이터 세트를 사용합니다. 만료 metadata는 설정 가능하고 SQLite에 영속화합니다. ID는 `query.destination.anonymous-v1`입니다. |
 | `WRITE_TRUNCATE` 스키마 교체 | 미지원 | 같은 스키마만 지원합니다. 미지원 ID는 `query.destination.truncate-schema-replacement-v1`입니다. |
 
 ### 실행 제어와 영속성
@@ -149,19 +149,23 @@ BigQuery는 이미 사용한 모든 작업 ID를 `409 duplicate`로 거부하고
 참고합니다.
 
 `destinationTable`이 없는 쿼리가 행을 반환하면 `JobRepository.CreateOrGet`을
-호출하기 전에 대상 테이블을 만듭니다. 생성한 테이블을
+호출하기 전에 대상 테이블을 정합니다. 생성한 테이블을
 `configuration.query.destinationTable`로 반환하고, `WRITE_EMPTY`와
-`CREATE_IF_NEEDED`로 결과를 저장합니다.
+`CREATE_IF_NEEDED`로 결과를 저장합니다. `query.materialization`에 지정한 공개 데이터
+세트를 내부 숨김 데이터 세트보다 우선합니다. 설정 대상은 시작할 때 존재해야 하며
+해석한 쿼리 위치와 같아야 합니다. 요청에 명시한 대상은 두 자동 대상보다 우선하며
+생성 결과 만료 시간을 적용하지 않습니다.
 
-생성한 데이터 세트의 이름은 `_`로 시작합니다. [`all=true`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/list)를
-지정하지 않으면 `datasets.list`에서 숨깁니다. 테이블은 BigQuery의 대략적인 [익명 테이블
-수명](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)에
-맞춰 메타데이터를 반영한 지 24시간 뒤의 만료 시간을 제공합니다.
+설정 대상이 없을 때 생성하는 내부 데이터 세트의 이름은 `_`로 시작합니다.
+[`all=true`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/list)를
+지정하지 않으면 `datasets.list`에서 숨깁니다. 생성 테이블은 BigQuery의 대략적인 [익명
+테이블 수명](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)에
+맞춰 기본 24시간인 설정 만료 시각을 제공합니다. 만료 시각과 대상 소유권은 SQLite에
+저장되어 재시작 뒤에도 유지됩니다.
 
 만료된 결과는 `tables.get`, `tables.list`, Storage Read에서 테이블을 찾을 때
-동기적으로 정리합니다. 숨김 데이터 세트는 다음 결과를 위해 남겨 둡니다. 캐시 적중
-결과 재사용, 백그라운드 정리 작업, 재시작 후 복구할 수 있는 만료 기록은 아직
-없습니다. 별도 정리 고루틴이나 `Close` 순서도 없으며 각 요청이 정리를 끝냅니다.
+동기적으로 정리합니다. 설정 대상과 내부 숨김 데이터 세트는 모두 남겨 둡니다. 캐시
+적중 결과 재사용과 백그라운드 정리 작업은 제공하지 않습니다.
 
 ID를 알고 있는 숨김 데이터 세트에는 일반 삭제 규칙을 적용합니다. 사용 가능한
 테이블이 있으면 `deleteContents=true`가 필요합니다. 조회 과정에서 만료된 테이블을

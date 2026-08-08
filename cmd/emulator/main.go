@@ -127,6 +127,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := bootstrapCatalog(ctx, cfg, catalogService); err != nil {
 		return err
 	}
+	if err := application.ValidateQueryMaterializationTarget(
+		ctx, catalogService,
+		cfg.Query.Materialization.ProjectID, cfg.Query.Materialization.DatasetID,
+	); err != nil {
+		return fmt.Errorf("validate query materialization target: %w", err)
+	}
 	googleSQLGateway, err := googlesqladapter.NewGateway(catalogService)
 	if err != nil {
 		return fmt.Errorf("configure GoogleSQL analyzer gateway: %w", err)
@@ -141,7 +147,11 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		application.WithQueryDestinationCatalog(catalogService),
 		application.WithQueryOperationTimeout(cfg.Query.OperationTimeout.Value()),
 		application.WithQueryCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
-		application.WithAnonymousQueryTTL(cfg.Query.AnonymousResultTTL.Value()),
+		application.WithQueryMaterialization(
+			cfg.Query.Materialization.ProjectID,
+			cfg.Query.Materialization.DatasetID,
+			cfg.Query.Materialization.Expiration.Value(),
+		),
 	)
 	if err != nil {
 		return fmt.Errorf("configure query service: %w", err)

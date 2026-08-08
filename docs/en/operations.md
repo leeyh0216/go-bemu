@@ -35,10 +35,19 @@ materialization and settled to the adapter's retained bytes; the sum of live
 sessions and in-flight reservations cannot exceed `maxTotalSnapshotBytes`.
 `query.operationTimeout` (default `2m`, environment
 `BQEMU_QUERY_OPERATION_TIMEOUT`) is the server hard ceiling for both synchronous
-and service-owned asynchronous query execution. `query.anonymousResultTtl` (default
-`24h`, environment `BQEMU_QUERY_ANONYMOUS_RESULT_TTL`) controls generated result
-table expiration. Both values must be positive and can be overridden in the
-configuration file or with `--set`. Their protocol basis is official
+and service-owned asynchronous query execution. `query.materialization` owns
+server-generated result destinations. `projectId` and `datasetId` must either
+both be empty or both identify a public dataset reconciled by `bootstrap` (or
+already present in the persistent catalog). An empty pair uses an internal
+hidden dataset. `expiration` defaults to `24h` and maps to
+`BQEMU_QUERY_MATERIALIZATION_EXPIRATION`; the optional target maps to
+`BQEMU_QUERY_MATERIALIZATION_PROJECT_ID` and
+`BQEMU_QUERY_MATERIALIZATION_DATASET_ID`. The configured target is checked
+before listeners start and again before a job is persisted. Its location must
+match every source and explicit job location. An explicit `destinationTable`
+always takes precedence and does not inherit generated-result expiration.
+Durations must be positive and every scalar can be overridden with `--set`.
+Their protocol basis is official
 [`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms)
 and [anonymous cached-result lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored).
 `query.compensationTimeout` (default `30s`, environment
