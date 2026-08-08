@@ -367,6 +367,9 @@ func NewStatement(descriptor StatementDescriptor) (Statement, error) {
 
 	columns := make([]Column, len(descriptor.OutputColumns))
 	for index, descriptorColumn := range descriptor.OutputColumns {
+		if strings.TrimSpace(descriptorColumn.Name) == "" {
+			return Statement{}, fmt.Errorf("%w: invalid semantic output column", domain.ErrInvalid)
+		}
 		if !validType(descriptorColumn.Type) {
 			return Statement{}, invalidType()
 		}

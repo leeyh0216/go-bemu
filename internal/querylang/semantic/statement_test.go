@@ -145,6 +145,10 @@ func TestStatementRejectsIncompleteRelationAndExpressionBindings(t *testing.T) {
 	if got, ok := bound.Reference(); !ok || got != reference {
 		t.Fatalf("binding reference = (%#v, %t)", got, ok)
 	}
+	descriptor.OutputColumns = []semantic.ColumnDescriptor{{Name: "", Type: boolType}}
+	if _, err := semantic.NewStatement(descriptor); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("empty output name error = %v", err)
+	}
 }
 
 func TestDecimalTypePreservesOmissionAndEffectivePolicy(t *testing.T) {
