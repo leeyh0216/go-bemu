@@ -306,7 +306,6 @@ func validateOperationConditions(operation Operation) error {
 	conditions := operation.Conditions
 	allowed := map[string]ConditionEffect{
 		"admin.enabled":         ConditionOperationExposure,
-		"load.enabled":          ConditionInputBranch,
 		"storage.read.enabled":  ConditionServiceAvailability,
 		"storage.write.enabled": ConditionServiceAvailability,
 		"ui.enabled":            ConditionOperationExposure,
