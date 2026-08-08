@@ -3,241 +3,267 @@
 
 [English](../en/bigquery-internals.md) | [한국어](bigquery-internals.md)
 
-# BigQuery와 Spark Connector 내부 동작
+# BigQuery와 Spark 커넥터 내부 동작
 
 <!-- section: mental-model -->
 ## 핵심 모델
 
-Spark connector는 서로 다른 세 공개 경계를 통과한다.
+Spark 커넥터는 서로 다른 공개 경계 세 곳을 사용합니다.
 
-1. table metadata, query/load job, polling, overwrite 조정용 BigQuery REST;
-2. session 생성과 병렬 row stream용 BigQuery Storage Read gRPC;
-3. direct append, stream finalize, pending-stream commit용 BigQuery Storage
-   Write gRPC.
+1. BigQuery REST는 테이블 메타데이터, 쿼리·적재 작업, 상태 확인, 덮어쓰기 조정을
+   담당합니다.
+2. BigQuery Storage Read gRPC는 세션을 만들고 행 스트림을 병렬로 읽습니다.
+3. BigQuery Storage Write gRPC는 직접 추가, 스트림 확정, 대기 스트림 커밋을
+   담당합니다.
 
-여기서 설명하는 정확한 client 동작은 [connector
+이 문서에서 설명하는 클라이언트 동작은 [커넥터
 `0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)를
-기준으로 한다. BigQuery의 canonical service 경계는 [REST
+기준으로 합니다. BigQuery 서비스의 기준 경계는 [REST
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest)와 [Storage RPC
-레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)다.
-`go-bemu`는 REST metadata/query와 opt-in Parquet load job, public Partial Storage
-Read/Write 범위를 노출한다. 아래 설명은 이 bounded runtime path와 남은 BigQuery
-요구사항을 구분한다.
+레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)입니다.
+
+`go-bemu`는 REST 메타데이터와 쿼리를 공개합니다. Parquet 적재 작업은 선택적으로
+활성화할 수 있습니다. Storage Read/Write 공개 범위는 부분 지원(`Partial`)입니다.
+아래 설명은 현재 제한을 둔 실행 절차와 아직 남은 BigQuery 요구사항을 구분합니다.
 
 <!-- section: read-planning -->
 ## 읽기 계획
 
-Connector는 먼저 REST로 table 또는 query를 확인하고 선택 column, filter,
-snapshot time, 요청 parallelism을 계산한 뒤 `CreateReadSession`을 전송한다. 정확한
-builder는
+커넥터는 먼저 REST로 테이블이나 쿼리를 확인합니다. 선택할 열, 필터, 스냅샷 시각,
+요청 병렬도를 계산한 뒤 `CreateReadSession`을 보냅니다. 정확한 요청 생성 코드는
 [`ReadSessionCreator.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java)에
-있다. Server는 reference schema 하나와 이름 있는 stream 0개 이상을 반환한다.
-Spark는 반환된 stream마다 input partition을 만든다. 요청 max parallelism은
-상한이지 stream을 강제로 만들라는 명령이 아니다.
+있습니다.
 
-올바른 emulator는 모든 logical stream을 하나의 안정된 snapshot에 묶어야 한다.
-각 range마다 순서 없는 query를 독립 재실행하면 안 된다. Projection과 row
-restriction은 session snapshot에 속하고 `ReadRows` offset은 선택 stream에
-상대적이다. 이 field와 의미는 공식
+서버는 참조 스키마 하나와 이름이 있는 스트림을 0개 이상 반환합니다. Spark는
+반환된 스트림마다 입력 파티션을 만듭니다. 요청한 최대 병렬도는 상한일 뿐, 해당
+개수만큼 스트림을 반드시 만들라는 뜻은 아닙니다.
+
+올바른 에뮬레이터는 모든 논리 스트림을 안정된 스냅샷 하나에 묶어야 합니다. 각
+범위마다 정렬 기준이 없는 쿼리를 따로 실행해서는 안 됩니다.
+
+열 선택과 행 제한 조건은 세션 스냅샷에 속합니다. `ReadRows` 오프셋은 선택한
+스트림을 기준으로 계산합니다. 이 필드와 의미는 공식
 [`ReadSession`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession)과
 [`ReadRowsRequest`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readrowsrequest)
-message에 정의되어 있다.
+메시지에 정의되어 있습니다.
 
-현재 public runtime은 live session마다 bounded DuckDB result 하나를 materialize하고
-이를 설정된 수의 stable logical range로 나누며 stream-relative offset에서 재개한다.
-Top-level projection과 제한된 row restriction subset은 Partial이다.
-`SplitReadStream`, historical `snapshot_time`, nested projection, restart recovery는
-unsupported다.
+현재 공개 실행 환경은 활성 세션마다 크기 제한을 둔 DuckDB 결과 하나를
+구체화합니다. 결과는 설정된 수의 고정된 논리 범위로 나눕니다. 각 스트림은 자체
+오프셋에서 읽기를 재개할 수 있습니다.
+
+최상위 열 선택과 제한된 행 조건은 부분 지원(`Partial`)입니다. `SplitReadStream`,
+과거 `snapshot_time`, 중첩 필드 선택, 재시작 복구는 지원하지 않습니다.
 
 <!-- section: read-wire -->
-## Arrow와 Avro Read Wire Format
+## Arrow와 Avro 읽기 전송 형식
 
 Arrow의 `serialized_schema`와 `serialized_record_batch`는 서로 다른 protobuf
-field에 Arrow IPC message를 담는다. 임의의 전체 Arrow file이 아니다. Format
-출처는 [Arrow IPC
-specification](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc)이다.
-Connector decode 경로는
+필드에 Arrow IPC 메시지를 담습니다. 완전한 Arrow 파일을 임의로 넣는 형식이
+아닙니다. 형식의 기준은 [Arrow IPC
+명세](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc)입니다.
+커넥터의 디코딩 절차는
 [`ArrowReaderIterator.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ArrowReaderIterator.java)에서
-시작한다.
+시작합니다.
 
-Avro는 JSON schema 하나와 연속된 binary row datum을 사용한다. Logical type과
-null union은 [Apache Avro
-specification](https://avro.apache.org/docs/1.11.4/specification/)을 따라야 하며
-BigQuery format mapping은 [Storage API Avro schema
-details](https://cloud.google.com/bigquery/docs/reference/storage#avro_schema_details)에
-정의되어 있다.
+Avro는 JSON 스키마 하나와 연속된 이진 행 데이터를 사용합니다. 논리 유형과 null
+유니온은 [Apache Avro
+명세](https://avro.apache.org/docs/1.11.4/specification/)를 따라야 합니다.
+BigQuery 형식 변환은 [Storage API Avro 스키마
+설명](https://cloud.google.com/bigquery/docs/reference/storage#avro_schema_details)에
+정의되어 있습니다.
 
-어느 format이든 row count, schema, payload byte, empty result, multiple batch,
-nested/repeated value, compression, offset resume가 일치해야 한다. Scalar fixture
-하나를 decode했다는 사실만으로 wire compatibility를 증명할 수 없다.
+어느 형식이든 행 수, 스키마, 데이터 바이트 수, 빈 결과, 여러 배치, 중첩·반복 값,
+압축, 오프셋 재개가 일치해야 합니다. 스칼라 시험 데이터 하나를 디코딩한 결과만으로
+전송 형식 호환성을 증명할 수는 없습니다.
 
-현재 DuckDB adapter는 public `ReadRows` path에서 bounded Arrow record-batch message와
-Avro binary row를 encode한다. Compression과 완전한 nested/repeated type mapping은
-gap이므로 full wire compatibility가 아닌 Partial이다.
+현재 DuckDB 어댑터는 공개 `ReadRows` 처리 과정에서 크기 제한을 둔 Arrow 레코드 배치
+메시지와 Avro 이진 행을 인코딩합니다. 압축과 완전한 중첩·반복 유형 변환은 아직
+지원하지 않습니다. 따라서 전체 전송 형식 호환성이 아닌 부분 지원(`Partial`)
+상태입니다.
 
 <!-- section: direct-exact -->
-## Direct Write: Pending Stream과 정확한 Offset
+## 직접 쓰기: 대기 스트림과 정확한 오프셋
 
-`writeMethod=direct` exactly-once mode에서는 Spark data partition마다 `PENDING`
-stream을 만든다. Connector `0.44.2`는
+`writeMethod=direct`의 정확히 한 번 쓰기 모드에서는 Spark 데이터 파티션마다
+`PENDING` 스트림을 만듭니다. 커넥터 `0.44.2`는
 [`BigQueryDirectDataWriterHelper.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java)에서
-이를 수행한다. `AppendRows`를 열고 writer schema를 제공하며 stream-relative
-starting offset과 serialized Proto row를 전송하고 각 response offset을 검증한 뒤
-stream을 finalize한다. 모든 task가 성공하면 driver가 stream 이름을 모아 commit한다.
+이를 수행합니다. `AppendRows` 연결을 열고 작성자 스키마를 제공합니다. 스트림 기준
+시작 오프셋과 직렬화된 Proto 행을 전송합니다. 각 응답 오프셋을 검증한 뒤 스트림을
+확정합니다. 모든 작업이 성공하면 드라이버가 스트림 이름을 모아 커밋합니다.
 
-공식 Write API는 정확한 offset 동작을 요구한다. 다음 offset은 수락하고 gap은
-실패하며, 이미 수락한 offset replay는 duplicate로 인식하거나 payload가 다르면
-거부해야 한다. `FinalizeWriteStream` 이후 append를 막고 row count를 확정한다.
-`BatchCommitWriteStreams`는 pending stream을 atomic하게 visible 상태로 만든다.
-Canonical RPC 계약은
+공식 Write API는 정확한 오프셋 처리를 요구합니다. 바로 다음 오프셋은 받습니다.
+중간 오프셋을 건너뛴 요청은 실패해야 합니다. 이미 받은 오프셋을 다시 보내면 중복
+요청으로 처리해야 합니다. 같은 오프셋의 데이터가 달라지면 거부해야 합니다.
+
+`FinalizeWriteStream` 이후에는 행을 추가할 수 없습니다. 이 호출에서 최종 행 수를
+확정합니다. `BatchCommitWriteStreams`는 대기 스트림을 원자적으로 공개합니다. 기준
+RPC 계약은
 [`BigQueryWrite`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite),
-운영 순서는 [pending stream batch
-load](https://cloud.google.com/bigquery/docs/write-api-batch)에 있다.
+운영 순서는 [대기 스트림 일괄
+적재](https://cloud.google.com/bigquery/docs/write-api-batch)에 있습니다.
 
-현재 Partial 구현은 stream을 key로 하는 process-local ledger에 schema fingerprint,
-next offset, 수락 payload digest, final row count, state, staging relation을 보관한다.
-ProtoRows append, exact offset, finalize, 검증된 PENDING group의 atomic commit이 public
-경계에 연결되어 있다. DuckDB mutation은 bounded coordinator 하나를 통해 직렬화하며
-ledger와 staging은 restart 후 복구되지 않는다. Process-global offset이나 임의
-stream-map 조회는 동시 Spark task에서 올바르지 않다.
+현재 부분 지원 구현은 스트림을 키로 사용하는 프로세스 내부 원장에 상태를
+보관합니다. 원장에는 스키마 지문값, 다음 오프셋, 수락한 데이터의 요약 해시, 최종 행
+수, 스트림 상태, 준비 테이블 정보가 들어갑니다.
+
+공개 경계는 `ProtoRows` 추가, 정확한 오프셋, 스트림 확정, 검증된 `PENDING` 그룹의
+원자적 커밋을 지원합니다. DuckDB 변경은 처리량에 상한을 둔 조정기 하나로
+직렬화합니다. 원장과 준비 데이터는 재시작 후 복구되지 않습니다.
+
+프로세스 전체에서 오프셋 하나를 공유하거나 스트림 맵을 임의로 조회하는 방식은 여러
+Spark 작업이 동시에 실행될 때 올바르지 않습니다.
 
 <!-- section: direct-at-least-once -->
-## Direct Write: Default Stream과 At-least-once Mode
+## 직접 쓰기: 기본 스트림과 한 번 이상 쓰기 모드
 
-`writeAtLeastOnce=true`이면 connector `0.44.2`는 table의 `_default` stream을
-사용하고 exact offset을 생략한다. Row는 finalize/batch commit 없이 visible해지지만
-모호한 실패 후 retry하면 중복될 수 있다. Google은 [Storage Write streaming
-semantics](https://cloud.google.com/bigquery/docs/write-api-streaming)에 이 차이를
-정의한다.
+`writeAtLeastOnce=true`이면 커넥터 `0.44.2`는 테이블의 `_default` 스트림을
+사용합니다. 정확한 오프셋은 보내지 않습니다. 행은 스트림 확정이나 일괄 커밋 없이
+바로 보입니다. 결과가 불명확한 실패 뒤에 재시도하면 행이 중복될 수 있습니다.
+Google은 이 차이를 [Storage Write 스트리밍
+의미](https://cloud.google.com/bigquery/docs/write-api-streaming)에 정의합니다.
 
-로컬 테스트는 두 mode를 구분해야 한다. Default stream response offset을
-제거했다는 사실만으로 at-least-once retry를 증명할 수 없다. Server side effect
-이후 client가 response를 받기 전에 끊는 fault test가 필요하다.
+로컬 테스트는 두 모드를 구분해야 합니다. 기본 스트림 응답에서 오프셋을 뺐다는
+사실만으로 한 번 이상 쓰기의 재시도 동작을 증명할 수는 없습니다. 서버가 행을
+저장한 뒤 클라이언트가 응답을 받기 전에 연결을 끊는 장애 시험이 필요합니다.
 
-Public Partial 구현은 공식 `/streams/_default` 이름과 connector `0.44.2`의 legacy
-`/_default` alias를 모두 받고 offset 없이 row를 즉시 적용한다. 모호한 response
-retry는 설계상 row를 중복시킬 수 있다. ArrowRows, BUFFERED와 explicit COMMITTED
-stream, `FlushRows`는 unsupported다.
+공개 부분 지원 구현은 공식 `/streams/_default` 이름을 받습니다. 커넥터 `0.44.2`의
+이전 별칭인 `/_default`도 받습니다. 오프셋 없이 행을 즉시 적용하므로 결과가
+불명확한 응답을 재시도하면 행이 중복될 수 있습니다. `ArrowRows`, `BUFFERED` 스트림,
+명시적 `COMMITTED` 스트림, `FlushRows`는 지원하지 않습니다.
 
 <!-- section: overwrite-merge -->
-## Direct Overwrite와 MERGE
+## 직접 덮어쓰기와 MERGE
 
-Direct overwrite는 단순 append flag가 아니다. Connector는 temporary table에 쓴
-뒤 destination row를 교체하는 `MERGE`를 제출하고 마지막에 정리할 수 있다.
-Connector 조정 코드는
+직접 덮어쓰기는 단순한 행 추가 옵션이 아닙니다. 커넥터는 임시 테이블에 먼저
+씁니다. 이후 대상 행을 교체하는 `MERGE`를 제출하고 마지막에 임시 테이블을 정리할 수
+있습니다. 커넥터 조정 코드는
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)에
-있다.
+있습니다.
 
-BigQuery `MERGE`는 source/target match, 순서 있는 clause, atomic visibility를
-결합한다. Constant-false predicate는 문서화된 replace 최적화지만 dynamic
-partition overwrite는 expression, partition value, script, source-row
-cardinality에도 의존한다. 권위 있는 규칙은 [GoogleSQL DML `MERGE`
+BigQuery `MERGE`는 원본과 대상의 일치 조건, 순서가 있는 절, 원자적인 공개 시점을
+결합합니다. 항상 거짓인 조건식은 문서화된 교체 최적화입니다. 동적 파티션
+덮어쓰기는 식, 파티션 값, 스크립트, 원본 행의 대응 개수에도 의존합니다. 기준 규칙은
+[GoogleSQL DML `MERGE`
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)에
-있다. Regex text substitution으로 일반 `MERGE`를 구현할 수 없다. Compatibility
-rule은 정확한 connector template 하나를 인식하고 알 수 없는 SQL은 그대로
-전달하거나 unsupported로 보고해야 한다.
+있습니다. 정규식으로 SQL 문구만 치환해서는 일반 `MERGE`를 구현할 수 없습니다.
+호환성 규칙은 커넥터가 생성하는 정확한 SQL 구조 하나를 인식해야 합니다. 알 수 없는
+SQL은 그대로 전달하거나 미지원으로 보고해야 합니다.
 
-현재 static adapter는 이 좁은 작업만 수행한다. Token parser가 source-derived
-connector `0.44.2` constant-false shape를 수락하고 source/destination table을 해석한
-뒤 하나의 atomic [DuckDB `MERGE
-INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 실행한다.
+현재 정적 어댑터는 이 제한된 작업만 수행합니다. 토큰 파서는 커넥터 `0.44.2`
+구현에서 파생한 항상 거짓인 조건 구조를 받습니다. 원본 테이블과 대상 테이블을
+해석한 뒤 원자적인 [DuckDB `MERGE
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실행합니다.
 [`direct-overwrite-static`](../../contract/golden/direct-overwrite-static-0.44.2.json)
-golden은 `jobs.insert`, polling, temporary-table delete를 다룬다. Released Spark
-`3.5.8` [public-edge evidence](../../tests/spark/evidence/direct-static-overwrite-0.44.2.json)는
-PENDING stream 4개, atomic group commit 1회, replacement visibility, cleanup도
-검증한다. Dynamic time/range partition overwrite와 일반 BigQuery `MERGE` parity는
-gap으로 남는다.
+기준 결과는 `jobs.insert`, 상태 확인, 임시 테이블 삭제를 다룹니다. 출시된 Spark
+`3.5.8`의 [공개 API 검증 자료](../../tests/spark/evidence/direct-static-overwrite-0.44.2.json)는
+`PENDING` 스트림 4개, 원자적 그룹 커밋 1회, 교체 결과의 공개, 정리까지 검증합니다.
+동적 시간·범위 파티션 덮어쓰기와 일반 BigQuery `MERGE` 호환성은 아직 지원하지
+않습니다.
 
 <!-- section: indirect-write -->
-## Indirect Write와 Load Job
+## 간접 쓰기와 적재 작업
 
-`writeMethod=indirect`이면 executor가 GCS에 intermediate file을 쓰고 driver가
-load configuration을 담은 `jobs.insert`를 제출하고 polling한 뒤 staging object를
-정리한다. Connector 조정은
+`writeMethod=indirect`이면 실행기가 GCS에 중간 파일을 씁니다. 드라이버는 적재 설정을
+담은 `jobs.insert`를 제출하고 상태를 확인합니다. 작업이 끝나면 준비 객체를
+정리합니다. 커넥터 조정 코드는
 [`BigQueryWriteHelper.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/BigQueryWriteHelper.java)에
-있다.
+있습니다.
 
-올바른 emulator는 모든 source URI를 object-store port로 해석하고 immutable
-input을 staging에 적재하며 schema/bad-record option을 검증한 뒤
-`CREATE_IF_NEEDED`와 `WRITE_APPEND`, `WRITE_TRUNCATE`, `WRITE_EMPTY`를 하나의
-destination transaction에서 적용해야 한다. BigQuery는 REST shape을
+올바른 에뮬레이터는 모든 원본 URI를 객체 저장소 포트로 해석해야 합니다. 변경되지
+않는 입력을 준비 영역에 적재하고 스키마와 잘못된 레코드 처리 옵션을 검증해야
+합니다. `CREATE_IF_NEEDED`, `WRITE_APPEND`, `WRITE_TRUNCATE`, `WRITE_EMPTY`는 대상
+트랜잭션 하나에서 적용해야 합니다.
+
+BigQuery는 REST 요청 구조를
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad),
-format/type 동작을 [batch loading
-문서](https://cloud.google.com/bigquery/docs/loading-data)에 정의한다. Parquet
-file을 열었다는 사실은 BigQuery load 의미, job error, wildcard URI, atomic
-visibility를 증명하지 않는다.
+형식과 유형 동작을 [일괄 적재
+문서](https://cloud.google.com/bigquery/docs/loading-data)에 정의합니다. Parquet 파일을
+열 수 있다는 사실만으로 BigQuery 적재 의미, 작업 오류, 와일드카드 URI, 원자적인
+공개 시점을 검증할 수는 없습니다.
 
-Opt-in public 범위는 fake-GCS-compatible JSON adapter로 bounded `gs://` list/get/media
-request를 해석하고 object를 private temporary workspace에 download하며 기존 table
-기준으로 Parquet column과 cast를 검증한 뒤 `WRITE_APPEND`, `WRITE_EMPTY`,
-`WRITE_TRUNCATE`를 하나의 DuckDB transaction에서 적용한다. File source는 명시적인
-local-only option이 필요하다. Destination create, autodetect,
-`schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, multipart/resumable download는
-unsupported이며 job과 idempotency state는 process-local이다.
+선택적으로 활성화하는 공개 범위는 가짜 GCS 호환 JSON 어댑터를 사용합니다. 개수와
+크기 제한을 적용하면서 `gs://` 목록·조회·미디어 요청을 해석합니다. 객체는 비공개
+임시 작업 디렉터리에 내려받습니다.
+
+기존 테이블을 기준으로 Parquet 열과 유형 변환을 검증합니다. `WRITE_APPEND`,
+`WRITE_EMPTY`, `WRITE_TRUNCATE`는 DuckDB 트랜잭션 하나에서 적용합니다. 파일 원본을
+사용하려면 로컬 전용 옵션을 명시해야 합니다.
+
+대상 생성, 자동 감지, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, 멀티파트·재개 가능
+다운로드는 지원하지 않습니다. 작업과 멱등성 상태는 프로세스 내부에만 보관합니다.
 
 <!-- section: rest-jobs -->
-## REST Job, Polling, Paging
+## REST 작업, 상태 확인, 페이지 조회
 
-`jobs.query`는 caller 관점에서 synchronous지만 job identity를 반환하고 result
-polling이 필요할 수 있다. `jobs.insert`는 job을 먼저 저장한 뒤 asynchronous로
-실행한다. 성공과 실패 모두 `DONE`이 되며 실패는 `errorResult`와 `errors`에
-담긴다. Result page에는 안정된 opaque `pageToken`, total row count, schema,
-BigQuery JSON cell shape가 필요하다. 공식 resource는
+`jobs.query`는 호출자 관점에서 동기 방식이지만 작업 식별자를 반환합니다. 결과를
+받기 위해 상태를 다시 확인해야 할 수도 있습니다. `jobs.insert`는 작업을 먼저 저장한
+뒤 비동기로 실행합니다.
+
+성공과 실패 상태는 모두 `DONE`입니다. 실패 정보는 `errorResult`와 `errors`에
+담깁니다. 결과 페이지에는 안정된 불투명 `pageToken`, 전체 행 수, 스키마, BigQuery
+JSON 셀 구조가 필요합니다. 공식 리소스는
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job)과
-[`GetQueryResultsResponse`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults#response-body)다.
+[`GetQueryResultsResponse`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults#response-body)입니다.
 
-`startIndex` truncation만 구현한 것은 page-token 지원이 아니다. Result table
-data가 DuckDB file에 있다는 이유만으로 in-memory job state가 영속화되지 않는다.
+`startIndex`에서 결과를 잘라 내는 기능만으로 페이지 토큰을 지원한다고 볼 수는
+없습니다. 결과 테이블 데이터가 DuckDB 파일에 있어도 메모리의 작업 상태가 자동으로
+영속화되지는 않습니다.
 
 <!-- section: types -->
-## Type 경계
+## 유형 경계
 
-Type은 BigQuery metadata, engine storage, REST JSON cell, Arrow/Avro/Proto wire
-value라는 네 독립 mapping을 통과한다. Canonical type 정의와 범위는 [BigQuery
-data types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)에
-있다. NUMERIC/BIGNUMERIC precision, TIMESTAMP와 DATETIME, TIME microsecond, 특수
-floating value, BYTES base64, JSON null과 SQL NULL, GEOGRAPHY transport, nested
-STRUCT, repeated field, empty array, nullability가 중요하다.
+유형은 서로 독립적인 변환 네 단계를 거칩니다. BigQuery 메타데이터, 엔진 저장
+유형, REST JSON 셀, Arrow/Avro/Proto 전송 값이 각각 하나의 단계입니다. 기준 유형의
+정의와 범위는 [BigQuery 데이터
+유형](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)에
+있습니다.
 
-DuckDB가 BIGNUMERIC이나 GEOGRAPHY를 text로 저장해도 canonical metadata는
-BIGNUMERIC 또는 GEOGRAPHY로 남아야 한다. Query result encoding은 schema-aware
-conversion을 사용해야 한다. List나 struct에 대한 `fmt.Sprint`는 BigQuery REST
-row가 아니다.
+`NUMERIC`/`BIGNUMERIC` 정밀도, `TIMESTAMP`와 `DATETIME`의 차이, `TIME`의 마이크로초
+정밀도를 처리해야 합니다. 특수 부동소수점 값, `BYTES`의 base64 표현, JSON null과
+SQL NULL의 차이도 처리해야 합니다. `GEOGRAPHY` 전송, 중첩 `STRUCT`, 반복 필드, 빈
+배열, null 허용 여부도 중요합니다.
+
+DuckDB가 `BIGNUMERIC`이나 `GEOGRAPHY`를 문자열로 저장하더라도 기준 메타데이터는
+`BIGNUMERIC` 또는 `GEOGRAPHY`를 유지해야 합니다. 쿼리 결과는 스키마에 따라
+인코딩해야 합니다. 목록이나 구조체에 `fmt.Sprint`를 적용한 값은 BigQuery REST 행
+표현이 아닙니다.
 
 <!-- section: authentication -->
 ## 인증과 인가
 
-Service-account JSON, authorized-user ADC, external-account WIF는 token 획득
-방식이 다르다. BigQuery REST/gRPC service는 최종적으로 Bearer token을 받는다.
-ADC 검색 순서와 credential file type은 [Application Default
+서비스 계정 JSON, 사용자 인증 ADC, 외부 계정 WIF는 토큰 획득 방식이 서로
+다릅니다. BigQuery REST/gRPC 서비스는 최종적으로 Bearer 토큰을 받습니다. ADC 검색
+순서와 인증 정보 파일 유형은 [Application Default
 Credentials](https://cloud.google.com/docs/authentication/application-default-credentials),
-WIF exchange는 [Workload Identity
+WIF 교환은 [Workload Identity
 Federation](https://cloud.google.com/iam/docs/workload-identity-federation)에 정의되어
-있다.
+있습니다.
 
-BQEMU는 이 credential을 획득하거나 exchange하지 않는다. REST와 gRPC adapter는 모든
-Authorization value를 하나의 bounded [RFC 6750 bearer
-parser](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)에 전달한 뒤 설정된
-`disabled`, syntax-only `bearer-present`, local `StaticTokenSet` verifier를 적용한다.
-로컬 OAuth/STS stub은 여전히 client acquisition과 propagation을 테스트할 수 있다.
-두 경로 모두 signature trust, IAM role, permission inheritance, federation policy,
-token introspection, production authorization을 에뮬레이션하지 않는다. TLS,
-acquisition, authentication, authorization은 서로 다른 capability 주장으로
-유지한다.
+BQEMU는 인증 정보를 획득하거나 교환하지 않습니다. REST와 gRPC 어댑터는 모든
+Authorization 값을 크기 제한이 있는 하나의 [RFC 6750 Bearer
+파서](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)에 전달합니다. 이후 설정에
+따라 `disabled`, 문법만 확인하는 `bearer-present`, 로컬 `StaticTokenSet` 검증기를
+적용합니다.
+
+로컬 OAuth/STS 대체 서비스로 클라이언트의 토큰 획득과 전달을 시험할 수 있습니다.
+두 경로 모두 서명 신뢰, IAM 역할, 권한 상속, 연합 정책, 토큰 검사, 운영 환경의
+인가를 재현하지 않습니다. TLS, 토큰 획득, 인증, 인가는 각각 별도의 지원 범위로
+관리합니다.
 
 <!-- section: implementation-map -->
 ## 구현 매핑
 
-| BigQuery/connector 단계 | 필요한 emulator 경계 | 현재 상태 |
+| BigQuery/커넥터 단계 | 필요한 에뮬레이터 경계 | 현재 상태 |
 | --- | --- | --- |
-| REST metadata | catalog use case와 JSON transport | 기본 lifecycle, patch/update, paging, ETag verified |
-| additive schema | schema validator와 warehouse transaction | top-level/nested/repeated-record addition verified |
-| query job | job repository와 query-engine port | 공식 Python sync/async path verified, process-local 부분 구현 |
-| CreateReadSession/ReadRows | snapshot/session ledger와 Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical stream, stable offset, Split/compression/historical snapshot/nested projection gap |
-| AppendRows/finalize/commit | stream별 ledger와 transaction coordinator | public Partial: PENDING/default ProtoRows, offset, finalize, atomic commit, advanced stream kind와 durability gap |
-| indirect load | object store, staging, load disposition | opt-in public Partial: fake-GCS JSON과 기존 table 대상 Parquet, 다른 format/create/evolution/download gap |
-| direct overwrite MERGE | 구조적인 connector-template adapter | static unpartitioned connector `0.44.2` public-edge verified, dynamic time/range와 일반 parity gap |
-| bearer public edge | 하나의 application service와 REST/gRPC adapter | disabled, syntax-only presence, bounded static verification 구현 |
-| ADC/WIF acquisition | client credential library 또는 optional external token stub | BQEMU 외부, 결과 bearer는 선택한 local verifier를 따름 |
+| REST 메타데이터 | 카탈로그 사용 사례와 JSON 전송 계층 | 기본 수명 주기, 부분·전체 갱신, 페이지 조회, ETag 검증 완료 |
+| 스키마 필드 추가 | 스키마 검증기와 웨어하우스 트랜잭션 | 최상위·중첩·반복 레코드 필드 추가 검증 완료 |
+| 쿼리 작업 | 작업 저장소와 쿼리 엔진 포트 | 공식 Python 동기·비동기 절차 검증 완료, 프로세스 내부 상태는 부분 구현 |
+| `CreateReadSession`/`ReadRows` | 스냅샷·세션 원장과 Arrow/Avro 인코더 | 공개 API 부분 지원: 크기 제한이 있는 DuckDB 스냅샷, 논리 스트림, 안정된 오프셋 지원. 분할, 압축, 과거 스냅샷, 중첩 필드 선택은 미지원 |
+| `AppendRows`/확정/커밋 | 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋 지원. 고급 스트림 유형과 영속성은 미지원 |
+| 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 선택형 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 대상 Parquet 지원. 다른 형식, 생성, 스키마 변경, 다운로드 방식은 미지원 |
+| 직접 덮어쓰기 `MERGE` | 구조 기반 커넥터 SQL 어댑터 | 정적 비파티션 커넥터 `0.44.2` 공개 API 검증 완료. 동적 시간·범위 파티션과 일반 `MERGE` 호환성은 미지원 |
+| 공개 Bearer 경계 | 하나의 애플리케이션 서비스와 REST/gRPC 어댑터 | 비활성화, 문법 확인, 크기 제한이 있는 정적 검증 구현 |
+| ADC/WIF 획득 | 클라이언트 인증 정보 라이브러리 또는 선택형 외부 토큰 대체 서비스 | BQEMU 범위 밖. 최종 Bearer 토큰은 선택한 로컬 검증기를 따름 |
 
-Capability 변경에는 공개 경계 테스트와 두 문서 언어의 호환성 갱신이 필요하다.
+지원 범위를 바꾸려면 공개 경계 테스트를 추가해야 합니다. 한국어와 영어 호환성
+문서도 함께 갱신해야 합니다.

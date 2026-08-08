@@ -3,13 +3,13 @@
 
 [English](../en/maintainer-guide.md) | [한국어](maintainer-guide.md)
 
-# Maintainer 안내서
+# 유지보수 담당자 안내서
 
 <!-- section: bootstrap -->
-## Clone부터 Service 실행까지
+## 저장소 복제부터 서비스 실행까지
 
-Go 1.26 이상, DuckDB용 C/C++ compiler, 선택적으로 Docker와 direnv가 필요하다.
-Upstream emulator clone은 필요하지 않다.
+Go 1.26 이상과 DuckDB용 C/C++ 컴파일러가 필요합니다. Docker와 `direnv`는
+선택 사항입니다. 외부 에뮬레이터 저장소를 복제할 필요는 없습니다.
 
 ```bash
 direnv allow
@@ -18,37 +18,45 @@ make check
 make run
 ```
 
-Credential이 없는 checked-in `.envrc`는 `.envrc.example`을 source한 다음
-ignore되는 optional `.envrc.local`을 load한다. Example은 `configs/bqemu.yaml`,
-host database/temp path, bounded test budget을 선택한다. Machine-specific
-non-production override만 `.envrc.local`에 넣는다. Token, private key,
-credential JSON, production endpoint는 checked-in file 어느 쪽에도 넣지 않는다.
-Direnv를 쓰지 않으면 같은 값을 export하거나 `--config`와 반복 `--set`을
-명시적으로 전달한다. 정확한 merge/validation 규칙은 [설정과 운영](operations.md)에
-있다. `GET /healthz`를 확인한 다음 root README의 emulator project를 생성한다.
-REST shape는 [BigQuery REST
-레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 한다.
+저장소에 포함된 `.envrc`에는 인증 정보가 없습니다. 이 파일은
+`.envrc.example`을 불러온 뒤, Git에서 제외한 선택적 `.envrc.local`을 불러옵니다.
+예제 설정은 `configs/bqemu.yaml`, 호스트의 데이터베이스 및 임시 저장 경로,
+테스트 자원 한도를 지정합니다.
+
+`.envrc.local`에는 개발 장비에서만 사용하는 비운영 설정만 넣습니다. 토큰,
+개인 키, 인증 정보 JSON, 운영 환경 엔드포인트는 저장소에 포함되는 어느 파일에도
+넣지 않습니다. `direnv`를 사용하지 않는다면 같은 값을 환경 변수로 내보내거나
+`--config`와 반복 `--set`을 직접 전달합니다.
+
+정확한 설정 병합 및 유효성 검사 규칙은 [설정과 운영](operations.md)에 있습니다.
+`GET /healthz`를 확인한 뒤 최상위 README에 설명된 에뮬레이터 프로젝트를
+생성합니다. REST 응답 형식은 [BigQuery REST
+레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 합니다.
 
 <!-- section: learning-path -->
 ## 학습 경로
 
-1. [아키텍처](architecture.md), 특히 dependency와 transaction 경계를 읽는다.
-2. Service와 README의 project/dataset/table/query 요청 하나를 실행한다.
-3. `go test ./internal/domain -run Schema`와 같은 가장 가까운 focused test를 실행한다.
-4. `internal/transport`에서 application/port를 지나 adapter까지 요청을 추적한다.
-5. Storage 또는 connector 의존 계약을 바꾸기 전에 [BigQuery와 connector 내부
-   동작](bigquery-internals.md)을 읽는다.
-6. [호환성](compatibility.md)에서 기존 capability를 선택하거나 새로 선언한다.
+1. [아키텍처](architecture.md)를 읽습니다. 특히 의존성 방향과 트랜잭션 경계를
+   확인합니다.
+2. 서비스를 실행하고 README에 있는 프로젝트, 데이터 세트, 테이블, 쿼리 요청 중
+   하나를 실행합니다.
+3. `go test ./internal/domain -run Schema`처럼 변경 사항과 가장 가까운 테스트를
+   실행합니다.
+4. 요청이 `internal/transport`에서 애플리케이션 및 포트를 거쳐 어댑터에 도달하는
+   과정을 추적합니다.
+5. Storage 또는 커넥터에 의존하는 계약을 바꾸기 전에 [BigQuery와 커넥터 내부
+   동작](bigquery-internals.md)을 읽습니다.
+6. [호환성](compatibility.md)에서 기존 지원 기능을 선택하거나 새로 선언합니다.
 
-Connector baseline은 정확한 [Spark BigQuery connector
-`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)다.
+기준 커넥터는 정확히 [Spark BigQuery 커넥터
+`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)입니다.
 
 <!-- section: first-change -->
-## 첫 변경 Runbook
+## 첫 변경 절차
 
-공개 동작 하나와 negative case 하나로 시작한다. Domain invariant, fake port를
-사용한 application test, adapter 동작, 공개 REST/gRPC test, compatibility row,
-두 언어 문서를 추가하거나 갱신한다. 다음을 실행한다.
+공개 동작 하나와 실패 사례 하나로 시작합니다. 도메인 불변 조건, 테스트용 포트를
+사용한 애플리케이션 테스트, 어댑터 동작, 공개 REST/gRPC 계약 테스트, 호환성 표
+항목, 두 언어 문서를 추가하거나 갱신합니다. 다음 명령을 실행합니다.
 
 ```bash
 gofmt -w ./cmd ./internal docs/documentation_test.go
@@ -56,41 +64,46 @@ go test ./...
 go vet ./...
 ```
 
-Review 전 engine SQL만 assert하는 test가 없는지, unsupported field를 구현된
-것처럼 조용히 무시하지 않는지, error가 capability와 actionable fix를 명명하는지
-확인한다.
+검토를 요청하기 전에 엔진 SQL만 검증하는 테스트가 없는지 확인합니다. 지원하지
+않는 필드를 구현한 것처럼 조용히 무시해서도 안 됩니다. 오류 메시지에는 관련
+지원 기능과 해결 방법이 있어야 합니다.
 
 <!-- section: new-version -->
-## Protocol 또는 Client Version 추가
+## 프로토콜 또는 클라이언트 버전 추가
 
-`protocol profile -> adapter -> capability -> golden -> E2E` pipeline을 사용한다.
-정확한 artifact/tag, REST/RPC sequence, field-presence rule, wire format, schema
-mapping, retry/offset semantics, removal criteria를 기록한다. 이전 profile을
-제자리에서 수정하거나 mutable branch를 연결하지 않는다. Storage operation은
+`protocol profile -> adapter -> capability -> golden -> E2E` 순서를 사용합니다.
+정확한 산출물 및 태그, REST/RPC 호출 순서, 필드 존재 여부 규칙, 전송 형식,
+스키마 대응, 재시도 및 오프셋 의미, 제거 조건을 기록합니다. 이전 프로필을 직접
+수정하거나 변경될 수 있는 브랜치를 연결하지 않습니다. Storage 동작은
 [공식 RPC 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)와
-비교한다.
+비교합니다.
 
 <!-- section: diagnose-drift -->
-## Drift 진단
+## 호환성 차이 진단
 
-1. 공개 endpoint에서 재현하고 stage 및 identifier를 수집한다.
-2. Credential, SQL text, row payload 없이 `version`, `operation`, `shape`,
-   `fingerprint`, `fix_hint`를 출력한다.
-3. Request/response를 pinned profile과 공식 계약에 비교한다.
-4. Mismatch를 transport, application invariant, outbound adapter로 좁힌다.
-5. 좁은 fix를 적용하기 전에 negative golden을 추가한다.
-6. Focused test, full test, vet, released-client E2E lane을 실행한다.
+1. 공개 엔드포인트에서 문제를 재현하고 처리 단계와 식별자를 수집합니다.
+2. 인증 정보, SQL 원문, 행 데이터 없이 `version`, `operation`, `shape`,
+   `fingerprint`, `fix_hint`를 출력합니다.
+3. 요청과 응답을 고정된 프로필 및 공식 계약과 비교합니다.
+4. 차이가 전송 계층, 애플리케이션 불변 조건, 외부 연동 어댑터 중 어디에서
+   발생했는지 확인합니다.
+5. 수정하기 전에 실패 사례를 담은 검증 기준 데이터를 추가합니다. 코드는 필요한
+   범위만 변경합니다.
+6. 관련 범위 테스트, 전체 테스트, `vet`, 배포된 클라이언트를 사용하는 E2E
+   테스트를 실행합니다.
 
-Schema fingerprint는 deterministic digest이며 schema authority가 아니다.
-Canonical type source는 [BigQuery data
-type](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)이다.
+스키마 지문은 같은 입력에 항상 같은 값을 내는 해시일 뿐, 스키마의 기준 정보가
+아닙니다. 타입의 기준은 [BigQuery 데이터
+타입](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)입니다.
 
 <!-- section: release -->
-## Release와 문서 Runbook
+## 릴리스 및 문서 점검 절차
 
-`make check`를 실행하고 Docker 동작이 바뀌었으면 container를 build하며,
-compatibility diff를 검토하고 모든 공개 주장이 테스트한 경계를 명시하는지
-확인한다. README, CONTRIBUTING, 모든 `docs/en/**` file은 marker와 source URL이
-같은 한국어 counterpart를 가져야 한다. 모든 issue body도 scope, acceptance
-criteria, 제외 범위, source가 동등한 `## English`와 `## 한국어` section을 가져야
-한다. Acceptance criteria가 실행되기 전에는 issue를 close하지 않는다.
+`make check`를 실행합니다. Docker 동작을 바꿨다면 컨테이너도 빌드합니다.
+호환성 변경 내용을 검토하고, 외부에 공개하는 모든 설명에 어디까지 테스트했는지
+명시되어 있는지 확인합니다.
+
+README, CONTRIBUTING, 모든 `docs/en/**` 파일에는 표식과 출처 URL이 같은 한국어
+대응 문서가 있어야 합니다. 모든 이슈 본문에도 범위, 완료 조건, 제외 범위,
+출처가 같은 `## English`와 `## 한국어` 구역이 있어야 합니다. 완료 조건을 실제로
+검증하기 전에는 이슈를 닫지 않습니다.

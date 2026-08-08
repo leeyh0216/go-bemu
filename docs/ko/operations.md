@@ -3,112 +3,161 @@
 
 [English](../en/operations.md) | [한국어](operations.md)
 
-# 설정과 운영 Runbook
+# 설정과 운영 절차
 
 <!-- section: configuration -->
-## 설정 계약
+## 설정 규칙
 
-구현된 versioned loader는 낮은 순서에서 높은 순서로 다음 precedence를 사용한다.
+설정 로더는 다음 순서로 값을 덮어씁니다. 오른쪽에 있는 설정의 우선순위가 더
+높습니다.
 
 ```text
-compiled defaults < YAML file < mapped environment variables < repeated --set path=value
+컴파일 기본값 < YAML 파일 < 매핑된 환경 변수 < 반복 --set path=value
 ```
 
-`BQEMU_CONFIG`가 optional file을 선택하고 `--config`가 이 selector를 덮어쓴다.
-모든 runtime leaf는 `config.bqemu.dev/v1alpha1` model에 존재하며 typed `--set`으로
-override할 수 있다. 자주 쓰는 setting에는 이름 있는 `BQEMU_*` environment
-mapping도 있다. 완전한 Docker-oriented example은
-[`configs/bqemu.yaml`](../../configs/bqemu.yaml)이다.
+`BQEMU_CONFIG`로 선택 설정 파일을 지정할 수 있습니다. `--config`를 함께 사용하면
+이 값을 덮어씁니다. 모든 최종 설정 항목은 `config.bqemu.dev/v1alpha1` 모델에
+정의되어 있으며, 자료형을 검사하는 `--set`으로 변경할 수 있습니다. 자주 사용하는
+항목에는 `BQEMU_*` 환경 변수도 제공합니다. Docker용 전체 예시는
+[`configs/bqemu.yaml`](../../configs/bqemu.yaml)에 있습니다.
 
-| Layer | Selector | 계약 |
+| 설정 계층 | 지정 방법 | 규칙 |
 | --- | --- | --- |
-| compiled defaults | 없음 | 완전하고 유효한 in-memory model |
-| file | `BQEMU_CONFIG` 또는 `--config` | YAML document 하나, 최대 1 MiB |
-| environment | 문서화된 `BQEMU_*` mapping | 비어 있지 않은 scalar override |
-| CLI | 반복 가능한 `--set path=value` | 모든 leaf의 typed override |
+| 컴파일 기본값 | 없음 | 메모리에 완전하고 유효한 모델을 만듭니다. |
+| 파일 | `BQEMU_CONFIG` 또는 `--config` | 최대 1 MiB인 YAML 문서 하나를 읽습니다. |
+| 환경 변수 | 문서화된 `BQEMU_*` 변수 | 비어 있지 않은 스칼라 값만 덮어씁니다. |
+| CLI | 반복 가능한 `--set path=value` | 모든 최종 항목의 자료형을 검사한 뒤 덮어씁니다. |
 
-Composition root는 default, HTTP/gRPC/TLS limit, database/temp path, shutdown
-budget, logging, admin, UI, 두 Storage service, opt-in load field를 사용한다.
-`storage.read.maxSnapshotBytes`는 각 materialization 전에 예약하고 adapter의 실제
-retained byte로 정산한다. Live session과 in-flight reservation 합계는
-`maxTotalSnapshotBytes`를 넘을 수 없다.
-`query.operationTimeout`(default `2m`, 환경 변수
-`BQEMU_QUERY_OPERATION_TIMEOUT`)은 동기 query와 service가 소유하는 비동기 query 실행 모두의 server
-hard ceiling이다. `query.anonymousResultTtl`(default `24h`, 환경 변수
-`BQEMU_QUERY_ANONYMOUS_RESULT_TTL`)은 생성된 result table 만료를 제어한다. 두 값은
-양수여야 하고 configuration file 또는 `--set`으로 바꿀 수 있다. Protocol 근거는 공식
-[`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms)와
-[anonymous cached-result lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)이다.
-`query.compensationTimeout`(default `30s`, 환경 변수
-`BQEMU_QUERY_COMPENSATION_TIMEOUT`)은 metadata publication 실패 뒤 physical cleanup을
-별도로 제한한다. 취소된 request와는 분리하지만 deadline 없이 실행하지 않는다.
-`tableData.operationTimeout`(default `30s`, 환경 변수
-`BQEMU_TABLE_DATA_OPERATION_TIMEOUT`)은 global catalog mutation 경계 admission
-전에 시작하며, 그 대기와 live metadata/TTL 해석 및
-[`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
-뒤의 DuckDB count-and-page transaction 전체를 제한한다. `tableData.maxPageRows`(default
-`10000`, 환경 변수 `BQEMU_TABLE_DATA_MAX_PAGE_ROWS`)는 caller가 더 많은 row를 요청해도
-한 response를 제한하며 1과 BigQuery의 100,000-row response quota 사이여야 한다.
-`tableData.maxResponseBytes`(default `10000000`, 환경 변수
-`BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES`)는 serialized JSON page의 exact byte
-budget이며 empty metadata envelope도 수용하도록 최소 1024 byte여야 한다. DuckDB
-adapter는 row 수가 제한된 query를 stream하고 canonical value를 증분 trim한다. Schema
-name을 포함하는 backend JSON 크기는 public semantics를 결정하지 않으며 REST가 exact
-uncompressed wire limit을 적용한다. Continuation token은 내보내지 않은 첫 row를 가리킨다.
-`tableData.maxRowBytes`(default `100000000`, 환경 변수
-`BQEMU_TABLE_DATA_MAX_ROW_BYTES`)는 BigQuery가 문서화한 single-row exception의 exact
-hard ceiling이다. Cloud의 [10 MB page와 100 MB single-row 제한](https://cloud.google.com/bigquery/docs/paging-results#api-limits)은
-내부 표현을 기준으로 한 근사치이므로 local 계산은 의도적으로 deterministic하게 정의한다.
-네 값 모두 file-first이며 typed `--set` override를 제공한다. 수락한 wire fragment는
-두 번째 whole-page copy 없이 stream한다. Log에는 raw row 대신 row count, canonical byte count, 증분 framed digest,
-HTTP boundary에서 실제 쓴 byte의 digest만 남긴다.
-Memory snapshot은 encoded row byte를,
-spill file은 각 row의 8-byte frame prefix까지 계산한다.
-`storage.write.maxInFlightBytes*`는 serialized DuckDB coordinator를 기다리는 decoded
-request를 제한하고, `maxStagedBytes*`는 숨김 DuckDB PENDING table에 보관된
-deterministic serialized-row charge를 제한한다. Configured append size는 stream별
-limit 이하이고, stream별 limit은 global limit 이하여야 한다. Staged-byte 계산은
-안정적이고 이식 가능한 논리적 크기이며 DuckDB의 실제 file/page 크기는 아니다.
-`storage.write.queueWaitTimeout`(default `5s`)은 byte admission 이후 serialized
-coordinator에 들어갈 때까지의 대기를 제한하고,
-`storage.write.operationTimeout`(default `30s`)은 수락된 operation의 serialized
-queue 체류와 backend 실행을 합친 전체 시간을 제한한다. Timer는 queue admission
-성공 뒤에만 시작하므로 queue 포화는 독립적으로 `RESOURCE_EXHAUSTED` 경계가 된다.
-각각 `BQEMU_STORAGE_WRITE_QUEUE_WAIT_TIMEOUT`,
-`BQEMU_STORAGE_WRITE_OPERATION_TIMEOUT`에 mapping된다. Queue 포화는 재시도 가능한
-gRPC `RESOURCE_EXHAUSTED`, server operation deadline은 `DEADLINE_EXCEEDED`로
-보고하며 caller의 더 이른 deadline이 우선한다. PENDING append가 응답 전에 staging된
-경우 Finalize 전에 같은 offset/schema/payload receipt로 재전송해야 하며 이 retry는
-idempotent하다.
-DEFAULT stream은 공식 at-least-once ambiguity를 유지한다. 공식 제한은 전체 request에
-적용되지만 pinned Java 3.22.1 client는 `ProtoData` 크기로 batch를 구성한다.
-Compatibility 설정 `maxAppendRequestBytes`는 이 client-visible payload를 모델링하고
-transient admission은 전체 `AppendRowsRequest`를 계산한다. Startup 시에는
-`server.grpc.maxReceiveMessageBytes`가 설정된 payload와 file-configured
-`maxAppendEnvelopeBytes`(default 64 KiB)를 수용하는지도 검증한다. 환경 변수는
-`BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES`다. 이 규칙은 공식
-[`AppendRows` request와 retry 계약](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows)을
-따른다.
-정확한 pinned client source는
-[`google-cloud-bigquerystorage` 3.22.1 source artifact](https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar)에 고정한다.
-`maxConcurrentAppendRequests`(default `16`, 환경 변수
-`BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`)는 gRPC `Recv` 전에
-획득하여 bidi stream 전체에서 protobuf decode, clone, digest의 동시 메모리를
-weighted coordinator admission 이전부터 제한한다.
-`load.enabled`에는 absolute `load.gcsEndpoint`가 필요하고
-`load.allowFileSources`는 default false이며 object/list/download limit을 적용한다.
-Runtime contract-profile negotiation은 아직 composition되지 않는다. 유효한
-setting은 각 Partial capability를 넘어서는 주장이 아니다.
+구성 진입점에서는 기본값과 HTTP, gRPC, TLS 제한을 읽습니다. 데이터베이스와 임시
+디렉터리 경로, 종료 제한 시간, 로그, 관리 API, UI, 두 Storage 서비스, 선택형 로드
+기능의 설정도 이곳에서 사용합니다.
 
-Authentication은 file-first이며 database나 listener side effect 전에 composition된다.
-`auth.mode`는 `disabled`, `bearer-present`, `static`을 허용한다. `disabled`는 malformed
-credential을 의도적으로 무시하고 anonymous principal을 설치한다. `bearer-present`는
-syntax와 존재만 강제하는 connector compatibility gate이며 identity 검증이 아니다.
-`static`은 엄격한 `auth.bqemu.dev/v1alpha1` `StaticTokenSet` YAML file 하나를
-검증한다. REST와 gRPC가 하나의 authentication application service와 immutable
-verifier snapshot을 공유하므로 duplicate header/metadata, principal digest,
-allow/deny decision의 의미가 같다. Parser는 [RFC 6750 bearer
-usage](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)를 따른다.
+### Storage Read 스냅샷 제한
+
+`storage.read.maxSnapshotBytes`는 각 결과를 구체화하기 전에 예상 크기를 예약합니다.
+결과를 만든 뒤에는 어댑터가 실제로 유지하는 바이트 수로 정산합니다. 실행 중인 세션과
+처리 중인 예약의 합은 `maxTotalSnapshotBytes`를 넘을 수 없습니다.
+
+### 쿼리 제한 시간
+
+`query.operationTimeout`의 기본값은 `2m`이며 환경 변수는
+`BQEMU_QUERY_OPERATION_TIMEOUT`입니다. 서버가 소유한 동기 쿼리와 비동기 쿼리의
+전체 실행 시간에 이 상한을 적용합니다.
+
+`query.anonymousResultTtl`의 기본값은 `24h`이며 환경 변수는
+`BQEMU_QUERY_ANONYMOUS_RESULT_TTL`입니다. 이 값은 생성된 결과 테이블의 만료 시간을
+제어합니다. 두 설정은 양수여야 하며 설정 파일이나 `--set`으로 변경할 수 있습니다.
+관련 프로토콜은 공식 [`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms)와
+[anonymous cached-result lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored)을
+기준으로 합니다.
+
+`query.compensationTimeout`의 기본값은 `30s`이며 환경 변수는
+`BQEMU_QUERY_COMPENSATION_TIMEOUT`입니다. 메타데이터 반영에 실패한 뒤 실행하는
+DuckDB 정리 작업에는 이 제한 시간을 별도로 적용합니다. 요청이 취소된 경우와 정리
+작업의 제한 시간은 분리하지만, 정리 작업을 무기한 실행하지는 않습니다.
+
+### 테이블 데이터 조회 제한
+
+`tableData.operationTimeout`의 기본값은 `30s`이며 환경 변수는
+`BQEMU_TABLE_DATA_OPERATION_TIMEOUT`입니다. 제한 시간은 전역 카탈로그 변경 잠금을
+기다리기 전에 시작합니다. 잠금 대기, 현재 메타데이터와 만료 시간 확인,
+[`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)를
+위한 DuckDB 행 수 계산과 페이지 조회 트랜잭션을 모두 포함합니다.
+
+`tableData.maxPageRows`의 기본값은 `10000`이며 환경 변수는
+`BQEMU_TABLE_DATA_MAX_PAGE_ROWS`입니다. 호출자가 더 많은 행을 요청해도 한 응답에
+이 값까지만 담습니다. 설정값은 1 이상, BigQuery의 응답 제한인 100,000행 이하여야
+합니다.
+
+`tableData.maxResponseBytes`의 기본값은 `10000000`이며 환경 변수는
+`BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES`입니다. 직렬화한 JSON 페이지의 실제 바이트
+수를 제한합니다. 빈 메타데이터 응답도 담을 수 있도록 최소값은 1,024바이트입니다.
+
+DuckDB 어댑터는 행 수를 제한한 쿼리 결과를 스트리밍하면서 기준 자료형의 값을
+순서대로 줄입니다. 백엔드 JSON에는 공개 `f/v` 행에 없는 스키마 이름도 들어가므로,
+그 크기로 공개 API의 응답 제한을 판단하지 않습니다. 압축하지 않은 실제 응답 크기는
+REST 계층에서 검사합니다. 이어받기 토큰은 아직 보내지 않은 첫 번째 행을 가리킵니다.
+
+`tableData.maxRowBytes`의 기본값은 `100000000`이며 환경 변수는
+`BQEMU_TABLE_DATA_MAX_ROW_BYTES`입니다. BigQuery가 문서화한 단일 행 예외의 절대
+상한으로 사용합니다. Cloud의 [10 MB page와 100 MB single-row 제한](https://cloud.google.com/bigquery/docs/paging-results#api-limits)은
+내부 표현을 기준으로 한 근사치입니다. 로컬 계산은 같은 입력에 항상 같은 결과가
+나오도록 별도로 정의합니다.
+
+이 네 설정은 모두 파일을 기준으로 하며, 자료형을 검사하는 `--set`으로 덮어쓸 수
+있습니다. 승인한 전송 조각은 전체 페이지를 한 번 더 복사하지 않고 스트리밍합니다.
+로그에는 원본 행을 남기지 않습니다. 행 수, 기준 바이트 수, 프레임 단위 누적 해시,
+HTTP 경계에서 실제로 쓴 바이트의 해시만 기록합니다. 메모리 스냅샷은 인코딩된 행의
+바이트 수를 계산하고, 임시 파일은 각 행 앞의 8바이트 프레임 길이까지 계산합니다.
+
+### Storage Write 메모리와 대기 제한
+
+`storage.write.maxInFlightBytes*`는 직렬화된 DuckDB 조정자를 기다리는 디코딩된 요청의
+크기를 제한합니다. `maxStagedBytes*`는 숨김 DuckDB `PENDING` 테이블에 보관한 행의
+논리적 크기를 제한합니다. 설정한 추가 요청 크기는 스트림별 제한 이하여야 하며,
+스트림별 제한은 전체 제한 이하여야 합니다. 준비된 바이트 수는 이식 가능한 논리적
+크기이며 DuckDB 파일이나 페이지의 실제 크기는 아닙니다.
+
+`storage.write.queueWaitTimeout`의 기본값은 `5s`입니다. 바이트 수 검사를 통과한 뒤
+직렬화 조정자에 들어갈 때까지의 대기 시간을 제한합니다.
+`storage.write.operationTimeout`의 기본값은 `30s`입니다. 승인된 작업이 직렬화
+대기열에 머문 시간과 백엔드 실행 시간을 함께 제한합니다. 타이머는 대기열 진입이
+승인된 뒤에 시작하므로, 대기열 포화는 별도의 `RESOURCE_EXHAUSTED` 오류가 됩니다.
+
+두 설정은 각각 `BQEMU_STORAGE_WRITE_QUEUE_WAIT_TIMEOUT`과
+`BQEMU_STORAGE_WRITE_OPERATION_TIMEOUT` 환경 변수에 대응합니다. 대기열 포화는
+재시도할 수 있는 gRPC `RESOURCE_EXHAUSTED`로 보고합니다. 서버 작업의 제한 시간이
+끝나면 `DEADLINE_EXCEEDED`로 보고합니다. 호출자가 더 이른 제한 시간을 설정했다면
+호출자의 값이 우선합니다.
+
+`PENDING` 추가 요청이 응답 전에 준비 영역에 저장되었다면, 스트림을 종료하기 전에
+같은 오프셋, 스키마, 전송 데이터 확인값으로 다시 보내야 합니다. 같은 요청을 다시
+보내도 결과는 한 번만 반영됩니다.
+
+### Storage Write 요청 크기
+
+기본 스트림은 공식 at-least-once 동작의 모호성을 유지합니다. 공식 제한은 전체 요청에
+적용되지만, 고정한 Java 3.22.1 클라이언트는 `ProtoData` 크기를 기준으로 배치를
+구성합니다. 호환성 설정 `maxAppendRequestBytes`는 클라이언트에 보이는 이 데이터의
+크기를 나타냅니다. 처리 중 메모리 제한은 전체 `AppendRowsRequest`를 기준으로
+계산합니다.
+
+시작할 때 `server.grpc.maxReceiveMessageBytes`가 설정된 전송 데이터와 파일에서 읽은
+`maxAppendEnvelopeBytes`를 함께 수용할 수 있는지 검사합니다.
+`maxAppendEnvelopeBytes`의 기본값은 64 KiB이고 환경 변수는
+`BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES`입니다. 이 규칙은 공식
+[`AppendRows` 요청 및 재시도 계약](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows)을
+따릅니다. 클라이언트 동작은 특정 버전의
+[`google-cloud-bigquerystorage` 3.22.1 소스 아티팩트](https://repo.maven.apache.org/maven2/com/google/cloud/google-cloud-bigquerystorage/3.22.1/google-cloud-bigquerystorage-3.22.1-sources.jar)를
+기준으로 확인합니다.
+
+`maxConcurrentAppendRequests`의 기본값은 `16`이며 환경 변수는
+`BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`입니다. gRPC `Recv` 전에 허가를
+획득하므로, 양방향 스트림에서 Protobuf 디코딩, 복제, 해시에 동시에 사용하는
+메모리를 가중치 기반 조정자의 용량 검사 전부터 제한합니다.
+
+### 로드 설정
+
+`load.enabled`를 사용하려면 `load.gcsEndpoint`에 절대 URL을 지정해야 합니다.
+`load.allowFileSources`의 기본값은 `false`입니다. 객체 목록 조회와 다운로드에는
+설정된 제한을 적용합니다.
+
+실행 중에 프로토콜 기준 버전을 협상하는 기능은 아직 구성하지 않았습니다. 설정값이
+유효하더라도 부분 지원 기능의 범위가 넓어지는 것은 아닙니다.
+
+### 인증 설정
+
+인증 설정은 파일을 기준으로 구성하며, 데이터베이스를 열거나 리스너를 시작하기 전에
+완료합니다. `auth.mode`에는 `disabled`, `bearer-present`, `static`을 지정할 수
+있습니다. `disabled`는 형식이 잘못된 인증 정보도 무시하고 익명 주체를 사용합니다.
+`bearer-present`는 Bearer 인증 정보의 형식과 존재 여부만 확인하며 신원을 검증하지
+않습니다. `static`은 `auth.bqemu.dev/v1alpha1` 형식의 `StaticTokenSet` YAML 파일
+하나를 엄격히 검사합니다.
+
+REST와 gRPC는 같은 인증 애플리케이션 서비스와 변경할 수 없는 검증기 스냅샷을
+공유합니다. 따라서 중복 헤더와 메타데이터, 주체 해시, 허용 및 거부 결정은 두
+프로토콜에서 같은 의미를 가집니다. Bearer 인증 정보는 [RFC 6750 bearer
+usage](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)에 따라 해석합니다.
 
 ```yaml
 apiVersion: auth.bqemu.dev/v1alpha1
@@ -118,92 +167,110 @@ tokens:
     token: replace-with-mounted-secret
 ```
 
-Token-set decoder는 unknown/duplicate field, custom tag, scalar coercion,
-credential field alias, multiple document, duplicate token, configured bound 밖의 값을
-거부한다. Source principal은 publish 전에 digest로 변환되며 text 상태로 log나 request
-context에 들어가지 않는다.
+토큰 파일 해석기는 알 수 없거나 중복된 필드, 사용자 정의 태그, 스칼라 값의 암시적
+형 변환을 거부합니다. 인증 필드의 별칭, 여러 YAML 문서, 중복 토큰, 설정한 범위를
+벗어난 값도 거부합니다. 파일의 주체 값은 공개하기 전에 해시로 바꿉니다. 원문은
+로그나 요청 컨텍스트에 넣지 않습니다.
 
-File, token, Authorization field, entry count, principal byte bound는 모두 명시적인
-`auth.*` leaf이며 대응하는 `BQEMU_AUTH_*` environment mapping과 typed `--set` path를
-제공한다. `auth.staticTokensReloadInterval` default는 `5s`이고 양수여야 한다. 초기
-content가 invalid이면 storage를 열기 전에 startup을 중단한다. Periodic reload가
-invalid이면 deny-all snapshot을 atomic publish하고, 이후 valid reload가 새 active
-digest를 publish하여 restart 없이 복구한다. Log에는 policy, reason, byte count,
-SHA-256 digest만 남는다. REST `/healthz`, `/readyz`와 gRPC health `Check`, `List`,
-`Watch`만 public이다. REST discovery, gRPC reflection, 모든 data-plane method는
-보호한다. Deny는 body decode, `RecvMsg`, routing, application side effect 전에 generic
-REST `401` 또는 gRPC `UNAUTHENTICATED`를 반환한다.
+파일, 토큰, `Authorization` 필드, 항목 수, 주체의 최대 바이트 수는 모두 `auth.*`
+설정으로 정의합니다. 각 설정에는 대응하는 `BQEMU_AUTH_*` 환경 변수와 자료형을
+검사하는 `--set` 경로가 있습니다. `auth.staticTokensReloadInterval`의 기본값은
+`5s`이며 양수여야 합니다.
 
-Service-account, authorized-user, external-account credential file은 [Application
-Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)와
+첫 토큰 파일이 유효하지 않으면 저장소를 열기 전에 시작을 중단합니다. 주기적으로
+다시 읽은 파일이 유효하지 않으면 모든 요청을 거부하는 스냅샷을 원자적으로
+반영합니다. 이후 유효한 파일을 읽으면 새 활성 해시를 반영하므로 재시작하지 않고
+복구할 수 있습니다. 로그에는 정책, 사유, 바이트 수, SHA-256 해시만 남깁니다.
+
+공개 상태 확인 API는 REST `/healthz`, `/readyz`와 gRPC Health의 `Check`, `List`,
+`Watch`뿐입니다. REST 탐색 API, gRPC 리플렉션, 모든 데이터 처리 메서드는 인증으로
+보호합니다. 요청을 거부할 때는 본문 디코딩, `RecvMsg`, 라우팅, 애플리케이션의 상태
+변경보다 먼저 일반 REST `401` 또는 gRPC `UNAUTHENTICATED`를 반환합니다.
+
+서비스 계정, 승인된 사용자, 외부 계정 인증 파일은 [Application Default
+Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)와
 [Workload Identity
 Federation](https://cloud.google.com/iam/docs/workload-identity-federation)에 정의된
-client-side token acquisition mechanism으로 남는다. BQEMU는 선택한 local policy에
-따라 결과 bearer token을 받지만 credential exchange, Google signature 검증, IAM을
-에뮬레이션하지 않는다.
+클라이언트 측 토큰 획득 방식입니다. BQEMU는 로컬 정책에 따라 최종 Bearer 토큰을
+받습니다. 인증 정보 교환, Google 서명 검증, IAM은 에뮬레이션하지 않습니다.
 
-HTTP edge는 `identity`와 `gzip` request body를 허용한다.
-`server.http.maxCompressedRequestBytes`는 gzip decode 전 wire에서 읽는 byte를
-제한하고, `server.http.maxUncompressedRequestBytes`는 decoded byte를 독립적으로
-제한한다. 두 값의 default는 2 MiB다. 각각
-`BQEMU_HTTP_MAX_COMPRESSED_REQUEST_BYTES`,
-`BQEMU_HTTP_MAX_UNCOMPRESSED_REQUEST_BYTES`에 mapping되며 typed `--set`으로도
-설정할 수 있다. Enforcement는 stream을 직접 읽으므로 `ContentLength`를 알 수 없는
-chunked request에도 적용된다. Unsupported encoding은 `415`, malformed 또는
-multiple encoding은 `400`, 두 byte budget 초과는 `413`을 반환한다. Boundary
-log에는 encoding, accepted/rejected outcome, byte count, SHA-256 digest, status,
-reason만 남기고 raw body와 credential은 남기지 않는다. 구현 근거는 Go의
-[`Request` body 계약](https://pkg.go.dev/net/http#Request),
+### HTTP 요청 본문 제한
+
+HTTP API는 `identity`와 `gzip`으로 인코딩한 요청 본문을 허용합니다.
+`server.http.maxCompressedRequestBytes`는 gzip을 풀기 전에 전송 구간에서 읽는
+바이트 수를 제한합니다. `server.http.maxUncompressedRequestBytes`는 압축을 푼 뒤의
+바이트 수를 별도로 제한합니다. 두 설정의 기본값은 2 MiB입니다.
+
+각 설정은 `BQEMU_HTTP_MAX_COMPRESSED_REQUEST_BYTES`와
+`BQEMU_HTTP_MAX_UNCOMPRESSED_REQUEST_BYTES` 환경 변수에 대응합니다. 자료형을
+검사하는 `--set`으로도 값을 바꿀 수 있습니다. 스트림을 직접 읽으면서 제한을
+적용하므로 `ContentLength`를 알 수 없는 청크 요청도 검사합니다.
+
+지원하지 않는 인코딩은 `415`를 반환합니다. 형식이 잘못되었거나 인코딩을 여러 개
+지정하면 `400`을 반환합니다. 압축 전후의 바이트 제한을 넘으면 `413`을 반환합니다.
+경계 로그에는 인코딩, 허용 또는 거부 결과, 바이트 수, SHA-256 해시, 상태, 사유만
+남깁니다. 요청 원문과 인증 정보는 남기지 않습니다.
+
+구현은 Go의
+[`Request` 본문 계약](https://pkg.go.dev/net/http#Request),
 [`MaxBytesReader`](https://pkg.go.dev/net/http#MaxBytesReader),
 [`gzip.NewReader`](https://pkg.go.dev/compress/gzip#NewReader), 공식
-[`tables.insert` method](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert),
-고정된 connector의 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)다.
+[`tables.insert` 메서드](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables/insert),
+고정된 커넥터의 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)를
+기준으로 합니다.
 
-Unknown YAML field, multiple document, ambiguous numeric duration, unknown
-override path, invalid cross-field 조합은 listener 시작 전에 실패한다. Error에는
-`stage`, `operation`, `model_version`, `field`, `shape`, `fingerprint`, `fix_hint`가
-있다. `--print-effective-config`는 merged model을 검증하고 출력하며 source-file 및
-effective-model SHA-256 fingerprint로 drift를 재현할 수 있게 한다. Schema는
-[YAML 1.2.2 명세](https://yaml.org/spec/1.2.2/)를 따른다.
+### 설정 검증과 민감정보
 
-Secret byte를 runtime-configuration YAML이나 environment variable에 넣지 않는다.
-TLS key, 전용 StaticTokenSet document, remote admin token은 mounted file path로
-참조한다. Secret file은 deployment에 맞는 permission으로 read-only mount한다.
-Effective configuration은 이 reference path를 포함할 수 있지만 file content를
-읽거나 출력하지 않는다. Output은 operational metadata로 다룬다. TLS는 전송만
-보호하며 [Google Cloud
-인증](https://cloud.google.com/docs/authentication)을 구현하지 않는다.
+알 수 없는 YAML 필드, 여러 YAML 문서, 의미가 모호한 숫자형 기간, 알 수 없는 덮어쓰기
+경로, 유효하지 않은 필드 조합은 리스너를 시작하기 전에 거부합니다. 오류에는
+`stage`, `operation`, `model_version`, `field`, `shape`, `fingerprint`, `fix_hint`를
+포함합니다. 여기서 `shape`는 값의 원문이 아닌 설정 구조를 뜻합니다.
+
+`--print-effective-config`는 병합한 모델을 검사한 뒤 출력합니다. 원본 파일과 최종
+모델의 SHA-256 해시를 함께 제공하므로 설정 불일치를 재현할 수 있습니다. 스키마는
+[YAML 1.2.2 명세](https://yaml.org/spec/1.2.2/)를 따릅니다.
+
+실행 설정 YAML이나 환경 변수에 민감정보 원문을 넣으면 안 됩니다. TLS 키, 전용
+`StaticTokenSet` 문서, 원격 관리 토큰은 마운트한 파일의 경로로 참조합니다. 민감정보
+파일은 배포 환경에 맞는 권한으로 읽기 전용 마운트해야 합니다.
+
+최종 설정에는 참조 경로가 포함될 수 있지만 파일 내용은 읽거나 출력하지 않습니다.
+출력 결과는 운영 메타데이터로 취급합니다. TLS는 전송 구간만 보호하며 [Google Cloud
+인증](https://cloud.google.com/docs/authentication)을 구현하지 않습니다.
 
 <!-- section: logging-safety -->
-## Payload-safe Logging 계약
+## 민감정보를 기록하지 않는 로그 정책
 
 `logging.unsafePayloads`와 `BQEMU_LOG_UNSAFE_PAYLOADS`는
-`config.bqemu.dev/v1alpha1`의 deprecated compatibility input이다. 기존 file,
-environment, `--set logging.unsafePayloads=true`는 계속 load되지만 값은 no-op이며
-structured deprecation event를 남긴다. Raw payload logging을 활성화할 수 없다. Key
-제거에는 향후 configuration API version이 필요하지만 동작 변경에는 필요하지 않다.
+`config.bqemu.dev/v1alpha1`에서 호환성을 위해 남겨 둔 입력값입니다. 기존 파일, 환경
+변수, `--set logging.unsafePayloads=true`는 계속 읽지만 동작에는 영향을 주지 않습니다.
+대신 구조화된 사용 중단 이벤트를 남깁니다. 원본 전송 데이터를 기록하는 기능은
+활성화할 수 없습니다. 설정 키를 제거하려면 이후 설정 API 버전이 필요하지만, 현재
+동작을 바꾸는 데 새 버전이 필요한 것은 아닙니다.
 
-이 invariant는 JSON/text output, 모든 log level, legacy setting의 두 값에 모두
-적용된다. 공식 [Cloud Logging structured-log
-model](https://cloud.google.com/logging/docs/structured-logging)과 [audit-log security
-guidance](https://cloud.google.com/logging/docs/audit/best-practices)를 따른다.
+이 정책은 JSON 및 텍스트 출력, 모든 로그 수준, 기존 설정의 두 값에 똑같이
+적용합니다. 공식 [Cloud Logging 구조화 로그
+모델](https://cloud.google.com/logging/docs/structured-logging)과 [감사 로그 보안
+안내](https://cloud.google.com/logging/docs/audit/best-practices)를 기준으로 합니다.
 
-| Boundary | 기록하는 shape | 절대 기록하지 않는 값 |
+| 경계 | 기록 항목 | 기록하지 않는 값 |
 | --- | --- | --- |
-| REST | method/path, query/header **이름**, encoding, 읽은 body byte count와 SHA-256, status, duration | header/query 값, request/response body |
-| Storage gRPC | RPC/protobuf full name, resource identifier, offset, item/row count, wire/schema byte count와 SHA-256 | protobuf JSON, serialized row, filter/SQL text, credential metadata 값 |
-| error | Go error type, message byte count, 전체 message SHA-256 | `error`/`err.Error()` text, 그 안의 SQL, 값, path, credential |
-| side effect | component, operation, pre/post state, success, duration, 안전한 identifier/count/digest | raw request/response 또는 backend payload |
+| REST | 메서드와 경로, 쿼리 및 헤더의 **이름**, 인코딩, 읽은 본문의 바이트 수와 SHA-256, 상태, 처리 시간 | 헤더와 쿼리의 값, 요청 및 응답 본문 |
+| Storage gRPC | RPC와 Protobuf 전체 이름, 리소스 식별자, 오프셋, 항목 및 행 수, 전송 및 스키마 바이트 수와 SHA-256 | Protobuf JSON, 직렬화한 행, 필터와 SQL 원문, 인증 메타데이터 값 |
+| 오류 | Go 오류 자료형, 메시지 바이트 수, 전체 메시지의 SHA-256 | `error` 또는 `err.Error()` 원문과 그 안의 SQL, 값, 경로, 인증 정보 |
+| 상태 변경 | 구성 요소, 작업, 변경 전후 상태, 성공 여부, 처리 시간, 안전한 식별자와 개수 및 해시 | 요청과 응답 원문 또는 백엔드 전송 데이터 |
 
-`PayloadAttrs`, `ProtoAttrs`, `ErrorAttrs`가 opaque data의 유일한 변환 경계다.
-호환성을 위해 남긴 `RedactText` helper도 omitted marker, byte count, digest만
-반환하며 pattern 기반 부분 redaction을 security boundary로 취급하지 않는다.
-SHA-256 fingerprint는 same/different 진단용이지 payload 복원용이 아니다. Storage
-message shape의 근거는 공식
-[`google.cloud.bigquery.storage.v1` RPC model](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1)이다.
+`PayloadAttrs`, `ProtoAttrs`, `ErrorAttrs`만 불투명한 데이터를 로그 속성으로 바꿀 수
+있습니다. 호환성을 위해 남긴 `RedactText` 도우미도 생략 표식, 바이트 수, 해시만
+반환합니다. 패턴을 이용한 부분 가림은 보안 경계로 취급하지 않습니다.
+
+SHA-256 해시는 두 입력이 같은지 확인하기 위한 진단값입니다. 이 값으로 전송 데이터를
+복원할 수는 없습니다. Storage 메시지 구조는 공식
+[`google.cloud.bigquery.storage.v1` RPC 모델](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1)을
+기준으로 합니다.
 
 <!-- section: local-run -->
-## 로컬 실행 Runbook
+## 로컬 실행 절차
 
 ```bash
 direnv allow
@@ -214,31 +281,34 @@ curl --fail http://localhost:9050/healthz
 curl --fail http://localhost:9050/readyz
 ```
 
-Direnv는 선택 사항이며 secret을 자동으로 load하지 않는다. Checked-in `.envrc`는
-`.envrc.example`을 source하고, 존재하면 ignore되는 `.envrc.local`을 load한다.
-Example은 `configs/bqemu.yaml`을 선택하고 container database/temp path를 host용으로
-override하며 bounded Go, Python, Docker test budget을 설정한다. Machine-specific
-non-production override만 `.envrc.local`에 넣는다. Listener를 시작하지 않고 merge를
-확인하려면 다음을 실행한다.
+Direnv는 선택 사항이며 민감정보를 자동으로 불러오지 않습니다. 저장소의 `.envrc`는
+`.envrc.example`을 불러온 뒤, 파일이 있으면 Git에서 제외한 `.envrc.local`도
+불러옵니다. 예제는 `configs/bqemu.yaml`을 선택합니다. 컨테이너용 데이터베이스와 임시
+디렉터리 경로는 호스트용으로 바꾸고, Go, Python, Docker 테스트에는 제한 시간을
+설정합니다. 컴퓨터마다 다른 개발용 설정만 `.envrc.local`에 넣습니다.
+
+리스너를 시작하지 않고 설정 병합 결과를 확인하려면 다음 명령을 실행합니다.
 
 ```bash
 go run ./cmd/emulator --print-effective-config
 go run ./cmd/emulator --set logging.level=debug --print-effective-config
 ```
 
-Liveness는 process가 응답함을, readiness는 warehouse ping도 성공함을 뜻한다.
-gRPC는 표준 health service를 노출한다. Enabled Storage Read/Write service는
-`SERVING`, disabled service는 `NOT_SERVING`을 보고하며 transport drain 전에 모든
-gRPC health entry를 `NOT_SERVING`으로 바꾼다. Canonical Storage service 목록은
-[Storage RPC 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)에 있다.
+활성 상태는 프로세스가 응답한다는 뜻입니다. 준비 상태는 웨어하우스 연결 확인도
+성공했다는 뜻입니다. gRPC는 표준 Health 서비스를 제공합니다.
+
+활성화한 Storage Read/Write 서비스는 `SERVING`을 보고합니다. 비활성화한 서비스는
+`NOT_SERVING`을 보고합니다. 전송 계층의 연결을 종료하기 전에 모든 gRPC Health
+항목을 `NOT_SERVING`으로 바꿉니다. 공식 Storage 서비스 목록은 [Storage RPC
+레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)에 있습니다.
 
 <!-- section: container -->
-## Container 계약
+## 컨테이너 실행 규칙
 
-Image는 전용 non-root `bqemu` user로 실행하며 `/data`를 writable volume으로
-선언하고 `/readyz`를 health-check한다. Default Compose는 repository-relative config
-path를 build argument로 전달한다. Image는 이를 mode `0440`으로 stable runtime
-path에 copy한다.
+이미지는 루트 권한이 없는 전용 `bqemu` 사용자로 실행합니다. `/data`는 쓰기 가능한
+볼륨으로 선언하고 `/readyz`로 준비 상태를 확인합니다. 기본 Compose 설정은 저장소
+기준의 설정 파일 경로를 빌드 인자로 전달합니다. 이미지는 이 파일을 권한 `0440`으로
+고정된 실행 경로에 복사합니다.
 
 ```yaml
 build:
@@ -253,110 +323,127 @@ tmpfs:
   - /tmp/bqemu:uid=65532,gid=65532,mode=0700
 ```
 
-다른 non-secret file을 선택하려면 [Docker build
-context](https://docs.docker.com/build/building/context/) 내부 path를
-`BQEMU_CONFIG_SOURCE=configs/<profile>.yaml`로 설정하고 rebuild한다. 이 default는
-Docker Desktop host-sharing 제한을 포함한 runtime host bind를 피한다. 명시적
-override로 readable file을 `/etc/bqemu/bqemu.yaml:ro`에 bind할 수도 있으며 동작은
-[bind mount 문서](https://docs.docker.com/engine/storage/bind-mounts/)를 따른다.
+민감정보가 없는 다른 파일을 사용하려면 [Docker build
+context](https://docs.docker.com/build/building/context/) 안의 경로를
+`BQEMU_CONFIG_SOURCE=configs/<profile>.yaml`로 지정한 뒤 이미지를 다시 빌드합니다.
+기본 방식은 Docker Desktop의 호스트 공유 제한을 포함하여 실행 중 호스트 파일을
+바인드하는 문제를 피합니다. 필요하면 읽을 수 있는 파일을
+`/etc/bqemu/bqemu.yaml:ro`에 명시적으로 바인드할 수 있습니다. 자세한 동작은 [bind
+mount 문서](https://docs.docker.com/engine/storage/bind-mounts/)를 따릅니다.
 
-Database는 container UID `65532`가 소유한 named volume으로만 영속화한다. Built
-config에는 path와 non-secret setting만 넣는다. TLS/token file은 별도로 read-only
-mount하고 content를 image layer에 copy하지 않는다.
+데이터베이스는 컨테이너 UID `65532`가 소유한 이름 있는 볼륨에만 영속화합니다. 이미지에
+포함하는 설정에는 경로와 민감하지 않은 값만 넣습니다. TLS와 토큰 파일은 별도로 읽기
+전용 마운트하며 이미지 계층에 내용을 복사하지 않습니다.
 
-Checked-in Compose profile은 read-only root filesystem, `no-new-privileges`,
-전용 `/tmp/bqemu` tmpfs, readiness health check, configured 10초 application
-budget보다 긴 15초 stop grace period를 설정한다. 모든 Linux capability drop과
-명시적 CPU/memory limit은 deployment별 추가 사항으로 남아 있다. Docker의 권위
-있는 control은 [read-only root
+저장소의 Compose 프로필은 루트 파일 시스템을 읽기 전용으로 설정하고
+`no-new-privileges`를 사용합니다. 전용 `/tmp/bqemu` tmpfs와 준비 상태 검사도
+설정합니다. 애플리케이션 종료 제한 10초보다 긴 15초의 종료 유예 시간을 둡니다.
+
+모든 Linux 기능 권한 제거와 명시적인 CPU 및 메모리 제한은 배포 환경에서 추가해야
+합니다. Docker 설정은 [read-only root
 filesystem](https://docs.docker.com/reference/cli/docker/container/run/#read-only)과
-[Compose service 설정](https://docs.docker.com/reference/compose-file/services/)이다.
+[Compose 서비스 설정](https://docs.docker.com/reference/compose-file/services/)을
+기준으로 합니다.
 
 <!-- section: shutdown -->
-## Health와 Graceful Shutdown
+## 상태 확인과 정상 종료
 
-SIGINT, SIGTERM 또는 listener failure가 발생하면 runtime은 먼저 모든 gRPC health
-entry를 `NOT_SERVING`으로 바꾼다. `runtime.serverDrainTimeout`(default `5s`) context
-하나가 public/admin HTTP shutdown과 gRPC `GracefulStop`을 제한하며 만료 시
-`grpc.Stop`으로 강제 종료한다. 별도 `runtime.storageCloseTimeout`(default `4s`)은
-공유 resource-close budget이다. 먼저 새 query를 거부하고 이미 수용한 sync/async query를
-취소한 뒤 종료를 기다리고, 이어 Read snapshot cleanup, Write orphan cleanup,
-coordinator close를 제한한다. Query가 이 budget 안에 DuckDB를 반환하지 않으면 active
-query와 경합하지 않도록 Storage 및 DuckDB close를 건너뛰고 남은 resource는 process
-teardown이 회수한다.
-`runtime.shutdownTimeout`(default `10s`)은 startup 또는 early-return path의 deferred
-Storage cleanup fallback이다. HTTP readiness는 drain 전에 false가 되지 않고
-outstanding operation count를 보고하지 않으며 두 번째 signal 전용 즉시 종료 path도
-없다. DuckDB file이 남더라도 abrupt termination은 process-local catalog, job, Read
-session, Write stream, load idempotency record를 잃을 수 있다.
+SIGINT, SIGTERM 또는 리스너 오류가 발생하면 먼저 모든 gRPC Health 항목을
+`NOT_SERVING`으로 바꿉니다. `runtime.serverDrainTimeout`의 기본값은 `5s`입니다.
+하나의 컨텍스트로 공개 및 관리용 HTTP 종료와 gRPC `GracefulStop` 시간을 제한합니다.
+시간이 끝나면 `grpc.Stop`으로 강제 종료합니다.
 
-Test는 query admission 거부, active sync/async 취소, bounded query drain,
-query-before-Storage close 순서를 검증한다. Idle shutdown, active REST request,
-active gRPC stream, deadline expiry, second-signal force exit, mounted volume
-restart는 계속 필요한 runtime scenario다. Storage Write
-visibility 계약은 공식
+`runtime.storageCloseTimeout`의 기본값은 `4s`이며 공유 저장소를 닫는 전체 시간에
+적용합니다. 먼저 새 쿼리를 거부합니다. 이미 승인한 동기 및 비동기 쿼리를 취소하고
+종료를 기다린 뒤, Read 스냅샷 정리, Write 고아 데이터 정리, 조정자 종료를 차례로
+제한합니다.
+
+제한 시간 안에 쿼리가 DuckDB 사용권을 반환하지 않으면 Storage와 DuckDB를 닫지
+않습니다. 실행 중인 쿼리와 자원 종료가 경합하는 상황을 피하기 위한 동작입니다.
+남은 자원은 프로세스가 종료될 때 회수합니다.
+
+`runtime.shutdownTimeout`의 기본값은 `10s`입니다. 시작 과정이나 조기 반환 경로에서
+지연된 Storage 정리를 제한하는 보조 수단입니다. 현재 HTTP 준비 상태는 연결 종료를
+시작하기 전에 `false`로 바뀌지 않습니다. 처리 중인 작업 수도 보고하지 않으며, 두
+번째 종료 신호만을 위한 즉시 종료 경로도 없습니다.
+
+DuckDB 파일이 남아 있더라도 갑작스럽게 종료하면 프로세스 메모리의 카탈로그와 작업을
+잃을 수 있습니다. Read 세션, Write 스트림, 로드 중복 방지 기록도 복구할 수 없습니다.
+
+테스트에서는 새 쿼리 거부, 실행 중인 동기 및 비동기 쿼리 취소, 제한 시간 안의 쿼리
+종료, 쿼리 종료 후 Storage를 닫는 순서를 확인합니다. 유휴 상태 종료, 처리 중인 REST
+요청과 gRPC 스트림, 제한 시간 만료, 두 번째 신호에 따른 강제 종료, 마운트한 볼륨을
+사용한 재시작은 추가 검증이 필요합니다.
+
+Storage Write의 공개 시점은 공식
 [`BatchCommitWriteStreams` 계약](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams)이며
-shutdown이 commit 성공을 만들어내면 안 된다.
+종료 과정에서 커밋이 성공한 것으로 바뀌면 안 됩니다.
 
 <!-- section: timeouts -->
-## 설정 가능한 Test Timeout
+## 테스트 제한 시간 설정
 
-어떤 test도 이름 없는 sleep에 의존하지 않는다. 현재 control은 unit과 scope를
-이름에 명시한다.
+테스트에서는 용도를 알 수 없는 `sleep`을 사용하지 않습니다. 각 설정 이름에 시간
+단위와 적용 범위를 표시합니다.
 
-| Control | Format과 default | 현재 scope |
+| 설정 | 형식과 기본값 | 적용 범위 |
 | --- | --- | --- |
-| `BQEMU_GO_TEST_TIMEOUT` | Go duration, `10m` | `make test`, race test, CI package budget |
-| `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go duration, `5s` | Storage Read application test context 하나 |
-| `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go duration, `5s` | Storage Write application, adapter, public gRPC test context |
-| `BQEMU_REST_TEST_TIMEOUT` | Go duration, `5s` | REST request, gzip boundary, pagination, overwrite test context |
-| `BQEMU_AUTH_RUNTIME_TEST_TIMEOUT` | Go duration, `5s` | authentication composition, reload, recovery, scheduler test context |
-| `BQEMU_AUTH_TRANSPORT_TEST_TIMEOUT` | Go duration, `5s` | REST 및 gRPC authentication boundary test context |
-| `BQEMU_PYTEST_TIMEOUT_SECONDS` | 양의 초, suite default `90`; direnv default `300` | 공식 Python-client build, readiness, request, shutdown budget |
-| `BQEMU_BQCLI_TIMEOUT_SECONDS` | 양의 초, `300` | 각 bq CLI subprocess와 emulator readiness budget |
-| `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | 양의 초, `120` | `docker compose --wait` startup budget |
+| `BQEMU_GO_TEST_TIMEOUT` | Go 기간, `10m` | `make test`, 경쟁 상태 테스트, CI 패키지 전체 |
+| `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go 기간, `5s` | Storage Read 애플리케이션 테스트 컨텍스트 하나 |
+| `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go 기간, `5s` | Storage Write 애플리케이션, 어댑터, 공개 gRPC 테스트 컨텍스트 |
+| `BQEMU_REST_TEST_TIMEOUT` | Go 기간, `5s` | REST 요청, gzip 경계, 페이지 나누기, 덮어쓰기 테스트 컨텍스트 |
+| `BQEMU_AUTH_RUNTIME_TEST_TIMEOUT` | Go 기간, `5s` | 인증 구성, 다시 읽기, 복구, 스케줄러 테스트 컨텍스트 |
+| `BQEMU_AUTH_TRANSPORT_TEST_TIMEOUT` | Go 기간, `5s` | REST 및 gRPC 인증 경계 테스트 컨텍스트 |
+| `BQEMU_PYTEST_TIMEOUT_SECONDS` | 양의 초, 테스트 모음 `90`, direnv `300` | 공식 Python 클라이언트 빌드, 준비 상태, 요청, 종료 |
+| `BQEMU_BQCLI_TIMEOUT_SECONDS` | 양의 초, `300` | 각 `bq` CLI 하위 프로세스와 에뮬레이터 준비 상태 |
+| `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | 양의 초, `120` | `docker compose --wait` 시작 과정 |
 
-Python startup failure에는 local process log의 bounded tail만 포함한다. Suite-wide
-Python budget은 설정 가능하지만 의도적으로 coarse로 분류한다. 향후 phase별 분리는
-다음과 같다.
+Python 시작 오류에는 로컬 프로세스 로그의 마지막 일부만 정해진 크기만큼 포함합니다.
+Python 테스트 모음 전체의 제한 시간은 설정할 수 있지만, 현재는 세부 단계별로 나누지
+않습니다. 이후에는 다음과 같이 분리할 계획입니다.
 
-| Control | 목적 | 만료 시 진단 |
+| 설정 | 목적 | 시간 만료 시 진단 정보 |
 | --- | --- | --- |
-| `BQEMU_TEST_STARTUP_TIMEOUT` | process/container readiness budget | port, health body, 마지막 sanitized log |
-| `BQEMU_TEST_REQUEST_TIMEOUT` | REST/RPC operation 하나의 budget | operation, capability, request fingerprint |
-| `BQEMU_TEST_EVENTUALLY_TIMEOUT` | polling/eventual-state budget | 마지막 state와 transition history |
-| `BQEMU_TEST_SHUTDOWN_TIMEOUT` | graceful-stop budget | outstanding REST/RPC/job count |
+| `BQEMU_TEST_STARTUP_TIMEOUT` | 프로세스와 컨테이너의 준비 대기 | 포트, 상태 확인 본문, 민감정보를 제거한 마지막 로그 |
+| `BQEMU_TEST_REQUEST_TIMEOUT` | REST 또는 RPC 작업 하나 | 작업, 지원 기능, 요청 해시 |
+| `BQEMU_TEST_EVENTUALLY_TIMEOUT` | 조회와 최종 상태 대기 | 마지막 상태와 상태 전환 기록 |
+| `BQEMU_TEST_SHUTDOWN_TIMEOUT` | 정상 종료 | 처리 중인 REST, RPC, 작업 수 |
 
-Default는 하나의 test configuration module에 두고 실패 output에 출력해야 한다.
-CI는 environment variable로 budget을 늘릴 수 있고 individual test는 명시적
-fixture/option으로 budget을 줄일 수 있다. Timeout failure는 `version`,
-`operation`, `shape`, `fingerprint`, `fix_hint`를 보고한다. 네 개 split
-control은 설계 계약이며 아직 wiring되지 않았다.
+기본값은 하나의 테스트 설정 모듈에서 관리하고 실패 결과에 출력해야 합니다. CI는 환경
+변수로 제한 시간을 늘릴 수 있습니다. 개별 테스트는 명시적인 테스트 자료나 옵션으로
+제한 시간을 줄일 수 있습니다.
+
+시간이 만료되면 `version`, `operation`, `shape`, `fingerprint`, `fix_hint`를
+보고합니다. 여기서 `shape`는 요청이나 응답의 구조를 뜻합니다. 위 네 개의 단계별
+설정은 설계만 정해졌으며 아직 실제 테스트에 연결하지 않았습니다.
 
 <!-- section: diagnostics -->
-## Diagnostics Admin Endpoint 설계
+## 진단용 관리 API 설계
 
-Versioned model은 `admin.enabled`, `admin.address`, `admin.tokenFile`,
-`admin.readHeaderTimeout`, `admin.maxStackBytes`를 정의한다. Admin은 default로
-disabled이며 주소는 `127.0.0.1:9051`이다. Composition root는 enabled일 때만 별도
-listener를 시작하며 BigQuery REST namespace를 공유하지 않는다. Non-loopback
-bind에는 token file과 configured server TLS가 모두 필요하고 admin listener는 이
-shared TLS identity를 사용한다.
+버전이 있는 설정 모델에는 `admin.enabled`, `admin.address`, `admin.tokenFile`,
+`admin.readHeaderTimeout`, `admin.maxStackBytes`가 있습니다. 관리 API는 기본적으로
+비활성화되며 주소는 `127.0.0.1:9051`입니다. 활성화했을 때만 별도 리스너를 시작하며
+BigQuery REST 네임스페이스와 공유하지 않습니다.
 
-| Method와 path | 구현된 response |
+루프백이 아닌 주소에 바인드하려면 토큰 파일과 서버 TLS를 모두 설정해야 합니다.
+관리용 리스너는 공개 서버와 같은 TLS 인증 정보를 사용합니다.
+
+| 메서드와 경로 | 응답 내용 |
 | --- | --- |
-| `GET /healthz` | admin liveness와 `admin.bqemu.dev/v1alpha1` |
-| `GET /bqemu/v1/admin/diagnostics/runtime` | uptime, Go/build/process, goroutine, heap, GC snapshot |
-| `GET /bqemu/v1/admin/diagnostics/goroutines` | SHA-256/truncation header가 있는 bounded text stack |
+| `GET /healthz` | 관리 API 활성 상태와 `admin.bqemu.dev/v1alpha1` |
+| `GET /bqemu/v1/admin/diagnostics/runtime` | 실행 시간, Go와 빌드 및 프로세스 정보, 고루틴, 힙, GC 스냅샷 |
+| `GET /bqemu/v1/admin/diagnostics/goroutines` | SHA-256 및 잘림 헤더가 있는 크기 제한 텍스트 스택 |
 
-`tokenFile`을 설정하면 모든 route가 constant-time으로 비교하는 Bearer token을
-요구한다. Trim한 token은 최소 16 byte이고 file은 최대 64 KiB다. Goroutine
-output은 설계상 configuration을 제외해도 민감하다. Default cap은 4 MiB이며 log에
-복사하지 않고 remote access는 반드시 보호한다.
+`tokenFile`을 설정하면 모든 경로에서 Bearer 토큰을 요구합니다. 토큰 비교에는 입력값에
+따라 실행 시간이 달라지지 않는 방식을 사용합니다. 앞뒤 공백을 제거한 토큰은 최소
+16바이트여야 하며 파일은 최대 64 KiB입니다.
 
-향후 `GET /bqemu/v1/admin/config`는 model version, source/effective fingerprint,
-redacted effective model을 반환할 수 있다. Authorization header, token/key
-content, raw SQL, row payload, unbounded log를 포함하면 안 되며 secret file
-reference는 configured/not-configured 또는 non-reversible digest로 줄인다. 이
-config endpoint, capability/operation count, recent drift summary는 아직 planned며
-IAM 대체재가 아니다.
+고루틴 출력은 설정값을 제외하더라도 민감할 수 있습니다. 기본 최대 크기는 4 MiB이며
+로그에 복사하지 않습니다. 원격 접근은 반드시 보호해야 합니다.
+
+향후 `GET /bqemu/v1/admin/config`는 모델 버전, 원본과 최종 설정의 해시, 민감정보를
+제거한 최종 모델을 반환할 수 있습니다. `Authorization` 헤더, 토큰과 키 원문, SQL
+원문, 행 데이터, 크기 제한이 없는 로그는 포함하면 안 됩니다. 민감정보 파일 참조는
+설정 여부 또는 되돌릴 수 없는 해시로 줄여야 합니다.
+
+이 설정 API, 지원 기능과 작업 수, 최근 계약 불일치 요약은 아직 계획 단계입니다.
+관리 API는 IAM을 대체하지 않습니다.
