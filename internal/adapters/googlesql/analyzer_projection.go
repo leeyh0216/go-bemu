@@ -13,11 +13,12 @@ import (
 )
 
 type resolvedProjection struct {
-	ctx           context.Context
-	snapshot      *catalogSnapshot
-	references    []domain.TableReference
-	canonicalByID map[int32]semantic.Type
-	expressions   []gsql.ResolvedExprNode
+	ctx            context.Context
+	snapshot       *catalogSnapshot
+	references     []domain.TableReference
+	canonicalByID  map[int32]semantic.Type
+	expressions    []gsql.ResolvedExprNode
+	locationOffset int
 }
 
 func projectResolvedStatement(
@@ -300,6 +301,8 @@ func (projection *resolvedProjection) expressionBindings(
 		if !present {
 			continue
 		}
+		range_.start += projection.locationOffset
+		range_.end += projection.locationOffset
 		typ, err := projection.resolvedExpressionType(expression)
 		if err != nil {
 			return nil, false, err
