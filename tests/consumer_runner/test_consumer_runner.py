@@ -320,6 +320,47 @@ class ConsumerRunnerTest(unittest.TestCase):
                 ["runner-setup", "bq-indirect-load", "bq-indirect-load"],
             )
 
+    def test_indirect_load_preserves_safe_child_failure_without_raw_output(self) -> None:
+        case = load_case(DEFAULT_MANIFEST, "bq-cli-2.1.31")
+        execution = next(
+            execution
+            for execution in case.executions
+            if execution.execution_id == "indirect-load"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_root = Path(directory)
+            adapter = build_adapter(
+                CaseContext(case, Path("."), artifact_root, execution=execution)
+            )
+            safe = {
+                "status": "failed",
+                "stage": "contract",
+                "service": "load-e2e",
+                "model_version": "bqemu-load-public-process/v1",
+                "operation": "cross-protocol-trace",
+                "shape": "load-order",
+                "fix_hint": "compare-the-pinned-load-contract",
+                "observed": "raw-payload-must-not-survive",
+            }
+            unsafe = {
+                **safe,
+                "shape": "SECRET_MARKER_MUST_NOT_SURVIVE",
+            }
+            adapter.result = subprocess.CompletedProcess(
+                [], 1, "\n".join((json.dumps(safe), json.dumps(unsafe))), ""
+            )
+
+            adapter.collect_evidence()
+
+            evidence = json.loads(
+                (artifact_root / "evidence.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(evidence["exitCode"], 1)
+            self.assertEqual(evidence["childFailure"]["shape"], "load-order")
+            encoded = json.dumps(evidence, sort_keys=True)
+            self.assertNotIn("raw-payload", encoded)
+            self.assertNotIn("SECRET_MARKER", encoded)
+
     def test_scenario_selectors_are_deduplicated_and_adapter_typed(self) -> None:
         case = _with_public_execution(
             replace(_python_case(), case_id="case"),

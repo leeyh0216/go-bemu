@@ -492,6 +492,35 @@ class SparkScalaShellAdapter(SparkAdapter):
         return result
 
 
+_SAFE_CHILD_FAILURE_FIELDS = (
+    "stage",
+    "service",
+    "model_version",
+    "operation",
+    "shape",
+    "fix_hint",
+)
+_SAFE_CHILD_FAILURE_TOKEN = re.compile(r"[a-z0-9_.:+/-]{1,160}")
+
+
+def _safe_child_failure(output: str) -> dict[str, str] | None:
+    for encoded in reversed(output.splitlines()):
+        try:
+            decoded = json.loads(encoded)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(decoded, dict) or decoded.get("status") != "failed":
+            continue
+        safe: dict[str, str] = {}
+        for field in _SAFE_CHILD_FAILURE_FIELDS:
+            value = decoded.get(field)
+            if isinstance(value, str) and _SAFE_CHILD_FAILURE_TOKEN.fullmatch(value):
+                safe[field] = value
+        if {"stage", "service", "operation", "shape"} <= safe.keys():
+            return safe
+    return None
+
+
 class IndirectLoadAdapter:
     load_case: str
 
@@ -526,6 +555,10 @@ class IndirectLoadAdapter:
             child = json.loads(path.read_text(encoding="utf-8"))
             operations = child["consumerOperations"]
         except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+            result = self.result  # type: ignore[attr-defined]
+            if result is not None and result.returncode != 0:
+                self._write_failed_child_evidence(result)
+                return
             raise ContractError("indirect-load evidence is missing or invalid") from error
         if not isinstance(operations, list) or any(
             not isinstance(operation, str) for operation in operations
@@ -591,6 +624,49 @@ class IndirectLoadAdapter:
                 "events": events,
             },
         )
+
+    def _write_failed_child_evidence(
+        self, result: subprocess.CompletedProcess[str]
+    ) -> None:
+        context = self.context  # type: ignore[attr-defined]
+        scenarios = list(context.execution.scenarios)
+        child_failure = _safe_child_failure(result.stdout)
+        evidence: dict[str, Any] = {
+            "schemaVersion": "1",
+            "caseId": context.case_id,
+            "executionId": context.execution_id,
+            "runnerAdapterId": context.runner_id,
+            "scenarioIds": [scenario["id"] for scenario in scenarios],
+            "exitCode": result.returncode,
+            "durationMillis": round((time.time() - self.started_at) * 1000),  # type: ignore[attr-defined]
+            "artifactEvidence": self.artifact_evidence,  # type: ignore[attr-defined]
+            "comparison": {
+                "status": "unavailable",
+                "expectedOperationCount": sum(
+                    len(scenario["operationExpectations"])
+                    for scenario in scenarios
+                ),
+                "observedEventCount": 0,
+            },
+            "events": [],
+        }
+        if child_failure is not None:
+            evidence["childFailure"] = child_failure
+        _write_json(context.artifact_root / "evidence.json", evidence)
+        difference: dict[str, Any] = {
+            "schemaVersion": "1",
+            "caseId": context.case_id,
+            "executionId": context.execution_id,
+            "scenarioId": None,
+            "phase": "child-runner",
+            "operationId": None,
+            "field": "process.exitCode",
+            "expected": 0,
+            "actual": result.returncode,
+        }
+        if child_failure is not None:
+            difference["childFailure"] = child_failure
+        _write_json(context.artifact_root / "diff.json", difference)
         if self.result is not None and self.result.returncode != 0:  # type: ignore[attr-defined]
             _write_json(
                 context.artifact_root / "diff.json",
