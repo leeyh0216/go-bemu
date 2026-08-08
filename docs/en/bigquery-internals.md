@@ -178,8 +178,10 @@ workspace, validates Parquet columns and casts against an existing table, and
 applies `WRITE_APPEND`, `WRITE_EMPTY`, or `WRITE_TRUNCATE` in one DuckDB
 transaction. Other URI schemes are rejected before job persistence. Destination
 creation, autodetect, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, and
-multipart/resumable download are unsupported; job and idempotency state is
-process-local.
+multipart/resumable download are unsupported. Load job metadata and same-ID
+identity are SQLite-durable, while downloaded object bytes, temporary workspace
+state, and active execution remain process-local. Startup reconciliation moves
+an interrupted load to a terminal error.
 
 <!-- section: rest-jobs -->
 ## REST Jobs, Polling, and Paging

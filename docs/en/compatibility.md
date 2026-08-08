@@ -325,8 +325,10 @@ The load target is
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad).
 The load path downloads bounded immutable objects into a private temporary
 workspace, then applies the selected disposition atomically. Download is outside
-the destination transaction, and load jobs and idempotency records are
-process-local.
+the destination transaction. Load configuration, status, errors, timestamps,
+statistics, and same-ID identity are SQLite-durable. Downloaded object bytes,
+the temporary workspace, and active execution are process-local; startup
+reconciliation moves interrupted jobs to a terminal error.
 See [Getting started](getting-started.md) for host, Compose-network, and
 development-container endpoint selection.
 The public edge does not parse or validate `Authorization` header or metadata
