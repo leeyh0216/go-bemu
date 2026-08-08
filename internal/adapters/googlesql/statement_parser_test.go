@@ -154,6 +154,21 @@ func TestStatementParserMapsQueryAndDMLStructure(t *testing.T) {
 	if len(row) != 3 || row[0].Kind() != queryast.ExpressionTemporal || row[1].Kind() != queryast.ExpressionStruct || row[2].Kind() != queryast.ExpressionArray {
 		t.Fatalf("insert row = %#v", row)
 	}
+
+	statement, err = parser.Parse(context.Background(), ports.QueryRequest{SQL: "UPDATE `p.d.t` SET amount = NUMERIC '1.2500', wide = BIGNUMERIC '1.2e3' WHERE id = 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignments := statement.(*queryast.UpdateStatement).Assignments()
+	if len(assignments) != 2 {
+		t.Fatalf("assignments = %#v", assignments)
+	}
+	numeric := assignments[0].Value().(*queryast.DecimalLiteral)
+	bigNumeric := assignments[1].Value().(*queryast.DecimalLiteral)
+	if numeric.Type() != queryast.TypeNumeric || numeric.CanonicalValue() != "1.25" ||
+		bigNumeric.Type() != queryast.TypeBigNumeric || bigNumeric.CanonicalValue() != "1200" {
+		t.Fatalf("decimal literals = (%q %q), (%q %q)", numeric.Type(), numeric.CanonicalValue(), bigNumeric.Type(), bigNumeric.CanonicalValue())
+	}
 }
 
 func TestStatementParserRejectsBackendSyntaxWithoutLeakingSQL(t *testing.T) {

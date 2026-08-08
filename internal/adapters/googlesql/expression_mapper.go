@@ -78,6 +78,10 @@ func (mapper *statementMapper) mapExpressionNode(statementKind queryast.Statemen
 		return mapper.mapIntegerLiteral(expression)
 	case *gsql.ASTFloatLiteral:
 		return mapper.mapFloatLiteral(expression)
+	case *gsql.ASTNumericLiteral:
+		return mapper.mapDecimalLiteral(expression, queryast.TypeNumeric, expression.StringLiteral)
+	case *gsql.ASTBigNumericLiteral:
+		return mapper.mapDecimalLiteral(expression, queryast.TypeBigNumeric, expression.StringLiteral)
 	case *gsql.ASTStringLiteral:
 		value, err := expression.StringValue()
 		if err != nil {
@@ -113,6 +117,30 @@ func (mapper *statementMapper) mapExpressionNode(statementKind queryast.Statemen
 	default:
 		return nil, unsupportedNode(statementKind, "expression", node)
 	}
+}
+
+func (mapper *statementMapper) mapDecimalLiteral(
+	node gsql.ASTNode,
+	typ queryast.TypeKind,
+	stringLiteral func() (*gsql.ASTStringLiteral, error),
+) (queryast.Expression, error) {
+	literal, err := stringLiteral()
+	if err != nil || literal == nil {
+		return nil, parserFailure()
+	}
+	value, err := literal.StringValue()
+	if err != nil {
+		return nil, parserFailure()
+	}
+	key, err := mapper.key(node, "decimal-literal")
+	if err != nil {
+		return nil, err
+	}
+	mapped, err := queryast.NewDecimalLiteral(key, typ, value)
+	if err != nil {
+		return nil, parserFailure()
+	}
+	return mapped, nil
 }
 
 func (mapper *statementMapper) mapQualifiedStar(statementKind queryast.StatementKind, node *gsql.ASTDotStar) (queryast.Expression, error) {
