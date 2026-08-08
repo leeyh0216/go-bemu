@@ -106,11 +106,41 @@ func TestNodeConstructorsRejectZeroNodeKey(t *testing.T) {
 	if _, err := queryast.NewFloatLiteral(queryast.NodeKey{}, 1); err == nil {
 		t.Fatal("float accepted a zero NodeKey")
 	}
+	if _, err := queryast.NewDecimalLiteral(queryast.NodeKey{}, queryast.TypeNumeric, "1.25"); err == nil {
+		t.Fatal("decimal accepted a zero NodeKey")
+	}
 	if _, err := queryast.NewStringLiteral(queryast.NodeKey{}, "value"); err == nil {
 		t.Fatal("string accepted a zero NodeKey")
 	}
 	if _, err := queryast.NewScalarType(queryast.NodeKey{}, queryast.TypeInt64, nil, nil); err == nil {
 		t.Fatal("scalar type accepted a zero NodeKey")
+	}
+}
+
+func TestDecimalLiteralPreservesExactCanonicalValueAndType(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "+001.2500", want: "1.25"},
+		{input: "1.2e3", want: "1200"},
+		{input: "1.2e-3", want: "0.0012"},
+		{input: "-0.000", want: "0"},
+	}
+	for index, tt := range tests {
+		literal, err := queryast.NewDecimalLiteral(mustKey(t, index, "decimal", 0, 8), queryast.TypeBigNumeric, tt.input)
+		if err != nil {
+			t.Fatalf("NewDecimalLiteral(%q) error = %v", tt.input, err)
+		}
+		if literal.Type() != queryast.TypeBigNumeric || literal.CanonicalValue() != tt.want {
+			t.Fatalf("NewDecimalLiteral(%q) = (%q, %q)", tt.input, literal.Type(), literal.CanonicalValue())
+		}
+	}
+	if _, err := queryast.NewDecimalLiteral(mustKey(t, 9, "decimal", 0, 8), queryast.TypeFloat64, "1.25"); err == nil {
+		t.Fatal("decimal literal accepted FLOAT64 type")
+	}
+	if _, err := queryast.NewDecimalLiteral(mustKey(t, 10, "decimal", 0, 8), queryast.TypeNumeric, "not-a-number"); err == nil {
+		t.Fatal("decimal literal accepted invalid value")
 	}
 }
 

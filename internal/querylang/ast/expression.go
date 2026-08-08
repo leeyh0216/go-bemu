@@ -16,6 +16,7 @@ const (
 	ExpressionBoolean       ExpressionKind = "BOOLEAN_LITERAL"
 	ExpressionInteger       ExpressionKind = "INTEGER_LITERAL"
 	ExpressionFloat         ExpressionKind = "FLOAT_LITERAL"
+	ExpressionDecimal       ExpressionKind = "DECIMAL_LITERAL"
 	ExpressionString        ExpressionKind = "STRING_LITERAL"
 	ExpressionTemporal      ExpressionKind = "TEMPORAL_LITERAL"
 	ExpressionArray         ExpressionKind = "ARRAY_LITERAL"
@@ -45,6 +46,7 @@ type ExpressionVisitor interface {
 	VisitBooleanLiteral(*BooleanLiteral) error
 	VisitIntegerLiteral(*IntegerLiteral) error
 	VisitFloatLiteral(*FloatLiteral) error
+	VisitDecimalLiteral(*DecimalLiteral) error
 	VisitStringLiteral(*StringLiteral) error
 	VisitTemporalLiteral(*TemporalLiteral) error
 	VisitArrayLiteral(*ArrayLiteral) error
@@ -213,6 +215,121 @@ func (literal *FloatLiteral) Accept(visitor ExpressionVisitor) error {
 func (literal *FloatLiteral) writeSemantic(builder *fingerprintBuilder) {
 	builder.token("float")
 	builder.token(strconv.FormatFloat(literal.value, 'g', -1, 64))
+}
+
+// DecimalLiteral holds an exact canonical decimal value. The submitted
+// string lexeme and its quoting are intentionally not retained.
+type DecimalLiteral struct {
+	expressionBase
+	type_     TypeKind
+	canonical string
+}
+
+func NewDecimalLiteral(key NodeKey, typ TypeKind, value string) (*DecimalLiteral, error) {
+	if !validNodeKey(key) {
+		return nil, fmt.Errorf("invalid decimal literal node key")
+	}
+	if typ != TypeNumeric && typ != TypeBigNumeric {
+		return nil, fmt.Errorf("invalid decimal literal type")
+	}
+	canonical, err := canonicalDecimal(value)
+	if err != nil {
+		return nil, err
+	}
+	return &DecimalLiteral{expressionBase: expressionBase{key: key}, type_: typ, canonical: canonical}, nil
+}
+func (*DecimalLiteral) expressionNode()                {}
+func (*DecimalLiteral) Kind() ExpressionKind           { return ExpressionDecimal }
+func (literal *DecimalLiteral) Type() TypeKind         { return literal.type_ }
+func (literal *DecimalLiteral) CanonicalValue() string { return literal.canonical }
+func (literal *DecimalLiteral) Accept(visitor ExpressionVisitor) error {
+	return visitor.VisitDecimalLiteral(literal)
+}
+func (literal *DecimalLiteral) writeSemantic(builder *fingerprintBuilder) {
+	builder.token("decimal")
+	builder.token(string(literal.type_))
+	builder.token(literal.canonical)
+}
+
+func canonicalDecimal(input string) (string, error) {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return "", fmt.Errorf("invalid decimal literal")
+	}
+	negative := false
+	if value[0] == '+' || value[0] == '-' {
+		negative = value[0] == '-'
+		value = value[1:]
+	}
+	if value == "" {
+		return "", fmt.Errorf("invalid decimal literal")
+	}
+
+	exponent := int64(0)
+	if index := strings.IndexAny(value, "eE"); index >= 0 {
+		if strings.IndexAny(value[index+1:], "eE") >= 0 {
+			return "", fmt.Errorf("invalid decimal literal")
+		}
+		parsed, err := strconv.ParseInt(value[index+1:], 10, 32)
+		if err != nil || parsed < -1000 || parsed > 1000 {
+			return "", fmt.Errorf("invalid decimal literal exponent")
+		}
+		exponent = parsed
+		value = value[:index]
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || len(parts) == 0 || parts[0] == "" && (len(parts) == 1 || parts[1] == "") {
+		return "", fmt.Errorf("invalid decimal literal")
+	}
+	integer := parts[0]
+	fraction := ""
+	if len(parts) == 2 {
+		fraction = parts[1]
+	}
+	if integer == "" {
+		integer = "0"
+	}
+	digits := integer + fraction
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return "", fmt.Errorf("invalid decimal literal")
+		}
+	}
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return "0", nil
+	}
+	scale := int64(len(fraction)) - exponent
+	if scale <= 0 {
+		if -scale > 1000 {
+			return "", fmt.Errorf("invalid decimal literal exponent")
+		}
+		canonical := digits + strings.Repeat("0", int(-scale))
+		if negative {
+			canonical = "-" + canonical
+		}
+		return canonical, nil
+	}
+	if scale > 1000 {
+		return "", fmt.Errorf("invalid decimal literal exponent")
+	}
+	if int64(len(digits)) <= scale {
+		digits = strings.Repeat("0", int(scale)-len(digits)+1) + digits
+	}
+	split := len(digits) - int(scale)
+	whole := strings.TrimLeft(digits[:split], "0")
+	if whole == "" {
+		whole = "0"
+	}
+	fraction = strings.TrimRight(digits[split:], "0")
+	canonical := whole
+	if fraction != "" {
+		canonical += "." + fraction
+	}
+	if negative {
+		canonical = "-" + canonical
+	}
+	return canonical, nil
 }
 
 type StringLiteral struct {

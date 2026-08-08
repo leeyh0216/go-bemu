@@ -202,7 +202,7 @@ func (collector *relationCollector) expression(expression Expression) error {
 	collector.expressions = append(collector.expressions, expression)
 	switch value := expression.(type) {
 	case *IdentifierExpression, *StarExpression, *NullLiteral, *BooleanLiteral,
-		*IntegerLiteral, *FloatLiteral, *StringLiteral, *TemporalLiteral:
+		*IntegerLiteral, *FloatLiteral, *DecimalLiteral, *StringLiteral, *TemporalLiteral:
 		return nil
 	case *ArrayLiteral:
 		for _, element := range value.elements {
