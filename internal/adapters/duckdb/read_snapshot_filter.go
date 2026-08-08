@@ -386,6 +386,41 @@ func (visitor *duckDBRowRestrictionVisitor) VisitBinaryExpression(expression *qu
 	}
 }
 
+func (visitor *duckDBRowRestrictionVisitor) VisitBetweenExpression(expression *queryast.BetweenExpression) error {
+	value, err := visitor.compiler.render(expression.Value())
+	if err != nil {
+		return err
+	}
+	low, err := visitor.compiler.render(expression.Low())
+	if err != nil {
+		return err
+	}
+	high, err := visitor.compiler.render(expression.High())
+	if err != nil {
+		return err
+	}
+	if value.kind != rowRestrictionColumn || low.kind != rowRestrictionLiteral || high.kind != rowRestrictionLiteral {
+		return invalidRowRestriction()
+	}
+	lowPlaceholder, err := visitor.compiler.bindLiteral(low.literal)
+	if err != nil {
+		return err
+	}
+	highPlaceholder, err := visitor.compiler.bindLiteral(high.literal)
+	if err != nil {
+		return err
+	}
+	operator := " BETWEEN "
+	if expression.Not() {
+		operator = " NOT BETWEEN "
+	}
+	visitor.result = compiledRowRestrictionValue{
+		kind: rowRestrictionPredicate,
+		sql:  "(" + value.sql + operator + lowPlaceholder + " AND " + highPlaceholder + ")",
+	}
+	return nil
+}
+
 func (visitor *duckDBRowRestrictionVisitor) VisitCastExpression(*queryast.CastExpression) error {
 	return unsupportedRowRestriction()
 }

@@ -40,6 +40,16 @@ func TestExpressionParserMapsStorageReadPredicate(t *testing.T) {
 	if decimal.Type() != queryast.TypeBigNumeric || decimal.CanonicalValue() != "1.25" {
 		t.Fatalf("decimal = (%q, %q)", decimal.Type(), decimal.CanonicalValue())
 	}
+
+	expression, err = parser.ParseExpression(context.Background(), "id BETWEEN 2 AND 4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	between, ok := expression.(*queryast.BetweenExpression)
+	if !ok || between.Not() || between.Value().Kind() != queryast.ExpressionIdentifier ||
+		between.Low().Kind() != queryast.ExpressionInteger || between.High().Kind() != queryast.ExpressionInteger {
+		t.Fatalf("BETWEEN expression = %#v", expression)
+	}
 }
 
 func TestExpressionParserFailsClosedAndRedactsSubmittedPredicate(t *testing.T) {
@@ -48,7 +58,6 @@ func TestExpressionParserFailsClosedAndRedactsSubmittedPredicate(t *testing.T) {
 		input string
 		kind  error
 	}{
-		{input: "customer_secret BETWEEN 1 AND 2", kind: domain.ErrUnsupported},
 		{input: "customer_secret ->> 'name'", kind: domain.ErrInvalid},
 		{input: "customer_secret = 1; DELETE FROM dataset.table", kind: domain.ErrInvalid},
 	}

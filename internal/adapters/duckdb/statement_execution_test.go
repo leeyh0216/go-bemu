@@ -88,6 +88,51 @@ func TestExecuteStatementRunsTypedInsertAndSelectPlans(t *testing.T) {
 	}
 }
 
+func TestExecuteStatementRunsBetweenPredicate(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	reference := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "source"}
+	if _, err := warehouse.ExecuteStatement(ctx, newTypedSourceSeedStatement(t, reference)); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := newRendererASTFixture(t)
+	table := fixture.table([]string{"UNRESOLVED_BETWEEN_MARKER"}, nil)
+	between, err := queryast.NewBetweenExpression(
+		fixture.key("between"), fixture.identifierExpression("id"),
+		fixture.integer("2"), fixture.integer("4"), false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := queryast.NewSelectQuery(false, []queryast.SelectItem{
+		fixture.selectItem(fixture.identifierExpression("id"), ""),
+	}, table, between, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := queryast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syntax, err := queryast.NewSelectStatement(fixture.source(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := fixture.semanticStatementWithOutput(syntax, map[queryast.NodeKey]duckDBTableBinding{
+		table.NodeKey(): fixture.physicalBinding(reference),
+	}, []semantic.ColumnDescriptor{semanticScalarColumn(t, "id", semantic.TypeInt64)})
+	result, err := warehouse.ExecuteStatement(ctx, statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != int64(2) {
+		t.Fatalf("BETWEEN result = %#v", result.Rows)
+	}
+}
+
 func TestExecuteStatementRedactsDuckDBDiagnostics(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := duckDBQueryTestContext(t)
