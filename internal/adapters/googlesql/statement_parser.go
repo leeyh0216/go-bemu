@@ -103,16 +103,24 @@ func parseExternal(sql string) (parsedDocument, error) {
 		}
 		statements = append(statements, statement)
 	}
-	digest := sha256.Sum256([]byte(sql))
-	span, err := queryast.NewSpan(0, len(sql))
+	source, err := sourceForInput(sql)
 	if err != nil {
-		return parsedDocument{}, parserFailure()
+		return parsedDocument{}, err
+	}
+	return parsedDocument{statements: statements, source: source, owner: output}, nil
+}
+
+func sourceForInput(input string) (queryast.Source, error) {
+	digest := sha256.Sum256([]byte(input))
+	span, err := queryast.NewSpan(0, len(input))
+	if err != nil {
+		return queryast.Source{}, parserFailure()
 	}
 	source, err := queryast.NewSource(hex.EncodeToString(digest[:]), span)
 	if err != nil {
-		return parsedDocument{}, parserFailure()
+		return queryast.Source{}, parserFailure()
 	}
-	return parsedDocument{statements: statements, source: source, owner: output}, nil
+	return source, nil
 }
 
 type statementMapper struct {
