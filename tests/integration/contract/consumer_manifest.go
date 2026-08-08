@@ -81,6 +81,7 @@ type ConsumerScenario struct {
 	ID                    string                         `yaml:"id" json:"id"`
 	OperationIDs          []string                       `yaml:"operationIds" json:"operationIds"`
 	Selectors             []string                       `yaml:"selectors" json:"selectors"`
+	TestEvidence          []string                       `yaml:"testEvidence" json:"testEvidence"`
 	OperationExpectations []ConsumerOperationExpectation `yaml:"operationExpectations" json:"operationExpectations"`
 }
 
@@ -213,6 +214,9 @@ func compileConsumerManifest(repositoryRoot string, operationIDs map[string]bool
 	}
 	manifest, err := DecodeConsumerManifest(contents)
 	if err != nil {
+		return NormalizedConsumerManifest{}, err
+	}
+	if err := ValidateIntegrationOperationAnnotations(repositoryRoot, manifest, operationIDs); err != nil {
 		return NormalizedConsumerManifest{}, err
 	}
 	cases, err := loadConsumerCases(repositoryRoot)
@@ -358,6 +362,9 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 		}
 		if len(scenario.Selectors) == 0 || firstDuplicate(scenario.Selectors) != "" {
 			return NormalizedConsumerManifest{}, fmt.Errorf("scenario %s must define unique test selectors", scenario.ID)
+		}
+		if duplicate := firstDuplicate(scenario.TestEvidence); duplicate != "" {
+			return NormalizedConsumerManifest{}, fmt.Errorf("scenario %s duplicates test evidence %s", scenario.ID, duplicate)
 		}
 		declaredOperations := sliceSet(scenario.OperationIDs)
 		for _, expectation := range scenario.OperationExpectations {
@@ -828,6 +835,14 @@ func DecodeNormalizedConsumerManifest(contents []byte) (NormalizedConsumerManife
 			for _, scenario := range execution.ScenarioSet.Scenarios {
 				if scenario.ID == "" || len(scenario.OperationIDs) == 0 || len(scenario.Selectors) == 0 {
 					return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has an invalid scenario", consumerCase.ID, execution.ID)
+				}
+				if duplicate := firstDuplicate(scenario.TestEvidence); duplicate != "" {
+					return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s duplicates test evidence", consumerCase.ID, execution.ID)
+				}
+				for _, testID := range scenario.TestEvidence {
+					if !integrationTestIDPattern.MatchString(testID) {
+						return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has invalid test evidence", consumerCase.ID, execution.ID)
+					}
 				}
 				for _, selector := range scenario.Selectors {
 					prefix, value, found := strings.Cut(selector, ":")

@@ -91,14 +91,14 @@ func TestOperationManifestRejectsUnknownDuplicateAndUnclassifiedInput(t *testing
 
 func TestVerificationRequiresPrimaryLevelAndAllowsSupplementalTests(t *testing.T) {
 	tests := []string{
-		"python:tests/integration/python/test_sample.py:test_public_process",
-		"go:internal/transport/rest/sample:TestTransportSupplement",
+		"go:internal/transport/rest/sample:TestTransport",
+		"go:internal/application/sample:TestApplicationSupplement",
 	}
-	if err := validateVerificationTests(VerificationPublicProcess, tests); err != nil {
-		t.Fatalf("public process with transport supplement = %v", err)
+	if err := validateVerificationTests(VerificationTransport, tests); err != nil {
+		t.Fatalf("transport with application supplement = %v", err)
 	}
-	if err := validateVerificationTests(VerificationPublicProcess, tests[1:]); err == nil || !strings.Contains(err.Error(), "at least one") {
-		t.Fatalf("transport-only public verification error = %v", err)
+	if err := validateVerificationTests(VerificationTransport, tests[1:]); err == nil || !strings.Contains(err.Error(), "at least one") {
+		t.Fatalf("application-only transport verification error = %v", err)
 	}
 }
 
@@ -157,59 +157,6 @@ func TestAnnotated(t *testing.T) { contracttest.Operation(t, "example.unknown") 
 	manifest.Operations[0].Tests = []string{"go:sample:TestAnother"}
 	if err := ValidateOperationAnnotations(root, manifest); err == nil || !strings.Contains(err.Error(), "missing from manifest tests") {
 		t.Fatalf("missing manifest link error = %v", err)
-	}
-}
-
-func TestPythonOperationMarkerCarriesOnlyOperationID(t *testing.T) {
-	root := t.TempDir()
-	directory := filepath.Join(root, "tests", "integration", "python")
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	source := "import pytest\n\n@pytest.mark.operation(\"example.python.get\")\ndef test_public_process():\n    pass\n"
-	if err := os.WriteFile(filepath.Join(directory, "test_sample.py"), []byte(source), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manifest := OperationManifest{Operations: []Operation{{
-		ID: "example.python.get", Verification: VerificationPublicProcess,
-		Tests: []string{"python:tests/integration/python/test_sample.py:test_public_process"},
-	}}}
-	if err := ValidateOperationAnnotations(root, manifest); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestBQOperationMarkerCarriesOnlyCanonicalOperationID(t *testing.T) {
-	root := t.TempDir()
-	directory := filepath.Join(root, "tests", "integration", "bqcli")
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	source := "from operation_contract import operation\n\n@operation(\"example.bq.get\")\ndef run_contract():\n    pass\n"
-	path := filepath.Join(directory, "runner.py")
-	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manifest := OperationManifest{Operations: []Operation{{
-		ID: "example.bq.get", Verification: VerificationPublicProcess,
-		Tests: []string{"bq:tests/integration/bqcli/runner.py:run_contract"},
-	}}}
-	if err := ValidateOperationAnnotations(root, manifest); err != nil {
-		t.Fatal(err)
-	}
-	unknown := strings.Replace(source, "example.bq.get", "example.bq.unknown", 1)
-	if err := os.WriteFile(path, []byte(unknown), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateOperationAnnotations(root, manifest); err == nil || !strings.Contains(err.Error(), "unknown operation") {
-		t.Fatalf("unknown bq marker error = %v", err)
-	}
-	malformed := strings.Replace(source, `@operation("example.bq.get")`, `@operation("example.bq.get", "metadata")`, 1)
-	if err := os.WriteFile(path, []byte(malformed), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateOperationAnnotations(root, manifest); err == nil || !strings.Contains(err.Error(), "only one literal") {
-		t.Fatalf("malformed bq marker error = %v", err)
 	}
 }
 

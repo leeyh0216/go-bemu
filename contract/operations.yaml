@@ -130,59 +130,59 @@ operations:
     limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: IAM visibility and billing metadata are intentionally outside the emulator scope., ko: IAM 가시성과 결제 메타데이터는 에뮬레이터 범위에서 의도적으로 제외합니다.}
     issues: []
     sources: [bigquery-rest-v2]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, bq:tests/integration/bqcli/run_contract.py:main]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
 
   - id: bigquery.datasets.insert
     protocol: rest
     component: public-core
     summary: {en: Create a dataset, ko: 데이터 세트를 생성합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/datasets', discovery: true}
-    supportedInput: {en: "Dataset reference, location, labels, description, expiration metadata, and the bq-compatible accessPolicyVersion method argument are accepted.", ko: "데이터 세트 참조와 위치, 라벨, 설명, 만료 메타데이터 및 bq 호환 accessPolicyVersion 메서드 인자를 받습니다."}
+    supportedInput: {en: "Dataset reference, location, labels, description, expiration metadata, and the accessPolicyVersion method argument are accepted.", ko: "데이터 세트 참조와 위치, 라벨, 설명, 만료 메타데이터 및 accessPolicyVersion 메서드 인자를 받습니다."}
     limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: accessPolicyVersion is exposed for generated-client compatibility but access policies and Cloud KMS configuration are intentionally outside the emulator scope., ko: 생성 클라이언트 호환성을 위해 accessPolicyVersion을 노출하지만 액세스 정책과 Cloud KMS 설정은 에뮬레이터 범위에서 의도적으로 제외합니다.}
     issues: []
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/integration/bqcli/run_contract.py:main, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.datasets.list
     protocol: rest
     component: public-core
     summary: {en: List datasets in a project, ko: 프로젝트의 데이터 세트 목록을 반환합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets', discovery: true}
     supportedInput: {en: "maxResults, pageToken, and all are supported.", ko: "maxResults와 pageToken, all을 지원합니다."}
     limitations: {policy: tracked, byDesign: [], en: "The filter method argument remains in Discovery for generated-client compatibility, but non-empty filter semantics are not implemented.", ko: "생성 클라이언트 호환성을 위해 filter 메서드 인자를 Discovery에 유지하지만 비어 있지 않은 filter 의미는 지원하지 않습니다."}
     issues: ['#33']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
 
   - id: bigquery.datasets.get
     protocol: rest
     component: public-core
     summary: {en: Get dataset metadata, ko: 데이터 세트 메타데이터를 조회합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}', discovery: true}
-    supportedInput: {en: "Project and dataset path parameters plus bq-compatible accessPolicyVersion and datasetView method arguments are accepted.", ko: "프로젝트와 데이터 세트 경로 매개변수 및 bq 호환 accessPolicyVersion, datasetView 메서드 인자를 받습니다."}
+    supportedInput: {en: "Project and dataset path parameters plus accessPolicyVersion and datasetView method arguments are accepted.", ko: "프로젝트와 데이터 세트 경로 매개변수 및 accessPolicyVersion, datasetView 메서드 인자를 받습니다."}
     limitations: {policy: mixed, byDesign: [google-iam], en: datasetView selection semantics are tracked; accessPolicyVersion is exposed for generated-client compatibility while access-policy data remains outside scope., ko: datasetView 선택 의미는 구현 예정입니다. accessPolicyVersion은 생성 클라이언트 호환성을 위해 노출하지만 액세스 정책 데이터는 범위에서 제외합니다.}
     issues: ['#33']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/integration/bqcli/run_contract.py:main, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.datasets.patch
     protocol: rest
     component: public-core
     summary: {en: Patch dataset metadata, ko: 데이터 세트 메타데이터 일부를 변경합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: PATCH, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}', discovery: true}
-    supportedInput: {en: "Description, labels, and supported expiration fields can be patched with ETags; bq-compatible accessPolicyVersion and updateMode method arguments are exposed.", ko: "설명과 라벨, 지원하는 만료 필드를 ETag와 함께 변경할 수 있으며 bq 호환 accessPolicyVersion, updateMode 메서드 인자를 노출합니다."}
+    supportedInput: {en: "Description, labels, and supported expiration fields can be patched with ETags; accessPolicyVersion and updateMode method arguments are exposed.", ko: "설명과 라벨, 지원하는 만료 필드를 ETag와 함께 변경할 수 있으며 accessPolicyVersion, updateMode 메서드 인자를 노출합니다."}
     limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: Access-policy mutations and their updateMode variants are intentionally outside the emulator scope., ko: 액세스 정책 변경과 관련 updateMode 동작은 에뮬레이터 범위에서 의도적으로 제외합니다.}
     issues: []
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/integration/bqcli/extended_contract.py:run_extended_contract]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution]
 
   - id: bigquery.datasets.update
     protocol: rest
@@ -202,65 +202,65 @@ operations:
     component: public-core
     summary: {en: Delete a dataset, ko: 데이터 세트를 삭제합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: DELETE, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}', discovery: true}
     supportedInput: {en: deleteContents is supported., ko: deleteContents를 지원합니다.}
     limitations: {policy: by-design, byDesign: [google-iam], en: Deletion is local and intentionally performs no IAM checks., ko: 로컬 데이터만 삭제하며 의도적으로 IAM 검사를 수행하지 않습니다.}
     issues: []
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/integration/bqcli/run_contract.py:main]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
 
   - id: bigquery.tables.insert
     protocol: rest
     component: public-core
     summary: {en: Create a table, ko: 테이블을 생성합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables', discovery: true}
     supportedInput: {en: "Schema, labels, description, expiration, and basic partitioning metadata are supported.", ko: "스키마와 라벨, 설명, 만료, 기본 파티션 메타데이터를 지원합니다."}
     limitations: {policy: tracked, byDesign: [], en: "Views, routines, external tables, and advanced partition options are not implemented.", ko: "뷰와 루틴, 외부 테이블, 고급 파티션 옵션은 지원하지 않습니다."}
     issues: ['#21', '#27']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/integration/bqcli/run_contract.py:main, spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge, spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.tables.list
     protocol: rest
     component: public-core
     summary: {en: List tables in a dataset, ko: 데이터 세트의 테이블 목록을 반환합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables', discovery: true}
     supportedInput: {en: maxResults and pageToken are supported., ko: maxResults와 pageToken을 지원합니다.}
     limitations: {policy: mixed, byDesign: [google-control-plane], en: Supported local metadata is returned; remaining list fields are tracked while Google-managed metadata stays out of scope., ko: 지원하는 로컬 메타데이터를 반환하며 나머지 목록 필드는 구현 예정이고 Google 관리 메타데이터는 범위에서 제외합니다.}
     issues: ['#33']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/integration/bqcli/run_contract.py:main]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
 
   - id: bigquery.tables.get
     protocol: rest
     component: public-core
     summary: {en: Get table metadata, ko: 테이블 메타데이터를 조회합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}', discovery: true}
     supportedInput: {en: "Project, dataset, and table path parameters are supported.", ko: "프로젝트와 데이터 세트, 테이블 경로 매개변수를 지원합니다."}
     limitations: {policy: mixed, byDesign: [google-control-plane, google-iam], en: selectedFields and view are tracked; Cloud statistics and IAM metadata remain outside the emulator scope., ko: selectedFields와 view는 구현 예정이며 Cloud 통계와 IAM 메타데이터는 에뮬레이터 범위에서 제외합니다.}
     issues: ['#33']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/integration/bqcli/run_contract.py:main, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.tables.patch
     protocol: rest
     component: public-core
     summary: {en: Patch table metadata and additive schema fields, ko: 테이블 메타데이터와 추가 스키마 필드를 변경합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: PATCH, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}', discovery: true}
     supportedInput: {en: Metadata and additive schema updates with ETags are supported., ko: ETag를 사용하는 메타데이터 변경과 스키마 필드 추가를 지원합니다.}
     limitations: {policy: tracked, byDesign: [], en: Type changes and destructive schema updates remain limited., ko: 자료형 변경과 파괴적인 스키마 변경은 제한됩니다.}
     issues: ['#21']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/integration/bqcli/run_contract.py:main, bq:tests/integration/bqcli/extended_contract.py:run_extended_contract]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution]
 
   - id: bigquery.tables.update
     protocol: rest
@@ -280,93 +280,93 @@ operations:
     component: public-core
     summary: {en: Delete a table, ko: 테이블을 삭제합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: DELETE, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}', discovery: true}
     supportedInput: {en: "Project, dataset, and table path parameters are supported.", ko: "프로젝트와 데이터 세트, 테이블 경로 매개변수를 지원합니다."}
     limitations: {policy: by-design, byDesign: [google-iam], en: Deletion is local and intentionally performs no IAM checks., ko: 로컬 데이터만 삭제하며 의도적으로 IAM 검사를 수행하지 않습니다.}
     issues: []
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/integration/bqcli/run_contract.py:main]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
 
   - id: bigquery.jobs.query
     protocol: rest
     component: public-query
     summary: {en: Run a synchronous query, ko: 동기 쿼리를 실행합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/queries', discovery: true}
     supportedInput: {en: "GoogleSQL queries, locations, paging limits, request IDs, and supported destinations are accepted.", ko: "GoogleSQL 쿼리와 위치, 페이지 크기, 요청 ID, 지원하는 대상 테이블을 받습니다."}
     limitations: {policy: tracked, byDesign: [], en: Legacy SQL and several cloud execution options are rejected., ko: Legacy SQL과 일부 Cloud 실행 옵션은 거부합니다.}
     issues: ['#3', '#27']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery]
 
   - id: bigquery.jobs.getQueryResults
     protocol: rest
     component: public-query
     summary: {en: Read query job results, ko: 쿼리 작업 결과를 조회합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/queries/{jobId}', discovery: true}
     supportedInput: {en: "location, maxResults, pageToken, and startIndex are supported.", ko: "location과 maxResults, pageToken, startIndex를 지원합니다."}
     limitations: {policy: tracked, byDesign: [], en: "Row payloads are process-local; after restart, a non-empty result fails with backendError instead of returning a false empty result.", ko: "결과 행은 프로세스 안에서만 유지합니다. 재시작 후 비어 있지 않은 결과를 조회하면 잘못된 빈 결과 대신 backendError를 반환합니다."}
     issues: ['#3', '#26']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs, bq:tests/integration/bqcli/run_contract.py:main, bq:tests/integration/bqcli/extended_contract.py:run_extended_contract, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
 
   - id: bigquery.jobs.insert
     protocol: rest
     component: public-query
     summary: {en: Submit a query or configured load job, ko: 쿼리 작업 또는 설정된 로드 작업을 제출합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/jobs', discovery: true}
     supportedInput: {en: Query jobs are accepted; configured Parquet load input is described by the condition., ko: 쿼리 작업을 받으며 설정된 Parquet 로드 입력은 조건 항목에 따릅니다.}
     conditions:
       - {setting: load.enabled, equals: true, effect: input-branch, verification: transport, tests: [go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs], en: Configured Parquet load job input is accepted., ko: 설정된 Parquet 로드 작업 입력을 받습니다.}
-    limitations: {policy: tracked, byDesign: [], en: "Discovery retains media-body metadata required by bq 2.1.31, but the media upload endpoints are not registered; unsupported load formats end with notImplemented.", ko: "bq 2.1.31에 필요한 media-body 메타데이터는 Discovery에 유지하지만 미디어 업로드 엔드포인트는 등록하지 않습니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."}
+    limitations: {policy: tracked, byDesign: [], en: "Discovery retains media-body metadata for generated request compatibility, but the media upload endpoints are not registered; unsupported load formats end with notImplemented.", ko: "생성된 요청과의 호환성을 위해 media-body 메타데이터는 Discovery에 유지하지만 미디어 업로드 엔드포인트는 등록하지 않습니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."}
     issues: ['#5', '#26']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch, bq:tests/integration/bqcli/run_contract.py:main, bq:tests/integration/bqcli/extended_contract.py:run_extended_contract, go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
 
   - id: bigquery.jobs.list
     protocol: rest
     component: public-query
     summary: {en: List jobs in a project and location, ko: 프로젝트와 위치의 작업 목록을 반환합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/jobs', discovery: true}
-    supportedInput: {en: "location, maxResults, pageToken, and bq-compatible neutral parameters are accepted.", ko: "location과 maxResults, pageToken, bq 호환을 위한 중립 매개변수를 받습니다."}
+    supportedInput: {en: "location, maxResults, pageToken, and documented neutral parameters are accepted.", ko: "location과 maxResults, pageToken 및 문서화된 중립 매개변수를 받습니다."}
     limitations: {policy: tracked, byDesign: [], en: "allUsers, state filters, creation-time filters, and parent job semantics are not implemented.", ko: "allUsers와 상태 필터, 생성 시간 필터, 상위 작업 의미는 지원하지 않습니다."}
     issues: ['#3']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch, bq:tests/integration/bqcli/run_contract.py:main, bq:tests/integration/bqcli/extended_contract.py:run_extended_contract]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery]
 
   - id: bigquery.jobs.get
     protocol: rest
     component: public-query
     summary: {en: Get one job, ko: 작업 하나를 조회합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/jobs/{jobId}', discovery: true}
     supportedInput: {en: "Project, job, and location identifiers are supported; query and load metadata survive restart when state.dsn is retained.", ko: "프로젝트와 작업, 위치 식별자를 지원합니다. state.dsn을 유지하면 쿼리와 로드 작업 메타데이터를 재시작 후에도 조회할 수 있습니다."}
     limitations: {policy: tracked, byDesign: [], en: Only currently implemented emulator job types and metadata are returned., ko: 현재 구현된 에뮬레이터 작업 유형과 메타데이터만 반환합니다.}
     issues: ['#3', '#26']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch, bq:tests/integration/bqcli/extended_contract.py:run_extended_contract, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
 
   - id: bigquery.tabledata.list
     protocol: rest
     component: public-tabledata
     summary: {en: List table rows in REST f/v encoding, ko: REST f/v 형식으로 테이블 행을 반환합니다.}
     support: partial
-    verification: public-process
+    verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}/data', discovery: true}
     supportedInput: {en: "maxResults, pageToken, startIndex, and selected wire format options are supported.", ko: "maxResults와 pageToken, startIndex, 일부 출력 형식 옵션을 지원합니다."}
     limitations: {policy: tracked, byDesign: [], en: selectedFields projection is rejected and response sizes are bounded., ko: selectedFields 프로젝션은 거부하며 응답 크기에 제한이 있습니다.}
     issues: ['#3']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/integration/python/test_tabledata_contract.py:test_list_rows_decodes_nested_repeated_values_and_pages, spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:internal/transport/rest/tabledata:TestTableDataListPagesNestedRowsAcrossPublicRESTEdge]
 
   - id: bqemu.capabilities.get
     protocol: rest
@@ -482,7 +482,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: "Nested projection, historical snapshots, and compression are not implemented.", ko: "중첩 프로젝션과 과거 스냅샷, 압축은 지원하지 않습니다."}
     issues: ['#6']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume, spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge, spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume]
 
   - id: grpc.bigquery-read.read-rows
     protocol: grpc
@@ -497,7 +497,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Responses and session snapshots have configured size limits while remaining Storage Read work is tracked., ko: 응답과 세션 스냅샷에 설정된 크기 제한이 있으며 나머지 Storage Read 작업은 이슈에서 관리합니다.}
     issues: ['#6']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume, spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge, spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume]
 
   - id: grpc.bigquery-read.split-read-stream
     protocol: grpc
@@ -525,7 +525,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Explicit COMMITTED and BUFFERED streams and CDC mode are not implemented., ko: 명시적 COMMITTED 및 BUFFERED 스트림과 CDC 모드는 지원하지 않습니다.}
     issues: ['#7', '#20']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance, spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.append-rows
     protocol: grpc
@@ -540,7 +540,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: ArrowRows and missing-value default expressions are not implemented., ko: ArrowRows와 누락 값의 기본 표현식은 지원하지 않습니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance, spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.get-write-stream
     protocol: grpc
@@ -570,7 +570,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Finalization follows the local coordinator state machine while remaining state-machine work is tracked., ko: 로컬 조정자의 상태 전이 규칙을 따르며 나머지 상태 머신 작업은 이슈에서 관리합니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance, spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.batch-commit-write-streams
     protocol: grpc
@@ -585,7 +585,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Distributed concurrency and cloud throughput guarantees are not implemented., ko: 분산 동시성과 Cloud 처리량 보장은 지원하지 않습니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance, spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.flush-rows
     protocol: grpc

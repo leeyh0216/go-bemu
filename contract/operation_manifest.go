@@ -33,11 +33,10 @@ const (
 type OperationVerification string
 
 const (
-	VerificationPublicProcess OperationVerification = "public-process"
-	VerificationTransport     OperationVerification = "transport"
-	VerificationApplication   OperationVerification = "application"
-	VerificationUnit          OperationVerification = "unit"
-	VerificationNone          OperationVerification = "none"
+	VerificationTransport   OperationVerification = "transport"
+	VerificationApplication OperationVerification = "application"
+	VerificationUnit        OperationVerification = "unit"
+	VerificationNone        OperationVerification = "none"
 )
 
 type LocalizedText struct {
@@ -129,7 +128,7 @@ var (
 	operationIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][A-Za-z0-9]+)+$`)
 	componentPattern   = regexp.MustCompile(`^(public-(?:core|query|tabledata|console)|admin|storage-read|storage-write|grpc-health|grpc-reflection)$`)
 	issuePattern       = regexp.MustCompile(`^#[1-9][0-9]*$`)
-	testIDPattern      = regexp.MustCompile(`^(?:go|python|spark|bq):[^:]+:[A-Za-z_][A-Za-z0-9_]*$`)
+	testIDPattern      = regexp.MustCompile(`^go:[^:]+:Test[A-Za-z0-9_]+$`)
 	grpcNamePattern    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.]*$`)
 )
 
@@ -296,7 +295,7 @@ func validateOperationClassification(operation Operation) error {
 		return fmt.Errorf("unknown support %q", operation.Support)
 	}
 	switch operation.Verification {
-	case VerificationPublicProcess, VerificationTransport, VerificationApplication, VerificationUnit, VerificationNone:
+	case VerificationTransport, VerificationApplication, VerificationUnit, VerificationNone:
 	default:
 		return fmt.Errorf("unknown verification %q", operation.Verification)
 	}

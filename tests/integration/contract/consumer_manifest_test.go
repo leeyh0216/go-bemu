@@ -270,6 +270,7 @@ func TestAddingOneConnectorPatchCaseYAMLAutoAddsContractAndAuthMatrixRows(t *tes
 	}
 	copyFile(t, filepath.Join(repositoryRoot, consumerManifestPath), filepath.Join(temporaryRoot, consumerManifestPath))
 	copyFile(t, filepath.Join(repositoryRoot, "contract/operations.normalized.json"), filepath.Join(temporaryRoot, "contract/operations.normalized.json"))
+	copyIntegrationAnnotationFiles(t, repositoryRoot, temporaryRoot)
 	paths, err := filepath.Glob(filepath.Join(repositoryRoot, consumerCasesDirectory, "*.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -519,5 +520,28 @@ func copyFile(t *testing.T, source, destination string) {
 	}
 	if err := os.WriteFile(destination, contents, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func copyIntegrationAnnotationFiles(t *testing.T, sourceRoot, destinationRoot string) {
+	t.Helper()
+	for _, directory := range []string{"python", "spark", "bqcli"} {
+		root := filepath.Join(sourceRoot, "tests", "integration", directory)
+		if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || filepath.Ext(path) != ".py" {
+				return nil
+			}
+			relative, err := filepath.Rel(sourceRoot, path)
+			if err != nil {
+				return err
+			}
+			copyFile(t, path, filepath.Join(destinationRoot, relative))
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

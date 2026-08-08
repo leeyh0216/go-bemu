@@ -1,7 +1,6 @@
 package contract
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -9,17 +8,11 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 )
 
 const contractTestImport = "github.com/leeyh0216/go-bemu/internal/contracttest"
-
-var (
-	pythonOperationMarker = regexp.MustCompile(`^\s*@pytest\.mark\.operation\(["']([^"']+)["']\)\s*$`)
-	bqOperationMarker     = regexp.MustCompile(`^\s*@operation\(["']([^"']+)["']\)\s*$`)
-)
 
 func ValidateOperationAnnotations(repositoryRoot string, manifest OperationManifest) error {
 	annotations, err := collectOperationAnnotations(repositoryRoot)
@@ -63,16 +56,14 @@ const (
 	testLevelUnit
 	testLevelApplication
 	testLevelTransport
-	testLevelPublicProcess
 )
 
 func validateVerificationTests(verification OperationVerification, testIDs []string) error {
 	required, known := map[OperationVerification]testVerificationLevel{
-		VerificationNone:          testLevelNone,
-		VerificationUnit:          testLevelUnit,
-		VerificationApplication:   testLevelApplication,
-		VerificationTransport:     testLevelTransport,
-		VerificationPublicProcess: testLevelPublicProcess,
+		VerificationNone:        testLevelNone,
+		VerificationUnit:        testLevelUnit,
+		VerificationApplication: testLevelApplication,
+		VerificationTransport:   testLevelTransport,
 	}[verification]
 	if !known {
 		return fmt.Errorf("unknown verification %q", verification)
@@ -102,8 +93,6 @@ func validateVerificationTests(verification OperationVerification, testIDs []str
 func verificationLevelForTest(testID string) (testVerificationLevel, error) {
 	kind, remainder, _ := strings.Cut(testID, ":")
 	switch kind {
-	case "python", "spark", "bq":
-		return testLevelPublicProcess, nil
 	case "go":
 		path, _, _ := strings.Cut(remainder, ":")
 		switch {
@@ -139,8 +128,6 @@ func collectOperationAnnotations(repositoryRoot string) (map[string]map[string]b
 		switch {
 		case strings.HasSuffix(path, "_test.go"):
 			return collectGoAnnotations(path, relative, annotations)
-		case strings.HasSuffix(path, ".py") && (strings.HasPrefix(relative, "tests/integration/python/") || strings.HasPrefix(relative, "tests/integration/spark/") || strings.HasPrefix(relative, "tests/integration/bqcli/")):
-			return collectPythonAnnotations(path, relative, annotations)
 		default:
 			return nil
 		}
@@ -150,7 +137,7 @@ func collectOperationAnnotations(repositoryRoot string) (map[string]map[string]b
 
 func ignoredAnnotationDirectory(name string) bool {
 	switch name {
-	case ".git", ".artifacts", ".venv", "vendor", "node_modules", "__pycache__":
+	case ".git", ".artifacts", ".venv", "vendor", "node_modules", "tests", "__pycache__":
 		return true
 	default:
 		return false
@@ -217,60 +204,6 @@ func collectGoAnnotations(path, relative string, annotations map[string]map[stri
 		if annotationErr != nil {
 			return annotationErr
 		}
-	}
-	return nil
-}
-
-func collectPythonAnnotations(path, relative string, annotations map[string]map[string]bool) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	kind := "python"
-	marker := pythonOperationMarker
-	if strings.HasPrefix(relative, "tests/integration/spark/") {
-		kind = "spark"
-	} else if strings.HasPrefix(relative, "tests/integration/bqcli/") {
-		kind = "bq"
-		marker = bqOperationMarker
-	}
-	var pending []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if match := marker.FindStringSubmatch(line); match != nil {
-			pending = append(pending, match[1])
-			continue
-		}
-		trimmed := strings.TrimSpace(line)
-		if (kind == "bq" && strings.HasPrefix(trimmed, "@operation(")) ||
-			(kind != "bq" && strings.HasPrefix(trimmed, "@pytest.mark.operation(")) {
-			return fmt.Errorf("%s: operation marker must contain only one literal operation ID", relative)
-		}
-		if strings.HasPrefix(trimmed, "@") || trimmed == "" {
-			continue
-		}
-		if len(pending) == 0 {
-			continue
-		}
-		if (kind != "bq" && !strings.HasPrefix(trimmed, "def test_")) ||
-			(kind == "bq" && !strings.HasPrefix(trimmed, "def ")) {
-			return fmt.Errorf("%s: operation marker must immediately decorate a test function", relative)
-		}
-		name := strings.TrimPrefix(trimmed, "def ")
-		name, _, _ = strings.Cut(name, "(")
-		testID := kind + ":" + relative + ":" + name
-		for _, operationID := range pending {
-			addOperationAnnotation(annotations, operationID, testID)
-		}
-		pending = nil
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	if len(pending) != 0 {
-		return fmt.Errorf("%s: operation marker has no following test function", relative)
 	}
 	return nil
 }

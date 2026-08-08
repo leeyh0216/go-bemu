@@ -699,13 +699,20 @@ def _decode_source_provenance(value: Any) -> SourceProvenance:
 def _decode_scenario(value: Any, selector_prefix: str) -> dict[str, Any]:
     scenario = _exact_object(
         value,
-        {"id", "operationIds", "selectors", "operationExpectations"},
+        {"id", "operationIds", "selectors", "testEvidence", "operationExpectations"},
         "scenario",
     )
     scenario_id = _nonempty_string(scenario["id"], "scenario.id")
     operation_ids = _string_list(scenario["operationIds"], "scenario.operationIds")
     selectors = _string_list(scenario["selectors"], "scenario.selectors")
-    if len(operation_ids) != len(set(operation_ids)) or len(selectors) != len(set(selectors)):
+    test_evidence = _string_list(
+        scenario["testEvidence"], "scenario.testEvidence", allow_empty=True
+    )
+    if (
+        len(operation_ids) != len(set(operation_ids))
+        or len(selectors) != len(set(selectors))
+        or len(test_evidence) != len(set(test_evidence))
+    ):
         raise ConsumerRuntimeError("normalized scenario contains duplicate values")
     if any(not selector.startswith(selector_prefix + ":") for selector in selectors):
         raise ConsumerRuntimeError("normalized scenario selector does not match its adapter")
@@ -748,6 +755,7 @@ def _decode_scenario(value: Any, selector_prefix: str) -> dict[str, Any]:
         "id": scenario_id,
         "operationIds": operation_ids,
         "selectors": selectors,
+        "testEvidence": test_evidence,
         "operationExpectations": expectations,
     }
 

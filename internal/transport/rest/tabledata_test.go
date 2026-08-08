@@ -18,6 +18,7 @@ import (
 	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/application"
+	"github.com/leeyh0216/go-bemu/internal/contracttest"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 	tabledatabudget "github.com/leeyh0216/go-bemu/internal/tabledata"
@@ -368,6 +369,7 @@ func TestTableDataListDoesNotUseDuckDBColumnNamesAsWireBytes(t *testing.T) {
 }
 
 func TestTableDataListPagesNestedRowsAcrossPublicRESTEdge(t *testing.T) {
+	contracttest.Operation(t, "bigquery.tabledata.list")
 	ctx, cancel := requestBodyTestContext(t)
 	defer cancel()
 	warehouse, err := duckdb.New("")

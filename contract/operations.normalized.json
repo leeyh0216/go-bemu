@@ -36,7 +36,7 @@
         "ko": "데이터 세트를 삭제합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "DELETE",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}",
@@ -60,8 +60,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/run_contract.py:main",
-        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
     {
@@ -73,15 +72,15 @@
         "ko": "데이터 세트 메타데이터를 조회합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "GET",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}",
         "discovery": true
       },
       "supportedInput": {
-        "en": "Project and dataset path parameters plus bq-compatible accessPolicyVersion and datasetView method arguments are accepted.",
-        "ko": "프로젝트와 데이터 세트 경로 매개변수 및 bq 호환 accessPolicyVersion, datasetView 메서드 인자를 받습니다."
+        "en": "Project and dataset path parameters plus accessPolicyVersion and datasetView method arguments are accepted.",
+        "ko": "프로젝트와 데이터 세트 경로 매개변수 및 accessPolicyVersion, datasetView 메서드 인자를 받습니다."
       },
       "conditions": [],
       "limitations": {
@@ -99,9 +98,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
-        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery",
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
     },
     {
@@ -113,15 +112,15 @@
         "ko": "데이터 세트를 생성합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "POST",
         "path": "/bigquery/v2/projects/{projectId}/datasets",
         "discovery": true
       },
       "supportedInput": {
-        "en": "Dataset reference, location, labels, description, expiration metadata, and the bq-compatible accessPolicyVersion method argument are accepted.",
-        "ko": "데이터 세트 참조와 위치, 라벨, 설명, 만료 메타데이터 및 bq 호환 accessPolicyVersion 메서드 인자를 받습니다."
+        "en": "Dataset reference, location, labels, description, expiration metadata, and the accessPolicyVersion method argument are accepted.",
+        "ko": "데이터 세트 참조와 위치, 라벨, 설명, 만료 메타데이터 및 accessPolicyVersion 메서드 인자를 받습니다."
       },
       "conditions": [],
       "limitations": {
@@ -138,9 +137,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
-        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery",
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
     },
     {
@@ -152,7 +151,7 @@
         "ko": "프로젝트의 데이터 세트 목록을 반환합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "GET",
         "path": "/bigquery/v2/projects/{projectId}/datasets",
@@ -176,7 +175,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
     {
@@ -188,15 +187,15 @@
         "ko": "데이터 세트 메타데이터 일부를 변경합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "PATCH",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}",
         "discovery": true
       },
       "supportedInput": {
-        "en": "Description, labels, and supported expiration fields can be patched with ETags; bq-compatible accessPolicyVersion and updateMode method arguments are exposed.",
-        "ko": "설명과 라벨, 지원하는 만료 필드를 ETag와 함께 변경할 수 있으며 bq 호환 accessPolicyVersion, updateMode 메서드 인자를 노출합니다."
+        "en": "Description, labels, and supported expiration fields can be patched with ETags; accessPolicyVersion and updateMode method arguments are exposed.",
+        "ko": "설명과 라벨, 지원하는 만료 필드를 ETag와 함께 변경할 수 있으며 accessPolicyVersion, updateMode 메서드 인자를 노출합니다."
       },
       "conditions": [],
       "limitations": {
@@ -213,8 +212,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
-        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
     },
     {
@@ -263,7 +261,7 @@
         "ko": "작업 하나를 조회합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "GET",
         "path": "/bigquery/v2/projects/{projectId}/jobs/{jobId}",
@@ -288,9 +286,8 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
         "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
-        "python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
+        "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
       ]
     },
     {
@@ -302,7 +299,7 @@
         "ko": "쿼리 작업 결과를 조회합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "GET",
         "path": "/bigquery/v2/projects/{projectId}/queries/{jobId}",
@@ -327,10 +324,8 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
-        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
-        "python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs"
+        "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
       ]
     },
     {
@@ -342,7 +337,7 @@
         "ko": "쿼리 작업 또는 설정된 로드 작업을 제출합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "POST",
         "path": "/bigquery/v2/projects/{projectId}/jobs",
@@ -368,8 +363,8 @@
       "limitations": {
         "policy": "tracked",
         "byDesign": [],
-        "en": "Discovery retains media-body metadata required by bq 2.1.31, but the media upload endpoints are not registered; unsupported load formats end with notImplemented.",
-        "ko": "bq 2.1.31에 필요한 media-body 메타데이터는 Discovery에 유지하지만 미디어 업로드 엔드포인트는 등록하지 않습니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."
+        "en": "Discovery retains media-body metadata for generated request compatibility, but the media upload endpoints are not registered; unsupported load formats end with notImplemented.",
+        "ko": "생성된 요청과의 호환성을 위해 media-body 메타데이터는 Discovery에 유지하지만 미디어 업로드 엔드포인트는 등록하지 않습니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."
       },
       "issues": [
         "#26",
@@ -379,11 +374,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
-        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs",
-        "python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
+        "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
       ]
     },
     {
@@ -395,15 +388,15 @@
         "ko": "프로젝트와 위치의 작업 목록을 반환합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "GET",
         "path": "/bigquery/v2/projects/{projectId}/jobs",
         "discovery": true
       },
       "supportedInput": {
-        "en": "location, maxResults, pageToken, and bq-compatible neutral parameters are accepted.",
-        "ko": "location과 maxResults, pageToken, bq 호환을 위한 중립 매개변수를 받습니다."
+        "en": "location, maxResults, pageToken, and documented neutral parameters are accepted.",
+        "ko": "location과 maxResults, pageToken 및 문서화된 중립 매개변수를 받습니다."
       },
       "conditions": [],
       "limitations": {
@@ -419,9 +412,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
-        "bq:tests/integration/bqcli/run_contract.py:main",
-        "python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
+        "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
       ]
     },
     {
@@ -433,7 +424,7 @@
         "ko": "동기 쿼리를 실행합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "POST",
         "path": "/bigquery/v2/projects/{projectId}/queries",
@@ -458,7 +449,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs"
+        "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
       ]
     },
     {
@@ -495,7 +486,6 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
@@ -508,7 +498,7 @@
         "ko": "REST f/v 형식으로 테이블 행을 반환합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "GET",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}/data",
@@ -532,9 +522,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "python:tests/integration/python/test_tabledata_contract.py:test_list_rows_decodes_nested_repeated_values_and_pages",
-        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "go:internal/transport/rest/tabledata:TestTableDataListPagesNestedRowsAcrossPublicRESTEdge"
       ]
     },
     {
@@ -546,7 +534,7 @@
         "ko": "테이블을 삭제합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "DELETE",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}",
@@ -570,8 +558,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/run_contract.py:main",
-        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
     {
@@ -583,7 +570,7 @@
         "ko": "테이블 메타데이터를 조회합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "GET",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}",
@@ -610,9 +597,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
-        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery",
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
     },
     {
@@ -624,7 +611,7 @@
         "ko": "테이블을 생성합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "POST",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables",
@@ -649,12 +636,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
-        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema",
-        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
-        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery",
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
     },
     {
@@ -666,7 +650,7 @@
         "ko": "데이터 세트의 테이블 목록을 반환합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "GET",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables",
@@ -692,8 +676,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/run_contract.py:main",
-        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
     {
@@ -705,7 +688,7 @@
         "ko": "테이블 메타데이터와 추가 스키마 필드를 변경합니다."
       },
       "support": "partial",
-      "verification": "public-process",
+      "verification": "transport",
       "rest": {
         "method": "PATCH",
         "path": "/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}",
@@ -729,9 +712,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
-        "bq:tests/integration/bqcli/run_contract.py:main",
-        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
+        "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
     },
     {
@@ -1393,9 +1374,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume",
-        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
-        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume"
       ]
     },
     {
@@ -1443,9 +1422,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume",
-        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
-        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume"
       ]
     },
     {
@@ -1528,9 +1505,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
-        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
     {
@@ -1578,9 +1553,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
-        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
     {
@@ -1629,9 +1602,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
-        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
     {
@@ -1679,9 +1650,7 @@
       ],
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
-        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
-        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
     {

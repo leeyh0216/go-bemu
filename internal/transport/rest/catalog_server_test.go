@@ -88,7 +88,13 @@ func (*catalogTestWarehouse) Query(context.Context, ports.QueryRequest) (domain.
 }
 
 func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
+	contracttest.Operation(t, "bigquery.datasets.insert")
+	contracttest.Operation(t, "bigquery.datasets.get")
+	contracttest.Operation(t, "bigquery.datasets.patch")
 	contracttest.Operation(t, "bigquery.datasets.update")
+	contracttest.Operation(t, "bigquery.tables.insert")
+	contracttest.Operation(t, "bigquery.tables.get")
+	contracttest.Operation(t, "bigquery.tables.patch")
 	contracttest.Operation(t, "bigquery.tables.update")
 	warehouse := &catalogTestWarehouse{}
 	clock := catalogTestClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
@@ -357,6 +363,14 @@ func assertTableDefaultRoundingGap(t *testing.T, response map[string]any) {
 }
 
 func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
+	contracttest.Operation(t, "bigquery.datasets.insert")
+	contracttest.Operation(t, "bigquery.datasets.list")
+	contracttest.Operation(t, "bigquery.datasets.get")
+	contracttest.Operation(t, "bigquery.datasets.delete")
+	contracttest.Operation(t, "bigquery.tables.insert")
+	contracttest.Operation(t, "bigquery.tables.list")
+	contracttest.Operation(t, "bigquery.tables.get")
+	contracttest.Operation(t, "bigquery.tables.delete")
 	contracttest.Operation(t, "bqemu.discovery.get")
 	contracttest.Operation(t, "bqemu.discovery.googleapis.get")
 	contracttest.Operation(t, "bqemu.health.live")

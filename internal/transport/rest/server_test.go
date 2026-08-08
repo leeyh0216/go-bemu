@@ -31,6 +31,11 @@ func (ids *testIDs) NewID() string { return fmt.Sprintf("fixed-%d", ids.next.Add
 func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 	contracttest.Operation(t, "bqemu.capabilities.get")
 	contracttest.Operation(t, "bqemu.console.get")
+	contracttest.Operation(t, "bigquery.jobs.insert")
+	contracttest.Operation(t, "bigquery.jobs.list")
+	contracttest.Operation(t, "bigquery.jobs.get")
+	contracttest.Operation(t, "bigquery.jobs.query")
+	contracttest.Operation(t, "bigquery.jobs.getQueryResults")
 	warehouse, err := duckdb.New("")
 	if err != nil {
 		t.Fatal(err)
