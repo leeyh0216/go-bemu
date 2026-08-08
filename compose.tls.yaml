@@ -1,0 +1,23 @@
+services:
+  bqemu:
+    user: "${BQEMU_HOST_UID:?set BQEMU_HOST_UID}:${BQEMU_HOST_GID:?set BQEMU_HOST_GID}"
+    environment:
+      BQEMU_TLS_CERT_FILE: /run/bqemu-auth/server.pem
+      BQEMU_TLS_KEY_FILE: /run/bqemu-auth/server-key.pem
+      BQEMU_PUBLIC_URL: https://localhost:${BQEMU_HTTP_PORT:-9050}
+      BQEMU_HEALTHCHECK_URL: https://127.0.0.1:9050/readyz
+      CURL_CA_BUNDLE: /run/bqemu-auth/ca.pem
+    volumes:
+      - type: bind
+        source: ./.bqemu-auth
+        target: /run/bqemu-auth
+        read_only: true
+      - type: bind
+        source: ./configs/bqemu.yaml
+        target: /etc/bqemu/bqemu.yaml
+        read_only: true
+      - type: bind
+        source: ./data
+        target: /data
+    tmpfs:
+      - /tmp/bqemu:uid=${BQEMU_HOST_UID},gid=${BQEMU_HOST_GID},mode=0700

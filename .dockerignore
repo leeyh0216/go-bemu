@@ -1,5 +1,7 @@
 .git
 .github
+.artifacts
+.bqemu-auth
 .local
 .venv
 bin

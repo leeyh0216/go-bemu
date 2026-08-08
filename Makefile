@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
 BINARY ?= bin/go-bemu
+AUTH_FIXTURE_BINARY ?= bin/bqemu-auth-fixture
 BQEMU_CONFIG ?= configs/bqemu.yaml
 BQEMU_LOCAL_DATA_DIR ?= $(CURDIR)/data
 BQEMU_DATABASE_DSN ?= $(BQEMU_LOCAL_DATA_DIR)/bqemu.duckdb
@@ -22,14 +23,17 @@ IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup build run format format-check contract-generate contract-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup auth-client-setup auth-fixtures auth-client-test build run format format-check contract-generate contract-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
 	  'make doctor       Validate Go, CGO, Docker, and configuration prerequisites' \
 	  'make setup        Run doctor and download Go modules' \
 	  'make python-setup Create a Python 3.13 venv from the hash lock' \
-	  'make build        Build bin/go-bemu with CGO enabled' \
+	  'make auth-client-setup Install pinned Python and Spark client dependencies' \
+	  'make auth-fixtures Generate local TLS, credential, token, and Java trust files' \
+	  'make auth-client-test Run real TLS credential contracts for Python, bq, PySpark, and Scala Spark' \
+	  'make build        Build the emulator and local credential helper' \
 	  'make run          Run locally with repository data and temp directories' \
 	  'make contract-generate Regenerate canonical API/RPC contract artifacts' \
 	  'make contract-check Check API/RPC manifest, annotations, and generated files' \
@@ -58,8 +62,29 @@ python-setup:
 	uv pip sync --python "$(PYTHON)" --require-hashes tests/python/requirements.lock
 
 build:
-	mkdir -p $(dir $(BINARY))
+	mkdir -p $(dir $(BINARY)) $(dir $(AUTH_FIXTURE_BINARY))
 	CGO_ENABLED=1 go build -trimpath -o "$(BINARY)" ./cmd/emulator
+	CGO_ENABLED=0 go build -trimpath -o "$(AUTH_FIXTURE_BINARY)" ./cmd/bqemu-auth-fixture
+
+auth-client-setup: python-setup
+	@if test -x "$(BQEMU_SPARK_PYTHON)"; then \
+		"$(BQEMU_SPARK_PYTHON)" -c 'import sys; assert sys.version_info[:2] == (3, 11), "Spark contract requires Python 3.11"'; \
+	else \
+		uv venv --python 3.11 "$(BQEMU_SPARK_VENV)"; \
+	fi
+	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
+	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
+	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py
+
+auth-fixtures:
+	CGO_ENABLED=0 go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
+
+auth-client-test:
+	BQEMU_AUTH_PYTHON="$(PYTHON)" \
+	BQEMU_AUTH_SPARK_PYTHON="$(BQEMU_SPARK_PYTHON)" \
+	BQEMU_AUTH_BQ="$(BQEMU_BQCLI_BIN)" \
+	BQEMU_AUTH_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
+	"$(PYTHON3)" tests/auth/run_contract.py
 
 run:
 	mkdir -p "$(BQEMU_LOCAL_DATA_DIR)" "$(BQEMU_TEMP_DIRECTORY)"
@@ -135,6 +160,7 @@ ci-test-core:
 	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) \
 		./internal/admin \
 		./internal/application \
+		./internal/auth/... \
 		./internal/domain \
 		./internal/loadjob/... \
 		./internal/observability \
