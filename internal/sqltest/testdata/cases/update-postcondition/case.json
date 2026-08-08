@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "update-postcondition",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "none"
+}
