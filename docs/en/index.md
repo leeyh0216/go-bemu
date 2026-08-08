@@ -3,60 +3,45 @@
 
 [English](index.md) | [한국어](../ko/index.md)
 
-# Documentation Index
+# User Documentation
 
-<!-- section: guides -->
-## Guides
+These documents are for people running BQEMU from an application, CLI, or
+connector. BigQuery resources follow the public [BigQuery REST API
+reference](https://cloud.google.com/bigquery/docs/reference/rest).
 
-- [Getting started](getting-started.md): Compose, client endpoints, external
-  fake GCS, Spark options, TLS, and development-container networking.
-- [Architecture](architecture.md): dependency rules, runtime composition,
-  persistence boundaries, and replacement points.
-- [BigQuery and connector internals](bigquery-internals.md): REST jobs, Storage
-  Read/Write, indirect load, MERGE, types, and authentication flows.
-- [Compatibility](compatibility.md): implemented, partial, registered, planned,
-  and unsupported behavior.
-- [Local client credentials and TLS](client-credentials-and-tls.md): disposable
-  credentials, loopback token exchange, TLS trust, and client-specific setup.
-- [Consumer compatibility](consumer-compatibility.md): generated required
-  client, CLI, and Spark cases with their runtime and scenario identities.
-- [Schema evolution and CDC](schema-evolution-cdc.md): additive schema rules,
-  Storage Write schema changes, CDC ordering, and explicit current limits.
-- [Dynamic partition overwrite](dynamic-partition-overwrite.md): pinned Spark
-  script semantics, atomic execution, type validation, and promotion gaps.
-- [Maintainer guide](maintainer-guide.md): clone-to-run learning path, version
-  onboarding, drift diagnosis, and release runbooks.
-- [Storage engine adapter guide](engine-adapter-guide.md): engine capability
-  declaration, runtime composition, schema/load plans, and conformance tests.
-- [Configuration and operations](operations.md): precedence, container hardening,
-  health/shutdown, test timeouts, and diagnostics endpoint design.
-- [Architecture decisions](adr/): decisions that constrain implementation.
+<!-- section: start -->
+## Start Here
 
-<!-- section: reading-contract -->
-## How to Read These Documents
+- [Getting started](getting-started.md): run Compose, create resources, send the
+  first query, add fake GCS, and connect from a development container.
+- [Client credentials and TLS](client-credentials-and-tls.md): generate local
+  service-account, authorized-user, WIF, direct-token, certificate, and
+  truststore fixtures.
 
-Statements prefixed with **BigQuery contract** describe the service contract in
-the [official BigQuery documentation](https://cloud.google.com/bigquery/docs).
-Statements prefixed with **Current implementation** describe this repository.
-They are intentionally separate: registration of an RPC or successful DuckDB SQL
-does not prove BigQuery semantic equivalence.
+<!-- section: clients -->
+## Client Guides
 
-<!-- section: version-policy -->
-## Version and Source Policy
+- [Python BigQuery client 3.43.0](clients/python-bigquery.md)
+- [`bq` CLI 2.1.31](clients/bq-cli.md)
+- [PySpark and Scala Spark 3.5.8 with connector
+  0.44.2](clients/spark-bigquery-connector.md), bound to the reviewed [connector
+  revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)
 
-Connector-dependent statements use the exact [Spark BigQuery connector `0.44.2`
-tag](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2).
-Historical emulator comparisons use the exact [goccy BigQuery emulator `v0.8.1`
-tag](https://github.com/goccy/bigquery-emulator/tree/v0.8.1), without cloning or
-building it as part of this project.
-Wire contracts use the [BigQuery Storage RPC
-reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc), and
-engine statements use the [DuckDB documentation](https://duckdb.org/docs/stable/).
-Mutable upstream branch links are not accepted for version-bound claims.
+Each guide identifies the tested scenario IDs, public operation IDs, request
+order, and request/response shapes.
 
-<!-- section: maintenance -->
-## Maintenance Contract
+<!-- section: compatibility -->
+## Compatibility References
 
-Every file under `docs/en` has the same relative path under `docs/ko`. Both files
-carry the same `doc-id`, ordered `section` markers, and primary-source URLs.
-`go test ./...` enforces this contract. See [Contributing](../../CONTRIBUTING.md).
+- [Compatibility](compatibility.md): status definitions and links to the
+  generated API/RPC table.
+- [API and RPC compatibility](api-rpc-compatibility.md): generated method,
+  endpoint, condition, test, and issue rows.
+- [Consumer compatibility](consumer-compatibility.md): generated client
+  versions, runtime artifacts, and scenario selectors.
+
+<!-- section: maintainers -->
+## Maintainer Documentation
+
+Architecture, adapter contracts, implementation notes, runbooks, and version
+onboarding are kept in the separate [maintainer index](maintainers/index.md).

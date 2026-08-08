@@ -5,190 +5,150 @@
 
 # Getting Started
 
-This guide starts BQEMU for local client and connector tests. For the exact
-implemented API surface, see [Compatibility](compatibility.md). For credential
-files and local certificates, see [Local client credentials and TLS](client-credentials-and-tls.md).
+This guide starts BQEMU, creates the resources used by local clients, and runs
+one query. See [Compatibility](compatibility.md) before depending on a specific
+field or method. Request resources follow the [BigQuery REST API
+reference](https://cloud.google.com/bigquery/docs/reference/rest).
 
-<!-- section: compose -->
-## Docker Compose
+<!-- section: run -->
+## Start BQEMU
 
-Start BQEMU with its default REST and Storage gRPC listeners:
+From the repository root:
 
 ```bash
 docker compose up --build -d --wait
 curl --fail http://localhost:9050/readyz
 ```
 
-The named `bqemu-data` volume owns `/data`. Keep or replace that volume as part
-of your test environment policy. `docker compose down --volumes` removes it.
+Compose stores the catalog and table data in the `bqemu-data` volume. Keeping
+that volume across restarts is the user's responsibility.
 
-Create a local project before creating BigQuery resources:
+<!-- section: endpoints -->
+## Choose The Endpoint
+
+| Client location | REST | Storage gRPC |
+| --- | --- | --- |
+| Host running Compose | `http://localhost:9050` | `localhost:9060` |
+| Sibling Compose service | `http://bqemu:9050` | `bqemu:9060` |
+| Development container, BQEMU on host | `http://host.docker.internal:9050` | `host.docker.internal:9060` |
+
+REST clients use only the REST endpoint. Spark reads and direct writes require
+both endpoints.
+
+<!-- section: resources -->
+## Create A Project, Dataset, And Table
+
+BQEMU projects are emulator resources, so create one before calling BigQuery
+v2 methods:
 
 ```bash
 curl --fail -X POST http://localhost:9050/bqemu/v1/projects \
   -H 'Content-Type: application/json' \
-  -d '{"projectId":"test-project"}'
+  -d '{"projectId":"test-project","friendlyName":"Local tests"}'
+
+curl --fail -X POST \
+  http://localhost:9050/bigquery/v2/projects/test-project/datasets \
+  -H 'Content-Type: application/json' \
+  -d '{"datasetReference":{"projectId":"test-project","datasetId":"analytics"},"location":"US"}'
+
+curl --fail -X POST \
+  http://localhost:9050/bigquery/v2/projects/test-project/datasets/analytics/tables \
+  -H 'Content-Type: application/json' \
+  -d '{"tableReference":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},"schema":{"fields":[{"name":"id","type":"INTEGER","mode":"REQUIRED"},{"name":"label","type":"STRING"}]}}'
 ```
 
-<!-- section: external-gcs -->
-## Parquet Load And External GCS
+These requests use `bqemu.projects.create`, `bigquery.datasets.insert`, and
+`bigquery.tables.insert`.
 
-BQEMU does not contain a GCS server. The optional load adapter reads `gs://`
-objects from the configured GCS JSON API endpoint. The following command starts
-one digest-pinned fake GCS service beside BQEMU:
+<!-- section: query -->
+## Run The First Query
+
+```bash
+curl --fail -X POST \
+  http://localhost:9050/bigquery/v2/projects/test-project/queries \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"SELECT 1 AS answer","useLegacySql":false,"location":"US"}'
+```
+
+This calls `bigquery.jobs.query`. The response is a BigQuery `QueryResponse`
+shape with a job reference, schema, completion state, and encoded rows.
+
+<!-- section: clients -->
+## Configure A Client
+
+Use the guide for the process that sends the request:
+
+- [Python BigQuery client 3.43.0](clients/python-bigquery.md)
+- [`bq` CLI 2.1.31](clients/bq-cli.md)
+- [PySpark and Scala Spark 3.5.8 with connector
+  0.44.2](clients/spark-bigquery-connector.md), bound to the reviewed [connector
+  revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)
+
+Each guide contains endpoint, TLS trust, credentials, examples, operation IDs,
+and the request sequence exercised by that client.
+
+<!-- section: external-gcs -->
+## Enable Parquet Load
+
+BQEMU does not include a GCS server. The optional load profile starts an
+external fake GCS service and enables BQEMU's outbound GCS JSON adapter:
 
 ```bash
 docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
-curl --fail http://localhost:9050/readyz
 curl --fail http://localhost:4443/storage/v1/b
 ```
 
-The two configuration boundaries are independent:
+The two endpoint settings serve different callers:
 
-| Caller | Endpoint setting | Compose value |
+| Caller | Setting | Compose value |
 | --- | --- | --- |
-| BQEMU load worker | `load.gcsEndpoint` or `BQEMU_LOAD_GCS_ENDPOINT` | `http://fake-gcs:4443` |
+| BQEMU load worker | `BQEMU_LOAD_GCS_ENDPOINT` / `load.gcsEndpoint` | `http://fake-gcs:4443` |
 | Spark Hadoop GCS Connector | `fs.gs.storage.root.url` | `http://localhost:4443` |
 
-They resolve to the same Compose service from different network namespaces.
-The seeded bucket is `bqemu-temporary`. Direct Storage Write does not use GCS.
-
-For Spark indirect writes, include the reviewed shaded Hadoop GCS Connector and
-set both the Spark BigQuery Connector and Hadoop options:
-
-```python
-spark = (
-    SparkSession.builder
-    .config("spark.jars", "/opt/jars/spark-bigquery.jar,/opt/jars/gcs-connector.jar")
-    .config("spark.hadoop.fs.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem")
-    .config("spark.hadoop.fs.AbstractFileSystem.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS")
-    .config("spark.hadoop.fs.gs.auth.service.account.enable", "false")
-    .config("spark.hadoop.fs.gs.auth.null.enable", "true")
-    .config("spark.hadoop.fs.gs.storage.root.url", "http://localhost:4443")
-    .config("spark.hadoop.fs.gs.storage.service.path", "storage/v1/")
-    .getOrCreate()
-)
-
-(df.write.format("bigquery")
- .option("table", "test-project.analytics.events")
- .option("project", "test-project")
- .option("parentProject", "test-project")
- .option("bigQueryHttpEndpoint", "http://localhost:9050")
- .option("gcpAccessToken", "local-test-token")
- .option("writeMethod", "indirect")
- .option("intermediateFormat", "parquet")
- .option("temporaryGcsBucket", "bqemu-temporary")
- .mode("append")
- .save())
-```
-
-The fake GCS setting above is only for isolated local tests. The public GCS JSON
-API contract is documented by [Cloud Storage JSON API](https://cloud.google.com/storage/docs/json_api/v1/objects).
-
-<!-- section: python -->
-## Python BigQuery Client
-
-The client requires a credential object even though BQEMU does not authenticate
-public requests:
-
-```python
-from google.api_core.client_options import ClientOptions
-from google.auth.credentials import AnonymousCredentials
-from google.cloud import bigquery
-
-client = bigquery.Client(
-    project="test-project",
-    credentials=AnonymousCredentials(),
-    client_options=ClientOptions(api_endpoint="http://localhost:9050"),
-)
-```
-
-Use the generated credential fixtures instead when a library insists on a
-service-account, authorized-user, WIF, or access-token file. The commands are in
-[Local client credentials and TLS](client-credentials-and-tls.md).
-
-<!-- section: bq -->
-## bq CLI
-
-Point `bq` at the REST listener and provide a local placeholder token:
-
-```bash
-bq \
-  --api=http://localhost:9050 \
-  --project_id=test-project \
-  --use_gcloud_config=false \
-  --oauth_access_token=local-test-token \
-  ls
-```
-
-For Parquet load, upload objects to the external fake GCS first and then run:
-
-```bash
-bq --api=http://localhost:9050 \
-  --project_id=test-project \
-  --use_gcloud_config=false \
-  --oauth_access_token=local-test-token \
-  load --source_format=PARQUET \
-  test-project:analytics.events \
-  'gs://bqemu-temporary/input/*.parquet'
-```
-
-<!-- section: spark -->
-## PySpark And Scala Spark
-
-Both entrypoints use the same connector options. REST metadata and jobs go to
-`bigQueryHttpEndpoint`; Storage Read and direct Storage Write go to
-`bigQueryStorageGrpcEndpoint`:
-
-```text
-bigQueryHttpEndpoint=http://localhost:9050
-bigQueryStorageGrpcEndpoint=localhost:9060
-gcpAccessToken=local-test-token
-parentProject=test-project
-project=test-project
-```
-
-The required runtime contract is Spark `3.5.8`, Scala `2.12`, and Spark BigQuery
-Connector `0.44.2`. PySpark and Scala `spark-shell` are tested as separate
-entrypoints. Indirect writes additionally need the Hadoop GCS settings from the
-previous section. The connector behavior is bound to the reviewed
-[0.44.2 source revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92).
+Spark uploads temporary objects through the Hadoop GCS Connector. BQEMU lists
+matching objects when necessary, downloads object media, and commits the load.
+Direct Storage Write does not use GCS. The complete connector configuration and
+call sequence are in the [Spark guide](clients/spark-bigquery-connector.md).
 
 <!-- section: tls -->
-## TLS
+## Enable TLS And Credential Fixtures
 
-Generate local certificates and client credential files, then start the TLS
-override described in [Local client credentials and TLS](client-credentials-and-tls.md).
-Use the generated CA for Python and `bq`, and the generated PKCS12 truststore for
-Spark. The endpoint hostname must be present in the certificate SAN.
+Generate a local CA, REST/gRPC server certificate, Java truststore, and client
+credential files:
+
+```bash
+go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
+mkdir -p data
+export BQEMU_HOST_UID="$(id -u)"
+export BQEMU_HOST_GID="$(id -g)"
+docker compose -f compose.yaml -f compose.tls.yaml up --build -d --wait
+```
+
+The generated service-account, authorized-user, WIF, and direct-token files are
+local fixtures. Follow [Client credentials and TLS](client-credentials-and-tls.md)
+when a client must exchange a token or trust the generated CA.
 
 <!-- section: devcontainer -->
-## Development Container
+## Connect From A Development Container
 
-When the client runs in a development container and BQEMU runs on the host, use
-`host.docker.internal` instead of `localhost`:
+Use `host.docker.internal` when BQEMU runs on the host. On Linux, add a host
+mapping for `host.docker.internal:host-gateway`. When BQEMU is a sibling Compose
+service, use the service name `bqemu` instead.
 
-```text
-http://host.docker.internal:9050
-host.docker.internal:9060
-http://host.docker.internal:4443
-```
+Generate credential fixtures inside the container that uses them. This keeps
+the absolute subject-token path in `wif.json` valid. For sibling-service TLS,
+generate the certificate with `--tls-dns-name bqemu` and mount `.bqemu-auth`
+read-only.
 
-On Linux, add `--add-host=host.docker.internal:host-gateway` or the equivalent
-Compose `extra_hosts` entry. Mount the generated CA, truststore, and credential
-directory read-only. Do not copy generated secrets into an image layer.
-
-<!-- section: shutdown -->
-## Stop The Environment
-
-Keep the BQEMU data volume:
+<!-- section: stop -->
+## Stop BQEMU
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml down
+docker compose down
 ```
 
-Remove BQEMU data as well:
+To delete the persisted test state as well:
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml down --volumes
+docker compose down --volumes
 ```
