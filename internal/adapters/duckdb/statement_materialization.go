@@ -7,6 +7,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
+	"github.com/leeyh0216/go-bemu/internal/ports"
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
@@ -83,6 +84,32 @@ func (destination StatementDestination) CreateDisposition() domain.CreateDisposi
 type StatementMaterializationResult struct {
 	QueryResult        domain.QueryResult
 	DestinationCreated bool
+}
+
+var _ ports.StatementMaterializer = (*Warehouse)(nil)
+
+// MaterializeAnalyzedStatement adapts the engine-neutral application request
+// to the DuckDB-private destination value before any physical side effect.
+func (w *Warehouse) MaterializeAnalyzedStatement(
+	ctx context.Context,
+	statement semantic.Statement,
+	request ports.StatementMaterializationRequest,
+) (ports.StatementMaterializationResult, error) {
+	destination, err := NewStatementDestination(StatementDestinationDescriptor{
+		Reference: request.Destination, Exists: request.DestinationExists,
+		Schema: request.DestinationSchema, WriteDisposition: request.WriteDisposition,
+		CreateDisposition: request.CreateDisposition,
+	})
+	if err != nil {
+		return ports.StatementMaterializationResult{}, err
+	}
+	result, err := w.MaterializeStatement(ctx, statement, destination)
+	if err != nil {
+		return ports.StatementMaterializationResult{}, err
+	}
+	return ports.StatementMaterializationResult{
+		QueryResult: result.QueryResult, DestinationCreated: result.DestinationCreated,
+	}, nil
 }
 
 // MaterializeStatement evaluates the already analyzed statement once into a

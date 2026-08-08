@@ -35,3 +35,37 @@ type GoogleSQLDatasetSnapshot struct {
 type GoogleSQLGateway interface {
 	Analyze(context.Context, QueryRequest) (semantic.Statement, error)
 }
+
+// StatementExecutor is the engine-neutral execution boundary. Implementations
+// receive only an analyzed statement; client SQL and foreign parser handles
+// never cross this port.
+type StatementExecutor interface {
+	ExecuteStatement(context.Context, semantic.Statement) (domain.QueryResult, error)
+}
+
+// StatementMaterializationRequest carries canonical destination policy beside
+// the analyzed statement. Destination schema is owned recursively by the
+// caller and must be copied by adapters that retain it.
+type StatementMaterializationRequest struct {
+	Destination       domain.TableReference
+	DestinationExists bool
+	DestinationSchema []domain.Field
+	WriteDisposition  domain.WriteDisposition
+	CreateDisposition domain.CreateDisposition
+}
+
+type StatementMaterializationResult struct {
+	QueryResult        domain.QueryResult
+	DestinationCreated bool
+}
+
+// StatementMaterializer owns the atomic physical destination transaction for
+// an analyzed row-producing statement.
+type StatementMaterializer interface {
+	MaterializeAnalyzedStatement(
+		context.Context,
+		semantic.Statement,
+		StatementMaterializationRequest,
+	) (StatementMaterializationResult, error)
+	DropMaterializedDestination(context.Context, domain.TableReference) error
+}
