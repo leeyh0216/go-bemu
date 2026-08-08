@@ -19,6 +19,7 @@ BQEMU_SPARK_PYTHON ?= $(BQEMU_SPARK_VENV)/bin/python
 BQEMU_PYTHON_VERSION ?= 3.13
 BQEMU_SPARK_PYTHON_VERSION ?= 3.11
 BQEMU_AUTH_CASE ?= all
+BQEMU_CONSUMER_CASE ?=
 BQEMU_AUTH_JUNIT ?=
 BQEMU_AUTH_DIAGNOSTICS ?=
 GO_TEST_FLAGS ?=
@@ -131,13 +132,13 @@ test-race:
 
 python-test:
 	BQEMU_PYTEST_TIMEOUT_SECONDS="$(BQEMU_PYTEST_TIMEOUT_SECONDS)" \
-	"$(PYTHON)" scripts/consumer_runner.py --family python
+	"$(PYTHON)" scripts/consumer_runner.py $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family python)
 
 bq-test:
 	@command -v "$(BQEMU_BQCLI_BIN)" >/dev/null 2>&1 || \
 	  (printf '%s\n' 'stage=setup operation=find-bq shape=missing-binary fix_hint=install-case-declared-Google-Cloud-SDK' >&2; exit 1)
 	BQEMU_BQCLI_TIMEOUT_SECONDS="$(BQEMU_BQCLI_TIMEOUT_SECONDS)" \
-	"$(PYTHON3)" scripts/consumer_runner.py --family bq
+	"$(PYTHON3)" scripts/consumer_runner.py $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family bq)
 
 spark-prepare:
 	mkdir -p "$(CURDIR)/.artifacts/spark/diagnostics"
@@ -153,7 +154,7 @@ spark-contract: spark-prepare
 	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
 	PYTHONPYCACHEPREFIX="$(CURDIR)/.artifacts/spark/pycache" \
-	"$(BQEMU_SPARK_PYTHON)" scripts/consumer_runner.py --family spark --all
+	"$(BQEMU_SPARK_PYTHON)" scripts/consumer_runner.py $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family spark --all)
 
 spark-contract-setup: spark-prepare
 

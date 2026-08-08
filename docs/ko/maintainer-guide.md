@@ -88,6 +88,10 @@ make ci-static
 go run ./cmd/contractctl matrix --root . --family spark --lane required
 ```
 
+CI는 행마다 실행 환경을 분리합니다. 로컬에 설치된 클라이언트를 사용할 때는
+`BQEMU_CONSUMER_CASE=case-id make bq-test`처럼 해당 사례를 명시합니다. 실행 환경 하나를
+여러 사례가 공유하게 되는 경우에는 계열만 지정한 로컬 명령이 실행을 중단합니다.
+
 컴파일러는 알 수 없는 필드와 참조, 중복 ID, 잘못된 해시, 한 시나리오 묶음 안에서
 겹치는 동작 ID, 순서 제약의 순환, 함께 사용할 수 없는 실행 환경과 어댑터 조합을
 거부합니다. 각 시나리오의 선택자에는 실행 어댑터가 수행할 테스트를 기록합니다.

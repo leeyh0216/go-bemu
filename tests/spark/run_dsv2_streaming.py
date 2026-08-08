@@ -235,6 +235,7 @@ def _run(config: dict[str, Any]) -> None:
             "bigquery", spark._jsparkSession.sessionState().conf()
         )
         runtime_scala = java.scala.util.Properties.versionNumberString()
+        runtime_java = java.java.lang.System.getProperty("java.specification.version")
         service_count, other_connector_count = _connector_service_shape(
             java, SERVICE_ENTRY
         )
@@ -250,6 +251,7 @@ def _run(config: dict[str, Any]) -> None:
             spark.version != versions["spark"]
             or runtime_scala != versions["scala"]
             or not runtime_scala.startswith(versions["scalaBinary"] + ".")
+            or runtime_java != versions["java"]
             or provider.getName() != DSV2_PROVIDER
             or service_count != 1
             or other_connector_count != 0
@@ -315,6 +317,7 @@ def _run(config: dict[str, Any]) -> None:
             "variant": DSV2_RAW_VARIANT,
             "sparkVersion": spark.version,
             "scalaVersion": runtime_scala,
+            "javaVersion": runtime_java,
             "provider": "Spark35BigQueryTableProvider",
             "serviceProviderCount": service_count,
             "listedJarCount": listed_jar_count,

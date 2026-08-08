@@ -1,4 +1,4 @@
-"""Standalone Scala Spark 3.5.8 decimal contract over the public edge."""
+"""Standalone Scala decimal contract over the public edge."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from conftest import (
     create_table,
     list_table_data,
     record_capability,
+    runtime_versions,
 )
 
 
@@ -62,6 +63,7 @@ def test_scala_decimal_read_and_direct_write_through_public_edge(
     public_edge: PublicEdge,
     test_timeout: float,
 ) -> None:
+    versions = runtime_versions()
     source_id = f"scala_decimal_source_{uuid.uuid4().hex[:8]}"
     destination_id = f"scala_decimal_write_{uuid.uuid4().hex[:8]}"
     create_table(
@@ -144,6 +146,10 @@ def test_scala_decimal_read_and_direct_write_through_public_edge(
             "BQEMU_SCALA_ACCESS_TOKEN": STATIC_ACCESS_TOKEN,
             "BQEMU_SCALA_RPC_TIMEOUT_SECONDS": str(rpc_seconds),
             "BQEMU_SCALA_HTTP_TIMEOUT_MILLIS": str(rpc_seconds * 1000),
+            "BQEMU_SCALA_EXPECTED_SPARK_VERSION": versions["spark"],
+            "BQEMU_SCALA_EXPECTED_SCALA_VERSION": versions["scala"],
+            "BQEMU_SCALA_EXPECTED_SCALA_BINARY_VERSION": versions["scalaBinary"],
+            "BQEMU_SCALA_EXPECTED_JAVA_VERSION": versions["java"],
         }
     )
     completed = subprocess.run(
@@ -195,5 +201,12 @@ def test_scala_decimal_read_and_direct_write_through_public_edge(
         pytest.fail("Scala direct decimal value mismatch shape=single-row-two-decimals")
     record_capability(
         "SBQ-WRITE-DIRECT-DECIMAL-V1",
-        "scala-2.12 spark-3.5.8 connector-0.44.2 arrow-read+proto-write",
+        " ".join(
+            (
+                f"scala-{versions['scala']}",
+                f"spark-{versions['spark']}",
+                f"connector-{versions['connector']}",
+                "arrow-read+proto-write",
+            )
+        ),
     )

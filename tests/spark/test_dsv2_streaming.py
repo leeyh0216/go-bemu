@@ -228,6 +228,7 @@ def test_raw_dsv2_exact_streaming_finalizes_without_commit(
         result.get("variant") != DSV2_RAW_VARIANT
         or result.get("sparkVersion") != versions["spark"]
         or result.get("scalaVersion") != versions["scala"]
+        or result.get("javaVersion") != versions["java"]
         or result.get("provider") != "Spark35BigQueryTableProvider"
         or result.get("serviceProviderCount") != 1
         or result.get("listedJarCount") != 1

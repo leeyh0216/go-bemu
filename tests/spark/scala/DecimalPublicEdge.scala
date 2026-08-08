@@ -8,7 +8,23 @@ var stage = "bootstrap"
 
 try {
   stage = "version"
-  require(spark.version == "3.5.8", s"unexpected Spark version ${spark.version}")
+  val expectedSparkVersion = sys.env("BQEMU_SCALA_EXPECTED_SPARK_VERSION")
+  val expectedScalaVersion = sys.env("BQEMU_SCALA_EXPECTED_SCALA_VERSION")
+  val expectedScalaBinaryVersion = sys.env("BQEMU_SCALA_EXPECTED_SCALA_BINARY_VERSION")
+  val expectedJavaVersion = sys.env("BQEMU_SCALA_EXPECTED_JAVA_VERSION")
+  require(spark.version == expectedSparkVersion, s"unexpected Spark version ${spark.version}")
+  require(
+    scala.util.Properties.versionNumberString == expectedScalaVersion,
+    s"unexpected Scala version ${scala.util.Properties.versionNumberString}"
+  )
+  require(
+    scala.util.Properties.versionNumberString.startsWith(expectedScalaBinaryVersion + "."),
+    s"unexpected Scala binary version ${scala.util.Properties.versionNumberString}"
+  )
+  require(
+    System.getProperty("java.specification.version") == expectedJavaVersion,
+    s"unexpected Java version ${System.getProperty("java.specification.version")}"
+  )
 
   val project = sys.env("BQEMU_SCALA_PROJECT")
   val source = sys.env("BQEMU_SCALA_SOURCE")

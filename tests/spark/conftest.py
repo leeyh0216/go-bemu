@@ -1303,10 +1303,12 @@ def spark_session(connector_jar: Path, public_edge: PublicEdge, test_timeout: fl
     spark.sparkContext.setLogLevel("WARN")
     versions = runtime_versions()
     runtime_scala = spark._jvm.scala.util.Properties.versionNumberString()
+    runtime_java = spark._jvm.java.lang.System.getProperty("java.specification.version")
     if (
         spark.version != versions["spark"]
         or runtime_scala != versions["scala"]
         or not runtime_scala.startswith(versions["scalaBinary"] + ".")
+        or runtime_java != versions["java"]
     ):
         spark.stop()
         pytest.fail("Spark or Scala runtime identity drift")

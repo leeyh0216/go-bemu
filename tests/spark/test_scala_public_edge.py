@@ -58,6 +58,7 @@ def test_scala_spark_reads_through_connector(
 require(spark.version == {_scala_string(versions['spark'])}, s"Spark version drift: ${{spark.version}}")
 require(Properties.versionNumberString == {_scala_string(versions['scala'])}, s"Scala version drift: ${{Properties.versionNumberString}}")
 require(Properties.versionNumberString.startsWith({_scala_string(versions['scalaBinary'] + '.')}), s"Scala binary version drift: ${{Properties.versionNumberString}}")
+require(System.getProperty("java.specification.version") == {_scala_string(versions['java'])}, s"Java version drift: ${{System.getProperty("java.specification.version")}}")
 val connectorOptions = Map(
 {option_entries}
 )

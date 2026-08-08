@@ -693,11 +693,17 @@
               "bigquery.tables.insert",
               "bigquery.tables.get",
               "bigquery.jobs.query",
+              "bigquery.tabledata.list",
               "grpc.bigquery-read.create-read-session",
-              "grpc.bigquery-read.read-rows"
+              "grpc.bigquery-read.read-rows",
+              "grpc.bigquery-write.create-write-stream",
+              "grpc.bigquery-write.append-rows",
+              "grpc.bigquery-write.finalize-write-stream",
+              "grpc.bigquery-write.batch-commit-write-streams"
             ],
             "selectors": [
-              "pytest:tests/spark/test_scala_public_edge.py"
+              "pytest:tests/spark/test_scala_public_edge.py",
+              "pytest:tests/spark/test_scala_decimal_edge.py"
             ],
             "operationExpectations": [
               {
@@ -719,6 +725,12 @@
                 "after": []
               },
               {
+                "operationId": "bigquery.tabledata.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
                 "operationId": "grpc.bigquery-read.create-read-session",
                 "min": 1,
                 "max": 0,
@@ -730,6 +742,34 @@
                 "max": 0,
                 "after": [
                   "grpc.bigquery-read.create-read-session"
+                ]
+              },
+              {
+                "operationId": "grpc.bigquery-write.create-write-stream",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "grpc.bigquery-write.append-rows",
+                "min": 1,
+                "max": 0,
+                "after": [
+                  "grpc.bigquery-write.create-write-stream"
+                ]
+              },
+              {
+                "operationId": "grpc.bigquery-write.finalize-write-stream",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "grpc.bigquery-write.batch-commit-write-streams",
+                "min": 1,
+                "max": 0,
+                "after": [
+                  "grpc.bigquery-write.finalize-write-stream"
                 ]
               }
             ]

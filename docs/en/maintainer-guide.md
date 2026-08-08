@@ -83,6 +83,11 @@ make ci-static
 go run ./cmd/contractctl matrix --root . --family spark --lane required
 ```
 
+CI isolates every matrix row. For a local client executable, select the matching
+case explicitly, for example `BQEMU_CONSUMER_CASE=case-id make bq-test`. A
+family-only local target intentionally stops when more than one case would share
+the same installed runtime.
+
 The compiler rejects unknown fields and references, duplicate IDs, invalid
 digests, overlapping operation IDs in one scenario set, ordering cycles, and
 incompatible runtime/adapter combinations. Each scenario selector names the

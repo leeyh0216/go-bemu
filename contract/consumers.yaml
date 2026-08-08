@@ -147,18 +147,33 @@ scenarios:
         max: 0
         after: [grpc.bigquery-write.finalize-write-stream]
   - id: spark-scala-public-edge
-    selectors: [pytest:tests/spark/test_scala_public_edge.py]
+    selectors:
+      - pytest:tests/spark/test_scala_public_edge.py
+      - pytest:tests/spark/test_scala_decimal_edge.py
     operationIds:
       - bigquery.tables.insert
       - bigquery.tables.get
       - bigquery.jobs.query
+      - bigquery.tabledata.list
       - grpc.bigquery-read.create-read-session
       - grpc.bigquery-read.read-rows
+      - grpc.bigquery-write.create-write-stream
+      - grpc.bigquery-write.append-rows
+      - grpc.bigquery-write.finalize-write-stream
+      - grpc.bigquery-write.batch-commit-write-streams
     operationExpectations:
       - operationId: grpc.bigquery-read.read-rows
         min: 1
         max: 0
         after: [grpc.bigquery-read.create-read-session]
+      - operationId: grpc.bigquery-write.append-rows
+        min: 1
+        max: 0
+        after: [grpc.bigquery-write.create-write-stream]
+      - operationId: grpc.bigquery-write.batch-commit-write-streams
+        min: 1
+        max: 0
+        after: [grpc.bigquery-write.finalize-write-stream]
 scenarioSets:
   - id: python-public-contract
     scenarioIds: [python-metadata, python-query, python-tabledata]
