@@ -43,7 +43,7 @@ func TestRowRestrictionVisitorFailsClosedWithoutLeakingInput(t *testing.T) {
 		"customer_secret = 'literal-secret'",
 		"tags = 'literal-secret'",
 		"LOWER(id) = 'literal-secret'",
-		"id LIKE 'literal-secret'",
+		"id IN (SELECT 1)",
 	} {
 		expression := mustParseReadRestriction(t, input)
 		sql, args, err := compileRowRestriction(expression, schema)

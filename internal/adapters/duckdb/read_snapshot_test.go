@@ -292,6 +292,45 @@ func TestProjectReadFieldsParentSelectionWinsAndPreservesSchemaOrder(t *testing.
 	}
 }
 
+func TestDuckDBReadSnapshotExecutesAdvancedRowRestriction(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "advanced_filter", Type: "TABLE",
+		Schema: []catalogdomain.Field{
+			{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+			{Name: "name", Type: "STRING"},
+			{Name: "event_date", Type: "DATE"},
+			{Name: "event_at", Type: "TIMESTAMP"},
+			{Name: "nullable_id", Type: "INT64"},
+		},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table,
+		"(1, 'alpha', DATE '2026-08-01', TIMESTAMPTZ '2026-08-01T00:00:00Z', NULL), "+
+			"(2, 'prefix-match', DATE '2026-08-02', TIMESTAMPTZ '2026-08-02T00:00:00Z', 2), "+
+			"(3, 'prefix-other', DATE '2026-08-03', TIMESTAMPTZ '2026-08-03T00:00:00Z', 3), "+
+			"(4, 'skip', DATE '2026-08-04', TIMESTAMPTZ '2026-08-04T00:00:00Z', 4)")
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+		SelectedFields: []string{"id", "name"},
+		RowRestriction: mustParseReadRestriction(t,
+			"id IN (2, 3, 9) AND name LIKE 'prefix-%' AND "+
+				"event_date >= CAST('2026-08-02' AS DATE) AND "+
+				"event_at < TIMESTAMP '2026-08-04T00:00:00Z' AND nullable_id IS NOT NULL"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := snapshotPort.(*duckDBReadSnapshot)
+	defer closeReadSnapshot(t, snapshot)
+	if snapshot.Metadata().RowCount != 2 {
+		t.Fatalf("advanced filter row_count = %d, want 2", snapshot.Metadata().RowCount)
+	}
+}
+
 func newReadTestWarehouse(t *testing.T, ctx context.Context, table catalogdomain.Table) *Warehouse {
 	t.Helper()
 	warehouse, err := New("")
@@ -779,7 +818,7 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 		{
 			name: "unsupported predicate AST",
 			request: readports.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
-				RowRestriction: mustParseReadRestriction(t, "id IN (1)")},
+				RowRestriction: mustParseReadRestriction(t, "id IN (SELECT 1)")},
 			want: readdomain.ErrorInvalidArgument,
 		},
 		{

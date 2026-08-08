@@ -249,7 +249,7 @@ metadata.
 | public `CreateReadSession` / `ReadRows` | Partial; one bounded DuckDB materialization per session |
 | public `SplitReadStream` | Unsupported; returns `UNIMPLEMENTED` |
 | Arrow/Avro schema and row payloads | Partial; encoded from bounded DuckDB rows and response bytes |
-| projection and row restriction | Partial; recursive STRUCT/REPEATED projection preserves catalog order; row restrictions support a bounded expression subset |
+| projection and row restriction | Partial; recursive STRUCT/REPEATED projection preserves catalog order; filters support boolean logic, comparisons, `IN`, `BETWEEN`, NULL checks, `LIKE`, and scalar casts, but not functions or subqueries |
 | logical streams and offset resume | Partial; stable ranges and stream-relative offsets within a live session, with SQLite-durable lifecycle metadata |
 | historical snapshot and compression | Unsupported |
 

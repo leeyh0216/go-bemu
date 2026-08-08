@@ -44,8 +44,10 @@ messages.
 The current public runtime materializes one bounded DuckDB result per live
 session, divides it into a configured number of stable logical ranges, and
 resumes from a stream-relative offset. Recursive projection preserves catalog
-field order; row restrictions remain Partial. `SplitReadStream`, historical
-`snapshot_time`, compression, and restart recovery are unsupported.
+field order. Row restrictions support boolean logic, comparisons, `IN`,
+`BETWEEN`, NULL checks, `LIKE`, and scalar casts; functions and subqueries are
+rejected before materialization. `SplitReadStream`, historical `snapshot_time`,
+compression, and restart recovery are unsupported.
 
 <!-- section: read-wire -->
 ## Arrow and Avro Read Wire Formats

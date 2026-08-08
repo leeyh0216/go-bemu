@@ -37,9 +37,10 @@ const (
 )
 
 type compiledRowRestrictionValue struct {
-	kind    rowRestrictionValueKind
-	sql     string
-	literal rowRestrictionLiteralValue
+	kind        rowRestrictionValueKind
+	sql         string
+	logicalType queryast.TypeKind
+	literal     rowRestrictionLiteralValue
 }
 
 type rowRestrictionLiteralValue struct {
@@ -114,6 +115,7 @@ func (compiler *rowRestrictionCompiler) bindIdentifier(path queryast.IdentifierP
 	}
 	fields := compiler.schema
 	canonical := make([]string, 0, len(segments))
+	var resolved catalogdomain.Field
 	for index, segment := range segments {
 		found := false
 		for _, field := range fields {
@@ -124,6 +126,7 @@ func (compiler *rowRestrictionCompiler) bindIdentifier(path queryast.IdentifierP
 				return compiledRowRestrictionValue{}, invalidRowRestriction()
 			}
 			canonical = append(canonical, field.Name)
+			resolved = field
 			if index != len(segments)-1 {
 				if !strings.EqualFold(field.Type, "RECORD") && !strings.EqualFold(field.Type, "STRUCT") {
 					return compiledRowRestrictionValue{}, invalidRowRestriction()
@@ -141,7 +144,65 @@ func (compiler *rowRestrictionCompiler) bindIdentifier(path queryast.IdentifierP
 	for index, segment := range canonical {
 		quoted[index] = quoteIdentifier(segment)
 	}
-	return compiledRowRestrictionValue{kind: rowRestrictionColumn, sql: strings.Join(quoted, ".")}, nil
+	logicalType, err := rowRestrictionFieldType(resolved)
+	if err != nil {
+		return compiledRowRestrictionValue{}, err
+	}
+	return compiledRowRestrictionValue{
+		kind: rowRestrictionColumn, sql: strings.Join(quoted, "."), logicalType: logicalType,
+	}, nil
+}
+
+func rowRestrictionFieldType(field catalogdomain.Field) (queryast.TypeKind, error) {
+	switch strings.ToUpper(field.Type) {
+	case "BOOL", "BOOLEAN":
+		return queryast.TypeBool, nil
+	case "INT64", "INTEGER":
+		return queryast.TypeInt64, nil
+	case "FLOAT64", "FLOAT":
+		return queryast.TypeFloat64, nil
+	case "NUMERIC":
+		return queryast.TypeNumeric, nil
+	case "BIGNUMERIC":
+		return queryast.TypeBigNumeric, nil
+	case "STRING":
+		return queryast.TypeString, nil
+	case "BYTES":
+		return queryast.TypeBytes, nil
+	case "DATE":
+		return queryast.TypeDate, nil
+	case "DATETIME":
+		return queryast.TypeDatetime, nil
+	case "TIME":
+		return queryast.TypeTime, nil
+	case "TIMESTAMP":
+		return queryast.TypeTimestamp, nil
+	case "JSON":
+		return queryast.TypeJSON, nil
+	case "RECORD", "STRUCT":
+		return queryast.TypeStruct, nil
+	default:
+		return "", unsupportedRowRestriction()
+	}
+}
+
+func compatibleRowRestrictionTypes(left, right queryast.TypeKind) bool {
+	if left == "" || right == "" {
+		return true
+	}
+	if left == right {
+		return left != queryast.TypeJSON && left != queryast.TypeStruct && left != queryast.TypeArray && left != queryast.TypeGeography
+	}
+	return isRowRestrictionNumeric(left) && isRowRestrictionNumeric(right)
+}
+
+func isRowRestrictionNumeric(kind queryast.TypeKind) bool {
+	switch kind {
+	case queryast.TypeInt64, queryast.TypeFloat64, queryast.TypeNumeric, queryast.TypeBigNumeric:
+		return true
+	default:
+		return false
+	}
 }
 
 func (compiler *rowRestrictionCompiler) bindLiteral(literal rowRestrictionLiteralValue) (string, error) {
@@ -206,6 +267,56 @@ func (compiler *rowRestrictionCompiler) bindLiteral(literal rowRestrictionLitera
 	}
 }
 
+func (compiler *rowRestrictionCompiler) renderOperand(value compiledRowRestrictionValue) (string, error) {
+	if value.sql != "" {
+		return value.sql, nil
+	}
+	switch value.kind {
+	case rowRestrictionLiteral:
+		return compiler.bindLiteral(value.literal)
+	case rowRestrictionNull:
+		return "NULL", nil
+	default:
+		return "", invalidRowRestriction()
+	}
+}
+
+func renderRowRestrictionCastType(typ queryast.Type) (string, error) {
+	scalar, ok := typ.(*queryast.ScalarType)
+	if !ok {
+		return "", unsupportedRowRestriction()
+	}
+	switch scalar.Kind() {
+	case queryast.TypeBool:
+		return "BOOLEAN", nil
+	case queryast.TypeInt64:
+		return "BIGINT", nil
+	case queryast.TypeFloat64:
+		return "DOUBLE", nil
+	case queryast.TypeNumeric, queryast.TypeBigNumeric:
+		field := catalogdomain.Field{
+			Type: string(scalar.Kind()), Precision: scalar.Precision(), Scale: scalar.Scale(),
+		}
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return "", unsupportedRowRestriction()
+		}
+		return fmt.Sprintf("DECIMAL(%d,%d)", parameters.Precision, parameters.Scale), nil
+	case queryast.TypeString:
+		return "VARCHAR", nil
+	case queryast.TypeDate:
+		return "DATE", nil
+	case queryast.TypeDatetime:
+		return "TIMESTAMP", nil
+	case queryast.TypeTime:
+		return "TIME", nil
+	case queryast.TypeTimestamp:
+		return "TIMESTAMPTZ", nil
+	default:
+		return "", unsupportedRowRestriction()
+	}
+}
+
 type duckDBRowRestrictionVisitor struct {
 	compiler *rowRestrictionCompiler
 	result   compiledRowRestrictionValue
@@ -229,42 +340,42 @@ func (visitor *duckDBRowRestrictionVisitor) VisitNullLiteral(*queryast.NullLiter
 }
 
 func (visitor *duckDBRowRestrictionVisitor) VisitBooleanLiteral(literal *queryast.BooleanLiteral) error {
-	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, literal: rowRestrictionLiteralValue{
+	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, logicalType: queryast.TypeBool, literal: rowRestrictionLiteralValue{
 		kind: rowRestrictionBoolean, boolean: literal.Value(),
 	}}
 	return nil
 }
 
 func (visitor *duckDBRowRestrictionVisitor) VisitIntegerLiteral(literal *queryast.IntegerLiteral) error {
-	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, literal: rowRestrictionLiteralValue{
+	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, logicalType: queryast.TypeInt64, literal: rowRestrictionLiteralValue{
 		kind: rowRestrictionInteger, canonical: literal.CanonicalValue(),
 	}}
 	return nil
 }
 
 func (visitor *duckDBRowRestrictionVisitor) VisitFloatLiteral(literal *queryast.FloatLiteral) error {
-	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, literal: rowRestrictionLiteralValue{
+	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, logicalType: queryast.TypeFloat64, literal: rowRestrictionLiteralValue{
 		kind: rowRestrictionFloat, float: literal.Value(),
 	}}
 	return nil
 }
 
 func (visitor *duckDBRowRestrictionVisitor) VisitDecimalLiteral(literal *queryast.DecimalLiteral) error {
-	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, literal: rowRestrictionLiteralValue{
+	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, logicalType: literal.Type(), literal: rowRestrictionLiteralValue{
 		kind: rowRestrictionDecimal, canonical: literal.CanonicalValue(), decimalType: literal.Type(),
 	}}
 	return nil
 }
 
 func (visitor *duckDBRowRestrictionVisitor) VisitStringLiteral(literal *queryast.StringLiteral) error {
-	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, literal: rowRestrictionLiteralValue{
+	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, logicalType: queryast.TypeString, literal: rowRestrictionLiteralValue{
 		kind: rowRestrictionString, text: literal.Value(),
 	}}
 	return nil
 }
 
 func (visitor *duckDBRowRestrictionVisitor) VisitTemporalLiteral(literal *queryast.TemporalLiteral) error {
-	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, literal: rowRestrictionLiteralValue{
+	visitor.result = compiledRowRestrictionValue{kind: rowRestrictionLiteral, logicalType: literal.Type(), literal: rowRestrictionLiteralValue{
 		kind: rowRestrictionTemporal, temporal: literal.Type(), text: literal.Value(),
 	}}
 	return nil
@@ -362,23 +473,50 @@ func (visitor *duckDBRowRestrictionVisitor) VisitBinaryExpression(expression *qu
 		}
 		return nil
 	case "IS", "IS NOT":
-		if left.kind != rowRestrictionColumn || right.kind != rowRestrictionNull {
+		if left.kind == rowRestrictionPredicate || right.kind != rowRestrictionNull {
 			return invalidRowRestriction()
 		}
-		visitor.result = compiledRowRestrictionValue{
-			kind: rowRestrictionPredicate, sql: left.sql + " " + operator + " NULL",
-		}
-		return nil
-	case "=", "!=", "<>", "<", "<=", ">", ">=":
-		if left.kind != rowRestrictionColumn || right.kind != rowRestrictionLiteral {
-			return invalidRowRestriction()
-		}
-		placeholder, err := visitor.compiler.bindLiteral(right.literal)
+		leftSQL, err := visitor.compiler.renderOperand(left)
 		if err != nil {
 			return err
 		}
 		visitor.result = compiledRowRestrictionValue{
-			kind: rowRestrictionPredicate, sql: left.sql + " " + operator + " " + placeholder,
+			kind: rowRestrictionPredicate, sql: leftSQL + " " + operator + " NULL",
+		}
+		return nil
+	case "=", "!=", "<>", "<", "<=", ">", ">=", "IS DISTINCT FROM", "IS NOT DISTINCT FROM":
+		if left.kind == rowRestrictionPredicate || right.kind == rowRestrictionPredicate ||
+			(left.kind != rowRestrictionColumn && right.kind != rowRestrictionColumn) ||
+			left.kind == rowRestrictionNull || right.kind == rowRestrictionNull {
+			return invalidRowRestriction()
+		}
+		if !compatibleRowRestrictionTypes(left.logicalType, right.logicalType) {
+			return invalidRowRestriction()
+		}
+		leftSQL, err := visitor.compiler.renderOperand(left)
+		if err != nil {
+			return err
+		}
+		rightSQL, err := visitor.compiler.renderOperand(right)
+		if err != nil {
+			return err
+		}
+		visitor.result = compiledRowRestrictionValue{
+			kind: rowRestrictionPredicate, sql: leftSQL + " " + operator + " " + rightSQL,
+		}
+		return nil
+	case "LIKE", "NOT LIKE":
+		if left.kind != rowRestrictionColumn || right.kind != rowRestrictionLiteral ||
+			right.logicalType != queryast.TypeString ||
+			!compatibleRowRestrictionTypes(left.logicalType, queryast.TypeString) {
+			return invalidRowRestriction()
+		}
+		rightSQL, err := visitor.compiler.renderOperand(right)
+		if err != nil {
+			return err
+		}
+		visitor.result = compiledRowRestrictionValue{
+			kind: rowRestrictionPredicate, sql: left.sql + " " + operator + " " + rightSQL,
 		}
 		return nil
 	default:
@@ -399,14 +537,16 @@ func (visitor *duckDBRowRestrictionVisitor) VisitBetweenExpression(expression *q
 	if err != nil {
 		return err
 	}
-	if value.kind != rowRestrictionColumn || low.kind != rowRestrictionLiteral || high.kind != rowRestrictionLiteral {
+	if value.kind != rowRestrictionColumn || low.kind != rowRestrictionLiteral || high.kind != rowRestrictionLiteral ||
+		!compatibleRowRestrictionTypes(value.logicalType, low.logicalType) ||
+		!compatibleRowRestrictionTypes(value.logicalType, high.logicalType) {
 		return invalidRowRestriction()
 	}
-	lowPlaceholder, err := visitor.compiler.bindLiteral(low.literal)
+	lowPlaceholder, err := visitor.compiler.renderOperand(low)
 	if err != nil {
 		return err
 	}
-	highPlaceholder, err := visitor.compiler.bindLiteral(high.literal)
+	highPlaceholder, err := visitor.compiler.renderOperand(high)
 	if err != nil {
 		return err
 	}
@@ -421,12 +561,74 @@ func (visitor *duckDBRowRestrictionVisitor) VisitBetweenExpression(expression *q
 	return nil
 }
 
-func (visitor *duckDBRowRestrictionVisitor) VisitCastExpression(*queryast.CastExpression) error {
-	return unsupportedRowRestriction()
+func (visitor *duckDBRowRestrictionVisitor) VisitCastExpression(expression *queryast.CastExpression) error {
+	value, err := visitor.compiler.render(expression.Value())
+	if err != nil {
+		return err
+	}
+	if value.kind != rowRestrictionColumn && value.kind != rowRestrictionLiteral && value.kind != rowRestrictionNull {
+		return invalidRowRestriction()
+	}
+	operand, err := visitor.compiler.renderOperand(value)
+	if err != nil {
+		return err
+	}
+	physicalType, err := renderRowRestrictionCastType(expression.Type())
+	if err != nil {
+		return err
+	}
+	cast := "CAST"
+	if expression.Safe() {
+		cast = "TRY_CAST"
+	}
+	value.sql = cast + "(" + operand + " AS " + physicalType + ")"
+	value.logicalType = expression.Type().Kind()
+	visitor.result = value
+	return nil
 }
 
-func (visitor *duckDBRowRestrictionVisitor) VisitInExpression(*queryast.InExpression) error {
-	return unsupportedRowRestriction()
+func (visitor *duckDBRowRestrictionVisitor) VisitInExpression(expression *queryast.InExpression) error {
+	if expression.Subquery() != nil || expression.Unnest() != nil {
+		return unsupportedRowRestriction()
+	}
+	value, err := visitor.compiler.render(expression.Value())
+	if err != nil {
+		return err
+	}
+	if value.kind != rowRestrictionColumn {
+		return invalidRowRestriction()
+	}
+	options := expression.Options()
+	if len(options) == 0 {
+		return invalidRowRestriction()
+	}
+	placeholders := make([]string, len(options))
+	for index, option := range options {
+		compiled, renderErr := visitor.compiler.render(option)
+		if renderErr != nil {
+			return renderErr
+		}
+		if compiled.kind != rowRestrictionLiteral && compiled.kind != rowRestrictionNull {
+			return invalidRowRestriction()
+		}
+		if compiled.kind == rowRestrictionLiteral &&
+			!compatibleRowRestrictionTypes(value.logicalType, compiled.logicalType) {
+			return invalidRowRestriction()
+		}
+		placeholders[index], renderErr = visitor.compiler.renderOperand(compiled)
+		if renderErr != nil {
+			return renderErr
+		}
+	}
+	operator := " IN "
+	if expression.Not() {
+		operator = " NOT IN "
+	}
+	visitor.result = compiledRowRestrictionValue{
+		kind: rowRestrictionPredicate,
+		sql:  value.sql + operator + "(" + strings.Join(placeholders, ", ") + ")",
+	}
+	return nil
 }
 
 func (visitor *duckDBRowRestrictionVisitor) VisitParenthesizedExpression(expression *queryast.ParenthesizedExpression) error {

@@ -467,6 +467,8 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 	schema := []catalogdomain.Field{
 		{Name: "id", Type: "INT64"},
 		{Name: "active", Type: "BOOL"},
+		{Name: "name", Type: "STRING"},
+		{Name: "event_date", Type: "DATE"},
 		{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "rank", Type: "FLOAT64"}}},
 	}
 	sql, args, err := compileRowRestriction(
@@ -497,9 +499,46 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 		!reflect.DeepEqual(betweenArgs, []any{int64(2), int64(4)}) {
 		t.Fatalf("BETWEEN restriction = %q args=%#v", betweenSQL, betweenArgs)
 	}
-	for _, unsupported := range []string{"id IN (1)", "CAST(id AS STRING) = '1'", "id LIKE '1'"} {
+	advancedSQL, advancedArgs, err := compileRowRestriction(
+		mustParseReadRestriction(t, "id IN (1, 2, 3) AND name LIKE 'pre%' AND event_date >= CAST('2026-08-01' AS DATE)"), schema,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`"id" IN (?, ?, ?)`, `"name" LIKE ?`, `"event_date" >= CAST(? AS DATE)`} {
+		if !strings.Contains(advancedSQL, fragment) {
+			t.Fatalf("advanced restriction lacks %q: %s", fragment, advancedSQL)
+		}
+	}
+	if want := []any{int64(1), int64(2), int64(3), "pre%", "2026-08-01"}; !reflect.DeepEqual(advancedArgs, want) {
+		t.Fatalf("advanced restriction args = %#v, want %#v", advancedArgs, want)
+	}
+	castSQL, castArgs, err := compileRowRestriction(
+		mustParseReadRestriction(t, "CAST(id AS STRING) = '1'"), schema,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if castSQL != `CAST("id" AS VARCHAR) = ?` || !reflect.DeepEqual(castArgs, []any{"1"}) {
+		t.Fatalf("cast restriction = %q args=%#v", castSQL, castArgs)
+	}
+	nullSafeSQL, nullSafeArgs, err := compileRowRestriction(
+		mustParseReadRestriction(t, "(id IS NULL AND 1 IS NULL) OR (id IS NOT NULL AND 1 IS NOT NULL AND id = 1)"), schema,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(nullSafeSQL, "?") != 3 || !reflect.DeepEqual(nullSafeArgs, []any{int64(1), int64(1), int64(1)}) {
+		t.Fatalf("null-safe restriction = %q args=%#v", nullSafeSQL, nullSafeArgs)
+	}
+	for _, unsupported := range []string{"id IN (SELECT 1)", "id IN UNNEST([1])", "LOWER(name) = 'x'"} {
 		if _, _, err := compileRowRestriction(mustParseReadRestriction(t, unsupported), schema); err == nil {
 			t.Errorf("unsupported restriction %q unexpectedly accepted", unsupported)
+		}
+	}
+	for _, invalid := range []string{"id LIKE '1%'", "name > 1", "event_date IN (1, 2)"} {
+		if _, _, err := compileRowRestriction(mustParseReadRestriction(t, invalid), schema); !errors.Is(err, catalogdomain.ErrInvalid) {
+			t.Errorf("invalid typed restriction %q error = %v, want ErrInvalid", invalid, err)
 		}
 	}
 	if err := ctx.Err(); err != nil {

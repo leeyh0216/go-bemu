@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -68,6 +69,10 @@ func TestStorageReadWireFormatsAndOffsetResume(t *testing.T) {
 					Table:      "projects/data-project/datasets/analytics/tables/events",
 					DataFormat: testCase.wire,
 					TraceId:    "reader-stage-42",
+					ReadOptions: &storagepb.ReadSession_TableReadOptions{
+						SelectedFields: []string{"profile.rank", "id"},
+						RowRestriction: "id IN (2, 3) AND name LIKE 'prefix-%'",
+					},
 				},
 			})
 			if err != nil {
@@ -75,6 +80,12 @@ func TestStorageReadWireFormatsAndOffsetResume(t *testing.T) {
 			}
 			if materializer.calls != 1 {
 				t.Fatalf("materialize calls = %d, want 1", materializer.calls)
+			}
+			if got, want := materializer.lastRequest.SelectedFields, []string{"profile.rank", "id"}; !slices.Equal(got, want) {
+				t.Fatalf("materializer selected fields = %v, want %v", got, want)
+			}
+			if materializer.lastRequest.RowRestriction == nil {
+				t.Fatal("materializer did not receive parsed row restriction")
 			}
 			if len(session.GetStreams()) != 4 || session.GetEstimatedRowCount() != 8 {
 				t.Fatalf("unexpected session streams/rows: %d/%d", len(session.GetStreams()), session.GetEstimatedRowCount())
@@ -537,9 +548,10 @@ func (g *wireIDs) NewID() string {
 }
 
 type wireMaterializer struct {
-	calls    int
-	snapshot *wireSnapshot
-	err      error
+	calls       int
+	lastRequest ports.MaterializeRequest
+	snapshot    *wireSnapshot
+	err         error
 }
 
 func newWireMaterializer(t *testing.T, format domain.Format, rows int64) *wireMaterializer {
@@ -565,8 +577,9 @@ func wireCreateSessionRequest(format storagepb.DataFormat) *storagepb.CreateRead
 	}
 }
 
-func (m *wireMaterializer) Materialize(context.Context, ports.MaterializeRequest) (ports.ReadSnapshot, error) {
+func (m *wireMaterializer) Materialize(_ context.Context, request ports.MaterializeRequest) (ports.ReadSnapshot, error) {
 	m.calls++
+	m.lastRequest = request
 	return m.snapshot, m.err
 }
 
