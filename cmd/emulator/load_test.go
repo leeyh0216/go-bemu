@@ -11,7 +11,7 @@ import (
 	loadapplication "github.com/leeyh0216/go-bemu/internal/loadjob/application"
 )
 
-func TestComposeLoadJobsIsExplicitAndUsesConfiguredAdapters(t *testing.T) {
+func TestComposeLoadJobsAlwaysUsesConfiguredGCSAdapter(t *testing.T) {
 	warehouse, err := duckdb.New("")
 	if err != nil {
 		t.Fatal(err)
@@ -23,14 +23,7 @@ func TestComposeLoadJobsIsExplicitAndUsesConfiguredAdapters(t *testing.T) {
 
 	jobs := loadapplication.NewMemoryJobRepository()
 	service, err := composeLoadJobs(cfg, jobs, catalog, warehouse, clock, system.IDGenerator{})
-	if err != nil || service != nil {
-		t.Fatalf("disabled load composition = %#v, %v", service, err)
-	}
-
-	cfg.Load.Enabled = true
-	cfg.Load.GCSEndpoint = "http://127.0.0.1:4443"
-	service, err = composeLoadJobs(cfg, jobs, catalog, warehouse, clock, system.IDGenerator{})
 	if err != nil || service == nil {
-		t.Fatalf("enabled load composition = %#v, %v", service, err)
+		t.Fatalf("load composition = %#v, %v", service, err)
 	}
 }

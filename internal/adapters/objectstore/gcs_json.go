@@ -238,15 +238,11 @@ func (g *GCSJSON) listURL(bucket string, values url.Values) string {
 }
 
 func parseGCSURI(rawURI string) (string, string, error) {
-	u, err := url.Parse(rawURI)
-	if err != nil || u.Scheme != "gs" || u.Host == "" || u.User != nil || u.Port() != "" || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
-		return "", "", fmt.Errorf("%w: object URI must be a gs:// URI", domain.ErrInvalid)
+	uri, err := domain.ParseGCSObjectURI(rawURI)
+	if err != nil {
+		return "", "", err
 	}
-	object := strings.TrimPrefix(u.Path, "/")
-	if object == "" {
-		return "", "", fmt.Errorf("%w: GCS object name is required", domain.ErrInvalid)
-	}
-	return u.Host, object, nil
+	return uri.Bucket(), uri.ObjectName(), nil
 }
 
 func objectInfo(bucket string, resource gcsObjectResource) (loadports.ObjectInfo, error) {

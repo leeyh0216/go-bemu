@@ -43,9 +43,7 @@ storage:
     enabled: false
 
 load:
-  enabled: true
   gcsEndpoint: http://127.0.0.1:1
-  allowFileSources: false
   operationTimeout: "45s"
   maxObjects: 16
   maxObjectBytes: 1048576

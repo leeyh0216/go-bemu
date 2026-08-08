@@ -119,6 +119,39 @@ auth:
 	}
 }
 
+func TestRemovedLoadSwitchesAreNotPartOfRuntimeContract(t *testing.T) {
+	for _, path := range []string{"load.enabled", "load.allowFileSources"} {
+		if _, err := load([]string{"--set", path + "=true"}, lookup(nil)); err == nil ||
+			!strings.Contains(err.Error(), `unknown configuration path "`+path+`"`) {
+			t.Fatalf("removed load setting %s error = %v", path, err)
+		}
+	}
+
+	path := writeConfig(t, `
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+load:
+  enabled: true
+  allowFileSources: true
+`)
+	if _, err := load([]string{"--config", path}, lookup(nil)); err == nil ||
+		!strings.Contains(err.Error(), "decode-yaml") {
+		t.Fatalf("removed YAML load switches error = %v", err)
+	}
+
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_LOAD_ENABLED":            "true",
+		"BQEMU_LOAD_ALLOW_FILE_SOURCES": "true",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := string(result.EffectiveYAML)
+	if strings.Contains(effective, "allowFileSources:") || strings.Contains(effective, "load:\n  enabled:") {
+		t.Fatalf("effective configuration retained removed load switches: %s", effective)
+	}
+}
+
 func TestValidateProtectsRemoteAdminAndAppendBounds(t *testing.T) {
 	for name, override := range map[string][]string{
 		"remote-admin": {"--set", "admin.enabled=true", "--set", "admin.address=0.0.0.0:9051"},
@@ -167,7 +200,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"storage.write.maxStagedBytes=8388608", "storage.write.maxStagedBytesPerStream=4194304",
 		"storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
 		"storage.write.protocolModelVersion=test-storage-v1",
-		"load.enabled=true", "load.gcsEndpoint=http://fake-gcs:4443", "load.allowFileSources=true",
+		"load.gcsEndpoint=http://fake-gcs:4443",
 		"load.operationTimeout=30s", "load.maxObjects=20", "load.maxObjectBytes=1048576",
 		"load.maxTotalBytes=2097152", "load.maxMetadataBytes=65536", "load.maxListedObjects=30",
 		"logging.level=debug", "logging.format=text", "logging.unsafePayloads=true",
@@ -367,12 +400,10 @@ func TestStorageWriteByteLimitRelationshipsAreValidated(t *testing.T) {
 	}
 }
 
-func TestLoadConfigurationRequiresExplicitEndpointAndPositiveBounds(t *testing.T) {
+func TestLoadConfigurationRequiresGCSCompatibleEndpointAndPositiveBounds(t *testing.T) {
 	for name, overrides := range map[string][]string{
-		"missing-endpoint": {"--set", "load.enabled=true"},
-		"relative-endpoint": {
-			"--set", "load.enabled=true", "--set", "load.gcsEndpoint=fake-gcs:4443",
-		},
+		"missing-endpoint":  {"--set", "load.gcsEndpoint="},
+		"relative-endpoint": {"--set", "load.gcsEndpoint=fake-gcs:4443"},
 		"object-over-total": {
 			"--set", "load.maxObjectBytes=2048", "--set", "load.maxTotalBytes=1024",
 		},

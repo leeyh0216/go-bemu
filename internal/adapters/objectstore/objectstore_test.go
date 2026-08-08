@@ -6,46 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 )
-
-func TestFileSystemListGetAndOpen(t *testing.T) {
-	directory := t.TempDir()
-	for name, contents := range map[string]string{"a.parquet": "a", "b.parquet": "bb", "ignored.txt": "x"} {
-		if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	store := FileSystem{}
-	objects, err := store.List(context.Background(), canonicalFileURI(filepath.Join(directory, "*.parquet")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(objects) != 2 || objects[0].Size != 1 || objects[1].Size != 2 {
-		t.Fatalf("unexpected objects: %+v", objects)
-	}
-	object, err := store.Get(context.Background(), canonicalFileURI(filepath.Join(directory, "b.parquet")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err := store.Open(context.Background(), object)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
-	payload, err := io.ReadAll(reader)
-	if err != nil || string(payload) != "bb" {
-		t.Fatalf("payload=%q err=%v", payload, err)
-	}
-	if _, err := store.Get(context.Background(), filepath.Join(directory, "b.parquet")); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("bare path error = %v", err)
-	}
-}
 
 func TestGCSJSONSupportsFakeServerListGetAndMedia(t *testing.T) {
 	var requests []string
@@ -116,17 +81,21 @@ func TestGCSJSONDoesNotExposeHTTPErrorBody(t *testing.T) {
 	}
 }
 
-func TestGCSOnlyRouterRejectsFileSourcesBeforeAccess(t *testing.T) {
-	gcs, err := NewGCSJSON(GCSJSONConfig{Endpoint: "http://127.0.0.1:1"})
+func TestGCSJSONRejectsNonGCSURIWithoutHTTPRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	t.Cleanup(server.Close)
+	gcs, err := NewGCSJSON(GCSJSONConfig{Endpoint: server.URL, Client: server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	router, err := NewGCSOnlyRouter(gcs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = router.Get(context.Background(), "file:///etc/passwd")
-	if !errors.Is(err, domain.ErrUnsupported) {
+	_, err = gcs.Get(context.Background(), "file:///etc/passwd")
+	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("file source error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("invalid source made %d HTTP requests", requests)
 	}
 }

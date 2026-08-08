@@ -220,15 +220,9 @@ func rawPresent(value json.RawMessage) bool {
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
-// The pinned Spark connector selects FormatOptions.parquet(), and the pinned
-// Java client consequently serializes parquetOptions even when every option is
-// at its default. The bq CLI likewise serializes several neutral load fields.
-// Keep those shapes explicit here: accepting arbitrary fields would hide a
-// future client contract change and could silently change loaded data.
-//   - https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/SparkBigQueryConfig.java#L1312-L1318
-//   - https://github.com/googleapis/java-bigquery/blob/v2.60.0/google-cloud-bigquery/src/main/java/com/google/cloud/bigquery/LoadJobConfiguration.java#L922-L925
+// Keep recognized neutral resource shapes explicit. Accepting arbitrary
+// fields could silently change loaded data when the public resource evolves.
 //   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad
-//   - https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_load
 func unsupportedLoadOptions(payload []byte, wire loadConfigurationResource) ([]string, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil {

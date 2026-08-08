@@ -156,8 +156,8 @@ func ValidateConfiguration(configuration LoadConfiguration) error {
 		return fmt.Errorf("%w: sourceUris must contain at least one URI", ErrInvalid)
 	}
 	for _, rawURI := range configuration.SourceURIs {
-		if strings.TrimSpace(rawURI) == "" {
-			return fmt.Errorf("%w: sourceUris cannot contain an empty URI", ErrInvalid)
+		if err := validateSourceURI(rawURI); err != nil {
+			return err
 		}
 	}
 	if configuration.Destination.ProjectID == "" || configuration.Destination.DatasetID == "" || configuration.Destination.TableID == "" {
@@ -185,6 +185,11 @@ func ValidateConfiguration(configuration LoadConfiguration) error {
 		return err
 	}
 	return nil
+}
+
+func validateSourceURI(rawURI string) error {
+	_, err := ParseGCSObjectURI(rawURI)
+	return err
 }
 
 func ValidateSchema(fields []Field) error {
