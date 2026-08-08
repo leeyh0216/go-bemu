@@ -26,6 +26,7 @@ func run(arguments []string) error {
 	family := flags.String("family", "", "consumer family filter (matrix only)")
 	lane := flags.String("lane", "", "consumer lane filter (matrix only)")
 	outputKey := flags.String("output-key", "", "prefix matrix JSON with a GitHub output key")
+	presenceKey := flags.String("presence-key", "", "emit whether the selected matrix has rows")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return err
 	}
@@ -42,19 +43,27 @@ func run(arguments []string) error {
 	case "check":
 		return contract.CheckOperationArtifacts(absolute)
 	case "matrix":
-		matrix, err := contract.ConsumerMatrix(absolute, *family, *lane)
+		matrix, count, err := contract.ConsumerMatrixWithCount(absolute, *family, *lane)
 		if err != nil {
 			return err
 		}
-		if *outputKey != "" {
-			for _, character := range *outputKey {
+		for _, key := range []string{*outputKey, *presenceKey} {
+			for _, character := range key {
 				if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '_' {
-					return fmt.Errorf("output key %q must contain only letters, digits, or underscore", *outputKey)
+					return fmt.Errorf("output key %q must contain only letters, digits, or underscore", key)
 				}
 			}
-			matrix = append([]byte(*outputKey+"="), matrix...)
 		}
-		_, err = os.Stdout.Write(append(matrix, '\n'))
+		if *outputKey != "" {
+			if _, err := fmt.Fprintf(os.Stdout, "%s=%s\n", *outputKey, matrix); err != nil {
+				return err
+			}
+		} else if _, err := os.Stdout.Write(append(matrix, '\n')); err != nil {
+			return err
+		}
+		if *presenceKey != "" {
+			_, err = fmt.Fprintf(os.Stdout, "%s=%t\n", *presenceKey, count > 0)
+		}
 		return err
 	default:
 		panic("unreachable")

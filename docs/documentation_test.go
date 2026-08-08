@@ -19,10 +19,10 @@ var (
 	sparkVersionClaim  = regexp.MustCompile(`(?is)(connector.{0,160}0\.44\.2|0\.44\.2.{0,160}connector)`)
 	flinkVersionClaim  = regexp.MustCompile(`(?is)(flink.{0,160}1\.2\.0|1\.2\.0.{0,160}flink)`)
 	goccyVersionClaim  = regexp.MustCompile(`(?is)(goccy.{0,160}v?0\.8\.1|v?0\.8\.1.{0,160}goccy)`)
-	pinnedConnectorURL = regexp.MustCompile(`github\.com/GoogleCloudDataproc/spark-bigquery-connector/(blob|tree)/0\.44\.2(/|\b)`)
+	pinnedConnectorURL = regexp.MustCompile(`github\.com/GoogleCloudDataproc/spark-bigquery-connector/(blob|tree)/(0\.44\.2|[0-9a-f]{40})(/|\b)`)
 	pinnedFlinkURL     = regexp.MustCompile(`github\.com/GoogleCloudDataproc/flink-bigquery-connector/(blob|tree)/1\.2\.0(/|\b)`)
 	pinnedGoccyURL     = regexp.MustCompile(`github\.com/goccy/bigquery-emulator/(blob|tree)/v0\.8\.1(/|\b)`)
-	primarySourceURL   = regexp.MustCompile(`https://(cloud\.google\.com/|github\.com/(GoogleCloudDataproc/(spark-bigquery-connector/(blob|tree)/0\.44\.2|flink-bigquery-connector/(blob|tree)/1\.2\.0)|goccy/bigquery-emulator/(blob|tree)/v0\.8\.1)|duckdb\.org/|arrow\.apache\.org/|avro\.apache\.org/)`)
+	primarySourceURL   = regexp.MustCompile(`https://(cloud\.google\.com/|github\.com/(GoogleCloudDataproc/(spark-bigquery-connector/(blob|tree)/(0\.44\.2|[0-9a-f]{40})|flink-bigquery-connector/(blob|tree)/1\.2\.0)|goccy/bigquery-emulator/(blob|tree)/v0\.8\.1)|duckdb\.org/|arrow\.apache\.org/|avro\.apache\.org/)`)
 )
 
 func TestBilingualDocumentationParityAndProvenance(t *testing.T) {
@@ -214,7 +214,7 @@ func assertLanguageDocument(t *testing.T, path, contents, language string) {
 		t.Fatalf("%s contains a mutable upstream source link", path)
 	}
 	if sparkVersionClaim.MatchString(contents) && !pinnedConnectorURL.MatchString(contents) {
-		t.Fatalf("%s claims connector 0.44.2 behavior without an exact tagged source link", path)
+		t.Fatalf("%s claims connector 0.44.2 behavior without an immutable tagged or commit source link", path)
 	}
 	if flinkVersionClaim.MatchString(contents) && !pinnedFlinkURL.MatchString(contents) {
 		t.Fatalf("%s claims Flink connector 1.2.0 behavior without an exact tagged source link", path)

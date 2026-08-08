@@ -15,8 +15,17 @@ versions:
   python: "3.11"
 artifacts:
   - id: spark-bigquery-connector-0.44.2-jar
+    role: execution
+    usage: spark-connector-dsv1-jar
     uri: https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar
     sha256: 516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e
+  - id: spark-bigquery-connector-0.44.2-dsv2-jar
+    role: execution
+    usage: spark-connector-dsv2-jar
+    uri: https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/spark-3.5-bigquery-0.44.2.jar
+    sha256: 2e6bbb41bcaf56ae17a5488dd4453698bd35f13e9849f4daed744ca7b57b053f
   - id: pyspark-3.5.8-sdist
+    role: execution
+    usage: spark-runtime
     uri: https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz
     sha256: 54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c

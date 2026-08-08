@@ -2,9 +2,21 @@ name: spark-connector-contract
 
 on:
   workflow_call:
+    inputs:
+      lanes:
+        description: Comma-separated normalized consumer lanes
+        required: false
+        type: string
+        default: required
   schedule:
     - cron: "17 18 * * 0"
   workflow_dispatch:
+    inputs:
+      lanes:
+        description: Comma-separated normalized consumer lanes
+        required: false
+        type: string
+        default: preview,nightly
 
 permissions:
   contents: read
@@ -21,11 +33,12 @@ env:
 
 jobs:
   consumer-matrix:
-    name: Normalize required Spark cases
+    name: Normalize selected Spark cases
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       spark: ${{ steps.matrix.outputs.spark }}
+      has_spark: ${{ steps.matrix.outputs.has_spark }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -34,7 +47,9 @@ jobs:
           cache: true
       - name: Emit normalized Spark matrix
         id: matrix
-        run: go run ./cmd/contractctl matrix --root . --family spark --lane required --output-key spark >> "$GITHUB_OUTPUT"
+        env:
+          BQEMU_CONSUMER_LANES: ${{ inputs.lanes || 'preview,nightly' }}
+        run: go run ./cmd/contractctl matrix --root . --family spark --lane "$BQEMU_CONSUMER_LANES" --output-key spark --presence-key has_spark >> "$GITHUB_OUTPUT"
 
   protocol-matrix:
     name: Connector protocol matrix guard
@@ -51,6 +66,7 @@ jobs:
 
   spark-public-edge:
     name: Spark / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+    if: needs.consumer-matrix.outputs.has_spark == 'true'
     needs: [consumer-matrix, protocol-matrix]
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -87,7 +103,13 @@ jobs:
         with:
           name: consumer-${{ matrix.id }}-${{ github.run_id }}
           path: |
-            .artifacts/consumers/${{ matrix.id }}
-            .artifacts/spark/diagnostics
+            .artifacts/consumers/${{ matrix.id }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/runner-error.txt
+            .artifacts/spark/diagnostics/emulator-tail.log
+            .artifacts/spark/diagnostics/jvm-tail.log
+            .artifacts/spark/diagnostics/trace.jsonl
           if-no-files-found: ignore
           retention-days: 7

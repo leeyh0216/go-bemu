@@ -88,11 +88,22 @@ make ci-static
 go run ./cmd/contractctl matrix --root . --family spark --lane required
 ```
 
-컴파일러는 알 수 없는 필드와 참조, 중복 ID, 잘못된 해시, 함께 사용할 수 없는 실행
-환경과 어댑터 조합을 거부합니다. CI와 실행 어댑터는
-`contract/consumers.normalized.json`만 읽습니다. `required` 사례가 실패하면 이미지가
-배포되지 않습니다. `preview`와 `nightly` 사례는 별도로 선택하며 릴리스 조건에
-포함하지 않습니다. Storage 동작은 [공식 RPC
+컴파일러는 알 수 없는 필드와 참조, 중복 ID, 잘못된 해시, 한 시나리오 묶음 안에서
+겹치는 동작 ID, 순서 제약의 순환, 함께 사용할 수 없는 실행 환경과 어댑터 조합을
+거부합니다. 각 시나리오의 선택자에는 실행 어댑터가 수행할 테스트를 기록합니다.
+시나리오와 실행 준비 동작에 선언하지 않은 호출이 발생하면 검증에 실패합니다.
+
+CI와 실행 어댑터는 `contract/consumers.normalized.json`만 읽습니다. 호출 횟수는 사례
+전체를 기준으로 합산합니다. 호출 순서는 개별 서버 실행 안에서만 비교합니다. 증거의
+실행 식별자는 로그 상대 경로의 해시이므로 로컬 경로를 노출하지 않습니다. `execution`
+산출물은 해시 또는 해시 잠금 파일을 확인한 뒤 실행에 사용합니다. `tool-provenance`
+산출물은 릴리스 출처만 나타내며 CI가 설치한 실행 파일과 같다고 간주하지 않습니다.
+산출물의 `usage`는 `python-wheel`, `spark-connector-dsv1-jar`처럼 어댑터가 엄격하게 검사하는
+용도입니다. 컴파일러는 어댑터가 요구한 각 용도의 산출물이 정확히 하나인지 확인합니다.
+
+`required` 사례가 실패하면 이미지가 배포되지 않습니다. `preview`와 `nightly` 사례는
+수동 또는 주기 실행 워크플로에서 선택하며 릴리스 조건에 포함하지 않습니다. 두 실행
+구분에 사례가 하나도 없어도 정상입니다. Storage 동작은 [공식 RPC
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)와 비교합니다.
 
 <!-- section: diagnose-drift -->

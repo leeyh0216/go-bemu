@@ -145,8 +145,6 @@ spark-prepare:
 	  uv venv --python 3.11 "$(BQEMU_SPARK_VENV)"; \
 	fi
 	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
-	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
-	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py
 
 spark-contract: spark-prepare
 	BQEMU_SPARK_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \

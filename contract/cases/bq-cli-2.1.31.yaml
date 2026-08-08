@@ -11,6 +11,8 @@ versions:
   cloudSdk: "566.0.0"
   bq: "2.1.31"
 artifacts:
-  - id: google-cloud-cli-566.0.0-image
+  - id: google-cloud-cli-566.0.0-image-provenance
+    role: tool-provenance
+    usage: cloud-sdk-image
     uri: oci://gcr.io/google.com/cloudsdktool/google-cloud-cli@sha256:80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5
     sha256: 80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5

@@ -6,11 +6,11 @@
 # 소비자 호환성
 
 <!-- section: generated-cases -->
-이 문서는 `contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. Spark 사례의 출처는 [Spark BigQuery 커넥터 0.44.2](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)입니다.
+이 문서는 `contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. 각 소비자의 정확한 버전과 변경되지 않는 출처는 아래 표에 표시합니다. `execution` 산출물은 해시를 확인한 뒤 실행에 사용합니다. `tool-provenance` 산출물은 별도로 설치하고 버전을 확인한 도구의 릴리스 출처만 나타냅니다.
 
-| 사례 | 실행 계열 | 상태 | 런타임 | 시나리오 |
-|---|---|---|---|---|
-| `bq-cli-2.1.31` | bq | required | bq 2.1.31, cloudSdk 566.0.0 | `bq-metadata`<br>`bq-query` |
-| `google-cloud-bigquery-python-3.43.0` | python | required | client 3.43.0, python 3.13 | `python-metadata`<br>`python-query`<br>`python-tabledata` |
-| `spark-pyspark-3.5.8-connector-0.44.2` | spark | required | connector 0.44.2, java 17, python 3.11, scalaBinary 2.12, spark 3.5.8 | `spark-pyspark-public-edge` |
-| `spark-scala-3.5.8-connector-0.44.2` | spark | required | connector 0.44.2, java 17, scala 2.12.18, scalaBinary 2.12, spark 3.5.8 | `spark-scala-public-edge` |
+| 사례 | 실행 계열 | 상태 | 런타임 | 시나리오 | 출처 | 산출물 역할/용도 |
+|---|---|---|---|---|---|---|
+| `bq-cli-2.1.31` | bq | required | bq 2.1.31, cloudSdk 566.0.0 | `bq-metadata`<br>`bq-query` | [google-cloud-sdk 566.0.0](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28) | `google-cloud-cli-566.0.0-image-provenance` (`tool-provenance` / `cloud-sdk-image`) |
+| `google-cloud-bigquery-python-3.43.0` | python | required | client 3.43.0, python 3.13 | `python-metadata`<br>`python-query`<br>`python-tabledata` | [google-cloud-bigquery-python 3.43.0](https://github.com/googleapis/google-cloud-python/tree/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery) | `google-cloud-bigquery-python-3.43.0-wheel` (`execution` / `python-wheel`) |
+| `spark-pyspark-3.5.8-connector-0.44.2` | spark | required | connector 0.44.2, java 17, python 3.11, scalaBinary 2.12, spark 3.5.8 | `spark-pyspark-public-edge` | [spark-bigquery-connector 0.44.2](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)<br>[google-cloud-bigquery-java 2.60.0](https://github.com/googleapis/java-bigquery/tree/v2.60.0) | `spark-bigquery-connector-0.44.2-jar` (`execution` / `spark-connector-dsv1-jar`)<br>`spark-bigquery-connector-0.44.2-dsv2-jar` (`execution` / `spark-connector-dsv2-jar`)<br>`pyspark-3.5.8-sdist` (`execution` / `spark-runtime`) |
+| `spark-scala-3.5.8-connector-0.44.2` | spark | required | connector 0.44.2, java 17, scala 2.12.18, scalaBinary 2.12, spark 3.5.8 | `spark-scala-public-edge` | [spark-bigquery-connector 0.44.2](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)<br>[google-cloud-bigquery-java 2.60.0](https://github.com/googleapis/java-bigquery/tree/v2.60.0) | `spark-bigquery-connector-0.44.2-jar` (`execution` / `spark-connector-dsv1-jar`)<br>`pyspark-3.5.8-sdist` (`execution` / `spark-runtime`) |

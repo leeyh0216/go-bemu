@@ -208,9 +208,17 @@ func TestConsumerWorkflowsUseNormalizedDynamicMatrices(t *testing.T) {
 			"fromJSON(needs.consumer-matrix.outputs.bq)",
 		},
 		"spark-contract.yaml": {
-			"contractctl matrix --root . --family spark --lane required --output-key spark",
+			"contractctl matrix --root . --family spark --lane \"$BQEMU_CONSUMER_LANES\" --output-key spark",
+			"default: required",
+			"default: preview,nightly",
 			"fromJSON(needs.consumer-matrix.outputs.spark)",
 			"scripts/consumer_runner.py --case",
+		},
+		"consumer-nonrequired.yaml": {
+			"--family python --lane preview,nightly --output-key python",
+			"--family bq --lane preview,nightly --output-key bq",
+			"fromJSON(needs.consumer-matrix.outputs.python)",
+			"fromJSON(needs.consumer-matrix.outputs.bq)",
 		},
 	}
 	for filename, required := range tests {
@@ -227,6 +235,47 @@ func TestConsumerWorkflowsUseNormalizedDynamicMatrices(t *testing.T) {
 		for _, version := range []string{"3.5.8", "0.44.2", "3.43.0", "2.1.31", "2.60.0", "566.0.0"} {
 			if strings.Contains(workflow, version) {
 				t.Errorf("%s duplicates consumer version %s outside normalized JSON", filename, version)
+			}
+		}
+	}
+}
+
+func TestNonRequiredConsumerFailuresCannotEnterReleaseGate(t *testing.T) {
+	root := repositoryRoot(t)
+	ciContents, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := string(ciContents)
+	if strings.Contains(ci, "preview,nightly") || strings.Contains(ci, "consumer-nonrequired") {
+		t.Fatal("release-blocking CI must select only required consumer cases")
+	}
+
+	nonRequiredPath := filepath.Join(root, ".github", "workflows", "consumer-nonrequired.yaml")
+	nonRequired := loadWorkflow(t, nonRequiredPath)
+	triggers := mappingKeys(t, requiredMapping(t, nonRequired.Content[0], "on"))
+	if strings.Join(triggers, ",") != "schedule,workflow_dispatch" {
+		t.Fatalf("non-required consumer triggers = %v", triggers)
+	}
+	if nodeContainsScalar(nonRequired.Content[0], "publish-ghcr") || nodeContainsScalar(nonRequired.Content[0], "validation-complete") {
+		t.Fatal("non-required consumer workflow must not publish or join the required validation gate")
+	}
+}
+
+func TestConsumerUploadsExcludeRawProcessTrees(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, filename := range []string{"ci.yaml", "spark-contract.yaml", "consumer-nonrequired.yaml"} {
+		contents, err := os.ReadFile(filepath.Join(root, ".github", "workflows", filename))
+		if err != nil {
+			t.Fatal(err)
+		}
+		workflow := string(contents)
+		if strings.Contains(workflow, ".artifacts/consumers/${{ matrix.id }}\n") || strings.Contains(workflow, "server.log") {
+			t.Errorf("%s uploads a raw consumer process tree or server log", filename)
+		}
+		for _, required := range []string{"evidence.json", "diff.json", "junit.xml", "runner.log", "runner-error.txt"} {
+			if !strings.Contains(workflow, ".artifacts/consumers/${{ matrix.id }}/"+required) {
+				t.Errorf("%s does not preserve %s", filename, required)
 			}
 		}
 	}

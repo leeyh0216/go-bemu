@@ -1,0 +1,113 @@
+name: consumer-preview-nightly
+
+on:
+  schedule:
+    - cron: "41 18 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: consumer-nonrequired-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consumer-matrix:
+    name: Normalize preview and nightly consumers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      python: ${{ steps.matrix.outputs.python }}
+      has_python: ${{ steps.matrix.outputs.has_python }}
+      bq: ${{ steps.matrix.outputs.bq }}
+      has_bq: ${{ steps.matrix.outputs.has_bq }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Emit normalized non-required matrices
+        run: |
+          go run ./cmd/contractctl matrix --root . --family python --lane preview,nightly --output-key python --presence-key has_python >> "$GITHUB_OUTPUT"
+          go run ./cmd/contractctl matrix --root . --family bq --lane preview,nightly --output-key bq --presence-key has_bq >> "$GITHUB_OUTPUT"
+        id: matrix
+
+  python-client:
+    name: Python non-required / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+    if: needs.consumer-matrix.outputs.has_python == 'true'
+    needs: consumer-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.consumer-matrix.outputs.python) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.runtimeProfile.versions.python }}
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Install hash-locked dependencies
+        run: uv pip sync --system --require-hashes tests/python/requirements.lock
+      - name: Run typed consumer contract
+        env:
+          BQEMU_CONSUMER_CASE: ${{ matrix.id }}
+        run: python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE"
+      - name: Upload payload-safe contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: consumer-${{ matrix.id }}-${{ github.run_id }}
+          path: |
+            .artifacts/consumers/${{ matrix.id }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/runner-error.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+  bq-cli:
+    name: bq non-required / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+    if: needs.consumer-matrix.outputs.has_bq == 'true'
+    needs: consumer-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.consumer-matrix.outputs.bq) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          version: ${{ matrix.runtimeProfile.versions.cloudSdk }}
+          install_components: bq
+      - name: Run typed consumer contract
+        env:
+          BQEMU_CONSUMER_CASE: ${{ matrix.id }}
+        run: python3 scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE"
+      - name: Upload payload-safe contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: consumer-${{ matrix.id }}-${{ github.run_id }}
+          path: |
+            .artifacts/consumers/${{ matrix.id }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/runner-error.txt
+          if-no-files-found: ignore
+          retention-days: 7

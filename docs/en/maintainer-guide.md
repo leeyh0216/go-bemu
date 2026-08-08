@@ -84,11 +84,25 @@ go run ./cmd/contractctl matrix --root . --family spark --lane required
 ```
 
 The compiler rejects unknown fields and references, duplicate IDs, invalid
-digests, and incompatible runtime/adapter combinations. CI and typed runners
-read only `contract/consumers.normalized.json`. Required cases block image
-publication; preview and nightly cases are selected separately and are not part
-of the release requirement. Storage operations remain grounded in the
-[official RPC reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
+digests, overlapping operation IDs in one scenario set, ordering cycles, and
+incompatible runtime/adapter combinations. Each scenario selector names the
+tests executed by its typed adapter. Calls outside the scenario and declared
+runner setup operations fail the case.
+
+CI and typed runners read only `contract/consumers.normalized.json`. Wire-call
+cardinality is aggregated across the case. Partial ordering is checked within
+each individual server run, identified in evidence by a digest of its relative
+log path. An `execution` artifact is used by the runtime after digest or hash-lock
+verification. A `tool-provenance` artifact identifies a release but is not
+claimed as the executable installed by CI. Artifact `usage` is a strict adapter
+contract such as `python-wheel` or `spark-connector-dsv1-jar`; the compiler requires
+exactly one artifact for every usage declared by the adapter.
+
+Required cases block image publication; preview and nightly cases are selected
+by scheduled or manually dispatched workflows and are not part of the release
+requirement. An empty preview or nightly matrix is valid. Storage operations
+remain grounded in the [official RPC
+reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
 
 <!-- section: diagnose-drift -->
 ## Diagnose Drift

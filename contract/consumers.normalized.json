@@ -19,11 +19,19 @@
         "id": "bq-cli-v1",
         "family": "bq",
         "runtimeKind": "bq-cli",
+        "selectorPrefix": "bq",
         "requiredVersions": [
           "cloudSdk",
           "bq"
         ],
-        "bootstrap": null
+        "requiredArtifactUsages": [
+          "cloud-sdk-image"
+        ],
+        "bootstrap": {},
+        "setupOperationIds": [
+          "bqemu.health.ready",
+          "bqemu.projects.create"
+        ]
       },
       "compatibilityProfile": {
         "id": "bq-cli-public-v1",
@@ -54,7 +62,79 @@
               "bigquery.tables.get",
               "bigquery.tables.patch",
               "bigquery.tables.list",
-              "bigquery.tables.delete"
+              "bigquery.tables.delete",
+              "bqemu.discovery.get"
+            ],
+            "selectors": [
+              "bq:tests/bqcli/run_contract.py:main"
+            ],
+            "operationExpectations": [
+              {
+                "operationId": "bigquery.projects.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.datasets.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.datasets.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.datasets.patch",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.datasets.delete",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.patch",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.delete",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bqemu.discovery.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              }
             ]
           },
           {
@@ -64,13 +144,44 @@
               "bigquery.jobs.get",
               "bigquery.jobs.getQueryResults",
               "bigquery.jobs.list"
+            ],
+            "selectors": [
+              "bq:tests/bqcli/run_contract.py:main"
+            ],
+            "operationExpectations": [
+              {
+                "operationId": "bigquery.jobs.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.getQueryResults",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              }
             ]
           }
         ]
       },
       "artifacts": [
         {
-          "id": "google-cloud-cli-566.0.0-image",
+          "id": "google-cloud-cli-566.0.0-image-provenance",
+          "role": "tool-provenance",
+          "usage": "cloud-sdk-image",
           "uri": "oci://gcr.io/google.com/cloudsdktool/google-cloud-cli@sha256:80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5",
           "sha256": "80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5"
         }
@@ -94,11 +205,20 @@
         "id": "python-pytest-v1",
         "family": "python",
         "runtimeKind": "python-pytest",
+        "selectorPrefix": "pytest",
         "requiredVersions": [
           "python",
           "client"
         ],
-        "bootstrap": null
+        "requiredArtifactUsages": [
+          "python-wheel"
+        ],
+        "bootstrap": {},
+        "setupOperationIds": [
+          "bqemu.health.ready",
+          "bqemu.projects.create",
+          "bqemu.projects.delete"
+        ]
       },
       "compatibilityProfile": {
         "id": "google-cloud-bigquery-python-public-v1",
@@ -131,6 +251,71 @@
               "bigquery.tables.get",
               "bigquery.tables.patch",
               "bigquery.tables.delete"
+            ],
+            "selectors": [
+              "pytest:tests/python/test_admin_contract.py"
+            ],
+            "operationExpectations": [
+              {
+                "operationId": "bigquery.datasets.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.datasets.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.datasets.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.datasets.patch",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.datasets.delete",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.patch",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.delete",
+                "min": 1,
+                "max": 0,
+                "after": []
+              }
             ]
           },
           {
@@ -141,12 +326,60 @@
               "bigquery.jobs.get",
               "bigquery.jobs.query",
               "bigquery.jobs.getQueryResults"
+            ],
+            "selectors": [
+              "pytest:tests/python/test_query_contract.py",
+              "pytest:tests/python/test_query_lifecycle_contract.py",
+              "pytest:tests/python/test_explicit_gaps.py"
+            ],
+            "operationExpectations": [
+              {
+                "operationId": "bigquery.jobs.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.query",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.getQueryResults",
+                "min": 1,
+                "max": 0,
+                "after": []
+              }
             ]
           },
           {
             "id": "python-tabledata",
             "operationIds": [
               "bigquery.tabledata.list"
+            ],
+            "selectors": [
+              "pytest:tests/python/test_tabledata_contract.py"
+            ],
+            "operationExpectations": [
+              {
+                "operationId": "bigquery.tabledata.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              }
             ]
           }
         ]
@@ -154,6 +387,8 @@
       "artifacts": [
         {
           "id": "google-cloud-bigquery-python-3.43.0-wheel",
+          "role": "execution",
+          "usage": "python-wheel",
           "uri": "https://files.pythonhosted.org/packages/67/c0/f491506bdff4d73750f74cf18fea7d6ca409ada2f81c4c4d10a32edf5688/google_cloud_bigquery-3.43.0-py3-none-any.whl",
           "sha256": "a39217f14f215472ce9da816f20ebaf77fdb1db7ccdc8360772d8bf6bafb55c2"
         }
@@ -180,6 +415,7 @@
         "id": "spark-pyspark-pytest-v1",
         "family": "spark",
         "runtimeKind": "spark-pyspark",
+        "selectorPrefix": "pytest",
         "requiredVersions": [
           "spark",
           "connector",
@@ -187,9 +423,19 @@
           "java",
           "python"
         ],
+        "requiredArtifactUsages": [
+          "spark-connector-dsv1-jar",
+          "spark-connector-dsv2-jar",
+          "spark-runtime"
+        ],
         "bootstrap": {
           "python": "3.11"
-        }
+        },
+        "setupOperationIds": [
+          "bqemu.health.ready",
+          "bqemu.projects.create",
+          "bigquery.datasets.insert"
+        ]
       },
       "compatibilityProfile": {
         "id": "spark-bigquery-connector-public-v1",
@@ -222,6 +468,9 @@
               "bigquery.jobs.insert",
               "bigquery.jobs.get",
               "bigquery.jobs.getQueryResults",
+              "bigquery.jobs.query",
+              "bigquery.tabledata.list",
+              "bigquery.tables.patch",
               "grpc.bigquery-read.create-read-session",
               "grpc.bigquery-read.read-rows",
               "grpc.bigquery-write.create-write-stream",
@@ -229,6 +478,114 @@
               "grpc.bigquery-write.finalize-write-stream",
               "grpc.bigquery-write.batch-commit-write-streams",
               "grpc.bigquery-write.get-write-stream"
+            ],
+            "selectors": [
+              "pytest:tests/spark/test_public_edge.py",
+              "pytest:tests/spark/test_dsv2_streaming.py"
+            ],
+            "operationExpectations": [
+              {
+                "operationId": "bigquery.tables.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.delete",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.getQueryResults",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.query",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tabledata.list",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.patch",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "grpc.bigquery-read.create-read-session",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "grpc.bigquery-read.read-rows",
+                "min": 1,
+                "max": 0,
+                "after": [
+                  "grpc.bigquery-read.create-read-session"
+                ]
+              },
+              {
+                "operationId": "grpc.bigquery-write.create-write-stream",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "grpc.bigquery-write.append-rows",
+                "min": 1,
+                "max": 0,
+                "after": [
+                  "grpc.bigquery-write.create-write-stream"
+                ]
+              },
+              {
+                "operationId": "grpc.bigquery-write.finalize-write-stream",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "grpc.bigquery-write.batch-commit-write-streams",
+                "min": 1,
+                "max": 0,
+                "after": [
+                  "grpc.bigquery-write.finalize-write-stream"
+                ]
+              },
+              {
+                "operationId": "grpc.bigquery-write.get-write-stream",
+                "min": 1,
+                "max": 0,
+                "after": []
+              }
             ]
           }
         ]
@@ -236,11 +593,22 @@
       "artifacts": [
         {
           "id": "spark-bigquery-connector-0.44.2-jar",
+          "role": "execution",
+          "usage": "spark-connector-dsv1-jar",
           "uri": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar",
           "sha256": "516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
         },
         {
+          "id": "spark-bigquery-connector-0.44.2-dsv2-jar",
+          "role": "execution",
+          "usage": "spark-connector-dsv2-jar",
+          "uri": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/spark-3.5-bigquery-0.44.2.jar",
+          "sha256": "2e6bbb41bcaf56ae17a5488dd4453698bd35f13e9849f4daed744ca7b57b053f"
+        },
+        {
           "id": "pyspark-3.5.8-sdist",
+          "role": "execution",
+          "usage": "spark-runtime",
           "uri": "https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz",
           "sha256": "54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c"
         }
@@ -267,6 +635,7 @@
         "id": "spark-scala-shell-v1",
         "family": "spark",
         "runtimeKind": "spark-scala",
+        "selectorPrefix": "pytest",
         "requiredVersions": [
           "spark",
           "connector",
@@ -274,9 +643,18 @@
           "scalaBinary",
           "java"
         ],
+        "requiredArtifactUsages": [
+          "spark-connector-dsv1-jar",
+          "spark-runtime"
+        ],
         "bootstrap": {
           "python": "3.11"
-        }
+        },
+        "setupOperationIds": [
+          "bqemu.health.ready",
+          "bqemu.projects.create",
+          "bigquery.datasets.insert"
+        ]
       },
       "compatibilityProfile": {
         "id": "spark-bigquery-connector-public-v1",
@@ -308,6 +686,43 @@
               "bigquery.jobs.query",
               "grpc.bigquery-read.create-read-session",
               "grpc.bigquery-read.read-rows"
+            ],
+            "selectors": [
+              "pytest:tests/spark/test_scala_public_edge.py"
+            ],
+            "operationExpectations": [
+              {
+                "operationId": "bigquery.tables.insert",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.tables.get",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "bigquery.jobs.query",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "grpc.bigquery-read.create-read-session",
+                "min": 1,
+                "max": 0,
+                "after": []
+              },
+              {
+                "operationId": "grpc.bigquery-read.read-rows",
+                "min": 1,
+                "max": 0,
+                "after": [
+                  "grpc.bigquery-read.create-read-session"
+                ]
+              }
             ]
           }
         ]
@@ -315,11 +730,15 @@
       "artifacts": [
         {
           "id": "spark-bigquery-connector-0.44.2-jar",
+          "role": "execution",
+          "usage": "spark-connector-dsv1-jar",
           "uri": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar",
           "sha256": "516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
         },
         {
           "id": "pyspark-3.5.8-sdist",
+          "role": "execution",
+          "usage": "spark-runtime",
           "uri": "https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz",
           "sha256": "54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c"
         }

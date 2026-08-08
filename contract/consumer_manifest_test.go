@@ -46,6 +46,17 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 		"bad digest": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
 			(*cases)[0].Artifacts[0].SHA256 = "SHA256:bad"
 		},
+		"unknown artifact usage": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
+			(*cases)[0].Artifacts[0].Usage = "guessed-wheel"
+		},
+		"missing required artifact usage": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
+			(*cases)[0].Artifacts = []ConsumerArtifact{{ID: "provenance", Role: "tool-provenance", Usage: "cloud-sdk-image", URI: "oci://example.invalid/tool@sha256:" + strings.Repeat("a", 64), SHA256: strings.Repeat("a", 64)}}
+		},
+		"duplicate required artifact usage": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
+			duplicate := (*cases)[0].Artifacts[0]
+			duplicate.ID = "wheel-two"
+			(*cases)[0].Artifacts = append((*cases)[0].Artifacts, duplicate)
+		},
 		"runtime mismatch": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
 			(*cases)[0].Family = "spark"
 		},
@@ -54,6 +65,25 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 		},
 		"duplicate scenario ID": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
 			manifest.Scenarios = append(manifest.Scenarios, manifest.Scenarios[0])
+		},
+		"duplicate operation across scenario set": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
+			manifest.Scenarios = append(manifest.Scenarios, ConsumerScenario{ID: "query-two", OperationIDs: []string{"bigquery.jobs.query"}, Selectors: []string{"pytest:tests/python/test_query_two.py"}})
+			manifest.ScenarioSets[0].ScenarioIDs = append(manifest.ScenarioSets[0].ScenarioIDs, "query-two")
+			manifest.CompatibilityProfiles[0].ScenarioIDs = append(manifest.CompatibilityProfiles[0].ScenarioIDs, "query-two")
+		},
+		"self ordering dependency": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
+			manifest.Scenarios[0].OperationExpectations = []ConsumerOperationExpectation{{OperationID: "bigquery.jobs.query", Min: 1, After: []string{"bigquery.jobs.query"}}}
+		},
+		"ordering dependency cycle": func(manifest *ConsumerManifest, _ *[]ConsumerCase, operations map[string]bool) {
+			operations["bigquery.jobs.get"] = true
+			manifest.Scenarios[0].OperationIDs = append(manifest.Scenarios[0].OperationIDs, "bigquery.jobs.get")
+			manifest.Scenarios[0].OperationExpectations = []ConsumerOperationExpectation{
+				{OperationID: "bigquery.jobs.query", Min: 1, After: []string{"bigquery.jobs.get"}},
+				{OperationID: "bigquery.jobs.get", Min: 1, After: []string{"bigquery.jobs.query"}},
+			}
+		},
+		"selector adapter mismatch": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
+			manifest.Scenarios[0].Selectors = []string{"bq:tests/bqcli/run_contract.py:main"}
 		},
 		"mutable source provenance": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
 			manifest.CompatibilityProfiles[0].SourceProvenance = []ConsumerSourceProvenance{{Name: "client", Version: "3.43.0", URI: "https://github.com/googleapis/google-cloud-python/tree/main/packages/google-cloud-bigquery"}}
@@ -105,7 +135,7 @@ func TestNormalizedConsumerManifestIsDeterministicAndFullyExpanded(t *testing.T)
 	}
 }
 
-func TestAddingOneCaseYAMLAutoAddsOneCIMatrixRow(t *testing.T) {
+func TestAddingOneConnectorPatchCaseYAMLAutoAddsOneCIMatrixRow(t *testing.T) {
 	repositoryRoot := filepath.Clean("..")
 	temporaryRoot := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(temporaryRoot, consumerCasesDirectory), 0o755); err != nil {
@@ -120,12 +150,12 @@ func TestAddingOneCaseYAMLAutoAddsOneCIMatrixRow(t *testing.T) {
 	for _, path := range paths {
 		copyFile(t, path, filepath.Join(temporaryRoot, consumerCasesDirectory, filepath.Base(path)))
 	}
-	base, err := os.ReadFile(filepath.Join(repositoryRoot, consumerCasesDirectory, "google-cloud-bigquery-python-3.43.0.yaml"))
+	base, err := os.ReadFile(filepath.Join(repositoryRoot, consumerCasesDirectory, "spark-pyspark-3.5.8-connector-0.44.2.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	patchCase := strings.Replace(string(base), "google-cloud-bigquery-python-3.43.0\n", "google-cloud-bigquery-python-3.43.0-patch\n", 1)
-	if err := os.WriteFile(filepath.Join(temporaryRoot, consumerCasesDirectory, "google-cloud-bigquery-python-3.43.0-patch.yaml"), []byte(patchCase), 0o600); err != nil {
+	patchCase := strings.ReplaceAll(string(base), "0.44.2", "0.44.3")
+	if err := os.WriteFile(filepath.Join(temporaryRoot, consumerCasesDirectory, "spark-pyspark-3.5.8-connector-0.44.3.yaml"), []byte(patchCase), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	normalized, err := CompileConsumerManifest(temporaryRoot)
@@ -139,7 +169,7 @@ func TestAddingOneCaseYAMLAutoAddsOneCIMatrixRow(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(temporaryRoot, consumerNormalizedPath), contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	matrix, err := ConsumerMatrix(temporaryRoot, "python", "required")
+	matrix, err := ConsumerMatrix(temporaryRoot, "spark", "required")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,8 +179,64 @@ func TestAddingOneCaseYAMLAutoAddsOneCIMatrixRow(t *testing.T) {
 	if err := json.Unmarshal(matrix, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Include) != 2 || payload.Include[1].ID != "google-cloud-bigquery-python-3.43.0-patch" {
+	if len(payload.Include) != 3 {
 		t.Fatalf("matrix rows = %#v", payload.Include)
+	}
+	var patchRow *ExpandedConsumerCase
+	for index := range payload.Include {
+		if payload.Include[index].ID == "spark-pyspark-3.5.8-connector-0.44.3" {
+			patchRow = &payload.Include[index]
+		}
+	}
+	if patchRow == nil || patchRow.RunnerAdapter.ID != "spark-pyspark-pytest-v1" || patchRow.RuntimeProfile.Versions["connector"] != "0.44.3" || !strings.Contains(patchRow.Artifacts[0].URI, "/0.44.3/") {
+		t.Fatalf("patch matrix row = %#v", patchRow)
+	}
+}
+
+func TestConsumerMatrixSeparatesRequiredPreviewAndNightlyLanes(t *testing.T) {
+	root := t.TempDir()
+	manifest := NormalizedConsumerManifest{SchemaVersion: "1", Cases: []ExpandedConsumerCase{
+		{ID: "nightly-case", Family: "spark", Lane: "nightly"},
+		{ID: "preview-case", Family: "spark", Lane: "preview"},
+		{ID: "required-case", Family: "spark", Lane: "required"},
+	}}
+	contents, err := MarshalNormalizedConsumerManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, consumerNormalizedPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, lane := range []string{"required", "preview", "nightly"} {
+		t.Run(lane, func(t *testing.T) {
+			matrix, err := ConsumerMatrix(root, "spark", lane)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload struct {
+				Include []ExpandedConsumerCase `json:"include"`
+			}
+			if err := json.Unmarshal(matrix, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if len(payload.Include) != 1 || payload.Include[0].Lane != lane {
+				t.Fatalf("lane %s matrix = %#v", lane, payload.Include)
+			}
+		})
+	}
+	matrix, count, err := ConsumerMatrixWithCount(root, "python", "preview,nightly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || string(matrix) != `{"include":[]}` {
+		t.Fatalf("empty non-required matrix = %s count=%d", matrix, count)
+	}
+	if _, _, err := ConsumerMatrixWithCount(root, "spark", "preview,unknown"); err == nil {
+		t.Fatal("expected unknown lane to fail")
 	}
 }
 
@@ -158,16 +244,16 @@ func validConsumerFixture() (ConsumerManifest, []ConsumerCase, map[string]bool) 
 	manifest := ConsumerManifest{
 		SchemaVersion:         "1",
 		RuntimeProfiles:       []RuntimeProfile{{ID: "python", Family: "python", Kind: "python-pytest"}},
-		RunnerAdapters:        []RunnerAdapter{{ID: "pytest-v1", Family: "python", RuntimeKind: "python-pytest", RequiredVersions: []string{"python", "client"}, Bootstrap: map[string]string{}}},
+		RunnerAdapters:        []RunnerAdapter{{ID: "pytest-v1", Family: "python", RuntimeKind: "python-pytest", SelectorPrefix: "pytest", RequiredVersions: []string{"python", "client"}, RequiredArtifactUsages: []string{"python-wheel"}, Bootstrap: map[string]string{}}},
 		CompatibilityProfiles: []CompatibilityProfile{{ID: "python-v1", ScenarioIDs: []string{"query"}}},
-		Scenarios:             []ConsumerScenario{{ID: "query", OperationIDs: []string{"bigquery.jobs.query"}}},
+		Scenarios:             []ConsumerScenario{{ID: "query", OperationIDs: []string{"bigquery.jobs.query"}, Selectors: []string{"pytest:tests/python/test_query_contract.py"}}},
 		ScenarioSets:          []ScenarioSet{{ID: "query-set", ScenarioIDs: []string{"query"}}},
 	}
 	cases := []ConsumerCase{{
 		SchemaVersion: "1", ID: "case-one", DisplayName: "Case one", Family: "python", Lane: "required",
 		RuntimeProfileID: "python", RunnerAdapterID: "pytest-v1", CompatibilityProfileID: "python-v1", ScenarioSetID: "query-set",
 		Versions:  map[string]string{"python": "3.13", "client": "3.43.0"},
-		Artifacts: []ConsumerArtifact{{ID: "wheel", URI: "https://example.invalid/client.whl", SHA256: strings.Repeat("a", 64)}},
+		Artifacts: []ConsumerArtifact{{ID: "wheel", Role: "execution", Usage: "python-wheel", URI: "https://example.invalid/client.whl", SHA256: strings.Repeat("a", 64)}},
 	}}
 	return manifest, cases, map[string]bool{"bigquery.jobs.query": true}
 }
@@ -185,6 +271,8 @@ scenarioSet: query-set
 versions: {python: "3.13", client: "3.43.0"}
 artifacts:
   - id: wheel
+    role: execution
+    usage: python-wheel
     uri: https://example.invalid/client.whl
     sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 `

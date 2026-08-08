@@ -16,21 +16,33 @@ runnerAdapters:
   - id: python-pytest-v1
     family: python
     runtimeKind: python-pytest
+    selectorPrefix: pytest
     requiredVersions: [python, client]
+    requiredArtifactUsages: [python-wheel]
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bqemu.projects.delete]
   - id: bq-cli-v1
     family: bq
     runtimeKind: bq-cli
+    selectorPrefix: bq
     requiredVersions: [cloudSdk, bq]
+    requiredArtifactUsages: [cloud-sdk-image]
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create]
   - id: spark-pyspark-pytest-v1
     family: spark
     runtimeKind: spark-pyspark
+    selectorPrefix: pytest
     requiredVersions: [spark, connector, scalaBinary, java, python]
+    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-connector-dsv2-jar, spark-runtime]
     bootstrap: {python: "3.11"}
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bigquery.datasets.insert]
   - id: spark-scala-shell-v1
     family: spark
     runtimeKind: spark-scala
+    selectorPrefix: pytest
     requiredVersions: [spark, connector, scala, scalaBinary, java]
+    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-runtime]
     bootstrap: {python: "3.11"}
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bigquery.datasets.insert]
 compatibilityProfiles:
   - id: google-cloud-bigquery-python-public-v1
     scenarioIds: [python-metadata, python-query, python-tabledata]
@@ -55,6 +67,7 @@ compatibilityProfiles:
         uri: https://github.com/googleapis/java-bigquery/tree/v2.60.0
 scenarios:
   - id: python-metadata
+    selectors: [pytest:tests/python/test_admin_contract.py]
     operationIds:
       - bigquery.datasets.insert
       - bigquery.datasets.list
@@ -67,6 +80,10 @@ scenarios:
       - bigquery.tables.patch
       - bigquery.tables.delete
   - id: python-query
+    selectors:
+      - pytest:tests/python/test_query_contract.py
+      - pytest:tests/python/test_query_lifecycle_contract.py
+      - pytest:tests/python/test_explicit_gaps.py
     operationIds:
       - bigquery.jobs.insert
       - bigquery.jobs.list
@@ -74,8 +91,10 @@ scenarios:
       - bigquery.jobs.query
       - bigquery.jobs.getQueryResults
   - id: python-tabledata
+    selectors: [pytest:tests/python/test_tabledata_contract.py]
     operationIds: [bigquery.tabledata.list]
   - id: bq-metadata
+    selectors: [bq:tests/bqcli/run_contract.py:main]
     operationIds:
       - bigquery.projects.list
       - bigquery.datasets.insert
@@ -87,13 +106,18 @@ scenarios:
       - bigquery.tables.patch
       - bigquery.tables.list
       - bigquery.tables.delete
+      - bqemu.discovery.get
   - id: bq-query
+    selectors: [bq:tests/bqcli/run_contract.py:main]
     operationIds:
       - bigquery.jobs.insert
       - bigquery.jobs.get
       - bigquery.jobs.getQueryResults
       - bigquery.jobs.list
   - id: spark-pyspark-public-edge
+    selectors:
+      - pytest:tests/spark/test_public_edge.py
+      - pytest:tests/spark/test_dsv2_streaming.py
     operationIds:
       - bigquery.tables.insert
       - bigquery.tables.get
@@ -101,6 +125,9 @@ scenarios:
       - bigquery.jobs.insert
       - bigquery.jobs.get
       - bigquery.jobs.getQueryResults
+      - bigquery.jobs.query
+      - bigquery.tabledata.list
+      - bigquery.tables.patch
       - grpc.bigquery-read.create-read-session
       - grpc.bigquery-read.read-rows
       - grpc.bigquery-write.create-write-stream
@@ -108,13 +135,32 @@ scenarios:
       - grpc.bigquery-write.finalize-write-stream
       - grpc.bigquery-write.batch-commit-write-streams
       - grpc.bigquery-write.get-write-stream
+    operationExpectations:
+      - operationId: grpc.bigquery-read.read-rows
+        min: 1
+        max: 0
+        after: [grpc.bigquery-read.create-read-session]
+      - operationId: grpc.bigquery-write.append-rows
+        min: 1
+        max: 0
+        after: [grpc.bigquery-write.create-write-stream]
+      - operationId: grpc.bigquery-write.batch-commit-write-streams
+        min: 1
+        max: 0
+        after: [grpc.bigquery-write.finalize-write-stream]
   - id: spark-scala-public-edge
+    selectors: [pytest:tests/spark/test_scala_public_edge.py]
     operationIds:
       - bigquery.tables.insert
       - bigquery.tables.get
       - bigquery.jobs.query
       - grpc.bigquery-read.create-read-session
       - grpc.bigquery-read.read-rows
+    operationExpectations:
+      - operationId: grpc.bigquery-read.read-rows
+        min: 1
+        max: 0
+        after: [grpc.bigquery-read.create-read-session]
 scenarioSets:
   - id: python-public-contract
     scenarioIds: [python-metadata, python-query, python-tabledata]

@@ -1051,8 +1051,23 @@ def connector_jar(test_timeout: float) -> Path:
 @pytest.fixture(scope="session")
 def dsv2_connector_jar(test_timeout: float) -> Path:
     configured = os.getenv("BQEMU_SPARK_DSV2_CONNECTOR_JAR")
+    expected_spec = None
     if configured:
         target = Path(configured).resolve()
+        raw_spec = os.getenv("BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON")
+        if not raw_spec:
+            raise pytest.UsageError(
+                "BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON is required with a configured DSv2 connector JAR"
+            )
+        spec = json.loads(raw_spec)
+        expected_spec = ArtifactSpec(
+            variant=str(spec["variant"]),
+            output=str(spec["output"]),
+            size=int(spec["size"]),
+            sha256=str(spec["sha256"]),
+            provider=str(spec["provider"]),
+            connector_version=str(spec["connectorVersion"]),
+        )
     else:
         _run(
             [
@@ -1067,7 +1082,10 @@ def dsv2_connector_jar(test_timeout: float) -> Path:
             lock = json.load(stream)
         target = REPOSITORY_ROOT / ".artifacts" / "spark" / lock["artifacts"][0]["output"]
     return enforce_connector_classpath(
-        [target], expected_variant=DSV2_RAW_VARIANT, repository_root=REPOSITORY_ROOT
+        [target],
+        expected_variant=DSV2_RAW_VARIANT,
+        repository_root=REPOSITORY_ROOT,
+        expected_spec=expected_spec,
     ).path
 
 
