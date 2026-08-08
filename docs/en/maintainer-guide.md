@@ -38,15 +38,12 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 3. Run the nearest focused test, for example `go test ./internal/domain -run Schema`.
 4. Trace the request from `internal/transport` through application/ports to an
    adapter.
-5. Read [BigQuery and connector internals](bigquery-internals.md) before changing
-   a Storage or connector-dependent contract.
+5. Read [BigQuery protocol internals](bigquery-internals.md) before changing a
+   Storage API contract.
 6. Use [Compatibility](compatibility.md) to choose an existing capability or
    declare a new one.
 7. Before changing a storage-engine port, read the planning and composition
    contracts in the [storage engine adapter guide](engine-adapter-guide.md).
-
-The connector baseline is exact [Spark BigQuery connector
-`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2).
 
 <!-- section: first-change -->
 ## First Change Runbook
@@ -82,13 +79,13 @@ selects scenarios. Run the following checks before committing:
 ```bash
 make contract-generate
 make ci-static
-go run ./tests/integration/cmd/integrationctl matrix --root . --family spark --lane required
+make integration-contract-check
 ```
 
-CI isolates every matrix row. For a local client executable, select the matching
-case explicitly, for example `BQEMU_CONSUMER_CASE=case-id make bq-test`. A
-family-only local target intentionally stops when more than one case would share
-the same installed runtime.
+CI isolates every matrix row. For a local executable, select one exact case and
+the case-specific target documented by the [integration test
+framework](../../tests/integration/docs/en/framework.md). A family-only local
+target intentionally stops when more than one case would share a runtime.
 
 The compiler rejects unknown fields and references, duplicate IDs, invalid
 digests, overlapping operation IDs in one scenario set, ordering cycles, and
@@ -102,18 +99,15 @@ each individual server run, identified in evidence by a digest of its relative
 log path. An `execution` artifact is used by the runtime after digest or hash-lock
 verification. A `tool-provenance` artifact identifies a release but is not
 claimed as the executable installed by CI. Artifact `usage` is a strict adapter
-contract such as `python-wheel` or `spark-connector-dsv1-jar`; the compiler requires
-exactly one artifact for every usage declared by the adapter.
+contract; the compiler requires exactly one artifact for every usage declared
+by the adapter.
 Every required case is also emitted into the credential and TLS matrix. Its
 runner adapter selects the typed auth process, and the same runtime versions and
 artifact usages drive setup and identity verification.
 
-The bq case is deliberately different: `cloud-sdk-release-provenance` is a
-`tool-provenance` OCI digest and is not executed by the runner. CI installs the
-declared Cloud SDK version through `setup-gcloud`, then the adapter requires the
-exact Cloud SDK and bq component identities from structured `gcloud version`
-output as well as the exact `bq version` identity. Evidence records this
-boundary and never claims that the OCI image is the installed executable.
+When CI installs a tool separately, its release provenance and executable
+identity remain distinct evidence. A provenance artifact must never be reported
+as the executable that actually ran.
 
 Required cases block image publication; preview and nightly cases are selected
 by scheduled or manually dispatched workflows and are not part of the release

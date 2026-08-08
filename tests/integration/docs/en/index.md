@@ -19,5 +19,7 @@ They are integration-test assets, not product runtime dependencies.
 <!-- section: evidence -->
 ## Generated Evidence
 
+- [Integration test framework](framework.md): manifest structure, runner
+  contracts, CI lanes, and the procedure for adding a case.
 - [Consumer compatibility](consumer-compatibility.md): exact versions,
   immutable artifacts, scenario IDs, and selectors used by CI.

@@ -19,5 +19,7 @@
 <!-- section: evidence -->
 ## 자동 생성 증거
 
+- [통합 테스트 프레임워크](framework.md): 매니페스트 구조, 실행기 계약, CI lane과 사례
+  추가 절차입니다.
 - [소비자 호환성](consumer-compatibility.md): CI가 사용하는 정확한 버전, 변경되지 않는
   아티팩트, scenario ID와 selector입니다.

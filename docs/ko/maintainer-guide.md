@@ -44,14 +44,11 @@ make run
    실행합니다.
 4. 요청이 `internal/transport`에서 애플리케이션 및 포트를 거쳐 어댑터에 도달하는
    과정을 추적합니다.
-5. Storage 또는 커넥터에 의존하는 계약을 바꾸기 전에 [BigQuery와 커넥터 내부
+5. Storage API 계약을 바꾸기 전에 [BigQuery 프로토콜 내부
    동작](bigquery-internals.md)을 읽습니다.
 6. [호환성](compatibility.md)에서 기존 지원 기능을 선택하거나 새로 선언합니다.
 7. 저장 엔진 포트를 변경한다면 [저장 엔진 어댑터 구현
    안내서](engine-adapter-guide.md)의 계획 및 조립 계약을 확인합니다.
-
-기준 커넥터는 정확히 [Spark BigQuery 커넥터
-`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)입니다.
 
 <!-- section: first-change -->
 ## 첫 변경 절차
@@ -87,12 +84,13 @@ go vet ./...
 ```bash
 make contract-generate
 make ci-static
-go run ./tests/integration/cmd/integrationctl matrix --root . --family spark --lane required
+make integration-contract-check
 ```
 
-CI는 행마다 실행 환경을 분리합니다. 로컬에 설치된 클라이언트를 사용할 때는
-`BQEMU_CONSUMER_CASE=case-id make bq-test`처럼 해당 사례를 명시합니다. 실행 환경 하나를
-여러 사례가 공유하게 되는 경우에는 계열만 지정한 로컬 명령이 실행을 중단합니다.
+CI는 행마다 실행 환경을 분리합니다. 로컬 실행 파일을 사용할 때는 [통합 테스트
+프레임워크](../../tests/integration/docs/ko/framework.md)에 설명된 정확한 사례와 전용
+명령을 선택합니다. 실행 환경 하나를 여러 사례가 공유하면 계열만 지정한 로컬 명령은
+실행을 중단합니다.
 
 컴파일러는 알 수 없는 필드와 참조, 중복 ID, 잘못된 해시, 한 시나리오 묶음 안에서
 겹치는 동작 ID, 순서 제약의 순환, 함께 사용할 수 없는 실행 환경과 어댑터 조합을
@@ -104,17 +102,13 @@ CI와 실행 어댑터는 `tests/integration/contract/consumers.normalized.json`
 실행 식별자는 로그 상대 경로의 해시이므로 로컬 경로를 노출하지 않습니다. `execution`
 산출물은 해시 또는 해시 잠금 파일을 확인한 뒤 실행에 사용합니다. `tool-provenance`
 산출물은 릴리스 출처만 나타내며 CI가 설치한 실행 파일과 같다고 간주하지 않습니다.
-산출물의 `usage`는 `python-wheel`, `spark-connector-dsv1-jar`처럼 어댑터가 엄격하게 검사하는
-용도입니다. 컴파일러는 어댑터가 요구한 각 용도의 산출물이 정확히 하나인지 확인합니다.
+산출물의 `usage`는 어댑터가 엄격하게 검사하는 용도입니다. 컴파일러는 어댑터가
+요구한 각 용도의 산출물이 정확히 하나인지 확인합니다.
 모든 필수 사례는 인증과 TLS 행렬에도 함께 추가됩니다. 실행 어댑터가 인증 실행
 유형을 선택하며, 같은 실행 환경 버전과 산출물 용도로 설치 및 동일성을 검증합니다.
 
-bq 사례는 처리 방식이 다릅니다. `cloud-sdk-release-provenance`는
-`tool-provenance` 역할의 OCI 해시이며 실행 어댑터가 직접 실행하지 않습니다. CI는
-`setup-gcloud`로 사례에 선언한 Cloud SDK 버전을 설치합니다. 어댑터는 구조화된
-`gcloud version` 출력에서 Cloud SDK와 bq 구성 요소의 정확한 버전을 확인하고,
-`bq version` 값도 별도로 확인합니다. 증거에도 이 경계를 기록하며 OCI 이미지가
-설치된 실행 파일이라고 표현하지 않습니다.
+CI가 도구를 별도로 설치한다면 릴리스 출처 증거와 실제 실행 파일의 동일성 증거를
+구분합니다. 출처 아티팩트를 실제 실행한 파일이라고 기록해서는 안 됩니다.
 
 `required` 사례가 실패하면 이미지가 배포되지 않습니다. `preview`와 `nightly` 사례는
 수동 또는 주기 실행 워크플로에서 선택하며 릴리스 조건에 포함하지 않습니다. 두 실행
