@@ -445,8 +445,13 @@ func TestStorageWriteOperationTimeoutAllowsPendingReceiptRetry(t *testing.T) {
 	defer cancel()
 	config := storageWriteCoordinatorTestConfig()
 	config.QueueWaitTimeout = 5 * time.Millisecond
-	config.OperationTimeout = 25 * time.Millisecond
+	config.OperationTimeout = time.Hour
 	_, coordinator, table := newStorageWriteFixtureWithConfig(t, []domain.Field{{Name: "id", Type: "INT64"}}, config)
+	timeoutRequested := make(chan func(), 1)
+	coordinator.scheduleTimeout = func(_ time.Duration, expire func()) func() {
+		timeoutRequested <- expire
+		return func() {}
+	}
 	descriptor := storageWriteDescriptor(t, protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL))
 	batch := writeports.AppendBatch{
 		StreamName: table.Name() + "/streams/timeout-retry", Table: table, WireBytes: 128,
@@ -468,6 +473,12 @@ func TestStorageWriteOperationTimeoutAllowsPendingReceiptRetry(t *testing.T) {
 	case <-workerEntered:
 	case <-ctx.Done():
 		t.Fatalf("waiting for staged operation: %v", ctx.Err())
+	}
+	select {
+	case expire := <-timeoutRequested:
+		expire()
+	case <-ctx.Done():
+		t.Fatalf("waiting for operation timeout registration: %v", ctx.Err())
 	}
 	select {
 	case err := <-result:

@@ -59,12 +59,13 @@ type StorageWriteCoordinator struct {
 	// DuckDB tables; this map contains byte counters only. Tests may set the fault
 	// hooks before submitting operations to exercise acknowledgement/transaction
 	// boundaries without exposing those seams through the outbound port.
-	stagedByStream map[string]int64
-	afterStage     func()
-	beforeCommit   func() error
-	submissionMu   sync.RWMutex
-	closeOnce      sync.Once
-	closeErr       error
+	stagedByStream  map[string]int64
+	afterStage      func()
+	beforeCommit    func() error
+	scheduleTimeout func(time.Duration, func()) func()
+	submissionMu    sync.RWMutex
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 type coordinatorOperation struct {
@@ -114,6 +115,10 @@ func NewStorageWriteCoordinator(ctx context.Context, warehouse *Warehouse, confi
 		warehouse: warehouse, config: config, admission: newStorageWriteByteAdmission(config),
 		queue: make(chan coordinatorOperation, config.QueueCapacity), stop: cancel, done: make(chan struct{}),
 		stagedByStream: make(map[string]int64),
+		scheduleTimeout: func(timeout time.Duration, expire func()) func() {
+			timer := time.AfterFunc(timeout, expire)
+			return func() { timer.Stop() }
+		},
 	}
 	if err := coordinator.initializeStaging(ctx); err != nil {
 		cancel()
@@ -320,11 +325,11 @@ func (c *StorageWriteCoordinator) submitOperation(ctx context.Context, fn func(c
 		callRelease(release)
 		return nil, errStorageWriteCoordinatorClosed
 	}
-	operationTimer := time.AfterFunc(c.config.OperationTimeout, func() {
+	stopOperationTimer := c.scheduleTimeout(c.config.OperationTimeout, func() {
 		cancel(writeports.ErrOperationTimeout)
 	})
 	value, err := waitCoordinatorResult(c.done, operation)
-	operationTimer.Stop()
+	stopOperationTimer()
 	cancel(nil)
 	return value, err
 }
