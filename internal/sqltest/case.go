@@ -339,6 +339,10 @@ func validateFields(fields []Field, owner string) error {
 				return err
 			}
 		}
+		canonical := fixtureFieldsToDomain([]Field{field})[0]
+		if err := canonical.Validate(); err != nil {
+			return fmt.Errorf("%s field %q: %w", owner, field.Name, err)
+		}
 	}
 	return nil
 }
