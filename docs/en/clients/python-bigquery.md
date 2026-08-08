@@ -1,7 +1,7 @@
 <!-- doc-id: clients/python-bigquery -->
 <!-- lang: en -->
 
-[English](python-bigquery.md) | [한국어](../ko/python-bigquery.md)
+[English](python-bigquery.md) | [한국어](../../ko/clients/python-bigquery.md)
 
 # Python BigQuery Client
 
@@ -40,7 +40,7 @@ plain local endpoint.
 For credential parsing or HTTPS tests, generate the repository fixtures and run
 their local issuer. Then use one of `service-account.json`,
 `authorized-user.json`, `wif.json`, or `access-token.txt` as described in
-[Client credentials and TLS](../../../../docs/en/client-credentials-and-tls.md).
+[Client credentials and TLS](../client-credentials-and-tls.md).
 
 ```bash
 export REQUESTS_CA_BUNDLE="$PWD/.bqemu-auth/ca.pem"
@@ -63,7 +63,7 @@ assert rows[0]["answer"] == 1
 client.close()
 ```
 
-Create the emulator project first by following [Getting started](../../../../docs/en/getting-started.md).
+Create the emulator project first by following [Getting started](../getting-started.md).
 
 <!-- section: operations -->
 ## API Call Order
@@ -94,8 +94,8 @@ Optional polling and pagination determine how many times a request is repeated.
 | `bigquery.tabledata.list` | Table path and page controls | BigQuery `f`/`v` row encoding and next page token |
 
 The exact accepted fields and support level are maintained in
-[Compatibility](../../../../docs/en/compatibility.md). Client versions and scenario selectors are
-generated in [Consumer compatibility](../../../../docs/en/consumer-compatibility.md).
+[Compatibility](../compatibility.md). Client versions and scenario selectors are
+generated in [Consumer compatibility](../consumer-compatibility.md).
 
 <!-- section: related -->
 ## Related Work

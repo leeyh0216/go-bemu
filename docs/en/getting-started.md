@@ -76,10 +76,15 @@ shape with a job reference, schema, completion state, and encoded rows.
 <!-- section: clients -->
 ## Connect Another Process
 
-Select REST and Storage gRPC addresses from the endpoint table above. For TLS,
-configure the process trust store with the generated CA and use the server name
-covered by the certificate. Version-pinned external consumer procedures are
-kept with the [integration tests](../../tests/integration/docs/en/index.md).
+Select the guide for the process sending requests:
+
+- [Python BigQuery client](clients/python-bigquery.md)
+- [`bq` CLI](clients/bq-cli.md)
+- [PySpark and Scala Spark](clients/spark-bigquery-connector.md)
+
+Each guide distinguishes host, sibling Compose service, and development
+container endpoints. For TLS, configure the process trust store with the
+generated CA and use a server name covered by the certificate.
 
 <!-- section: external-gcs -->
 ## Use Parquet Load

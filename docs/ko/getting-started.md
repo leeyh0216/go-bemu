@@ -76,10 +76,15 @@ curl --fail -X POST \
 <!-- section: clients -->
 ## 다른 프로세스 연결하기
 
-위 주소 표에서 REST와 Storage gRPC 주소를 선택합니다. TLS를 사용한다면 생성한 CA를
-프로세스의 trust store에 등록하고 인증서에 포함된 서버 이름으로 접속합니다. 버전을
-고정한 외부 소비자 실행 절차는 [통합
-테스트](../../tests/integration/docs/ko/index.md)와 함께 관리합니다.
+요청을 보내는 프로세스에 맞는 안내를 선택합니다.
+
+- [Python BigQuery 클라이언트](clients/python-bigquery.md)
+- [`bq` CLI](clients/bq-cli.md)
+- [PySpark와 Scala Spark](clients/spark-bigquery-connector.md)
+
+각 문서는 호스트, 같은 Compose의 다른 서비스, 개발 컨테이너별 접속 주소를
+구분합니다. TLS를 사용한다면 생성한 CA를 프로세스 trust store에 등록하고 인증서에
+포함된 서버 이름으로 접속합니다.
 
 <!-- section: external-gcs -->
 ## Parquet 로드 사용하기

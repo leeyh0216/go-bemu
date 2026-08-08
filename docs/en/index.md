@@ -18,12 +18,15 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
   service-account, authorized-user, WIF, direct-token, certificate, and
   truststore fixtures.
 
-<!-- section: integration -->
-## Integration Evidence
+<!-- section: clients -->
+## Client Guides
 
-Version-pinned external consumer setup and scenario evidence live with the
-[integration tests](../../tests/integration/docs/en/index.md). They are test
-harness contracts, not product modules or additional support claims.
+- [Python BigQuery client](clients/python-bigquery.md)
+- [`bq` CLI](clients/bq-cli.md)
+- [PySpark and Scala Spark](clients/spark-bigquery-connector.md)
+
+These user guides explain host, Compose-network, and development-container
+endpoints. Version-pinned evidence remains in the integration test manifests.
 
 <!-- section: compatibility -->
 ## Compatibility References

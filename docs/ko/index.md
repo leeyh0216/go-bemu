@@ -18,12 +18,15 @@ BigQuery 리소스는 공개 [BigQuery REST API
   authorized user, WIF, direct token, 인증서, truststore 자료를 생성하는 방법을
   설명합니다.
 
-<!-- section: integration -->
-## 통합 검증 근거
+<!-- section: clients -->
+## 클라이언트 사용 안내
 
-버전을 고정한 외부 소비자 설정과 scenario 근거는 [통합
-테스트](../../tests/integration/docs/ko/index.md)와 함께 관리합니다. 이 자료는 제품
-모듈이나 추가 지원 범위가 아니라 테스트 harness 계약입니다.
+- [Python BigQuery 클라이언트](clients/python-bigquery.md)
+- [`bq` CLI](clients/bq-cli.md)
+- [PySpark와 Scala Spark](clients/spark-bigquery-connector.md)
+
+사용자 가이드는 호스트, Compose 네트워크, 개발 컨테이너별 접속 주소를 설명합니다.
+버전을 고정한 검증 근거는 통합 테스트 매니페스트에서 별도로 관리합니다.
 
 <!-- section: compatibility -->
 ## 호환성 자료

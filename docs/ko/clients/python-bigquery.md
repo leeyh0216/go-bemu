@@ -1,7 +1,7 @@
 <!-- doc-id: clients/python-bigquery -->
 <!-- lang: ko -->
 
-[English](../en/python-bigquery.md) | [한국어](python-bigquery.md)
+[English](../../en/clients/python-bigquery.md) | [한국어](python-bigquery.md)
 
 # Python BigQuery 클라이언트
 
@@ -41,7 +41,7 @@ BQEMU는 공개 BigQuery 요청을 인증하지 않지만 Python 라이브러리
 인증 파일 해석이나 HTTPS 연결을 시험하려면 이 저장소의 생성 도구로 파일을 만들고
 로컬 발급 서버를 실행합니다. `service-account.json`, `authorized-user.json`,
 `wif.json`, `access-token.txt` 사용법은 [클라이언트 인증 파일과
-TLS](../../../../docs/ko/client-credentials-and-tls.md)를 참고해 주십시오.
+TLS](../client-credentials-and-tls.md)를 참고해 주십시오.
 
 ```bash
 export REQUESTS_CA_BUNDLE="$PWD/.bqemu-auth/ca.pem"
@@ -65,7 +65,7 @@ assert rows[0]["answer"] == 1
 client.close()
 ```
 
-먼저 [시작하기](../../../../docs/ko/getting-started.md)의 절차로 에뮬레이터 프로젝트를 만들어 주십시오.
+먼저 [시작하기](../getting-started.md)의 절차로 에뮬레이터 프로젝트를 만들어 주십시오.
 
 <!-- section: operations -->
 ## API 호출 순서
@@ -95,8 +95,8 @@ scenario ID를 실행합니다.
 | `bigquery.jobs.getQueryResults` | Job ID, location, 페이지 매개변수 | 스키마, `jobComplete`, 행, 다음 페이지 token |
 | `bigquery.tabledata.list` | 테이블 경로와 페이지 매개변수 | BigQuery `f`/`v` 행 인코딩과 다음 페이지 token |
 
-필드별 처리 범위와 지원 수준은 [호환성](../../../../docs/ko/compatibility.md)에 정리되어 있습니다.
-클라이언트 버전과 scenario selector는 [소비자 호환성](../../../../docs/ko/consumer-compatibility.md)에서
+필드별 처리 범위와 지원 수준은 [호환성](../compatibility.md)에 정리되어 있습니다.
+클라이언트 버전과 scenario selector는 [소비자 호환성](../consumer-compatibility.md)에서
 자동으로 생성합니다.
 
 <!-- section: related -->
