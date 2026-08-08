@@ -8,6 +8,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
 func (renderer *duckDBStatementRenderer) renderExpression(expression queryast.Expression) (string, error) {
@@ -225,7 +226,7 @@ func (visitor *duckDBExpressionVisitor) VisitFunctionCall(call *queryast.Functio
 	case "ABS", "CEIL", "CEILING", "FLOOR", "LOWER", "UPPER", "LENGTH":
 		return visitor.renderPlainFunction(call, strings.ToLower(name), 1, 1)
 	case "ROUND":
-		return visitor.renderPlainFunction(call, "round", 1, 2)
+		return visitor.renderRound(call)
 	case "ARRAY_LENGTH":
 		return visitor.renderPlainFunction(call, "array_length", 1, 1)
 	case "TO_JSON":
@@ -239,6 +240,43 @@ func (visitor *duckDBExpressionVisitor) VisitFunctionCall(call *queryast.Functio
 	default:
 		return unsupportedDuckDBLowering("function", name)
 	}
+}
+
+func (visitor *duckDBExpressionVisitor) renderRound(call *queryast.FunctionCall) error {
+	arguments := call.Arguments()
+	if call.Distinct() || call.NullHandling() != queryast.FunctionNullHandlingDefault ||
+		(len(arguments) != 1 && len(arguments) != 2) {
+		return unsupportedDuckDBLowering("function modifier", "ROUND")
+	}
+	value, err := visitor.renderer.renderExpression(arguments[0])
+	if err != nil {
+		return err
+	}
+	if len(arguments) == 1 {
+		visitor.result = "round(" + value + ")"
+		return nil
+	}
+	digits, err := visitor.renderer.renderExpression(arguments[1])
+	if err != nil {
+		return err
+	}
+	// GoogleSQL analyzes the digits argument as INT64. DuckDB's two-argument
+	// ROUND overload requires INTEGER, so the adapter performs the dialect-only
+	// narrowing explicitly after semantic analysis.
+	result := "round(" + value + ", CAST(" + digits + " AS INTEGER))"
+	typ, found := visitor.renderer.analysis.ExpressionType(call.NodeKey())
+	if !found {
+		return fmt.Errorf("%w: ROUND expression type binding is missing", domain.ErrPrecondition)
+	}
+	if typ.Kind() == semantic.TypeNumeric || typ.Kind() == semantic.TypeBigNumeric {
+		parameters, ok := typ.EffectiveDecimalParameters()
+		if !ok {
+			return fmt.Errorf("%w: ROUND decimal type binding is invalid", domain.ErrPrecondition)
+		}
+		result = fmt.Sprintf("CAST(%s AS DECIMAL(%d,%d))", result, parameters.Precision, parameters.Scale)
+	}
+	visitor.result = result
+	return nil
 }
 
 func (visitor *duckDBExpressionVisitor) renderAggregate(call *queryast.FunctionCall, name string) error {

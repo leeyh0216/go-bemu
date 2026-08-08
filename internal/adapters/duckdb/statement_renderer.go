@@ -43,6 +43,7 @@ func newDuckDBLocalTableBinding(name string) (duckDBTableBinding, error) {
 type duckDBTableBindingResolver func(queryast.NodeKey) (duckDBTableBinding, bool, error)
 
 type duckDBStatementRenderer struct {
+	analysis        semantic.Statement
 	bindings        map[queryast.NodeKey]duckDBTableBinding
 	scriptVariables map[queryast.NodeKey]string
 	arguments       []any
@@ -115,7 +116,7 @@ func newDuckDBStatementRenderer(
 	if err != nil {
 		return nil, err
 	}
-	return &duckDBStatementRenderer{bindings: bindings, scriptVariables: scriptVariables}, nil
+	return &duckDBStatementRenderer{analysis: statement, bindings: bindings, scriptVariables: scriptVariables}, nil
 }
 
 func collectDuckDBScriptVariables(

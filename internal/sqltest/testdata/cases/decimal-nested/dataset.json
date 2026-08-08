@@ -1,0 +1,14 @@
+{
+  "projects": [
+    {
+      "projectId": "test-project",
+      "datasets": [
+        {
+          "datasetId": "analytics",
+          "location": "US",
+          "tables": []
+        }
+      ]
+    }
+  ]
+}

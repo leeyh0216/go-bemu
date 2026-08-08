@@ -1,0 +1,36 @@
+{
+  "kind": "rows",
+  "schema": [
+    {"name": "rounded_amount", "type": "NUMERIC", "mode": "NULLABLE"},
+    {"name": "wide_amount", "type": "BIGNUMERIC", "mode": "NULLABLE"},
+    {
+      "name": "detail",
+      "type": "RECORD",
+      "mode": "NULLABLE",
+      "fields": [
+        {"name": "ratio", "type": "NUMERIC", "mode": "NULLABLE"},
+        {"name": "labels", "type": "STRING", "mode": "REPEATED"}
+      ]
+    },
+    {
+      "name": "entries",
+      "type": "RECORD",
+      "mode": "REPEATED",
+      "fields": [
+        {"name": "code", "type": "INT64", "mode": "NULLABLE"},
+        {"name": "value", "type": "BIGNUMERIC", "mode": "NULLABLE"}
+      ]
+    }
+  ],
+  "rows": [
+    [
+      "1.250000000",
+      "123.456789012345678901",
+      {"ratio": "2.500000000", "labels": ["x", "y"]},
+      [
+        {"code": 1, "value": "0.000000000000000001"},
+        {"code": 2, "value": "2.000000000000000000"}
+      ]
+    ]
+  ]
+}
