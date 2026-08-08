@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,38 @@ func TestProjectOwnedIdentityDoesNotRegress(t *testing.T) {
 		for _, legacy := range forbidden {
 			if bytes.Contains(contents, legacy.value) {
 				t.Errorf("%s reintroduces %s; use project-owned BQEMU/BEMU names", relative, legacy.name)
+			}
+		}
+	}
+}
+
+func TestProductSourceDoesNotOwnIntegrationProfiles(t *testing.T) {
+	root := filepath.Clean("..")
+	productPrefixes := []string{"cmd/", "configs/", "contract/", "internal/"}
+	forbidden := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b` + "sp" + `ark\b`),
+		regexp.MustCompile(`(?i)\b` + "py" + "sp" + `ark\b`),
+		regexp.MustCompile(`(?i)\b` + "b" + `q\b`),
+		regexp.MustCompile("v0" + "442"),
+		regexp.MustCompile(regexp.QuoteMeta("0." + "44.2")),
+		regexp.MustCompile(regexp.QuoteMeta("2." + "1.31")),
+		regexp.MustCompile(regexp.QuoteMeta("3." + "5.8")),
+		regexp.MustCompile(regexp.QuoteMeta("tests/" + "integration")),
+	}
+	for _, relative := range trackedProjectFiles(t, root) {
+		if !hasAnyPrefix(relative, productPrefixes) {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
+		if err != nil {
+			t.Fatalf("read product source %s: %v", relative, err)
+		}
+		if bytes.IndexByte(contents, 0) >= 0 {
+			continue
+		}
+		for _, pattern := range forbidden {
+			if pattern.Match(contents) {
+				t.Errorf("%s contains integration-profile content matched by %q", relative, pattern.String())
 			}
 		}
 	}
@@ -107,4 +140,13 @@ func trackedProjectFiles(t *testing.T, root string) []string {
 		t.Fatal("project identity guard found no tracked files")
 	}
 	return files
+}
+
+func hasAnyPrefix(value string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }

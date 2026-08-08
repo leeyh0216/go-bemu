@@ -194,10 +194,10 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 
 func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
 	accepted := map[string]string{
-		"absent":          `{}`,
-		"empty options":   `{"parquetOptions":{}}`,
-		"explicit false":  `{"parquetOptions":{"enableListInference":false,"enumAsString":false}}`,
-		"bq cli defaults": `{"decimalTargetTypes":null,"nullMarkers":[],"projectionFields":[],"timestampTargetPrecision":[]}`,
+		"absent":                 `{}`,
+		"empty options":          `{"parquetOptions":{}}`,
+		"explicit false":         `{"parquetOptions":{"enableListInference":false,"enumAsString":false}}`,
+		"explicit empty options": `{"decimalTargetTypes":null,"nullMarkers":[],"projectionFields":[],"timestampTargetPrecision":[]}`,
 	}
 	for name, payload := range accepted {
 		t.Run("accept "+name, func(t *testing.T) {

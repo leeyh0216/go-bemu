@@ -137,15 +137,15 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 	}
 
 	job := request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", `{
-		"jobReference":{"projectId":"test-project","jobId":"bq-cli-job","location":"US"},
+		"jobReference":{"projectId":"test-project","jobId":"public-query-job","location":"US"},
 		"configuration":{"query":{"query":"SELECT COUNT(*) AS row_count FROM `+"`test-project.analytics.events`"+`","useLegacySql":false}}
 	}`, http.StatusOK)
-	if jobReference, ok := job["jobReference"].(map[string]any); !ok || jobReference["jobId"] != "bq-cli-job" {
+	if jobReference, ok := job["jobReference"].(map[string]any); !ok || jobReference["jobId"] != "public-query-job" {
 		t.Fatalf("unexpected jobs.insert response: %#v", job)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		job = request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs/bq-cli-job?location=US", "", http.StatusOK)
+		job = request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs/public-query-job?location=US", "", http.StatusOK)
 		status := job["status"].(map[string]any)
 		if status["state"] == "DONE" {
 			break
@@ -155,7 +155,7 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	jobResults := request(http.MethodGet, "/bigquery/v2/projects/test-project/queries/bq-cli-job?location=US", "", http.StatusOK)
+	jobResults := request(http.MethodGet, "/bigquery/v2/projects/test-project/queries/public-query-job?location=US", "", http.StatusOK)
 	if jobResults["jobComplete"] != true || jobResults["totalRows"] != "1" {
 		t.Fatalf("unexpected jobs.getQueryResults response: %#v", jobResults)
 	}
