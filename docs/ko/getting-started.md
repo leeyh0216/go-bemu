@@ -83,11 +83,11 @@ curl --fail -X POST \
 <!-- section: external-gcs -->
 ## Parquet 로드 사용하기
 
-BQEMU에는 GCS 서버가 포함되어 있지 않습니다. 선택형 로드 구성은 외부 fake GCS
-서비스를 실행하고 BQEMU의 outbound GCS JSON 어댑터를 활성화합니다.
+BQEMU의 Parquet 로드 작업에는 GCS 호환 JSON endpoint가 필요합니다. 기본 Compose
+프로젝트는 fake GCS 서비스를 실행하고 BQEMU가 이 서비스를 사용하도록 설정합니다.
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 curl --fail http://localhost:4443/storage/v1/b
 ```
 

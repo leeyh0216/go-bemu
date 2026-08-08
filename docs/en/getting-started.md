@@ -84,11 +84,11 @@ test guides](../../tests/integration/docs/en/index.md).
 <!-- section: external-gcs -->
 ## Enable Parquet Load
 
-BQEMU does not include a GCS server. The optional load profile starts an
-external fake GCS service and enables BQEMU's outbound GCS JSON adapter:
+BQEMU requires a GCS-compatible JSON endpoint for Parquet load jobs. The default
+Compose project starts a fake GCS service and points BQEMU at it:
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 curl --fail http://localhost:4443/storage/v1/b
 ```
 

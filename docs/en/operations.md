@@ -28,8 +28,8 @@ environment mappings. The complete Docker-oriented example is
 | CLI | repeatable `--set path=value` | typed override for every leaf |
 
 The composition root consumes defaults, HTTP/gRPC/TLS limits, database/temp
-paths, shutdown budgets, logging, admin, UI, both Storage services, and opt-in
-load fields. `storage.read.maxSnapshotBytes` is reserved before each
+paths, shutdown budgets, logging, admin, UI, both Storage services, and load
+fields. `storage.read.maxSnapshotBytes` is reserved before each
 materialization and settled to the adapter's retained bytes; the sum of live
 sessions and in-flight reservations cannot exceed `maxTotalSnapshotBytes`.
 `query.operationTimeout` (default `2m`, environment
@@ -99,9 +99,9 @@ to fit the configured payload plus the file-configured
 `BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`) is acquired before gRPC
 `Recv`, bounding concurrent protobuf decode, clone, and digest memory across
 bidi streams before weighted coordinator admission begins.
-`load.enabled`
-requires an absolute `load.gcsEndpoint`; `load.allowFileSources` defaults false,
-and object/list/download limits are enforced. Runtime contract-profile
+`load.gcsEndpoint` must be an absolute HTTP(S) URL, and object/list/download
+limits are enforced. Load source URIs must use `gs://`; local paths and other
+schemes are rejected before job persistence. Runtime contract-profile
 negotiation remains uncomposed. A valid setting is not a claim beyond each
 Partial capability.
 

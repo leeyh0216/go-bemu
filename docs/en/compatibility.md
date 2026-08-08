@@ -91,7 +91,7 @@ relaxation, and job-driven evolution are not implied.
 | semantic SQL DDL | Partial | GoogleSQL AST plans execute `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, top-level `ADD`/`RENAME`/`DROP COLUMN`, and `ALTER COLUMN SET DATA TYPE`; unsupported clauses fail before mutation under `query.ddl.catalog-sync-v1`, while crash recovery between SQLite and the engine remains #26 |
 | multi-statement queries | Partial | transactional `DECLARE`, `SET`, and supported query/DML statements; control flow, dynamic SQL, and temporary routines remain unsupported under the official [multi-statement query contract](https://cloud.google.com/bigquery/docs/multi-statement-queries) |
 | cancellation | Partial | runtime shutdown rejects new work, cancels and drains admitted sync/async work before closing Storage or DuckDB; public [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel) and cancellation state remain unsupported |
-| Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in; configuration, status, errors, timestamps, and statistics are SQLite-durable |
+| Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | always available; configuration, status, errors, timestamps, and statistics are SQLite-durable |
 | copy/extract | Unsupported | configuration rejected |
 | durable job/result state | Partial | query/load job metadata survives restart; query row payloads do not, and a restarted non-empty result returns an explicit `backendError` instead of an empty success |
 | bounded query result retention | Unsupported | all result rows remain in Go memory; gap `query.results.unbounded-memory-v1` |
@@ -292,8 +292,8 @@ service.
 
 | Capability | Status |
 | --- | --- |
-| filesystem object-store adapter | Verified only behind explicit local opt-in |
-| embedded GCS server | Not provided; configure an external GCS-compatible JSON endpoint |
+| accepted load source URI | `gs://` only; local paths and other schemes fail before job persistence |
+| fake GCS service | Required by the default Compose project; the binary connects to the configured GCS-compatible JSON endpoint |
 | GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
 | Parquet load into an existing table | Partial; scalar fields only, with explicit schema/cast validation; nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1`, and decimal narrowing fails before destination mutation with `load.decimal-rounding.unsupported-v1` |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
@@ -308,7 +308,7 @@ service.
 
 The load target is
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad).
-The opt-in path downloads bounded immutable objects into a private temporary
+The load path downloads bounded immutable objects into a private temporary
 workspace, then applies the selected disposition atomically. Download is outside
 the destination transaction. Load job metadata and idempotency identity persist
 in SQLite; downloaded objects and temporary workspaces do not. The uploading

@@ -57,7 +57,7 @@ Those paths require staging, validation against the destination's current
 schema, atomic data plus metadata publication, and a durable job error. They are
 not implemented merely by accepting the JSON option.
 
-The current opt-in Parquet load slice validates casts against an existing table
+The current Parquet load path validates casts against an existing table
 and applies a write disposition atomically, but it rejects
 `schemaUpdateOptions`, destination creation, and autodetect. Load-driven schema
 evolution therefore remains unsupported.

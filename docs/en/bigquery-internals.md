@@ -158,12 +158,13 @@ documentation](https://cloud.google.com/bigquery/docs/loading-data).
 Opening a Parquet file is only one step; it does not prove BigQuery load
 semantics, job errors, wildcard URI handling, or atomic visibility.
 
-The opt-in public slice resolves bounded `gs://` list/get/media requests through
+The public load path resolves bounded `gs://` list/get/media requests through
 a fake-GCS-compatible JSON adapter, downloads objects to a private temporary
 workspace, validates Parquet columns and casts against an existing table, and
 applies `WRITE_APPEND`, `WRITE_EMPTY`, or `WRITE_TRUNCATE` in one DuckDB
-transaction. File sources require an explicit local-only option. Destination
-creation, autodetect, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, and
+transaction. Local paths and non-GCS URI schemes are rejected before job
+persistence. Destination creation, autodetect, `schemaUpdateOptions`,
+Avro/ORC/CSV/NDJSON, and
 multipart/resumable download are unsupported. Job metadata and idempotency
 identity persist in SQLite; downloaded objects and temporary staging workspaces
 do not.
@@ -231,7 +232,7 @@ policy, token introspection, or production authorization.
 | query job | job repository plus GoogleSQL gateway and statement ports | public sync/async path verified; result payload remains process-local |
 | CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical streams, stable offsets; Split/compression/historical snapshot/nested projection gaps |
 | AppendRows/finalize/commit | durable per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit, startup reconciliation; advanced stream kinds and independent-restore proof gaps |
-| indirect load | object store, staging, load dispositions | opt-in public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
+| indirect load | object store, staging, load dispositions | public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
 | overwrite `MERGE` | official analyzer, immutable semantic AST, engine visitor | constant-false replacement verified; dynamic partition and general parity remain #8 |
 | BigQuery-compatible request authentication | REST/gRPC transport behavior | intentionally absent; credential values are ignored |
 | ADC/WIF acquisition | client credential library | external to the public BQEMU runtime |
