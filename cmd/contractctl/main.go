@@ -25,6 +25,7 @@ func run(arguments []string) error {
 	root := flags.String("root", ".", "repository root")
 	family := flags.String("family", "", "consumer family filter (matrix only)")
 	lane := flags.String("lane", "", "consumer lane filter (matrix only)")
+	outputKey := flags.String("output-key", "", "prefix matrix JSON with a GitHub output key")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return err
 	}
@@ -44,6 +45,14 @@ func run(arguments []string) error {
 		matrix, err := contract.ConsumerMatrix(absolute, *family, *lane)
 		if err != nil {
 			return err
+		}
+		if *outputKey != "" {
+			for _, character := range *outputKey {
+				if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '_' {
+					return fmt.Errorf("output key %q must contain only letters, digits, or underscore", *outputKey)
+				}
+			}
+			matrix = append([]byte(*outputKey+"="), matrix...)
 		}
 		_, err = os.Stdout.Write(append(matrix, '\n'))
 		return err

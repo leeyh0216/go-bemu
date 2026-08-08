@@ -22,7 +22,8 @@
         "requiredVersions": [
           "cloudSdk",
           "bq"
-        ]
+        ],
+        "bootstrap": null
       },
       "compatibilityProfile": {
         "id": "bq-cli-public-v1",
@@ -96,7 +97,8 @@
         "requiredVersions": [
           "python",
           "client"
-        ]
+        ],
+        "bootstrap": null
       },
       "compatibilityProfile": {
         "id": "google-cloud-bigquery-python-public-v1",
@@ -184,7 +186,10 @@
           "scalaBinary",
           "java",
           "python"
-        ]
+        ],
+        "bootstrap": {
+          "python": "3.11"
+        }
       },
       "compatibilityProfile": {
         "id": "spark-bigquery-connector-public-v1",
@@ -268,7 +273,10 @@
           "scala",
           "scalaBinary",
           "java"
-        ]
+        ],
+        "bootstrap": {
+          "python": "3.11"
+        }
       },
       "compatibilityProfile": {
         "id": "spark-bigquery-connector-public-v1",

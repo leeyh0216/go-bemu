@@ -27,6 +27,7 @@ var approvedActionOwners = map[string]string{
 
 var requiredValidationJobs = []string{
 	"static-validation",
+	"consumer-matrix",
 	"go-smoke",
 	"go-tests",
 	"python-client",
@@ -193,6 +194,40 @@ func TestCIRequiresAllValidationBeforePublish(t *testing.T) {
 	for _, required := range []string{"github.event_name == 'push'", "refs/heads/main", "refs/tags/v"} {
 		if !strings.Contains(condition, required) {
 			t.Errorf("publish.if = %q, missing %q", condition, required)
+		}
+	}
+}
+
+func TestConsumerWorkflowsUseNormalizedDynamicMatrices(t *testing.T) {
+	root := repositoryRoot(t)
+	tests := map[string][]string{
+		"ci.yaml": {
+			"contractctl matrix --root . --family python --lane required --output-key python",
+			"contractctl matrix --root . --family bq --lane required --output-key bq",
+			"fromJSON(needs.consumer-matrix.outputs.python)",
+			"fromJSON(needs.consumer-matrix.outputs.bq)",
+		},
+		"spark-contract.yaml": {
+			"contractctl matrix --root . --family spark --lane required --output-key spark",
+			"fromJSON(needs.consumer-matrix.outputs.spark)",
+			"scripts/consumer_runner.py --case",
+		},
+	}
+	for filename, required := range tests {
+		contents, err := os.ReadFile(filepath.Join(root, ".github", "workflows", filename))
+		if err != nil {
+			t.Fatal(err)
+		}
+		workflow := string(contents)
+		for _, marker := range required {
+			if !strings.Contains(workflow, marker) {
+				t.Errorf("%s is missing dynamic consumer matrix marker %q", filename, marker)
+			}
+		}
+		for _, version := range []string{"3.5.8", "0.44.2", "3.43.0", "2.1.31", "2.60.0", "566.0.0"} {
+			if strings.Contains(workflow, version) {
+				t.Errorf("%s duplicates consumer version %s outside normalized JSON", filename, version)
+			}
 		}
 	}
 }

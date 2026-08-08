@@ -25,10 +25,12 @@ runnerAdapters:
     family: spark
     runtimeKind: spark-pyspark
     requiredVersions: [spark, connector, scalaBinary, java, python]
+    bootstrap: {python: "3.11"}
   - id: spark-scala-shell-v1
     family: spark
     runtimeKind: spark-scala
     requiredVersions: [spark, connector, scala, scalaBinary, java]
+    bootstrap: {python: "3.11"}
 compatibilityProfiles:
   - id: google-cloud-bigquery-python-public-v1
     scenarioIds: [python-metadata, python-query, python-tabledata]

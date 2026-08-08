@@ -10,7 +10,6 @@ BQEMU_GO_TEST_TIMEOUT ?= 10m
 BQEMU_PYTEST_TIMEOUT_SECONDS ?= 300
 BQEMU_BQCLI_BIN ?= bq
 BQEMU_BQCLI_TIMEOUT_SECONDS ?= 300
-BQEMU_BQCLI_VERSION ?= 2.1.31
 BQEMU_DOCKER_START_TIMEOUT_SECONDS ?= 120
 BQEMU_SPARK_TEST_TIMEOUT_SECONDS ?= 600
 BQEMU_SPARK_RPC_TIMEOUT_SECONDS ?= 30
@@ -26,7 +25,7 @@ IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test build run format format-check contract-generate contract-check test test-race python-test bq-test spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test build run format format-check contract-generate contract-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -119,6 +118,9 @@ contract-generate:
 contract-check:
 	go run ./cmd/contractctl check --root .
 
+consumer-runner-test:
+	"$(PYTHON3)" -m unittest discover -s tests/consumer_runner -p 'test_*.py'
+
 test:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...
 
@@ -127,17 +129,15 @@ test-race:
 
 python-test:
 	BQEMU_PYTEST_TIMEOUT_SECONDS="$(BQEMU_PYTEST_TIMEOUT_SECONDS)" \
-	"$(PYTHON)" -m pytest -c tests/python/pytest.ini tests/python
+	"$(PYTHON)" scripts/consumer_runner.py --family python
 
 bq-test:
 	@command -v "$(BQEMU_BQCLI_BIN)" >/dev/null 2>&1 || \
-	  (printf '%s\n' 'stage=setup operation=find-bq shape=missing-binary fix_hint=install-Google-Cloud-SDK-566.0.0' >&2; exit 1)
-	BQEMU_BQCLI_VERSION="$(BQEMU_BQCLI_VERSION)" \
+	  (printf '%s\n' 'stage=setup operation=find-bq shape=missing-binary fix_hint=install-case-declared-Google-Cloud-SDK' >&2; exit 1)
 	BQEMU_BQCLI_TIMEOUT_SECONDS="$(BQEMU_BQCLI_TIMEOUT_SECONDS)" \
-	BQEMU_BQCLI_ARTIFACT_DIR="$(CURDIR)/.artifacts/bqcli" \
-	"$(PYTHON3)" tests/bqcli/run_contract.py
+	"$(PYTHON3)" scripts/consumer_runner.py --family bq
 
-spark-contract-setup:
+spark-prepare:
 	mkdir -p "$(CURDIR)/.artifacts/spark/diagnostics"
 	@if test -x "$(BQEMU_SPARK_PYTHON)"; then \
 	  "$(BQEMU_SPARK_PYTHON)" -c 'import sys; assert sys.version_info[:2] == (3, 11), "Spark contract requires Python 3.11"'; \
@@ -148,16 +148,16 @@ spark-contract-setup:
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
 	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py
 
-spark-contract: spark-contract-setup
+spark-contract: spark-prepare
 	BQEMU_SPARK_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
 	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
 	PYTHONPYCACHEPREFIX="$(CURDIR)/.artifacts/spark/pycache" \
-	"$(BQEMU_SPARK_PYTHON)" -m pytest -c tests/spark/pytest.ini tests/spark \
-	  --basetemp="$(CURDIR)/.artifacts/spark/pytest" \
-	  --junitxml="$(CURDIR)/.artifacts/spark/diagnostics/junit.xml"
+	"$(BQEMU_SPARK_PYTHON)" scripts/consumer_runner.py --family spark --all
 
-spark-scala-contract: spark-contract-setup
+spark-contract-setup: spark-prepare
+
+spark-scala-contract: spark-prepare
 	BQEMU_SPARK_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
 	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
@@ -173,7 +173,7 @@ vet:
 github-actions-policy:
 	CGO_ENABLED=1 go test ./internal/cipolicy
 
-ci-static: github-actions-policy format-check contract-check vet config-check
+ci-static: github-actions-policy format-check contract-check consumer-runner-test vet config-check
 
 ci-test-all:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...

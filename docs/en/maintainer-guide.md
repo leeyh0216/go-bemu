@@ -66,11 +66,29 @@ actionable fix.
 <!-- section: new-version -->
 ## Add a Protocol or Client Version
 
-Use the pipeline `protocol profile -> adapter -> capability -> golden -> E2E`.
-Record exact artifact/tag, REST/RPC sequence, field-presence rules, wire format,
-schema mapping, retry/offset semantics, and removal criteria. Do not edit an old
-profile in place or link a mutable branch. Storage operations are compared with
-the [official RPC reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
+Consumer releases are declared in `contract/cases/*.yaml`. A case selects a
+`runtimeProfile`, `runnerAdapter`, `compatibilityProfile`, and `scenarioSet`, and
+contains its exact versions and immutable artifact URI and SHA-256. Add one case
+file when a release uses an existing runtime, invocation, and wire contract. Do
+not infer an adapter from a semantic-version range.
+
+Change `contract/consumers.yaml` only when the runtime shape, invocation method,
+wire contract, or scenario set is new. Operation IDs and scenario IDs are
+different namespaces. Test annotations contain only an operation ID; case YAML
+selects scenarios. Run the following checks before committing:
+
+```bash
+make contract-generate
+make ci-static
+go run ./cmd/contractctl matrix --root . --family spark --lane required
+```
+
+The compiler rejects unknown fields and references, duplicate IDs, invalid
+digests, and incompatible runtime/adapter combinations. CI and typed runners
+read only `contract/consumers.normalized.json`. Required cases block image
+publication; preview and nightly cases are selected separately and are not part
+of the release requirement. Storage operations remain grounded in the
+[official RPC reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
 
 <!-- section: diagnose-drift -->
 ## Diagnose Drift

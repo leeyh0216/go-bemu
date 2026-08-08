@@ -1,6 +1,12 @@
+<!-- doc-id: consumer-compatibility -->
+<!-- lang: ko -->
+
+[English](../en/consumer-compatibility.md) | [한국어](consumer-compatibility.md)
+
 # 소비자 호환성
 
-이 문서는 `contract/consumers.normalized.json`에서 생성됩니다.
+<!-- section: generated-cases -->
+이 문서는 `contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. Spark 사례의 출처는 [Spark BigQuery 커넥터 0.44.2](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)입니다.
 
 | 사례 | 실행 계열 | 상태 | 런타임 | 시나리오 |
 |---|---|---|---|---|

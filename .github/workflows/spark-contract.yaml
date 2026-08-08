@@ -20,8 +20,24 @@ env:
   BQEMU_ARTIFACT_TIMEOUT_SECONDS: "180"
 
 jobs:
+  consumer-matrix:
+    name: Normalize required Spark cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      spark: ${{ steps.matrix.outputs.spark }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Emit normalized Spark matrix
+        id: matrix
+        run: go run ./cmd/contractctl matrix --root . --family spark --lane required --output-key spark >> "$GITHUB_OUTPUT"
+
   protocol-matrix:
-    name: Connector 0.44.2 matrix guard
+    name: Connector protocol matrix guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -34,10 +50,13 @@ jobs:
         run: go test -race -timeout "$BQEMU_GO_TEST_TIMEOUT" ./contract
 
   spark-public-edge:
-    name: Real Spark public-edge slice
-    needs: protocol-matrix
+    name: Spark / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+    needs: [consumer-matrix, protocol-matrix]
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.consumer-matrix.outputs.spark) }}
     env:
       PYTHONPYCACHEPREFIX: ${{ github.workspace }}/.artifacts/spark/pycache
     steps:
@@ -48,21 +67,27 @@ jobs:
           cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.runnerAdapter.bootstrap.python }}
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ matrix.runtimeProfile.versions.java }}
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
-      - name: Install locks and run TLS REST and gRPC public-edge contracts
-        run: make spark-contract
+      - name: Install locked Spark test runtime
+        run: make spark-prepare
+      - name: Run typed TLS REST and gRPC public-edge contract
+        env:
+          BQEMU_CONSUMER_CASE: ${{ matrix.id }}
+        run: .artifacts/spark/venv/bin/python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE"
       - name: Upload payload-safe Spark diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: spark-public-edge-diagnostics-${{ github.run_id }}
-          path: .artifacts/spark/diagnostics
+          name: consumer-${{ matrix.id }}-${{ github.run_id }}
+          path: |
+            .artifacts/consumers/${{ matrix.id }}
+            .artifacts/spark/diagnostics
           if-no-files-found: ignore
           retention-days: 7

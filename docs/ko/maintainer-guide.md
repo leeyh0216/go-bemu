@@ -71,12 +71,29 @@ go vet ./...
 <!-- section: new-version -->
 ## 프로토콜 또는 클라이언트 버전 추가
 
-`protocol profile -> adapter -> capability -> golden -> E2E` 순서를 사용합니다.
-정확한 산출물 및 태그, REST/RPC 호출 순서, 필드 존재 여부 규칙, 전송 형식,
-스키마 대응, 재시도 및 오프셋 의미, 제거 조건을 기록합니다. 이전 프로필을 직접
-수정하거나 변경될 수 있는 브랜치를 연결하지 않습니다. Storage 동작은
-[공식 RPC 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)와
-비교합니다.
+소비자 릴리스는 `contract/cases/*.yaml`에 선언합니다. 사례에는 사용할
+`runtimeProfile`, `runnerAdapter`, `compatibilityProfile`, `scenarioSet`을 지정합니다.
+정확한 버전과 변경되지 않는 산출물 URI 및 SHA-256도 함께 기록합니다. 기존 실행
+환경, 호출 방법, 통신 계약을 그대로 사용하는 릴리스라면 사례 YAML 파일 하나만
+추가합니다. 버전 범위로 어댑터를 추측하지 않습니다.
+
+실행 환경의 형태, 호출 방법, 통신 계약, 시나리오 묶음이 새로 생긴 경우에만
+`contract/consumers.yaml`을 변경합니다. operation ID와 scenario ID는 서로 다른
+식별자입니다. 테스트 annotation에는 operation ID만 기록하고, 사례 YAML에서 실행할
+시나리오를 선택합니다. 커밋하기 전에 다음 명령을 실행합니다.
+
+```bash
+make contract-generate
+make ci-static
+go run ./cmd/contractctl matrix --root . --family spark --lane required
+```
+
+컴파일러는 알 수 없는 필드와 참조, 중복 ID, 잘못된 해시, 함께 사용할 수 없는 실행
+환경과 어댑터 조합을 거부합니다. CI와 실행 어댑터는
+`contract/consumers.normalized.json`만 읽습니다. `required` 사례가 실패하면 이미지가
+배포되지 않습니다. `preview`와 `nightly` 사례는 별도로 선택하며 릴리스 조건에
+포함하지 않습니다. Storage 동작은 [공식 RPC
+레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)와 비교합니다.
 
 <!-- section: diagnose-drift -->
 ## 호환성 차이 진단

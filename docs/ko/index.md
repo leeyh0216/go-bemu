@@ -15,6 +15,8 @@
 - [호환성](compatibility.md): 기능별 구현 상태와 제한 사항을 정리합니다.
 - [로컬 클라이언트 인증 파일과 TLS](client-credentials-and-tls.md): 폐기할 수 있는
   인증 파일, 루프백 token 교환, TLS 신뢰, 클라이언트별 설정을 설명합니다.
+- [소비자 호환성](consumer-compatibility.md): 현재 필수 클라이언트, CLI, Spark 사례와
+  각 실행 환경 및 시나리오 식별자를 자동 생성하여 정리합니다.
 - [스키마 변경과 CDC](schema-evolution-cdc.md): 필드 추가 규칙, Storage Write 스키마
   변경, CDC 처리 순서와 현재 제한 사항을 설명합니다.
 - [동적 파티션 덮어쓰기](dynamic-partition-overwrite.md): 특정 Spark 스크립트의 의미,

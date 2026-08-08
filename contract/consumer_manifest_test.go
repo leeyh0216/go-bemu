@@ -152,7 +152,7 @@ func validConsumerFixture() (ConsumerManifest, []ConsumerCase, map[string]bool) 
 	manifest := ConsumerManifest{
 		SchemaVersion:         "1",
 		RuntimeProfiles:       []RuntimeProfile{{ID: "python", Family: "python", Kind: "python-pytest"}},
-		RunnerAdapters:        []RunnerAdapter{{ID: "pytest-v1", Family: "python", RuntimeKind: "python-pytest", RequiredVersions: []string{"python", "client"}}},
+		RunnerAdapters:        []RunnerAdapter{{ID: "pytest-v1", Family: "python", RuntimeKind: "python-pytest", RequiredVersions: []string{"python", "client"}, Bootstrap: map[string]string{}}},
 		CompatibilityProfiles: []CompatibilityProfile{{ID: "python-v1", ScenarioIDs: []string{"query"}}},
 		Scenarios:             []ConsumerScenario{{ID: "query", OperationIDs: []string{"bigquery.jobs.query"}}},
 		ScenarioSets:          []ScenarioSet{{ID: "query-set", ScenarioIDs: []string{"query"}}},

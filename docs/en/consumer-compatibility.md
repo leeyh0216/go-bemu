@@ -1,6 +1,12 @@
-# Consumer compatibility
+<!-- doc-id: consumer-compatibility -->
+<!-- lang: en -->
 
-This page is generated from `contract/consumers.normalized.json`.
+[English](consumer-compatibility.md) | [한국어](../ko/consumer-compatibility.md)
+
+# Consumer Compatibility
+
+<!-- section: generated-cases -->
+This page is generated from `contract/consumers.normalized.json`. Public behavior is verified against the [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest). Spark cases use the [Spark BigQuery connector 0.44.2](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2) source.
 
 | Case | Family | Lane | Runtime | Scenarios |
 |---|---|---|---|---|

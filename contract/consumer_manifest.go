@@ -42,10 +42,11 @@ type RuntimeProfile struct {
 }
 
 type RunnerAdapter struct {
-	ID               string   `yaml:"id" json:"id"`
-	Family           string   `yaml:"family" json:"family"`
-	RuntimeKind      string   `yaml:"runtimeKind" json:"runtimeKind"`
-	RequiredVersions []string `yaml:"requiredVersions" json:"requiredVersions"`
+	ID               string            `yaml:"id" json:"id"`
+	Family           string            `yaml:"family" json:"family"`
+	RuntimeKind      string            `yaml:"runtimeKind" json:"runtimeKind"`
+	RequiredVersions []string          `yaml:"requiredVersions" json:"requiredVersions"`
+	Bootstrap        map[string]string `yaml:"bootstrap" json:"bootstrap"`
 }
 
 type CompatibilityProfile struct {
@@ -243,6 +244,11 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 		}
 		if duplicate := firstDuplicate(adapter.RequiredVersions); duplicate != "" {
 			return NormalizedConsumerManifest{}, fmt.Errorf("runner adapter %s duplicates required version %s", adapter.ID, duplicate)
+		}
+		for tool, version := range adapter.Bootstrap {
+			if tool == "" || version == "" {
+				return NormalizedConsumerManifest{}, fmt.Errorf("runner adapter %s has an empty bootstrap tool or version", adapter.ID)
+			}
 		}
 	}
 	for _, scenario := range manifest.Scenarios {
@@ -475,9 +481,9 @@ func FileSHA256(path string) (string, error) {
 func renderConsumerCompatibility(manifest NormalizedConsumerManifest, language string) []byte {
 	var output strings.Builder
 	if language == "ko" {
-		output.WriteString("# 소비자 호환성\n\n이 문서는 `contract/consumers.normalized.json`에서 생성됩니다.\n\n| 사례 | 실행 계열 | 상태 | 런타임 | 시나리오 |\n|---|---|---|---|---|\n")
+		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: ko -->\n\n[English](../en/consumer-compatibility.md) | [한국어](consumer-compatibility.md)\n\n# 소비자 호환성\n\n<!-- section: generated-cases -->\n이 문서는 `contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. Spark 사례의 출처는 [Spark BigQuery 커넥터 0.44.2](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)입니다.\n\n| 사례 | 실행 계열 | 상태 | 런타임 | 시나리오 |\n|---|---|---|---|---|\n")
 	} else {
-		output.WriteString("# Consumer compatibility\n\nThis page is generated from `contract/consumers.normalized.json`.\n\n| Case | Family | Lane | Runtime | Scenarios |\n|---|---|---|---|---|\n")
+		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: en -->\n\n[English](consumer-compatibility.md) | [한국어](../ko/consumer-compatibility.md)\n\n# Consumer Compatibility\n\n<!-- section: generated-cases -->\nThis page is generated from `contract/consumers.normalized.json`. Public behavior is verified against the [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest). Spark cases use the [Spark BigQuery connector 0.44.2](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2) source.\n\n| Case | Family | Lane | Runtime | Scenarios |\n|---|---|---|---|---|\n")
 	}
 	for _, consumerCase := range manifest.Cases {
 		versionKeys := make([]string, 0, len(consumerCase.RuntimeProfile.Versions))
