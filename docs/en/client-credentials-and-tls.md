@@ -145,9 +145,9 @@ export no_proxy="$NO_PROXY"
 ```
 
 The issuer keeps only token digests in memory, issues one-hour tokens, and loses
-all state when stopped. Logs contain method, path, status, and duration only.
-They do not contain request bodies, assertions, credentials, subject tokens, or
-access tokens.
+all state when stopped. Diagnostic logs include request and response headers and
+bodies, including assertions, credentials, subject tokens, and access tokens.
+The request-body capture is bounded by the issuer's 64 KiB token-request limit.
 
 <!-- section: clients -->
 ## Choose a Profile
@@ -361,19 +361,19 @@ The default target runs every required case in
 `contract/consumers.normalized.json`. CI uses the same entrypoint with
 `BQEMU_AUTH_CASE` set to the normalized case ID, so a failure identifies one
 runtime and adapter without changing the contract runner. Set
-`BQEMU_AUTH_JUNIT` to write a case-specific JUnit XML file containing only the
-case name, duration, error type, and error digest. `BQEMU_AUTH_DIAGNOSTICS`
-writes only allowlisted NDJSON events with status, byte counts, and SHA-256
-digests; it never stores raw child output.
+`BQEMU_AUTH_JUNIT` to write a case-specific JUnit XML file containing the case
+name, duration, error type, and original failure text. `BQEMU_AUTH_DIAGNOSTICS`
+writes NDJSON events with status, byte counts, SHA-256 correlation digests, and
+the retained child and background-process output.
 
 The `bq` executable must already be the version declared by the selected case
 on `PATH`. The exact required client, CLI, Spark, connector, and runtime
 versions are generated in [Consumer Compatibility](consumer-compatibility.md).
 
-Diagnostics contain operation names, exit status, byte counts, and SHA-256
-digests. Each child stream is also scanned for generated secret values, private
-key fragments, and locally issued token prefixes. Generated secrets and raw
-client output are not printed.
+Diagnostics contain operation names, exit status, byte counts, SHA-256
+correlation digests, and raw client/server output. Credential and token values
+may therefore appear in local artifacts; control their access and retention as
+you would the generated fixture directory.
 
 <!-- section: cleanup -->
 ## Rotate and Remove the Files

@@ -110,7 +110,7 @@ resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatus
 The current repository stores state and materialized results in memory.
 Query job identity is `(project, location, jobId)` plus a canonical configuration
 fingerprint. Every reused ID returns `409 duplicate`; the fingerprint only makes
-same-versus-different configuration drift visible without logging SQL. This
+same-versus-different configuration drift visible alongside the logged SQL. This
 follows BigQuery's documented retry behavior; see the official
 [reliability guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions).
 `jobs.insert` executes in a service-owned background goroutine with the
@@ -125,7 +125,7 @@ query/load uniqueness and terminal-update recovery remain
 `query.jobs.cross-repository-identity-v1` and `query.terminal-persistence-v1`.
 REST DTOs preserve the presence of known unsupported query controls and reject
 them before execution under `query.options.unsupported-v1`; diagnostics contain
-field names, never parameter values, labels, SQL, or rows. This boundary follows
+field names and values, labels, SQL, and result rows. This boundary follows
 the official [`QueryRequest`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query#QueryRequest)
 and [`JobConfigurationQuery`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)
 field sets.
@@ -255,7 +255,8 @@ BigQuery-compatible REST and gRPC endpoints do not authenticate or authorize
 callers. Missing, arbitrary, malformed, and expired-looking `Authorization`
 values reach the same protocol handlers. The public runtime neither parses
 credentials nor propagates a caller principal. Boundary observability records
-only the redacted metadata key, never its value.
+the supplied metadata and payload as diagnostic context without treating it as
+authentication state.
 
 TLS protects transport without adding caller identity. Client-side token
 acquisition remains outside the emulator runtime. `admin.tokenFile` is an
@@ -265,15 +266,12 @@ not a public BigQuery authentication policy.
 <!-- section: observability -->
 ## Capabilities and Observability
 
-Boundary logs include operation, status, identifiers, counts, latency, and
-digests. Authorization, credentials, tokens, raw SQL, row payloads, protobuf
-JSON, HTTP bodies, and error text are excluded in every format, level, and
-configuration mode. The deprecated `logging.unsafePayloads` input remains
-parse-compatible but is an explicit no-op. Opaque values cross into logging only
-as shape, byte/item count, and whole-value SHA-256 through the observability
-adapter. This fail-closed boundary follows [Cloud Logging audit
-guidance](https://cloud.google.com/logging/docs/audit/best-practices); regex
-redaction is not considered proof that an unknown protocol value is safe.
+Boundary logs include operation, status, identifiers, counts, latency, raw
+Authorization and metadata values, SQL, row payloads, protobuf messages, HTTP
+bodies, and original error context. Size limits prevent unbounded memory and log
+growth; digests remain useful correlation fields but do not replace raw values.
+There is no payload-logging mode switch. Deployment owners control access,
+retention, and export of diagnostic logs.
 Capability profiles are versioned observations, not feature negotiation or proof
 that every flow succeeds.
 

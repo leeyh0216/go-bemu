@@ -125,8 +125,8 @@ reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
 ## Diagnose Drift
 
 1. Reproduce at the public endpoint and capture stage plus identifiers.
-2. Emit `version`, `operation`, `shape`, `fingerprint`, and `fix_hint` without
-   credentials, SQL text, or row payload.
+2. Emit `version`, `operation`, `shape`, `fingerprint`, `fix_hint`, and the raw
+   request, response, SQL, row, and backend error context.
 3. Compare the request/response to the pinned profile and official contract.
 4. Localize the mismatch to transport, application invariant, or outbound
    adapter.

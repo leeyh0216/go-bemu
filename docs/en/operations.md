@@ -64,9 +64,9 @@ documented one-row exception. This local accounting is deliberately deterministi
 Cloud describes its [10 MB page and 100 MB single-row limits](https://cloud.google.com/bigquery/docs/paging-results#api-limits)
 as approximate internal sizes. All four values are file-first and have typed
 `--set` overrides. Accepted wire fragments stream without a second whole-page
-copy. Logs
-retain only row count, canonical byte count, incremental framed digest, and the
-digest of bytes actually written at the HTTP boundary, never raw rows.
+copy. Logs retain the raw rows together with row count, canonical byte count,
+incremental framed digest, and the digest of bytes actually written at the HTTP
+boundary.
 In-memory snapshots charge encoded row bytes, while spill files also charge the
 eight-byte frame prefix for every row. `storage.write.maxInFlightBytes*` bounds
 decoded requests waiting for the serialized DuckDB coordinator, and
@@ -127,9 +127,9 @@ bounds decoded bytes; both default to 2 MiB. They map to
 `--set`. Enforcement reads the stream and therefore also covers chunked
 requests whose `ContentLength` is unknown. An unsupported encoding returns
 `415`, a malformed or multiple encoding returns `400`, and either byte budget
-returns `413`. Boundary logs retain only encoding, accepted/rejected outcome,
-byte counts, SHA-256 digests, status, and reason, never the raw body or
-credentials. This follows Go's [`Request` body
+returns `413`. Boundary logs retain the bounded compressed and decoded request
+body, headers, encoding, accepted/rejected outcome, byte counts, SHA-256
+digests, status, and reason. This follows Go's [`Request` body
 contract](https://pkg.go.dev/net/http#Request),
 [`MaxBytesReader`](https://pkg.go.dev/net/http#MaxBytesReader), and
 [`gzip.NewReader`](https://pkg.go.dev/compress/gzip#NewReader), the official
@@ -153,33 +153,23 @@ operational metadata. TLS only secures transport; it does not implement [Google
 Cloud authentication](https://cloud.google.com/docs/authentication).
 
 <!-- section: logging-safety -->
-## Payload-Safe Logging Contract
+## Raw Diagnostic Logging
 
-`logging.unsafePayloads` and `BQEMU_LOG_UNSAFE_PAYLOADS` are deprecated
-compatibility inputs in `config.bqemu.dev/v1alpha1`. Existing files,
-environments, and `--set logging.unsafePayloads=true` continue to load, but the
-value is a no-op and emits a structured deprecation event. It cannot enable raw
-payload logging. Removing the key requires a future configuration API version;
-changing its behavior does not.
+Runtime logs retain the request and failure context needed to reproduce an
+emulator interaction. There is no `logging.unsafePayloads` switch: raw diagnostic
+context is the normal behavior.
 
-The invariant applies to JSON and text output, every log level, and both values
-of the legacy setting. It follows the official [Cloud Logging structured-log
-model](https://cloud.google.com/logging/docs/structured-logging) and [audit-log
-security guidance](https://cloud.google.com/logging/docs/audit/best-practices):
+| Boundary | Recorded context |
+| --- | --- |
+| REST | method/path, query and header names and values, bounded request body, status, duration, and handler errors |
+| Storage gRPC | RPC name, metadata, protobuf messages, serialized row/schema bytes, stream events, status, and errors |
+| SQL and storage engines | submitted SQL or predicate, rows and schemas involved in the operation, generated statement context, and the original backend error |
+| side effects | component, operation, pre/post state, raw request/result context, success, and duration |
 
-| Boundary | Recorded shape | Never recorded |
-| --- | --- | --- |
-| REST | method/path, query and header **names**, encoding, body bytes read and SHA-256, status, duration | header/query values, request or response body |
-| Storage gRPC | RPC and protobuf full name, resource identifiers, offsets, item/row counts, wire/schema byte counts and SHA-256 | protobuf JSON, serialized rows, filter/SQL text, credential metadata values |
-| errors | Go error type, message byte count, whole-message SHA-256 | `error`/`err.Error()` text, embedded SQL, values, paths, or credentials |
-| side effects | component, operation, pre/post state, success, duration, safe identifiers/counts/digests | raw request/response or backend payload |
-
-`PayloadAttrs`, `ProtoAttrs`, and `ErrorAttrs` are the only conversion boundary
-for opaque data. Even the retained `RedactText` helper returns only an omitted
-marker, byte count, and digest; pattern-based partial redaction is not treated as
-a security boundary. SHA-256 fingerprints support same/different diagnostics,
-not payload recovery. The Storage message shapes come from the official
-[`google.cloud.bigquery.storage.v1` RPC model](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1).
+Size and count limits remain resource controls, not redaction rules. Structured
+digests may accompany raw values for correlation. Because logs can contain
+headers, credentials, SQL, and row data, operators must apply access, retention,
+and export controls appropriate to their environment.
 
 <!-- section: local-run -->
 ## Local Runbook
@@ -303,7 +293,7 @@ classified as coarse. A future per-phase split is:
 
 | Control | Purpose | Diagnostic on expiry |
 | --- | --- | --- |
-| `BQEMU_TEST_STARTUP_TIMEOUT` | process/container readiness budget | ports, health bodies, last sanitized logs |
+| `BQEMU_TEST_STARTUP_TIMEOUT` | process/container readiness budget | ports, health bodies, last bounded raw logs |
 | `BQEMU_TEST_REQUEST_TIMEOUT` | one REST/RPC operation budget | operation, capability, request fingerprint |
 | `BQEMU_TEST_EVENTUALLY_TIMEOUT` | polling/eventual-state budget | last state and transition history |
 | `BQEMU_TEST_SHUTDOWN_TIMEOUT` | graceful-stop budget | outstanding REST/RPC/job counts |
@@ -332,13 +322,11 @@ admin listener uses that shared TLS identity.
 
 If `tokenFile` is set, every route requires a Bearer token compared in constant
 time. The trimmed token must contain at least 16 bytes and its file is bounded at
-64 KiB. Goroutine output is sensitive even though it excludes configuration by
-design: its default cap is 4 MiB, it is never copied into logs, and remote access
-must be protected.
+64 KiB. Goroutine output has a default 4 MiB cap and is copied into the
+diagnostic log when requested. Remote access and log storage must be protected
+accordingly.
 
 A future `GET /bqemu/v1/admin/config` may return model version,
-source/effective fingerprints, and a redacted effective model. It must never
-include Authorization headers, token/key contents, raw SQL, row payloads, or
-unbounded logs; secret file references reduce to configured/not-configured or a
-non-reversible digest. That config endpoint, capability/operation counts, and
-recent drift summaries are still planned and are not an IAM substitute.
+source/effective fingerprints, and the effective model. That config endpoint,
+capability/operation counts, and recent drift summaries are still planned and
+are not an IAM substitute.

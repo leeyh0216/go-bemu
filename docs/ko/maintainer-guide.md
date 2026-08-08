@@ -125,8 +125,8 @@ bq 사례는 처리 방식이 다릅니다. `cloud-sdk-release-provenance`는
 ## 호환성 차이 진단
 
 1. 공개 엔드포인트에서 문제를 재현하고 처리 단계와 식별자를 수집합니다.
-2. 인증 정보, SQL 원문, 행 데이터 없이 `version`, `operation`, `shape`,
-   `fingerprint`, `fix_hint`를 출력합니다.
+2. `version`, `operation`, `shape`, `fingerprint`, `fix_hint`와 함께 요청, 응답, SQL,
+   행 데이터, 백엔드 오류의 원본 맥락을 출력합니다.
 3. 요청과 응답을 고정된 프로필 및 공식 계약과 비교합니다.
 4. 차이가 전송 계층, 애플리케이션 불변 조건, 외부 연동 어댑터 중 어디에서
    발생했는지 확인합니다.

@@ -148,7 +148,7 @@ protocol profile -> adapter -> capability -> golden -> E2E
 
 The profile identifies client and protocol version. The adapter converts only a
 known shape. The capability records supported, partial, or unsupported status.
-The golden fixture is sanitized and includes both positive and negative shapes.
+The golden fixture includes the raw diagnostic context for positive and negative shapes.
 E2E runs through the public REST/gRPC endpoint with the released client. A stage
 cannot be skipped because a DuckDB unit test passed.
 
@@ -161,12 +161,12 @@ Every mismatch must carry these stable fields:
 version=<client/protocol version>
 operation=<REST method, RPC, or SQL template>
 shape=<JSON/protobuf/schema summary>
-fingerprint=<redacted deterministic digest>
+fingerprint=<deterministic digest>
 fix_hint=<next actionable boundary>
 ```
 
-Fingerprints cover canonical schemas or sanitized payload structure, never
-credentials or production row values. Version and operation select the profile;
+Fingerprints cover canonical schemas or payload structure and may accompany raw
+diagnostic context. Version and operation select the profile;
 shape and fingerprint localize drift; `fix_hint` names the adapter, capability,
 golden, or E2E step that must change.
 

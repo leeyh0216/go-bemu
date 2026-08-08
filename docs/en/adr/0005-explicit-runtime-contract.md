@@ -16,8 +16,8 @@ remain proposed.
 ## Context
 
 Hidden defaults, scattered test sleeps, a public diagnostics route, or an
-unbounded graceful stop make compatibility failures hard to reproduce and can
-leak sensitive values. BigQuery-compatible REST and Storage RPC listeners are
+unbounded graceful stop make compatibility failures hard to reproduce.
+BigQuery-compatible REST and Storage RPC listeners are
 public protocol surfaces, while emulator diagnostics are project-owned control
 surfaces. The service list comes from the [Storage RPC
 reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc), and
@@ -32,16 +32,14 @@ reference](https://docs.docker.com/reference/compose-file/services/).
 2. Diagnostics use a separate listener, disabled by default, and never share the
    BigQuery REST namespace. A non-loopback bind requires a token and server TLS.
 3. Startup, request, eventual-state, and shutdown tests use named configurable
-   deadlines and bounded sanitized diagnostics.
+   deadlines and bounded raw diagnostics.
 4. The release container runs non-root. Its operational profile uses read-only
    rootfs, explicit writable data volumes, bounded temporary storage, health and
    readiness probes, and one graceful-stop deadline with forced fallback.
-5. No endpoint or log exposes credentials, tokens, private keys, raw SQL, row
-   payloads, HTTP bodies, protobuf JSON, or error text in any mode. Opaque values
-   use shape/count/length/SHA-256 summaries. The legacy `unsafePayloads` input is
-   retained as a deprecated no-op, because partial redaction cannot establish a
-   safe boundary. This follows [Cloud Logging audit
-   guidance](https://cloud.google.com/logging/docs/audit/best-practices).
+5. Diagnostics retain raw request, response, metadata, SQL, row, protobuf, and
+   backend error context. Bounded capture protects resources; deployment access
+   and retention controls govern the resulting logs. There is no payload-logging
+   configuration switch.
 
 <!-- section: consequences -->
 ## Consequences
@@ -53,9 +51,6 @@ runtime applies configured HTTP/gRPC limits and shared TLS, starts admin only
 when enabled, and forces gRPC stop when its shared shutdown deadline expires.
 The resource-close phase owns QueryService admission/cancellation/drain and
 orders it before Storage Read, Storage Write, and DuckDB teardown.
-Legacy configurations that set `logging.unsafePayloads` still parse and produce
-the same effective model, but a true value emits only a deprecation event and
-does not change payload-safe logging.
 Readiness drain, outstanding-operation reporting, a dedicated second-signal path,
 and split per-phase test timeouts remain incomplete. Configuration failures use
 `model_version/operation/shape/fingerprint/fix_hint`; protocol drift uses

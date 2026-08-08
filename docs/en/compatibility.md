@@ -125,7 +125,7 @@ and `JobConfigurationQuery` are presence-aware at the REST boundary and fail
 before execution; a zero value is never silently accepted as implemented.
 BigQuery rejects every reused job ID with `409 duplicate` and recommends
 `jobs.get` recovery; BQEMU follows that default and retains a configuration
-fingerprint only for safe drift diagnostics. See the official
+fingerprint alongside the raw configuration for drift diagnostics. See the official
 [retry guidance](https://cloud.google.com/bigquery/docs/reliability-intro#retry_failed_job_insertions).
 
 For a row-producing query without `destinationTable`, BQEMU generates the

@@ -135,10 +135,10 @@ Planning uses stable classifications. Invalid logical input maps to
 `ErrInvalid`, an engine representability limit maps to `ErrUnsupported`, and a
 stale or foreign runtime binding maps to `ErrPrecondition`.
 
-Do not wrap a raw adapter error in a planning error. It can expose physical
-table names, engine SQL, paths, or credentials through the external error text
-or `errors.Unwrap`. Preserve cancellation and deadline errors; translate other
-causes to a stable error code and capability identifier.
+Wrap the raw adapter error in the planning classification so callers retain the
+physical table name, engine SQL, path, or other backend context through the
+error text and `errors.Unwrap`. Preserve cancellation and deadline errors while
+also attaching a stable error code and capability identifier.
 
 <!-- section: implementation -->
 ## Implement a New Adapter
