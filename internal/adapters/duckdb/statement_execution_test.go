@@ -3,13 +3,209 @@ package duckdb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/ports"
 	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
+
+type statementExecutionCatalog struct {
+	snapshot ports.GoogleSQLCatalogSnapshot
+}
+
+func (catalog statementExecutionCatalog) GoogleSQLCatalogSnapshot(context.Context) (ports.GoogleSQLCatalogSnapshot, error) {
+	return catalog.snapshot, nil
+}
+
+func TestExecuteStatementRunsGoogleSQLScriptWithResolvedVariables(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	reference := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "source"}
+	if _, err := warehouse.ExecuteStatement(ctx, newTypedSourceSeedStatement(t, reference)); err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := googlesqladapter.NewGateway(statementExecutionCatalog{snapshot: statementExecutionSnapshot()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		sql  string
+		want [][]any
+	}{
+		{
+			name: "declare set and select",
+			sql:  "DECLARE x INT64 DEFAULT 10; SET x = x + 1; SELECT x AS value",
+			want: [][]any{{int64(11)}},
+		},
+		{
+			name: "column shadows variable",
+			sql:  "DECLARE id INT64 DEFAULT 10; SELECT id + id AS value FROM analytics.source ORDER BY id",
+			want: [][]any{{int64(2)}, {int64(4)}},
+		},
+		{
+			name: "unshadowed variable",
+			sql:  "DECLARE x INT64 DEFAULT 10; SELECT id + x AS value FROM analytics.source ORDER BY id",
+			want: [][]any{{int64(11)}, {int64(12)}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statement, err := gateway.Analyze(ctx, ports.QueryRequest{
+				ProjectID: "test-project", DefaultDataset: "analytics", SQL: test.sql,
+			})
+			if err != nil {
+				t.Fatalf("Analyze() error = %v", err)
+			}
+			result, err := warehouse.ExecuteStatement(ctx, statement)
+			if err != nil {
+				t.Fatalf("ExecuteStatement() error = %v", err)
+			}
+			if len(result.Rows) != len(test.want) {
+				t.Fatalf("rows = %#v, want %#v", result.Rows, test.want)
+			}
+			for index := range test.want {
+				if len(result.Rows[index]) != 1 || result.Rows[index][0] != test.want[index][0] {
+					t.Fatalf("rows = %#v, want %#v", result.Rows, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestExecuteStatementRunsGenericDeclareMergeScriptAtomically(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "analytics"); err != nil {
+		t.Fatal(err)
+	}
+	fields := []domain.Field{
+		{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+		{Name: "partition_date", Type: "DATE", Mode: "NULLABLE"},
+		{Name: "payload", Type: "STRING", Mode: "NULLABLE"},
+	}
+	for _, tableID := range []string{"temporary", "destination"} {
+		if err := warehouse.CreateTable(ctx, domain.Table{
+			ProjectID: "test-project", DatasetID: "analytics", ID: tableID,
+			Type: "TABLE", Schema: domain.CloneFields(fields),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema := quoteIdentifier(physicalSchema("test-project", "analytics"))
+	if _, err := warehouse.db.ExecContext(ctx,
+		"INSERT INTO "+schema+"."+quoteIdentifier("destination")+" VALUES (1, DATE '2024-01-01', 'old'), (2, DATE '2024-01-02', 'keep')",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx,
+		"INSERT INTO "+schema+"."+quoteIdentifier("temporary")+" VALUES (3, DATE '2024-01-01', 'new'), (4, NULL, 'unpartitioned')",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := statementExecutionSnapshot()
+	snapshot.Projects[0].Datasets[0].Tables = []domain.Table{
+		{ProjectID: "test-project", DatasetID: "analytics", ID: "temporary", Type: "TABLE", Schema: domain.CloneFields(fields)},
+		{ProjectID: "test-project", DatasetID: "analytics", ID: "destination", Type: "TABLE", Schema: domain.CloneFields(fields)},
+	}
+	gateway, err := googlesqladapter.NewGateway(statementExecutionCatalog{snapshot: snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	googleSQL := "DECLARE partitions_to_delete DEFAULT " +
+		"(SELECT ARRAY_AGG(DISTINCT(DATE_TRUNC(partition_date, DAY)) IGNORE NULLS) " +
+		"FROM `test-project.analytics.temporary`); " +
+		"MERGE `test-project.analytics.destination` AS target " +
+		"USING `test-project.analytics.temporary` AS source ON FALSE " +
+		"WHEN NOT MATCHED BY SOURCE AND DATE_TRUNC(target.partition_date, DAY) " +
+		"IN UNNEST(partitions_to_delete) THEN DELETE " +
+		"WHEN NOT MATCHED BY TARGET THEN INSERT(id, partition_date, payload) " +
+		"VALUES(source.id, source.partition_date, source.payload)"
+	statement, err := gateway.Analyze(ctx, ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics", SQL: googleSQL,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	result, err := warehouse.ExecuteStatement(ctx, statement)
+	if err != nil {
+		t.Fatalf("ExecuteStatement() error = %v", err)
+	}
+	if result.AffectedRows != 3 {
+		t.Fatalf("affected rows = %d, want 3", result.AffectedRows)
+	}
+	rows, err := warehouse.db.QueryContext(ctx,
+		"SELECT id, payload FROM "+schema+"."+quoteIdentifier("destination")+" ORDER BY id",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var observed []string
+	for rows.Next() {
+		var id int64
+		var payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			t.Fatal(err)
+		}
+		observed = append(observed, fmt.Sprintf("%d:%s", id, payload))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(observed, ",") != "2:keep,3:new,4:unpartitioned" {
+		t.Fatalf("destination rows = %#v", observed)
+	}
+}
+
+func TestExecuteStatementRollsBackGoogleSQLScriptOnLaterFailure(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	reference := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "source"}
+	if _, err := warehouse.ExecuteStatement(ctx, newTypedSourceSeedStatement(t, reference)); err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := googlesqladapter.NewGateway(statementExecutionCatalog{snapshot: statementExecutionSnapshot()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := gateway.Analyze(ctx, ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics",
+		SQL: "UPDATE analytics.source SET payload = 'changed' WHERE id = 1; " +
+			"SELECT CAST('not-an-integer' AS INT64) AS value",
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if _, err := warehouse.ExecuteStatement(ctx, statement); err == nil {
+		t.Fatal("ExecuteStatement() unexpectedly succeeded")
+	}
+	physical, err := renderPhysicalTable(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload string
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT payload FROM "+physical+" WHERE id = 1").Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload != "one" {
+		t.Fatalf("payload after rollback = %q", payload)
+	}
+}
 
 func TestExecuteStatementRunsTypedInsertAndSelectPlans(t *testing.T) {
 	t.Parallel()
@@ -471,6 +667,22 @@ func newStatementExecutionWarehouse(t *testing.T, ctx context.Context) *Warehous
 		t.Fatal(err)
 	}
 	return warehouse
+}
+
+func statementExecutionSnapshot() ports.GoogleSQLCatalogSnapshot {
+	return ports.GoogleSQLCatalogSnapshot{Projects: []ports.GoogleSQLProjectSnapshot{{
+		Project: domain.Project{ID: "test-project"},
+		Datasets: []ports.GoogleSQLDatasetSnapshot{{
+			Dataset: domain.Dataset{ProjectID: "test-project", ID: "analytics", Location: "US"},
+			Tables: []domain.Table{{
+				ProjectID: "test-project", DatasetID: "analytics", ID: "source", Type: "TABLE",
+				Schema: []domain.Field{
+					{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+					{Name: "payload", Type: "STRING", Mode: "NULLABLE"},
+				},
+			}},
+		}},
+	}}}
 }
 
 func newTypedSourceSeedStatement(t *testing.T, reference domain.TableReference) semantic.Statement {

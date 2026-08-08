@@ -13,12 +13,13 @@ import (
 )
 
 type resolvedProjection struct {
-	ctx            context.Context
-	snapshot       *catalogSnapshot
-	references     []domain.TableReference
-	canonicalByID  map[int32]semantic.Type
-	expressions    []gsql.ResolvedExprNode
-	locationOffset int
+	ctx             context.Context
+	snapshot        *catalogSnapshot
+	references      []domain.TableReference
+	canonicalByID   map[int32]semantic.Type
+	expressions     []gsql.ResolvedExprNode
+	locationOffset  int
+	scriptVariables map[string]string
 }
 
 func projectResolvedStatement(
@@ -28,13 +29,24 @@ func projectResolvedStatement(
 	snapshot *catalogSnapshot,
 	resolved gsql.ResolvedStatementNode,
 ) (semantic.Statement, error) {
+	return projectResolvedStatementWithVariables(ctx, request, syntax, snapshot, resolved, nil)
+}
+
+func projectResolvedStatementWithVariables(
+	ctx context.Context,
+	request ports.QueryRequest,
+	syntax queryast.Statement,
+	snapshot *catalogSnapshot,
+	resolved gsql.ResolvedStatementNode,
+	variables map[string]string,
+) (semantic.Statement, error) {
 	kind, err := resolvedStatementKind(resolved)
 	if err != nil {
 		return semantic.Statement{}, err
 	}
 	projection := &resolvedProjection{
 		ctx: ctx, snapshot: snapshot,
-		canonicalByID: make(map[int32]semantic.Type),
+		canonicalByID: make(map[int32]semantic.Type), scriptVariables: variables,
 	}
 	if err := projection.walk(resolved); err != nil {
 		return semantic.Statement{}, err
@@ -51,10 +63,14 @@ func projectResolvedStatement(
 	if err != nil {
 		return semantic.Statement{}, err
 	}
+	symbolBindings, err := projection.symbolBindings(syntax)
+	if err != nil {
+		return semantic.Statement{}, err
+	}
 	return semantic.NewStatement(semantic.StatementDescriptor{
 		Syntax: syntax, ResolvedKind: kind, RelationBindings: bindings,
 		ExpressionTypes: expressionTypes, ExpressionsComplete: expressionsComplete,
-		OutputColumns: outputs,
+		SymbolBindings: symbolBindings, OutputColumns: outputs,
 	})
 }
 
@@ -333,6 +349,138 @@ func (projection *resolvedProjection) expressionBindings(
 		bindings = append(bindings, semantic.ExpressionTypeDescriptor{Key: expression.NodeKey(), Type: typ})
 	}
 	return bindings, len(bindings) == len(expressions), nil
+}
+
+func (projection *resolvedProjection) symbolBindings(
+	syntax queryast.Statement,
+) ([]semantic.SymbolBindingDescriptor, error) {
+	if len(projection.scriptVariables) == 0 {
+		return nil, nil
+	}
+	type symbolCandidate struct {
+		kind semantic.SymbolBindingKind
+		name string
+	}
+	resolvedByRange := make(map[byteRange][]symbolCandidate)
+	unmatchedVariables := make(map[byteRange][]string)
+	for _, expression := range projection.expressions {
+		candidate := symbolCandidate{}
+		registeredVariable := false
+		switch resolved := expression.(type) {
+		case *gsql.ResolvedColumnRef:
+			candidate.kind = semantic.SymbolColumn
+		case *gsql.ResolvedLiteral:
+			candidate.kind = semantic.SymbolValue
+		case *gsql.ResolvedConstant:
+			constant, err := resolved.Constant()
+			if err != nil || constant == nil {
+				return nil, analyzerBoundaryFailureAt("resolved-script-variable")
+			}
+			path, err := constant.NamePath()
+			if err != nil {
+				return nil, analyzerBoundaryFailureAt("resolved-script-variable-name")
+			}
+			if len(path) != 1 {
+				continue
+			}
+			name, registered := projection.scriptVariables[strings.ToLower(path[0])]
+			if !registered {
+				continue
+			}
+			candidate = symbolCandidate{kind: semantic.SymbolScriptVariable, name: name}
+			registeredVariable = true
+		default:
+			continue
+		}
+		range_, present, err := resolvedByteRange(expression)
+		if err != nil {
+			return nil, analyzerBoundaryFailureAt("resolved-symbol-location")
+		}
+		if !present {
+			if registeredVariable {
+				return nil, analyzerBoundaryFailureAt("resolved-script-variable-location")
+			}
+			continue
+		}
+		range_.start += projection.locationOffset
+		range_.end += projection.locationOffset
+		duplicate := false
+		for _, existing := range resolvedByRange[range_] {
+			if existing.kind == candidate.kind && strings.EqualFold(existing.name, candidate.name) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			resolvedByRange[range_] = append(resolvedByRange[range_], candidate)
+		}
+		if registeredVariable {
+			unmatchedVariables[range_] = append(unmatchedVariables[range_], candidate.name)
+		}
+	}
+
+	expressions, err := queryast.Expressions(syntax)
+	if err != nil {
+		return nil, analyzerBoundaryFailureAt("script-variable-syntax")
+	}
+	bindings := make([]semantic.SymbolBindingDescriptor, 0)
+	for _, expression := range expressions {
+		identifier, ok := expression.(*queryast.IdentifierExpression)
+		if !ok || identifier.Path().Len() != 1 {
+			continue
+		}
+		segment := identifier.Path().Segments()[0]
+		name, declared := projection.scriptVariables[strings.ToLower(segment)]
+		if !declared {
+			continue
+		}
+		span := identifier.Span()
+		candidates := resolvedByRange[byteRange{start: span.Start(), end: span.End()}]
+		if len(candidates) == 0 {
+			// The analyzer may omit a parse location for references to an
+			// output column, notably in ORDER BY. Every resolved script
+			// constant is still accounted for by unmatchedVariables below, so
+			// an unlocated identifier can safely be bound as a non-variable.
+			bindings = append(bindings, semantic.SymbolBindingDescriptor{
+				Key: identifier.NodeKey(), Kind: semantic.SymbolValue, Name: name,
+			})
+			continue
+		}
+		kind := semantic.SymbolValue
+		variableName := ""
+		for _, candidate := range candidates {
+			switch candidate.kind {
+			case semantic.SymbolScriptVariable:
+				if kind == semantic.SymbolColumn {
+					return nil, analyzerBoundaryFailureAt("resolved-script-symbol-ambiguity")
+				}
+				if variableName != "" && !strings.EqualFold(variableName, candidate.name) {
+					return nil, analyzerBoundaryFailureAt("resolved-script-symbol-ambiguity")
+				}
+				kind, variableName = candidate.kind, candidate.name
+			case semantic.SymbolColumn:
+				if kind == semantic.SymbolScriptVariable {
+					return nil, analyzerBoundaryFailureAt("resolved-script-symbol-ambiguity")
+				}
+				kind = candidate.kind
+			}
+		}
+		if kind == semantic.SymbolScriptVariable && !strings.EqualFold(variableName, name) {
+			return nil, analyzerBoundaryFailureAt("resolved-script-variable-identity")
+		}
+		bindings = append(bindings, semantic.SymbolBindingDescriptor{
+			Key: identifier.NodeKey(), Kind: kind, Name: name,
+		})
+		if kind == semantic.SymbolScriptVariable {
+			delete(unmatchedVariables, byteRange{start: span.Start(), end: span.End()})
+		}
+	}
+	for _, names := range unmatchedVariables {
+		if len(names) != 0 {
+			return nil, analyzerBoundaryFailureAt("resolved-script-variable-attestation")
+		}
+	}
+	return bindings, nil
 }
 
 func selectOutputExpressions(statement queryast.Statement) []queryast.Expression {

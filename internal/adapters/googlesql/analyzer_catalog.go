@@ -72,7 +72,7 @@ func (gateway *Gateway) Analyze(ctx context.Context, request ports.QueryRequest)
 		return semantic.Statement{}, analyzerBoundaryFailure(err)
 	}
 	if len(document.statements) > 1 {
-		return gateway.analyzeConnectorScript(ctx, request, document, snapshot, options)
+		return gateway.analyzeScript(ctx, request, document, snapshot, options)
 	}
 	return gateway.analyzeSingleStatement(ctx, request, document, snapshot, options)
 }

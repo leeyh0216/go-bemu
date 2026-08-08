@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
@@ -93,11 +92,6 @@ func (s *QueryService) executeAnalyzedStatement(
 			return domain.QueryResult{}, err
 		}
 		return domain.QueryResult{}, nil
-	case queryast.StatementScript:
-		return domain.QueryResult{}, fmt.Errorf(
-			"%w: capability=%s analyzed script execution profile is not configured",
-			domain.ErrUnsupported, domain.GapQueryScriptsUnsupportedV1,
-		)
 	default:
 		return s.statementExecutor.ExecuteStatement(ctx, statement)
 	}

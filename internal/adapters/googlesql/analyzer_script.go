@@ -13,31 +13,33 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
-const CapabilityConnectorScriptV1 = "query.googlesql.connector-script-v1"
+const CapabilityGoogleSQLScriptV1 = "query.googlesql.script-v1"
 
 type scriptVariable struct {
+	name    string
 	logical semantic.Type
 }
 
-type connectorScriptAnalyzer struct {
-	ctx       context.Context
-	request   ports.QueryRequest
-	snapshot  *catalogSnapshot
-	options   *gsql.AnalyzerOptions
-	outputs   []*gsql.AnalyzerOutput
-	values    []*gsql.Value
-	constants []*gsql.SimpleConstant
-	variables map[string]scriptVariable
+type scriptAnalyzer struct {
+	ctx         context.Context
+	request     ports.QueryRequest
+	snapshot    *catalogSnapshot
+	options     *gsql.AnalyzerOptions
+	outputs     []*gsql.AnalyzerOutput
+	values      []*gsql.Value
+	constants   []*gsql.SimpleConstant
+	variables   map[string]scriptVariable
+	symbolNames map[string]string
 }
 
-// analyzeConnectorScript supports the DECLARE/SET/MERGE shape emitted by the
-// Spark BigQuery connector. go-googlesql v0.4.0 exposes no resolved-script API:
+// analyzeScript resolves each child in source order. go-googlesql v0.4.0
+// exposes no resolved-script API:
 // AnalyzeStatementFromParserAST rejects DECLARE and SET and does not carry
 // variables into the next statement. Their expression spans are therefore
 // analyzed with the official AnalyzeExpression entrypoint, and typed NULL
 // constants are registered in the same request-scoped official catalog before
-// analyzing the original MERGE AST handle.
-func (gateway *Gateway) analyzeConnectorScript(
+// analyzing subsequent original statement AST handles.
+func (gateway *Gateway) analyzeScript(
 	ctx context.Context,
 	request ports.QueryRequest,
 	document parsedDocument,
@@ -56,16 +58,13 @@ func (gateway *Gateway) analyzeConnectorScript(
 		}
 		children = append(children, child)
 	}
-	if !isConnectorScript(children) {
-		return semantic.Statement{}, unsupportedConnectorScript()
-	}
 	syntax, err := queryast.NewScriptStatement(document.source, children)
 	if err != nil {
 		return semantic.Statement{}, analyzerBoundaryFailureAt("script-syntax")
 	}
-	state := &connectorScriptAnalyzer{
+	state := &scriptAnalyzer{
 		ctx: ctx, request: request, snapshot: snapshot, options: options,
-		variables: make(map[string]scriptVariable),
+		variables: make(map[string]scriptVariable), symbolNames: declaredScriptVariableNames(children),
 	}
 	defer func() { runtime.KeepAlive(state) }()
 
@@ -88,10 +87,11 @@ func (gateway *Gateway) analyzeConnectorScript(
 				return semantic.Statement{}, analyzerBoundaryFailureAt("script-set-handle")
 			}
 			analyzed, err = state.analyzeSet(statement, external)
-		case *queryast.MergeStatement:
+		case *queryast.SelectStatement, *queryast.InsertStatement,
+			*queryast.UpdateStatement, *queryast.DeleteStatement, *queryast.MergeStatement:
 			analyzed, err = state.analyzeStatement(statement, document.statements[index])
 		default:
-			return semantic.Statement{}, unsupportedConnectorScript()
+			return semantic.Statement{}, unsupportedGoogleSQLScript()
 		}
 		if err != nil {
 			return semantic.Statement{}, err
@@ -101,34 +101,28 @@ func (gateway *Gateway) analyzeConnectorScript(
 	return mergeScriptAnalysis(syntax, analyzedChildren)
 }
 
-func isConnectorScript(statements []queryast.Statement) bool {
-	if len(statements) < 2 || statements[len(statements)-1].Kind() != queryast.StatementMerge {
-		return false
-	}
-	hasDeclaration := false
-	for index, statement := range statements {
-		if index == len(statements)-1 {
-			return statement.Kind() == queryast.StatementMerge && hasDeclaration
+func declaredScriptVariableNames(statements []queryast.Statement) map[string]string {
+	names := make(map[string]string)
+	for _, statement := range statements {
+		declaration, ok := statement.(*queryast.DeclareStatement)
+		if !ok {
+			continue
 		}
-		switch statement.Kind() {
-		case queryast.StatementDeclare:
-			hasDeclaration = true
-		case queryast.StatementSet:
-		default:
-			return false
+		for _, variable := range declaration.Variables() {
+			names[strings.ToLower(variable.Value())] = variable.Value()
 		}
 	}
-	return false
+	return names
 }
 
-func unsupportedConnectorScript() error {
+func unsupportedGoogleSQLScript() error {
 	return fmt.Errorf(
-		"%w: capability=%s multi-statement input is outside the connector script profile",
-		domain.ErrUnsupported, CapabilityConnectorScriptV1,
+		"%w: capability=%s multi-statement input is outside the supported GoogleSQL script subset",
+		domain.ErrUnsupported, CapabilityGoogleSQLScriptV1,
 	)
 }
 
-func (state *connectorScriptAnalyzer) analyzeDeclare(
+func (state *scriptAnalyzer) analyzeDeclare(
 	statement *queryast.DeclareStatement,
 	external *gsql.ASTVariableDeclaration,
 ) (semantic.Statement, error) {
@@ -185,13 +179,13 @@ func (state *connectorScriptAnalyzer) analyzeDeclare(
 	return analyzed, nil
 }
 
-func (state *connectorScriptAnalyzer) analyzeSet(
+func (state *scriptAnalyzer) analyzeSet(
 	statement *queryast.SetStatement,
 	external *gsql.ASTSingleAssignment,
 ) (semantic.Statement, error) {
 	target := statement.Target().Segments()
 	if len(target) != 1 {
-		return semantic.Statement{}, unsupportedConnectorScript()
+		return semantic.Statement{}, unsupportedGoogleSQLScript()
 	}
 	variable, found := state.variables[strings.ToLower(target[0])]
 	if !found {
@@ -217,7 +211,7 @@ func (state *connectorScriptAnalyzer) analyzeSet(
 	return analyzed, nil
 }
 
-func (state *connectorScriptAnalyzer) analyzeStatement(
+func (state *scriptAnalyzer) analyzeStatement(
 	syntax queryast.Statement,
 	external gsql.ASTStatementNode,
 ) (semantic.Statement, error) {
@@ -235,10 +229,12 @@ func (state *connectorScriptAnalyzer) analyzeStatement(
 	if err != nil || resolved == nil {
 		return semantic.Statement{}, analyzerBoundaryFailure()
 	}
-	return projectResolvedStatement(state.ctx, state.request, syntax, state.snapshot, resolved)
+	return projectResolvedStatementWithVariables(
+		state.ctx, state.request, syntax, state.snapshot, resolved, state.variableNames(),
+	)
 }
 
-func (state *connectorScriptAnalyzer) analyzeExpression(
+func (state *scriptAnalyzer) analyzeExpression(
 	syntax queryast.Statement,
 	root queryast.Expression,
 	external gsql.ASTExpressionNode,
@@ -277,6 +273,7 @@ func (state *connectorScriptAnalyzer) analyzeExpression(
 	}
 	analyzed, err := projectResolvedExpression(
 		state.ctx, state.request, syntax, root, state.snapshot, resolved, span.Start(), logical,
+		state.variableNames(),
 	)
 	if err != nil {
 		return semantic.Statement{}, semantic.Type{}, nil, err
@@ -284,7 +281,7 @@ func (state *connectorScriptAnalyzer) analyzeExpression(
 	return analyzed, logical, externalType, nil
 }
 
-func (state *connectorScriptAnalyzer) registerVariable(
+func (state *scriptAnalyzer) registerVariable(
 	name string,
 	logical semantic.Type,
 	externalType gsql.Googlesql_TypeNode,
@@ -305,8 +302,16 @@ func (state *connectorScriptAnalyzer) registerVariable(
 	}
 	state.values = append(state.values, value)
 	state.constants = append(state.constants, constant)
-	state.variables[strings.ToLower(name)] = scriptVariable{logical: logical}
+	state.variables[strings.ToLower(name)] = scriptVariable{name: name, logical: logical}
 	return nil
+}
+
+func (state *scriptAnalyzer) variableNames() map[string]string {
+	names := make(map[string]string, len(state.symbolNames))
+	for normalized, name := range state.symbolNames {
+		names[normalized] = name
+	}
+	return names
 }
 
 func projectResolvedExpression(
@@ -318,10 +323,11 @@ func projectResolvedExpression(
 	resolved gsql.ResolvedExprNode,
 	locationOffset int,
 	rootType semantic.Type,
+	variables map[string]string,
 ) (semantic.Statement, error) {
 	projection := &resolvedProjection{
 		ctx: ctx, snapshot: snapshot, canonicalByID: make(map[int32]semantic.Type),
-		locationOffset: locationOffset,
+		locationOffset: locationOffset, scriptVariables: variables,
 	}
 	if err := projection.walk(resolved); err != nil {
 		return semantic.Statement{}, err
@@ -335,6 +341,10 @@ func projectResolvedExpression(
 		return semantic.Statement{}, err
 	}
 	expressionTypes = upsertExpressionType(expressionTypes, root.NodeKey(), rootType)
+	symbolBindings, err := projection.symbolBindings(syntax)
+	if err != nil {
+		return semantic.Statement{}, err
+	}
 	expressions, err := queryast.Expressions(syntax)
 	if err != nil {
 		return semantic.Statement{}, analyzerBoundaryFailureAt("script-syntax-expressions")
@@ -342,6 +352,7 @@ func projectResolvedExpression(
 	return semantic.NewStatement(semantic.StatementDescriptor{
 		Syntax: syntax, ResolvedKind: syntax.Kind(), RelationBindings: relations,
 		ExpressionTypes: expressionTypes, ExpressionsComplete: len(expressionTypes) == len(expressions),
+		SymbolBindings: symbolBindings,
 	})
 }
 
@@ -369,8 +380,12 @@ func mergeScriptAnalysis(
 	syntax *queryast.ScriptStatement,
 	children []semantic.Statement,
 ) (semantic.Statement, error) {
+	if len(children) == 0 {
+		return semantic.Statement{}, analyzerBoundaryFailureAt("script-children")
+	}
 	relationBindings := make([]semantic.RelationBindingDescriptor, 0)
 	expressionTypes := make([]semantic.ExpressionTypeDescriptor, 0)
+	symbolBindings := make([]semantic.SymbolBindingDescriptor, 0)
 	expressionsComplete := true
 	for _, child := range children {
 		relations, err := queryast.Relations(child.Syntax())
@@ -400,13 +415,24 @@ func mergeScriptAnalysis(
 					Key: expression.NodeKey(), Type: typ,
 				})
 			}
+			if binding, found := child.SymbolBinding(expression.NodeKey()); found {
+				symbolBindings = append(symbolBindings, semantic.SymbolBindingDescriptor{
+					Key: binding.Key(), Kind: binding.Kind(), Name: binding.Name(),
+				})
+			}
 		}
 		expressionsComplete = expressionsComplete && child.ExpressionsComplete()
+	}
+	lastColumns := children[len(children)-1].OutputColumns()
+	outputColumns := make([]semantic.ColumnDescriptor, len(lastColumns))
+	for index, column := range lastColumns {
+		outputColumns[index] = semantic.ColumnDescriptor{Name: column.Name(), Type: column.Type()}
 	}
 	return semantic.NewStatement(semantic.StatementDescriptor{
 		Syntax: syntax, ResolvedKind: queryast.StatementScript,
 		RelationBindings: relationBindings, ExpressionTypes: expressionTypes,
-		ExpressionsComplete: expressionsComplete,
+		SymbolBindings: symbolBindings, ExpressionsComplete: expressionsComplete,
+		OutputColumns: outputColumns,
 	})
 }
 
@@ -464,7 +490,7 @@ func semanticDescriptorFromSyntax(typ queryast.Type) (semantic.TypeDescriptor, e
 				domain.ErrUnsupported, domain.GapGeographyUnsupportedV1,
 			)
 		default:
-			return semantic.TypeDescriptor{}, unsupportedConnectorScript()
+			return semantic.TypeDescriptor{}, unsupportedGoogleSQLScript()
 		}
 		descriptor.Precision = value.Precision()
 		descriptor.Scale = value.Scale()
@@ -480,7 +506,7 @@ func semanticDescriptorFromSyntax(typ queryast.Type) (semantic.TypeDescriptor, e
 		for _, field := range value.Fields() {
 			name := field.Name()
 			if name == nil {
-				return semantic.TypeDescriptor{}, unsupportedConnectorScript()
+				return semantic.TypeDescriptor{}, unsupportedGoogleSQLScript()
 			}
 			fieldType, err := semanticDescriptorFromSyntax(field.Type())
 			if err != nil {
@@ -492,6 +518,6 @@ func semanticDescriptorFromSyntax(typ queryast.Type) (semantic.TypeDescriptor, e
 		}
 		return descriptor, nil
 	default:
-		return semantic.TypeDescriptor{}, unsupportedConnectorScript()
+		return semantic.TypeDescriptor{}, unsupportedGoogleSQLScript()
 	}
 }

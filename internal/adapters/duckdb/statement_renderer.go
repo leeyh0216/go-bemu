@@ -43,8 +43,9 @@ func newDuckDBLocalTableBinding(name string) (duckDBTableBinding, error) {
 type duckDBTableBindingResolver func(queryast.NodeKey) (duckDBTableBinding, bool, error)
 
 type duckDBStatementRenderer struct {
-	bindings  map[queryast.NodeKey]duckDBTableBinding
-	arguments []any
+	bindings        map[queryast.NodeKey]duckDBTableBinding
+	scriptVariables map[queryast.NodeKey]string
+	arguments       []any
 }
 
 func lowerDuckDBStatement(
@@ -52,6 +53,35 @@ func lowerDuckDBStatement(
 ) (duckDBStatementPlan, error) {
 	if statement.Syntax() == nil || !statement.RelationsComplete() {
 		return duckDBStatementPlan{}, fmt.Errorf("%w: semantic statement is missing", domain.ErrPrecondition)
+	}
+	return lowerDuckDBSyntax(statement, statement.Syntax(), nil)
+}
+
+func lowerDuckDBSyntax(
+	statement semantic.Statement,
+	syntax queryast.Statement,
+	variables map[string]string,
+) (duckDBStatementPlan, error) {
+	renderer, err := newDuckDBStatementRenderer(statement, syntax, variables)
+	if err != nil {
+		return duckDBStatementPlan{}, err
+	}
+	visitor := &duckDBTopLevelVisitor{renderer: renderer}
+	if err := syntax.Accept(visitor); err != nil {
+		return duckDBStatementPlan{}, err
+	}
+	return newDuckDBStatementPlan(
+		visitor.statement, renderer.arguments, visitor.producesRows, statement.AnalysisFingerprint(),
+	)
+}
+
+func newDuckDBStatementRenderer(
+	statement semantic.Statement,
+	syntax queryast.Statement,
+	variables map[string]string,
+) (*duckDBStatementRenderer, error) {
+	if syntax == nil || syntax.Source().Digest() != statement.Syntax().Source().Digest() {
+		return nil, fmt.Errorf("%w: semantic statement syntax is invalid", domain.ErrPrecondition)
 	}
 	resolve := func(key queryast.NodeKey) (duckDBTableBinding, bool, error) {
 		binding, err := statement.RequireRelationBinding(key)
@@ -77,18 +107,39 @@ func lowerDuckDBStatement(
 			return duckDBTableBinding{}, false, fmt.Errorf("%w: semantic relation binding kind is unsupported", domain.ErrPrecondition)
 		}
 	}
-	bindings, err := collectDuckDBTableBindings(statement.Syntax(), resolve)
+	bindings, err := collectDuckDBTableBindings(syntax, resolve)
 	if err != nil {
-		return duckDBStatementPlan{}, err
+		return nil, err
 	}
-	renderer := &duckDBStatementRenderer{bindings: bindings}
-	visitor := &duckDBTopLevelVisitor{renderer: renderer}
-	if err := statement.Syntax().Accept(visitor); err != nil {
-		return duckDBStatementPlan{}, err
+	scriptVariables, err := collectDuckDBScriptVariables(statement, syntax, variables)
+	if err != nil {
+		return nil, err
 	}
-	return newDuckDBStatementPlan(
-		visitor.statement, renderer.arguments, visitor.producesRows, statement.AnalysisFingerprint(),
-	)
+	return &duckDBStatementRenderer{bindings: bindings, scriptVariables: scriptVariables}, nil
+}
+
+func collectDuckDBScriptVariables(
+	statement semantic.Statement,
+	syntax queryast.Statement,
+	variables map[string]string,
+) (map[queryast.NodeKey]string, error) {
+	expressions, err := queryast.Expressions(syntax)
+	if err != nil {
+		return nil, fmt.Errorf("%w: semantic expression traversal failed", domain.ErrPrecondition)
+	}
+	bindings := make(map[queryast.NodeKey]string)
+	for _, expression := range expressions {
+		binding, found := statement.SymbolBinding(expression.NodeKey())
+		if !found || binding.Kind() != semantic.SymbolScriptVariable {
+			continue
+		}
+		table, exists := variables[strings.ToLower(binding.Name())]
+		if !exists || table == "" || strings.IndexByte(table, 0) >= 0 {
+			return nil, fmt.Errorf("%w: script variable runtime binding is missing", domain.ErrPrecondition)
+		}
+		bindings[expression.NodeKey()] = table
+	}
+	return bindings, nil
 }
 
 func collectDuckDBTableBindings(

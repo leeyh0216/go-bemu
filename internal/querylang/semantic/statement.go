@@ -240,6 +240,7 @@ const (
 const (
 	ErrorRelationBindingInvalidV1   = "query.semantic.relation-binding-invalid-v1"
 	ErrorExpressionBindingInvalidV1 = "query.semantic.expression-binding-invalid-v1"
+	ErrorSymbolBindingInvalidV1     = "query.semantic.symbol-binding-invalid-v1"
 )
 
 // RelationBindingDescriptor is mutable construction input for one AST
@@ -285,6 +286,37 @@ type ExpressionTypeDescriptor struct {
 	Type Type
 }
 
+// SymbolBindingKind describes an analyzer-resolved identifier whose runtime
+// meaning cannot be recovered from its spelling alone.
+type SymbolBindingKind string
+
+const (
+	SymbolColumn         SymbolBindingKind = "COLUMN"
+	SymbolScriptVariable SymbolBindingKind = "SCRIPT_VARIABLE"
+	SymbolValue          SymbolBindingKind = "VALUE"
+)
+
+// SymbolBindingDescriptor is mutable construction input for an identifier
+// binding. The owned Statement copies and validates every value.
+type SymbolBindingDescriptor struct {
+	Key  queryast.NodeKey
+	Kind SymbolBindingKind
+	Name string
+}
+
+// SymbolBinding is the immutable analyzer decision for one identifier node.
+type SymbolBinding struct {
+	key  queryast.NodeKey
+	kind SymbolBindingKind
+	name string
+}
+
+func (binding SymbolBinding) Key() queryast.NodeKey { return binding.key }
+
+func (binding SymbolBinding) Kind() SymbolBindingKind { return binding.kind }
+
+func (binding SymbolBinding) Name() string { return binding.name }
+
 // StatementDescriptor is mutable construction input for a Statement.
 // ResolvedKind is supplied by the official analyzer and must agree with the
 // syntax kind. It deliberately reuses ast.StatementKind instead of defining a
@@ -294,6 +326,7 @@ type StatementDescriptor struct {
 	ResolvedKind        queryast.StatementKind
 	RelationBindings    []RelationBindingDescriptor
 	ExpressionTypes     []ExpressionTypeDescriptor
+	SymbolBindings      []SymbolBindingDescriptor
 	ExpressionsComplete bool
 	OutputColumns       []ColumnDescriptor
 }
@@ -307,6 +340,7 @@ type Statement struct {
 	relationOrder       []queryast.NodeKey
 	expressionTypes     map[queryast.NodeKey]Type
 	expressionOrder     []queryast.NodeKey
+	symbolBindings      map[queryast.NodeKey]SymbolBinding
 	expressionsComplete bool
 	referencedTables    []domain.TableReference
 	mutationTargets     []domain.TableReference
@@ -344,6 +378,10 @@ func NewStatement(descriptor StatementDescriptor) (Statement, error) {
 	if err != nil {
 		return Statement{}, err
 	}
+	symbolBindings, err := validateSymbolBindings(descriptor.Syntax, expressions, descriptor.SymbolBindings)
+	if err != nil {
+		return Statement{}, err
+	}
 
 	references := make([]domain.TableReference, 0, len(relationBindings))
 	for _, key := range relationOrder {
@@ -378,7 +416,7 @@ func NewStatement(descriptor StatementDescriptor) (Statement, error) {
 
 	statement := Statement{
 		syntax: descriptor.Syntax, relationBindings: relationBindings, relationOrder: relationOrder,
-		expressionTypes: expressionTypes, expressionOrder: expressionOrder,
+		expressionTypes: expressionTypes, expressionOrder: expressionOrder, symbolBindings: symbolBindings,
 		expressionsComplete: descriptor.ExpressionsComplete, referencedTables: references,
 		mutationTargets: targets, outputColumns: columns,
 	}
@@ -495,6 +533,67 @@ func validateExpressionBindings(
 	return bindings, order, nil
 }
 
+func validateSymbolBindings(
+	syntax queryast.Statement,
+	expressions []queryast.Expression,
+	descriptors []SymbolBindingDescriptor,
+) (map[queryast.NodeKey]SymbolBinding, error) {
+	expected := make(map[queryast.NodeKey]*queryast.IdentifierExpression)
+	declaredVariables := make(map[string]struct{})
+	if script, ok := syntax.(*queryast.ScriptStatement); ok {
+		for _, child := range script.Statements() {
+			declaration, ok := child.(*queryast.DeclareStatement)
+			if !ok {
+				continue
+			}
+			for _, variable := range declaration.Variables() {
+				declaredVariables[strings.ToLower(variable.Value())] = struct{}{}
+			}
+		}
+	}
+	for _, expression := range expressions {
+		identifier, ok := expression.(*queryast.IdentifierExpression)
+		if ok {
+			expected[identifier.NodeKey()] = identifier
+		}
+	}
+	bindings := make(map[queryast.NodeKey]SymbolBinding, len(descriptors))
+	for _, descriptor := range descriptors {
+		identifier, exists := expected[descriptor.Key]
+		name := strings.TrimSpace(descriptor.Name)
+		if !exists || descriptor.Key.SourceDigest() != syntax.Source().Digest() ||
+			name == "" || strings.IndexByte(name, 0) >= 0 {
+			return nil, symbolBindingFailure()
+		}
+		switch descriptor.Kind {
+		case SymbolColumn, SymbolScriptVariable, SymbolValue:
+		default:
+			return nil, symbolBindingFailure()
+		}
+		segments := identifier.Path().Segments()
+		if len(segments) != 1 || !strings.EqualFold(segments[0], name) {
+			return nil, symbolBindingFailure()
+		}
+		if _, duplicate := bindings[descriptor.Key]; duplicate {
+			return nil, symbolBindingFailure()
+		}
+		bindings[descriptor.Key] = SymbolBinding{key: descriptor.Key, kind: descriptor.Kind, name: name}
+	}
+	for key, identifier := range expected {
+		segments := identifier.Path().Segments()
+		if len(segments) != 1 {
+			continue
+		}
+		if _, declared := declaredVariables[strings.ToLower(segments[0])]; !declared {
+			continue
+		}
+		if _, bound := bindings[key]; !bound {
+			return nil, symbolBindingFailure()
+		}
+	}
+	return bindings, nil
+}
+
 func relationBindingFailure(relations ...queryast.Relation) error {
 	paths := make([][]string, 0, len(relations))
 	for _, relation := range relations {
@@ -507,6 +606,10 @@ func relationBindingFailure(relations ...queryast.Relation) error {
 
 func expressionBindingFailure() error {
 	return fmt.Errorf("%w: code=%s analyzed expression binding is invalid", domain.ErrPrecondition, ErrorExpressionBindingInvalidV1)
+}
+
+func symbolBindingFailure() error {
+	return fmt.Errorf("%w: code=%s analyzed symbol binding is invalid", domain.ErrPrecondition, ErrorSymbolBindingInvalidV1)
 }
 
 func completeReference(reference domain.TableReference) bool {
@@ -625,6 +728,14 @@ func fingerprintStatement(statement Statement) string {
 		document.WriteByte(0)
 		writeTypeFingerprint(&document, typ)
 	}
+	for _, key := range statement.expressionOrder {
+		if binding, exists := statement.symbolBindings[key]; exists {
+			document.WriteByte(0)
+			document.WriteString(string(binding.kind))
+			document.WriteByte(0)
+			document.WriteString(strings.ToLower(binding.name))
+		}
+	}
 	document.WriteByte(0)
 	document.WriteString(strconv.FormatBool(statement.expressionsComplete))
 	for _, column := range statement.outputColumns {
@@ -697,6 +808,11 @@ func (statement Statement) RequireExpressionType(key queryast.NodeKey) (Type, er
 		return Type{}, expressionBindingFailure()
 	}
 	return typ, nil
+}
+
+func (statement Statement) SymbolBinding(key queryast.NodeKey) (SymbolBinding, bool) {
+	binding, exists := statement.symbolBindings[key]
+	return binding, exists
 }
 
 // RelationsComplete is always true for a constructed Statement. It is an

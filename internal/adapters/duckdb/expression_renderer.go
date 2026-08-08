@@ -47,6 +47,10 @@ type duckDBExpressionVisitor struct {
 }
 
 func (visitor *duckDBExpressionVisitor) VisitIdentifierExpression(expression *queryast.IdentifierExpression) error {
+	if table, found := visitor.renderer.scriptVariables[expression.NodeKey()]; found {
+		visitor.result = "(SELECT " + quoteIdentifier("value") + " FROM " + quoteIdentifier(table) + ")"
+		return nil
+	}
 	visitor.result = renderIdentifierPath(expression.Path())
 	return nil
 }

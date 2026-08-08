@@ -308,6 +308,80 @@ func TestGatewayCarriesDeclaredVariableTypeThroughSetAndMerge(t *testing.T) {
 	if err != nil || typ.Kind() != semantic.TypeInt64 {
 		t.Fatalf("SET expression type = (%#v, %v)", typ, err)
 	}
+	expressions, err := queryast.Expressions(statement.Syntax())
+	if err != nil {
+		t.Fatalf("Expressions() error = %v", err)
+	}
+	variableReferences := 0
+	for _, expression := range expressions {
+		identifier, ok := expression.(*queryast.IdentifierExpression)
+		if !ok || len(identifier.Path().Segments()) != 1 || !strings.EqualFold(identifier.Path().Segments()[0], "match_id") {
+			continue
+		}
+		binding, found := statement.SymbolBinding(identifier.NodeKey())
+		if !found || binding.Kind() != semantic.SymbolScriptVariable || !strings.EqualFold(binding.Name(), "match_id") {
+			t.Fatalf("script variable binding = (%#v, %t)", binding, found)
+		}
+		variableReferences++
+	}
+	if variableReferences != 2 {
+		t.Fatalf("script variable reference count = %d", variableReferences)
+	}
+}
+
+func TestGatewayPreservesColumnPrecedenceOverScriptVariables(t *testing.T) {
+	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
+	tests := []struct {
+		name       string
+		sql        string
+		symbolName string
+		kind       semantic.SymbolBindingKind
+		count      int
+	}{
+		{
+			name:       "column shadows variable",
+			sql:        "DECLARE id INT64 DEFAULT 10; SELECT id + id FROM analytics.events",
+			symbolName: "id",
+			kind:       semantic.SymbolColumn,
+			count:      2,
+		},
+		{
+			name:       "unshadowed variable",
+			sql:        "DECLARE x INT64 DEFAULT 10; SELECT id + x FROM analytics.events",
+			symbolName: "x",
+			kind:       semantic.SymbolScriptVariable,
+			count:      1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statement, err := gateway.Analyze(t.Context(), ports.QueryRequest{
+				ProjectID: "test-project", DefaultDataset: "analytics", SQL: test.sql,
+			})
+			if err != nil {
+				t.Fatalf("Analyze() error = %v", err)
+			}
+			expressions, err := queryast.Expressions(statement.Syntax())
+			if err != nil {
+				t.Fatalf("Expressions() error = %v", err)
+			}
+			matched := 0
+			for _, expression := range expressions {
+				identifier, ok := expression.(*queryast.IdentifierExpression)
+				if !ok || len(identifier.Path().Segments()) != 1 || !strings.EqualFold(identifier.Path().Segments()[0], test.symbolName) {
+					continue
+				}
+				binding, found := statement.SymbolBinding(identifier.NodeKey())
+				if !found || binding.Kind() != test.kind {
+					t.Fatalf("symbol binding = (%#v, %t), want %s", binding, found, test.kind)
+				}
+				matched++
+			}
+			if matched != test.count {
+				t.Fatalf("matching bindings = %d, want %d", matched, test.count)
+			}
+		})
+	}
 }
 
 func TestAnalyzerRetainsStableResolutionErrorsAndInput(t *testing.T) {
@@ -379,18 +453,31 @@ func TestGatewayRejectsTypedNilCatalogReader(t *testing.T) {
 	}
 }
 
-func TestGatewayRejectsScriptsAndCTASBeforeEngine(t *testing.T) {
+func TestGatewayAnalyzesGeneralMultiStatementScript(t *testing.T) {
+	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
+	statement, err := gateway.Analyze(t.Context(), ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics",
+		SQL: "UPDATE analytics.events SET amount = NUMERIC '2.5' WHERE id = 1; " +
+			"SELECT id, amount FROM analytics.events WHERE id = 1",
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if statement.Kind() != queryast.StatementScript || len(statement.OutputColumns()) != 2 {
+		t.Fatalf("script result contract = kind %s, columns %#v", statement.Kind(), statement.OutputColumns())
+	}
+	if len(statement.MutationTargets()) != 1 || len(statement.ReferencedTables()) != 1 {
+		t.Fatalf("script table bindings = targets %#v, references %#v", statement.MutationTargets(), statement.ReferencedTables())
+	}
+}
+
+func TestGatewayRejectsCTASBeforeEngine(t *testing.T) {
 	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
 	tests := []struct {
 		name string
 		sql  string
 		code string
 	}{
-		{
-			name: "multi statement script",
-			sql:  "SELECT id FROM analytics.events; SELECT id FROM analytics.events",
-			code: analyzeradapter.CapabilityConnectorScriptV1,
-		},
 		{
 			name: "create table as select",
 			sql:  "CREATE TABLE analytics.secret_copy AS SELECT id FROM analytics.events",

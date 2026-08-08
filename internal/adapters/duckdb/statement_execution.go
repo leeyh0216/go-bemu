@@ -8,6 +8,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
@@ -31,6 +32,9 @@ func (w *Warehouse) ExecuteStatement(
 	ctx context.Context,
 	statement semantic.Statement,
 ) (result domain.QueryResult, err error) {
+	if statement.Kind() == queryast.StatementScript {
+		return w.executeGoogleSQLScript(ctx, statement)
+	}
 	plan, err := lowerDuckDBStatement(statement)
 	if err != nil {
 		return domain.QueryResult{}, err

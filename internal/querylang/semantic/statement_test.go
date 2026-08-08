@@ -151,6 +151,75 @@ func TestStatementRejectsIncompleteRelationAndExpressionBindings(t *testing.T) {
 	}
 }
 
+func TestStatementRequiresBindingsForIdentifiersThatMatchDeclaredVariables(t *testing.T) {
+	digest := strings.Repeat("c", 64)
+	source := mustSource(t, digest, 0, 60)
+	identifier, err := ast.NewIdentifier("value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := ast.NewIdentifierPath([]ast.Identifier{identifier})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultValue, err := ast.NewIntegerLiteral(mustNodeKey(t, digest, 20, 21, "INTEGER_LITERAL", 0), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	declaration, err := ast.NewDeclareStatement(source, []ast.Identifier{identifier}, nil, defaultValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	variable, err := ast.NewIdentifierExpression(mustNodeKey(t, digest, 30, 35, "IDENTIFIER", 1), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := ast.NewSelectQuery(false, []ast.SelectItem{mustSelectItem(t, variable)}, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := ast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectStatement, err := ast.NewSelectStatement(source, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := ast.NewScriptStatement(source, []ast.Statement{declaration, selectStatement})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intType, err := semantic.NewType(semantic.TypeDescriptor{Kind: semantic.TypeInt64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := semantic.StatementDescriptor{
+		Syntax: script, ResolvedKind: ast.StatementScript,
+		ExpressionTypes: []semantic.ExpressionTypeDescriptor{
+			{Key: defaultValue.NodeKey(), Type: intType},
+			{Key: variable.NodeKey(), Type: intType},
+		},
+		ExpressionsComplete: true,
+		OutputColumns:       []semantic.ColumnDescriptor{{Name: "value", Type: intType}},
+	}
+	if _, err := semantic.NewStatement(descriptor); !errors.Is(err, domain.ErrPrecondition) ||
+		!strings.Contains(err.Error(), semantic.ErrorSymbolBindingInvalidV1) {
+		t.Fatalf("missing symbol binding error = %v", err)
+	}
+	descriptor.SymbolBindings = []semantic.SymbolBindingDescriptor{{
+		Key: variable.NodeKey(), Kind: semantic.SymbolScriptVariable, Name: "value",
+	}}
+	statement, err := semantic.NewStatement(descriptor)
+	if err != nil {
+		t.Fatalf("NewStatement() error = %v", err)
+	}
+	binding, found := statement.SymbolBinding(variable.NodeKey())
+	if !found || binding.Kind() != semantic.SymbolScriptVariable || binding.Name() != "value" {
+		t.Fatalf("symbol binding = (%#v, %t)", binding, found)
+	}
+}
+
 func TestDecimalTypePreservesOmissionAndEffectivePolicy(t *testing.T) {
 	tests := []struct {
 		kind      semantic.TypeKind
@@ -232,4 +301,13 @@ func mustTable(t *testing.T, digest string, start, end, ordinal int, tableID str
 		t.Fatalf("NewTableRelation() error = %v", err)
 	}
 	return relation
+}
+
+func mustSelectItem(t *testing.T, expression ast.Expression) ast.SelectItem {
+	t.Helper()
+	item, err := ast.NewSelectItem(expression, nil)
+	if err != nil {
+		t.Fatalf("NewSelectItem() error = %v", err)
+	}
+	return item
 }
