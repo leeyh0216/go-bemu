@@ -5,12 +5,13 @@ import "fmt"
 type PlanningErrorCode string
 
 const (
-	PlanningCodeInvalidDescriptor PlanningErrorCode = "ENGINE_PLAN_INVALID_DESCRIPTOR"
-	PlanningCodeUnsupported       PlanningErrorCode = "ENGINE_PLAN_UNSUPPORTED"
-	PlanningCodeEngineMismatch    PlanningErrorCode = "ENGINE_PLAN_ENGINE_MISMATCH"
-	PlanningCodeMutationMismatch  PlanningErrorCode = "ENGINE_PLAN_MUTATION_MISMATCH"
-	PlanningCodeCapabilityDrift   PlanningErrorCode = "ENGINE_PLAN_CAPABILITY_DRIFT"
-	PlanningCodePlannerMismatch   PlanningErrorCode = "ENGINE_PLAN_PLANNER_MISMATCH"
+	PlanningCodeInvalidDescriptor  PlanningErrorCode = "ENGINE_PLAN_INVALID_DESCRIPTOR"
+	PlanningCodeUnsupported        PlanningErrorCode = "ENGINE_PLAN_UNSUPPORTED"
+	PlanningCodeEngineMismatch     PlanningErrorCode = "ENGINE_PLAN_ENGINE_MISMATCH"
+	PlanningCodeMutationMismatch   PlanningErrorCode = "ENGINE_PLAN_MUTATION_MISMATCH"
+	PlanningCodeCapabilityDrift    PlanningErrorCode = "ENGINE_PLAN_CAPABILITY_DRIFT"
+	PlanningCodePlannerMismatch    PlanningErrorCode = "ENGINE_PLAN_PLANNER_MISMATCH"
+	PlanningCodePhysicalStateDrift PlanningErrorCode = "ENGINE_PLAN_PHYSICAL_STATE_DRIFT"
 )
 
 // PlanningError is safe to carry across the application boundary. Attribute
@@ -21,11 +22,10 @@ type PlanningError struct {
 	operation string
 	attribute string
 	detail    string
-	cause     error
 }
 
-func newPlanningError(code PlanningErrorCode, operation, attribute, detail string, cause error) *PlanningError {
-	return &PlanningError{code: code, operation: operation, attribute: attribute, detail: detail, cause: cause}
+func newPlanningError(code PlanningErrorCode, operation, attribute, detail string, _ error) *PlanningError {
+	return &PlanningError{code: code, operation: operation, attribute: attribute, detail: detail}
 }
 
 func (err *PlanningError) Error() string {
@@ -36,13 +36,6 @@ func (err *PlanningError) Error() string {
 		"engine planning failed: code=%s operation=%s attribute=%s detail=%s",
 		err.code, err.operation, err.attribute, err.detail,
 	)
-}
-
-func (err *PlanningError) Unwrap() error {
-	if err == nil {
-		return nil
-	}
-	return err.cause
 }
 
 func (err *PlanningError) Code() PlanningErrorCode {

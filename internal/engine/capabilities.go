@@ -41,18 +41,22 @@ const (
 	DDLChangeColumnType DDLOperation = "change-column-type"
 )
 
-type DDLAtomicity string
+type DDLGuarantee string
 
 const (
-	DDLAtomicityStatement DDLAtomicity = "statement"
-	DDLAtomicityTable     DDLAtomicity = "table"
+	// DDLGuaranteeAtomicPhysicalStatement guarantees that one physical DDL
+	// statement either completes or leaves the prior physical table unchanged.
+	DDLGuaranteeAtomicPhysicalStatement DDLGuarantee = "atomic-physical-statement"
+	// DDLGuaranteeAtomicPhysicalTable guarantees that a multi-step rebuild is
+	// hidden until the complete replacement is committed.
+	DDLGuaranteeAtomicPhysicalTable DDLGuarantee = "atomic-physical-table"
 )
 
 // DDLCapability describes the strongest atomicity and deepest logical field
 // path one DDL operation accepts. Table create/drop use depth zero. ALTER
 // operations require a positive depth; one means top-level fields only.
 type DDLCapability struct {
-	Atomicity         DDLAtomicity
+	Guarantee         DDLGuarantee
 	MaxFieldPathDepth int
 }
 
@@ -148,7 +152,7 @@ func NewCapabilities(descriptor CapabilitiesDescriptor) (Capabilities, error) {
 		}
 	}
 	for operation, ddl := range descriptor.DDL {
-		if !validDDLOperation(operation) || !validDDLAtomicity(ddl.Atomicity) ||
+		if !validDDLOperation(operation) || !validDDLGuarantee(ddl.Guarantee) ||
 			ddl.MaxFieldPathDepth < 0 || (ddlUsesFieldPath(operation) && ddl.MaxFieldPathDepth < 1) ||
 			(!ddlUsesFieldPath(operation) && ddl.MaxFieldPathDepth != 0) {
 			return Capabilities{}, invalidCapabilityDescriptor("ddl", string(operation))
@@ -250,8 +254,15 @@ func validDDLOperation(operation DDLOperation) bool {
 	}
 }
 
-func validDDLAtomicity(atomicity DDLAtomicity) bool {
-	return atomicity == DDLAtomicityStatement || atomicity == DDLAtomicityTable
+func validDDLGuarantee(guarantee DDLGuarantee) bool {
+	return guarantee == DDLGuaranteeAtomicPhysicalStatement || guarantee == DDLGuaranteeAtomicPhysicalTable
+}
+
+func ddlGuaranteeSatisfies(actual, required DDLGuarantee) bool {
+	if actual == required {
+		return true
+	}
+	return actual == DDLGuaranteeAtomicPhysicalTable && required == DDLGuaranteeAtomicPhysicalStatement
 }
 
 func ddlUsesFieldPath(operation DDLOperation) bool {
@@ -276,7 +287,7 @@ type capabilitiesFingerprintDocument struct {
 
 type ddlFingerprintEntry struct {
 	Operation         string `json:"operation"`
-	Atomicity         string `json:"atomicity"`
+	Guarantee         string `json:"guarantee"`
 	MaxFieldPathDepth int    `json:"maxFieldPathDepth"`
 }
 
@@ -296,7 +307,7 @@ func capabilitiesFingerprint(capabilities Capabilities) string {
 	}
 	for operation, ddl := range capabilities.ddl {
 		document.DDL = append(document.DDL, ddlFingerprintEntry{
-			Operation: string(operation), Atomicity: string(ddl.Atomicity), MaxFieldPathDepth: ddl.MaxFieldPathDepth,
+			Operation: string(operation), Guarantee: string(ddl.Guarantee), MaxFieldPathDepth: ddl.MaxFieldPathDepth,
 		})
 	}
 	sort.Strings(document.Transactions)

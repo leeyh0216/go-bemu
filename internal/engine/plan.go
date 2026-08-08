@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -23,15 +24,17 @@ const (
 	TableMutationDropColumn       TableMutationKind = "drop-column"
 	TableMutationRenameColumn     TableMutationKind = "rename-column"
 	TableMutationChangeColumnType TableMutationKind = "change-column-type"
-	TableMutationReplace          TableMutationKind = "replace"
 )
 
 type TableMutationDescriptor struct {
-	Kind         TableMutationKind
-	Target       domain.TableReference
-	BeforeSchema []domain.Field
-	AfterSchema  []domain.Field
-	FieldChanges []FieldChangeDescriptor
+	Kind               TableMutationKind
+	Target             domain.TableReference
+	BeforeSchema       []domain.Field
+	AfterSchema        []domain.Field
+	FieldChanges       []FieldChangeDescriptor
+	CorrelationID      string
+	ExpectedGeneration uint64
+	Generation         uint64
 }
 
 // FieldChangeDescriptor identifies the one logical field delta represented by
@@ -64,6 +67,9 @@ type TableMutation struct {
 	beforeSchema       []domain.Field
 	afterSchema        []domain.Field
 	fieldChanges       []FieldChange
+	correlationID      string
+	expectedGeneration uint64
+	generation         uint64
 	logicalFingerprint string
 }
 
@@ -74,6 +80,9 @@ func NewTableMutation(descriptor TableMutationDescriptor) (TableMutation, error)
 		)
 	}
 	if err := validateTableReference(descriptor.Target); err != nil {
+		return TableMutation{}, err
+	}
+	if err := validateCorrelation(descriptor.CorrelationID, descriptor.ExpectedGeneration, descriptor.Generation, "table-mutation"); err != nil {
 		return TableMutation{}, err
 	}
 	before := domain.CloneFields(descriptor.BeforeSchema)
@@ -87,7 +96,8 @@ func NewTableMutation(descriptor TableMutationDescriptor) (TableMutation, error)
 	}
 	mutation := TableMutation{
 		kind: descriptor.Kind, target: descriptor.Target, beforeSchema: before, afterSchema: after,
-		fieldChanges: changes,
+		fieldChanges: changes, correlationID: descriptor.CorrelationID,
+		expectedGeneration: descriptor.ExpectedGeneration, generation: descriptor.Generation,
 	}
 	mutation.logicalFingerprint = mutationFingerprint(mutation)
 	return mutation, nil
@@ -109,6 +119,26 @@ func (mutation TableMutation) FieldChanges() []FieldChange {
 	return cloneFieldChanges(mutation.fieldChanges)
 }
 
+func (mutation TableMutation) CorrelationID() string { return mutation.correlationID }
+
+func (mutation TableMutation) ExpectedGeneration() uint64 { return mutation.expectedGeneration }
+
+func (mutation TableMutation) Generation() uint64 { return mutation.generation }
+
+// GenerationMarkerFingerprint is the marker an adapter must write in the same
+// transaction as this mutation's physical change.
+func (mutation TableMutation) GenerationMarkerFingerprint() string {
+	return generationMarkerFingerprint(mutation.target, mutation.correlationID, mutation.generation)
+}
+
+func (mutation TableMutation) BeforeShapeFingerprint() string {
+	return logicalShapeFingerprint(mutation.beforeSchema)
+}
+
+func (mutation TableMutation) AfterShapeFingerprint() string {
+	return logicalShapeFingerprint(mutation.afterSchema)
+}
+
 func (mutation TableMutation) LogicalFingerprint() string { return mutation.logicalFingerprint }
 
 func (mutation TableMutation) validate() error {
@@ -125,6 +155,7 @@ type PlanRequirements struct {
 	Transactions       []TransactionScope
 	AtomicReplacements []AtomicReplacementScope
 	Inspection         []InspectionScope
+	DDLGuarantee       DDLGuarantee
 }
 
 // TablePlan is an immutable, engine-bound authorization to apply one logical
@@ -134,44 +165,40 @@ type TablePlan struct {
 	capabilityFingerprint string
 	mutation              TableMutation
 	requirements          PlanRequirements
+	proof                 PlanProof
 	planFingerprint       string
 	issuer                *planIssuer
 }
 
-// TableMutationValidator is implemented by an engine adapter. It verifies all
-// adapter-specific execution constraints without performing a physical side
-// effect. Returning nil attests that the adapter can execute this mutation.
-type TableMutationValidator interface {
-	ValidateTableMutation(context.Context, TableMutation) error
-}
-
-type TableMutationValidatorFunc func(context.Context, TableMutation) error
-
-func (function TableMutationValidatorFunc) ValidateTableMutation(ctx context.Context, mutation TableMutation) error {
-	return function(ctx, mutation)
+// AdapterPlanner inspects physical state and produces a typed, side-effect-free
+// proof for schema changes and data replacement. Executable SQL remains private
+// to the adapter.
+type AdapterPlanner interface {
+	PlanTableMutation(context.Context, TableMutation) (PlanProof, error)
+	PlanDataReplacement(context.Context, DataReplacement) (PlanProof, error)
 }
 
 type planIssuer struct{ marker byte }
 
 // Planner is the only TablePlan issuer. A runtime binds it to one immutable
-// capability snapshot and one adapter validator. The in-memory issuer seal is
+// capability snapshot and one adapter planner. The in-memory issuer seal is
 // deliberately absent from fingerprints because plans must never be persisted.
 type Planner struct {
 	capabilities Capabilities
-	validator    TableMutationValidator
+	adapter      AdapterPlanner
 	issuer       *planIssuer
 }
 
-func NewPlanner(capabilities Capabilities, validator TableMutationValidator) (*Planner, error) {
+func NewPlanner(capabilities Capabilities, adapter AdapterPlanner) (*Planner, error) {
 	if err := capabilities.validate(); err != nil {
 		return nil, err
 	}
-	if interfaceIsNil(validator) {
+	if interfaceIsNil(adapter) {
 		return nil, newPlanningError(
-			PlanningCodeInvalidDescriptor, "planner", "adapter.validator", "table mutation validator is required", nil,
+			PlanningCodeInvalidDescriptor, "planner", "adapter.planner", "adapter planner is required", nil,
 		)
 	}
-	return &Planner{capabilities: capabilities, validator: validator, issuer: &planIssuer{marker: 1}}, nil
+	return &Planner{capabilities: capabilities, adapter: adapter, issuer: &planIssuer{marker: 1}}, nil
 }
 
 func (planner *Planner) Capabilities() Capabilities {
@@ -186,10 +213,8 @@ func (planner *Planner) PlanTableChange(
 	mutation TableMutation,
 	requirements PlanRequirements,
 ) (TablePlan, error) {
-	if planner == nil || planner.issuer == nil || interfaceIsNil(planner.validator) {
-		return TablePlan{}, newPlanningError(
-			PlanningCodeInvalidDescriptor, "table-plan", "planner", "zero or invalid planner", nil,
-		)
+	if err := planner.validateRuntime(); err != nil {
+		return TablePlan{}, err
 	}
 	if err := mutation.validate(); err != nil {
 		return TablePlan{}, err
@@ -198,7 +223,7 @@ func (planner *Planner) PlanTableChange(
 	if err != nil {
 		return TablePlan{}, err
 	}
-	if err := validateLogicalSchemas(planner.capabilities, mutation); err != nil {
+	if err := validateDesiredLogicalSchema(planner.capabilities, mutation); err != nil {
 		return TablePlan{}, err
 	}
 	if err := validateMutationCapability(planner.capabilities, mutation); err != nil {
@@ -207,19 +232,16 @@ func (planner *Planner) PlanTableChange(
 	if err := validateRequirements(planner.capabilities, mutation.kind, requirements); err != nil {
 		return TablePlan{}, err
 	}
-	if err := planner.validator.ValidateTableMutation(ctx, mutation); err != nil {
-		var planningErr *PlanningError
-		if errors.As(err, &planningErr) {
-			return TablePlan{}, err
-		}
-		return TablePlan{}, newPlanningError(
-			PlanningCodeUnsupported, string(mutation.kind), "adapter.validation",
-			"engine adapter rejected the logical mutation", err,
-		)
+	proof, err := planner.adapter.PlanTableMutation(ctx, mutation)
+	if err != nil {
+		return TablePlan{}, adapterPlanningError(string(mutation.kind), err)
+	}
+	if err := validateTablePlanProof(planner.capabilities, mutation, proof); err != nil {
+		return TablePlan{}, err
 	}
 	plan := TablePlan{
 		engineIdentity: planner.capabilities.identity, capabilityFingerprint: planner.capabilities.fingerprint,
-		mutation: mutation, requirements: requirements, issuer: planner.issuer,
+		mutation: mutation, requirements: requirements, proof: proof, issuer: planner.issuer,
 	}
 	plan.planFingerprint = tablePlanFingerprint(plan)
 	return plan, nil
@@ -231,22 +253,48 @@ func (plan TablePlan) Mutation() TableMutation { return plan.mutation }
 
 func (plan TablePlan) Requirements() PlanRequirements { return cloneRequirements(plan.requirements) }
 
+func (plan TablePlan) Proof() PlanProof { return plan.proof }
+
 func (plan TablePlan) LogicalFingerprint() string { return plan.mutation.logicalFingerprint }
 
 func (plan TablePlan) Fingerprint() string { return plan.planFingerprint }
 
-// ValidateBinding prevents a plan from being reused with another planner,
-// engine, capability snapshot, or stale logical mutation.
-func (planner *Planner) ValidateBinding(plan TablePlan, mutation TableMutation) error {
+// ValidateApplyStart must run against an inspection taken inside the engine
+// transaction before the adapter mutates data or generation markers.
+func (planner *Planner) ValidateApplyStart(plan TablePlan, mutation TableMutation, current PhysicalTableState) error {
+	if err := planner.validateTableBinding(plan, mutation); err != nil {
+		return err
+	}
+	if !plan.proof.before.same(current) {
+		return unexpectedPhysicalState("before")
+	}
+	return nil
+}
+
+// ValidateApplyResult must run before commit. DROP results are tombstones stored
+// in engine-owned marker metadata, so they remain inspectable after the table is
+// absent.
+func (planner *Planner) ValidateApplyResult(plan TablePlan, current PhysicalTableState) error {
+	if plan.planFingerprint == "" || plan.planFingerprint != tablePlanFingerprint(plan) ||
+		planner == nil || plan.issuer != planner.issuer {
+		return newPlanningError(
+			PlanningCodeInvalidDescriptor, "validate-table-plan", "plan.binding", "invalid table plan binding", nil,
+		)
+	}
+	if !plan.proof.after.same(current) {
+		return unexpectedPhysicalState("after")
+	}
+	return nil
+}
+
+func (planner *Planner) validateTableBinding(plan TablePlan, mutation TableMutation) error {
 	if plan.planFingerprint == "" || plan.planFingerprint != tablePlanFingerprint(plan) {
 		return newPlanningError(
 			PlanningCodeInvalidDescriptor, "validate-table-plan", "plan.fingerprint", "zero or inconsistent table plan", nil,
 		)
 	}
-	if planner == nil || planner.issuer == nil {
-		return newPlanningError(
-			PlanningCodeInvalidDescriptor, "validate-table-plan", "planner", "zero or invalid planner", nil,
-		)
+	if err := planner.validateRuntime(); err != nil {
+		return err
 	}
 	if err := mutation.validate(); err != nil {
 		return err
@@ -274,6 +322,28 @@ func (planner *Planner) ValidateBinding(plan TablePlan, mutation TableMutation) 
 	return nil
 }
 
+func (planner *Planner) validateRuntime() error {
+	if planner == nil || planner.issuer == nil || interfaceIsNil(planner.adapter) {
+		return newPlanningError(
+			PlanningCodeInvalidDescriptor, "table-plan", "planner", "zero or invalid planner", nil,
+		)
+	}
+	return nil
+}
+
+func adapterPlanningError(operation string, err error) error {
+	var planningErr *PlanningError
+	if errors.As(err, &planningErr) {
+		return planningErr
+	}
+	if err == context.Canceled || err == context.DeadlineExceeded {
+		return err
+	}
+	return newPlanningError(
+		PlanningCodeUnsupported, operation, "adapter.planning", "engine adapter rejected the logical plan", nil,
+	)
+}
+
 func interfaceIsNil(value any) bool {
 	if value == nil {
 		return true
@@ -288,12 +358,6 @@ func interfaceIsNil(value any) bool {
 }
 
 func validateMutationCapability(capabilities Capabilities, mutation TableMutation) error {
-	if mutation.kind == TableMutationReplace {
-		if !capabilities.SupportsAtomicReplacement(AtomicReplacementTable) {
-			return unsupportedPlanCapability(mutation.kind, "atomic-replacement.table")
-		}
-		return nil
-	}
 	operation := mutationDDLOperation(mutation.kind)
 	ddl, supported := capabilities.DDL(operation)
 	if !supported {
@@ -301,6 +365,59 @@ func validateMutationCapability(capabilities Capabilities, mutation TableMutatio
 	}
 	if ddlUsesFieldPath(operation) && len(mutation.fieldChanges[0].path) > ddl.MaxFieldPathDepth {
 		return unsupportedPlanCapability(mutation.kind, "ddl."+string(operation)+".field-path-depth")
+	}
+	return nil
+}
+
+func validateTablePlanProof(
+	capabilities Capabilities,
+	mutation TableMutation,
+	proof PlanProof,
+) error {
+	if err := proof.validate(); err != nil {
+		return err
+	}
+	if proof.before.target != mutation.target || proof.after.target != mutation.target {
+		return invalidPlanProof("table mutation proof target differs")
+	}
+	if proof.before.provenance == PhysicalStateUnmanaged {
+		return newPlanningError(
+			PlanningCodePhysicalStateDrift, string(mutation.kind), "physical.provenance",
+			"unmanaged physical table requires explicit reconciliation", nil,
+		)
+	}
+	if proof.before.generation != mutation.expectedGeneration || proof.after.generation != mutation.generation {
+		return invalidPlanProof("table mutation proof generation differs")
+	}
+	switch mutation.kind {
+	case TableMutationCreate:
+		if proof.before.exists || proof.after.provenance != PhysicalStateManaged || !proof.after.exists ||
+			proof.after.logicalShapeFingerprint != mutation.AfterShapeFingerprint() || proof.strategy != PlanStrategyCreateTable {
+			return invalidPlanProof("create proof does not describe absent to managed table")
+		}
+	case TableMutationDrop:
+		if proof.before.provenance != PhysicalStateManaged || !proof.before.exists ||
+			proof.before.logicalShapeFingerprint != mutation.BeforeShapeFingerprint() ||
+			proof.after.provenance != PhysicalStateTombstone || proof.after.exists ||
+			proof.strategy != PlanStrategyDropTable {
+			return invalidPlanProof("drop proof does not describe managed table to tombstone")
+		}
+	default:
+		if proof.before.provenance != PhysicalStateManaged || !proof.before.exists ||
+			proof.before.logicalShapeFingerprint != mutation.BeforeShapeFingerprint() ||
+			proof.after.provenance != PhysicalStateManaged || !proof.after.exists ||
+			proof.after.logicalShapeFingerprint != mutation.AfterShapeFingerprint() {
+			return invalidPlanProof("ALTER proof shape or managed provenance differs")
+		}
+		if proof.strategy != PlanStrategyAlterInPlace && proof.strategy != PlanStrategyRebuildTable {
+			return invalidPlanProof("ALTER proof strategy is invalid")
+		}
+		if proof.strategy == PlanStrategyRebuildTable && !capabilities.SupportsAtomicReplacement(AtomicReplacementTable) {
+			return unsupportedPlanCapability(mutation.kind, "atomic-replacement.table")
+		}
+	}
+	if proof.after.markerFingerprint != mutation.GenerationMarkerFingerprint() {
+		return invalidPlanProof("table mutation proof marker differs")
 	}
 	return nil
 }
@@ -321,17 +438,29 @@ func validateRequirements(capabilities Capabilities, kind TableMutationKind, req
 			return unsupportedPlanCapability(kind, "inspection."+string(scope))
 		}
 	}
+	operation := mutationDDLOperation(kind)
+	ddl, supported := capabilities.DDL(operation)
+	if !supported || !ddlGuaranteeSatisfies(ddl.Guarantee, requirements.DDLGuarantee) {
+		return unsupportedPlanCapability(kind, "ddl."+string(operation)+".guarantee")
+	}
 	return nil
 }
 
 func unsupportedPlanCapability(kind TableMutationKind, attribute string) error {
+	return unsupportedCapability(string(kind), attribute)
+}
+
+func unsupportedCapability(operation, attribute string) error {
 	return newPlanningError(
-		PlanningCodeUnsupported, string(kind), attribute, "required logical capability is not supported", nil,
+		PlanningCodeUnsupported, operation, attribute, "required logical capability is not supported", nil,
 	)
 }
 
 func normalizeRequirements(input PlanRequirements) (PlanRequirements, error) {
 	result := cloneRequirements(input)
+	if !validDDLGuarantee(result.DDLGuarantee) {
+		return PlanRequirements{}, invalidRequirement("ddl-guarantee", "")
+	}
 	seenTransactions := make(map[TransactionScope]struct{}, len(result.Transactions))
 	for _, scope := range result.Transactions {
 		if !validTransactionScope(scope) {
@@ -389,13 +518,14 @@ func cloneRequirements(input PlanRequirements) PlanRequirements {
 		Transactions:       append([]TransactionScope(nil), input.Transactions...),
 		AtomicReplacements: append([]AtomicReplacementScope(nil), input.AtomicReplacements...),
 		Inspection:         append([]InspectionScope(nil), input.Inspection...),
+		DDLGuarantee:       input.DDLGuarantee,
 	}
 }
 
 func validTableMutationKind(kind TableMutationKind) bool {
 	switch kind {
 	case TableMutationCreate, TableMutationDrop, TableMutationAddColumn, TableMutationDropColumn,
-		TableMutationRenameColumn, TableMutationChangeColumnType, TableMutationReplace:
+		TableMutationRenameColumn, TableMutationChangeColumnType:
 		return true
 	default:
 		return false
@@ -434,18 +564,39 @@ func validateTableReference(reference domain.TableReference) error {
 	return nil
 }
 
+var correlationPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func validateCorrelation(correlationID string, expectedGeneration, generation uint64, operation string) error {
+	if !correlationPattern.MatchString(correlationID) {
+		return newPlanningError(
+			PlanningCodeInvalidDescriptor, operation, "correlation.id", "correlation ID is invalid", nil,
+		)
+	}
+	if generation == 0 || generation <= expectedGeneration {
+		return newPlanningError(
+			PlanningCodeInvalidDescriptor, operation, "correlation.generation", "generation must advance", nil,
+		)
+	}
+	return nil
+}
+
 func validateMutationSchemas(
 	kind TableMutationKind,
 	target domain.TableReference,
 	before, after []domain.Field,
 	changes []FieldChange,
 ) error {
-	validateSchema := func(attribute string, schema []domain.Field) error {
-		table := domain.Table{ProjectID: target.ProjectID, DatasetID: target.DatasetID, ID: target.TableID, Schema: schema}
-		if err := table.Validate(); err != nil {
+	validateBefore := func() error {
+		if err := validateLegacySchemaStructure(before, false); err != nil {
 			return newPlanningError(
-				PlanningCodeInvalidDescriptor, string(kind), attribute, "logical table schema is invalid", err,
+				PlanningCodeInvalidDescriptor, string(kind), "mutation.before-schema", "logical table schema is malformed", nil,
 			)
+		}
+		return nil
+	}
+	validateAfter := func() error {
+		if err := validateLogicalTableSchema(target, after); err != nil {
+			return classifyLogicalSchemaError(string(kind), err)
 		}
 		return nil
 	}
@@ -454,31 +605,17 @@ func validateMutationSchemas(
 		if len(before) != 0 || len(changes) != 0 {
 			return invalidSchemaTransition(kind, "create requires an absent before schema")
 		}
-		return validateSchema("mutation.after-schema", after)
+		return validateAfter()
 	case TableMutationDrop:
 		if len(after) != 0 || len(changes) != 0 {
 			return invalidSchemaTransition(kind, "drop requires an absent after schema")
 		}
-		return validateSchema("mutation.before-schema", before)
-	case TableMutationReplace:
-		if len(changes) != 0 {
-			return invalidSchemaTransition(kind, "replace must not carry ALTER field changes")
-		}
-		if err := validateSchema("mutation.before-schema", before); err != nil {
-			return err
-		}
-		if err := validateSchema("mutation.after-schema", after); err != nil {
-			return err
-		}
-		if reflect.DeepEqual(before, after) {
-			return invalidSchemaTransition(kind, "before and after schemas must differ")
-		}
-		return nil
+		return validateBefore()
 	default:
-		if err := validateSchema("mutation.before-schema", before); err != nil {
+		if err := validateBefore(); err != nil {
 			return err
 		}
-		if err := validateSchema("mutation.after-schema", after); err != nil {
+		if err := validateAfter(); err != nil {
 			return err
 		}
 		if len(changes) != 1 {
@@ -486,6 +623,94 @@ func validateMutationSchemas(
 		}
 		return validateAndApplyFieldChange(kind, before, after, changes[0])
 	}
+}
+
+var logicalFieldNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func validateLegacySchemaStructure(fields []domain.Field, nested bool) error {
+	if len(fields) == 0 && !nested {
+		return fmt.Errorf("schema is empty")
+	}
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		if len(field.Name) > 1024 || !logicalFieldNamePattern.MatchString(field.Name) {
+			return fmt.Errorf("field name is invalid")
+		}
+		key := strings.ToLower(field.Name)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("field is duplicated")
+		}
+		seen[key] = struct{}{}
+		fieldType := strings.ToUpper(field.Type)
+		switch fieldType {
+		case "GEOGRAPHY", "BOOL", "BOOLEAN", "INT64", "INTEGER", "FLOAT64", "FLOAT", "NUMERIC", "BIGNUMERIC",
+			"STRING", "BYTES", "DATE", "DATETIME", "TIME", "TIMESTAMP", "JSON", "RECORD", "STRUCT":
+		default:
+			return fmt.Errorf("field type is invalid")
+		}
+		mode := strings.ToUpper(field.Mode)
+		if mode != "" && mode != "NULLABLE" && mode != "REQUIRED" && mode != "REPEATED" {
+			return fmt.Errorf("field mode is invalid")
+		}
+		isStruct := fieldType == "RECORD" || fieldType == "STRUCT"
+		if isStruct != (len(field.Fields) > 0) {
+			return fmt.Errorf("field nesting is invalid")
+		}
+		if fieldType == "NUMERIC" || fieldType == "BIGNUMERIC" {
+			if err := validateLegacyDecimal(field); err != nil {
+				return err
+			}
+		} else if field.Precision != nil || field.Scale != nil || field.RoundingMode != "" {
+			return fmt.Errorf("scalar parameters are invalid")
+		}
+		if len(field.Fields) > 0 {
+			if err := validateLegacySchemaStructure(field.Fields, true); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateLegacyDecimal(field domain.Field) error {
+	if field.Precision == nil && field.Scale != nil {
+		return fmt.Errorf("scale requires precision")
+	}
+	if field.Precision != nil {
+		precision := *field.Precision
+		scale := int64(0)
+		if field.Scale != nil {
+			scale = *field.Scale
+		}
+		maximumPrecision, maximumScale := int64(38), int64(9)
+		if strings.EqualFold(field.Type, "BIGNUMERIC") {
+			maximumPrecision, maximumScale = 76, 38
+		}
+		if precision < 1 || precision > maximumPrecision || scale < 0 || scale > maximumScale || scale > precision {
+			return fmt.Errorf("decimal parameters are malformed")
+		}
+	}
+	switch field.RoundingMode {
+	case "", domain.RoundingModeUnspecified, domain.RoundingModeHalfAwayFromZero, domain.RoundingModeHalfEven:
+		return nil
+	default:
+		return fmt.Errorf("rounding mode is invalid")
+	}
+}
+
+func validateLogicalTableSchema(target domain.TableReference, schema []domain.Field) error {
+	return (domain.Table{ProjectID: target.ProjectID, DatasetID: target.DatasetID, ID: target.TableID, Schema: schema}).Validate()
+}
+
+func classifyLogicalSchemaError(operation string, err error) error {
+	if errors.Is(err, domain.ErrUnsupported) {
+		return newPlanningError(
+			PlanningCodeUnsupported, operation, "logical.schema.policy", "logical schema is outside the emulator policy", nil,
+		)
+	}
+	return newPlanningError(
+		PlanningCodeInvalidDescriptor, operation, "logical.schema", "logical table schema is malformed", nil,
+	)
 }
 
 func validateAndApplyFieldChange(kind TableMutationKind, before, after []domain.Field, change FieldChange) error {
@@ -667,13 +892,11 @@ func cloneFieldChanges(input []FieldChange) []FieldChange {
 
 func cloneField(input domain.Field) domain.Field { return domain.CloneFields([]domain.Field{input})[0] }
 
-func validateLogicalSchemas(capabilities Capabilities, mutation TableMutation) error {
-	for _, schema := range [][]domain.Field{mutation.beforeSchema, mutation.afterSchema} {
-		if err := validateLogicalFields(capabilities, mutation.kind, schema, 0, 0); err != nil {
-			return err
-		}
+func validateDesiredLogicalSchema(capabilities Capabilities, mutation TableMutation) error {
+	if mutation.kind == TableMutationDrop {
+		return nil
 	}
-	return nil
+	return validateLogicalFields(capabilities, mutation.kind, mutation.afterSchema, 0, 0)
 }
 
 func validateLogicalFields(
@@ -682,38 +905,45 @@ func validateLogicalFields(
 	fields []domain.Field,
 	structDepth, listDepth int,
 ) error {
+	return validateLogicalFieldsForOperation(capabilities, string(kind), fields, structDepth, listDepth)
+}
+
+func validateLogicalFieldsForOperation(
+	capabilities Capabilities,
+	operation string,
+	fields []domain.Field,
+	structDepth, listDepth int,
+) error {
 	for _, field := range fields {
 		fieldStructDepth, fieldListDepth := structDepth, listDepth
 		if strings.EqualFold(field.Mode, "REPEATED") {
 			fieldListDepth++
 			if fieldListDepth > capabilities.composite.MaxListDepth {
-				return unsupportedPlanCapability(kind, "logical.list.depth")
+				return unsupportedCapability(operation, "logical.list.depth")
 			}
 		}
 		if isStructField(field) {
 			fieldStructDepth++
 			if fieldStructDepth > capabilities.composite.MaxStructDepth {
-				return unsupportedPlanCapability(kind, "logical.struct.depth")
+				return unsupportedCapability(operation, "logical.struct.depth")
 			}
 		}
 		if strings.EqualFold(field.Type, "NUMERIC") || strings.EqualFold(field.Type, "BIGNUMERIC") {
 			if !capabilities.decimal.Supported {
-				return unsupportedPlanCapability(kind, "logical.decimal")
+				return unsupportedCapability(operation, "logical.decimal")
 			}
 			parameters, err := field.EffectiveDecimalParameters()
 			if err != nil {
-				return newPlanningError(
-					PlanningCodeInvalidDescriptor, string(kind), "logical.decimal", "decimal parameters are invalid", err,
-				)
+				return classifyLogicalSchemaError(operation, err)
 			}
 			if parameters.Precision > capabilities.decimal.MaxPrecision {
-				return unsupportedPlanCapability(kind, "logical.decimal.precision")
+				return unsupportedCapability(operation, "logical.decimal.precision")
 			}
 			if parameters.Scale > capabilities.decimal.MaxScale {
-				return unsupportedPlanCapability(kind, "logical.decimal.scale")
+				return unsupportedCapability(operation, "logical.decimal.scale")
 			}
 		}
-		if err := validateLogicalFields(capabilities, kind, field.Fields, fieldStructDepth, fieldListDepth); err != nil {
+		if err := validateLogicalFieldsForOperation(capabilities, operation, field.Fields, fieldStructDepth, fieldListDepth); err != nil {
 			return err
 		}
 	}
@@ -727,13 +957,16 @@ func invalidSchemaTransition(kind TableMutationKind, detail string) error {
 }
 
 type mutationFingerprintDocument struct {
-	Kind         TableMutationKind                `json:"kind"`
-	ProjectID    string                           `json:"projectId"`
-	DatasetID    string                           `json:"datasetId"`
-	TableID      string                           `json:"tableId"`
-	BeforeSchema []domain.Field                   `json:"beforeSchema"`
-	AfterSchema  []domain.Field                   `json:"afterSchema"`
-	FieldChanges []fieldChangeFingerprintDocument `json:"fieldChanges"`
+	Kind               TableMutationKind                `json:"kind"`
+	ProjectID          string                           `json:"projectId"`
+	DatasetID          string                           `json:"datasetId"`
+	TableID            string                           `json:"tableId"`
+	BeforeSchema       []domain.Field                   `json:"beforeSchema"`
+	AfterSchema        []domain.Field                   `json:"afterSchema"`
+	FieldChanges       []fieldChangeFingerprintDocument `json:"fieldChanges"`
+	CorrelationID      string                           `json:"correlationId"`
+	ExpectedGeneration uint64                           `json:"expectedGeneration"`
+	Generation         uint64                           `json:"generation"`
 }
 
 type fieldChangeFingerprintDocument struct {
@@ -747,6 +980,8 @@ func mutationFingerprint(mutation TableMutation) string {
 		Kind: mutation.kind, ProjectID: mutation.target.ProjectID,
 		DatasetID: mutation.target.DatasetID, TableID: mutation.target.TableID,
 		BeforeSchema: mutation.beforeSchema, AfterSchema: mutation.afterSchema,
+		CorrelationID: mutation.correlationID, ExpectedGeneration: mutation.expectedGeneration,
+		Generation: mutation.generation,
 	}
 	for _, change := range mutation.fieldChanges {
 		document.FieldChanges = append(document.FieldChanges, fieldChangeFingerprintDocument{
@@ -761,13 +996,24 @@ type tablePlanFingerprintDocument struct {
 	CapabilityFingerprint string           `json:"capabilityFingerprint"`
 	LogicalFingerprint    string           `json:"logicalFingerprint"`
 	Requirements          PlanRequirements `json:"requirements"`
+	Proof                 any              `json:"proof"`
 }
 
 func tablePlanFingerprint(plan TablePlan) string {
 	return fingerprintJSON(tablePlanFingerprintDocument{
 		EngineIdentity: plan.engineIdentity.key(), CapabilityFingerprint: plan.capabilityFingerprint,
 		LogicalFingerprint: plan.mutation.logicalFingerprint, Requirements: plan.requirements,
+		Proof: planProofFingerprintDocument(plan.proof),
 	})
+}
+
+func logicalShapeFingerprint(schema []domain.Field) string {
+	if len(schema) == 0 {
+		return ""
+	}
+	return fingerprintJSON(struct {
+		Schema []domain.Field `json:"schema"`
+	}{Schema: schema})
 }
 
 func fingerprintJSON(value any) string {
