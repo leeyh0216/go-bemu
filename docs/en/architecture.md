@@ -159,29 +159,28 @@ are validated and round-tripped (including an empty map), and both participate
 in the configuration fingerprint. Logs expose only priority, label count, and a
 sorted label-key fingerprint, never label values.
 
-For the supported query subset, creation is preceded by an explicit
-`QueryAnalyzer` port:
+For the supported query subset, creation is preceded by the single
+`GoogleSQLGateway` port:
 
 ```text
 GoogleSQL request
-  -> structural relation analysis
+  -> official parse and semantic analysis
+  -> immutable AST plus canonical relation/type bindings
   -> source/default/destination dataset location validation
   -> generated anonymous destination (row-producing, destination omitted)
   -> JobRepository.CreateOrGet
-  -> DuckDB materialization
+  -> StatementExecutor or StatementMaterializer
   -> catalog publication
 ```
 
-The application never imports DuckDB parsing. The DuckDB adapter returns only
-referenced table identities and `producesRows`; logs retain SQL length/digest,
-statement type, model version, and counts, not SQL. This follows BigQuery's
+The application never imports DuckDB parsing. The gateway owns the external
+parser handle and returns only the BQEMU semantic statement. The DuckDB adapter
+visits that statement and never receives or reparses user SQL. Structured logs
+record the statement kind, analysis fingerprint, destination policy, row count,
+and transaction outcome. This follows BigQuery's
 [location inference](https://cloud.google.com/bigquery/docs/locations#specify_locations)
 and `JobConfigurationQuery` [generated destination
 contract](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery).
-The exact connector consumer is `0.44.2`
-[`TempTableBuilder`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L1150-L1240),
-which reads the completed job's `destinationTable` when no materialization
-dataset is configured.
 
 <!-- section: transactions -->
 ## Transactions and Visibility
@@ -209,37 +208,25 @@ deliberately outside the load commit.
 <!-- section: sql-boundary -->
 ## SQL Dialect Boundary
 
-Catalog-mutating statements use a GoogleSQL AST adapter and immutable semantic
-commands. General query reference rewriting remains a bounded adapter and is
-not a complete implementation of scripts, table decorators, or every query
-expression. The authoritative syntax is the
+Every supported `SELECT`, DML, script child, and catalog DDL statement uses the
+same official GoogleSQL parse/analyze gateway and immutable semantic AST. The
+authoritative syntax is the
 [GoogleSQL lexical structure](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)
 and [query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax).
 Unknown or unsupported forms must fail explicitly rather than be approximately
-rewritten.
+rewritten or retried as DuckDB SQL.
 The application executes `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`,
 top-level `ADD`, `RENAME`, and `DROP COLUMN`, and `ALTER COLUMN SET DATA TYPE`
 through typed engine plans and the canonical catalog service. Unsupported DDL
 fails before mutation under `query.ddl.catalog-sync-v1`. A process crash between
 the engine change and SQLite publication still requires #26 reconciliation.
-The same boundary permits only one statement plus an optional trailing
-semicolon. A literal/comment-aware scan rejects all [multi-statement
-queries](https://cloud.google.com/bigquery/docs/multi-statement-queries) before
-job or engine side effects under `query.scripts.unsupported-v1`. Full script
-support requires statement-by-statement semantic analysis, variables, control
-flow, temporary objects, and job-level transaction semantics; passing an opaque
-script to DuckDB is never an acceptable fallback.
-
-The verified static unpartitioned overwrite path is intentionally structural and
-versioned. Its released connector `0.44.2` public-edge E2E uses a token parser
-that recognizes the source-derived shape from
-[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java),
-applies the constant-false [BigQuery `MERGE`
-contract](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),
-and executes one atomic [DuckDB `MERGE
-INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). It does not
-generalize to dynamic time/range partition overwrite or arbitrary `MERGE`; those
-remain explicit gaps.
+Multi-statement input is represented as a script root. The supported subset
+analyzes `DECLARE`, `SET`, and query/DML children, binds script variables, and
+executes the children in one engine transaction. Control flow, temporary
+routines, dynamic SQL, and exception blocks remain unsupported and fail before
+execution. `MERGE`, including constant-false replacement, follows the same AST
+visitor path; partition-specific parity beyond the supported expressions and
+actions remains #8.
 
 <!-- section: runtime-security -->
 ## Runtime, TLS, and Public Access

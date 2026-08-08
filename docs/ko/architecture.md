@@ -201,31 +201,31 @@ Cloud 내부 표현을 기준으로 한 공식 [페이지
 로그에는 우선순위, 라벨 수, 정렬한 라벨 키의 지문값만 남깁니다. 라벨 값은 남기지
 않습니다.
 
-지원하는 쿼리 범위에서는 작업을 만들기 전에 명시적으로 `QueryAnalyzer` 포트를
+지원하는 쿼리 범위에서는 작업을 만들기 전에 하나의 `GoogleSQLGateway` 포트를
 호출합니다.
 
 ```text
 GoogleSQL 요청
-  -> 구조 기반 관계 분석
+  -> 공식 parse와 semantic analysis
+  -> 불변 AST와 기준 relation/type binding
   -> 원본/기본/대상 데이터 세트 위치 검증
   -> 익명 대상 생성(행을 반환하고 대상을 생략한 경우)
   -> JobRepository.CreateOrGet
-  -> DuckDB 결과 구체화
+  -> StatementExecutor 또는 StatementMaterializer
   -> 카탈로그 반영
 ```
 
-애플리케이션은 DuckDB 구문 분석기를 의존하지 않습니다. DuckDB 어댑터는 참조한
-테이블 식별자와 `producesRows`만 반환합니다. 로그에는 SQL 원문과 함께 길이와 요약
-해시, 명령문 유형, 모델 버전, 개수를 남깁니다.
+애플리케이션은 DuckDB 구문 분석기를 의존하지 않습니다. Gateway가 외부 parser
+handle을 소유하고 BQEMU semantic statement만 반환합니다. DuckDB 어댑터는 이
+statement를 방문하며 사용자 SQL을 받거나 다시 해석하지 않습니다. 구조화 로그에는
+statement kind, analysis fingerprint, destination policy, row count,
+transaction 결과를 기록합니다.
 
 이 동작은 BigQuery의 [위치
 추론](https://cloud.google.com/bigquery/docs/locations#specify_locations)과
 `JobConfigurationQuery`의 [자동 생성 대상
 계약](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery)을
-따릅니다. 구체화 데이터 세트를 지정하지 않은 커넥터 `0.44.2`는 완료된 작업의
-`destinationTable`을 읽습니다. 해당 코드는
-[`TempTableBuilder`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L1150-L1240)에
-있습니다.
+따릅니다.
 
 <!-- section: transactions -->
 ## 트랜잭션과 공개 시점
@@ -259,15 +259,14 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 <!-- section: sql-boundary -->
 ## SQL 문법 경계
 
-카탈로그를 변경하는 문장은 GoogleSQL AST 어댑터와 불변 의미 명령으로 처리합니다.
-일반 쿼리의 참조 변환은 제한된 어댑터가 담당합니다. 스크립트, 테이블 데코레이터,
-모든 쿼리 표현식을 처리하는 완전한 구현은 아닙니다.
+지원하는 모든 `SELECT`, DML, script child, catalog DDL statement는 하나의 공식
+GoogleSQL parse/analyze gateway와 불변 semantic AST를 사용합니다.
 
 문법 기준은 [GoogleSQL 어휘
 구조](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)와
 [쿼리 문법](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax)입니다.
-알 수 없거나 지원하지 않는 형식은 비슷한 SQL로 추정하지 않고 명시적으로
-거부해야 합니다.
+알 수 없거나 지원하지 않는 형식은 비슷한 SQL로 추정하거나 DuckDB SQL로 재시도하지
+않고 명시적으로 거부해야 합니다.
 
 애플리케이션은 `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, 최상위 `ADD`, `RENAME`,
 `DROP COLUMN`, `ALTER COLUMN SET DATA TYPE`을 타입 있는 엔진 계획과 기준 카탈로그
@@ -275,25 +274,12 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 `query.ddl.catalog-sync-v1`로 거부합니다. 엔진 변경과 SQLite 공개 사이에서 프로세스가
 중단된 경우의 복구는 #26에 남아 있습니다.
 
-같은 경계에서는 명령문 하나와 선택적인 마지막 세미콜론만 허용합니다. 리터럴과
-주석을 구분하는 검사기는 모든 [여러 명령문
-쿼리](https://cloud.google.com/bigquery/docs/multi-statement-queries)를
-`query.scripts.unsupported-v1`로 작업 생성과 엔진 변경 전에 거부합니다.
-
-스크립트를 완전히 지원하려면 명령문별 의미 분석, 변수, 제어 흐름, 임시 객체, 작업
-단위 트랜잭션 의미가 필요합니다. 해석하지 못한 스크립트를 DuckDB에 그대로 넘기는
-우회 방식은 허용하지 않습니다.
-
-검증된 정적 비파티션 덮어쓰기는 의도적으로 입력 구조와 버전을 제한합니다. 출시된
-커넥터 `0.44.2`를 사용하는 공개 API E2E는 토큰 파서로
-[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)의
-구현에서 파생한 커넥터 `0.44.2` 구조를 인식합니다. 조건이 항상 거짓인 [BigQuery
-`MERGE` 계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
-적용하고 원자적인 [DuckDB `MERGE
-INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실행합니다.
-
-동적 시간·범위 파티션 덮어쓰기나 임의의 `MERGE`로 일반화하지 않습니다. 두 기능은
-명시적인 미지원 항목입니다.
+여러 명령문 입력은 script root로 표현합니다. 지원 범위는 `DECLARE`, `SET`,
+query/DML child를 분석하고 script variable을 binding한 뒤 하나의 엔진 transaction에서
+순서대로 실행합니다. Control flow, temporary routine, dynamic SQL, exception block은
+지원하지 않으며 실행 전에 거부합니다. 항상 거짓인 교체를 포함한 `MERGE`도 같은 AST
+visitor 경로를 사용합니다. 지원 expression과 action을 넘어서는 partition별 의미
+일치는 #8에 남아 있습니다.
 
 <!-- section: runtime-security -->
 ## 실행 환경, TLS, 공개 접근

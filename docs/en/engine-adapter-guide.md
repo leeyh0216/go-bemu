@@ -121,6 +121,21 @@ already bound to canonical catalog metadata. An engine adapter visits that
 statement and creates a private physical plan; it must not tokenize, reparse, or
 infer unresolved table paths from the original SQL.
 
+The shared AST boundary currently exposes these execution roots:
+
+| Root | Engine contract | Explicit boundary |
+| --- | --- | --- |
+| `SELECT` | relational visitor with canonical relation/type bindings | unknown relation, operator, function, expression, or type fails closed |
+| `INSERT`, `UPDATE`, `DELETE` | one typed DML statement and bind arguments | unsupported source/action shape fails before execution |
+| `MERGE` | ordered matched/not-matched clauses in one transaction | unsupported action, expression, or cardinality rule fails closed |
+| script | ordered `DECLARE`, `SET`, and supported query/DML children in one transaction | control flow, dynamic SQL, temporary routines, and exception blocks are unsupported |
+| catalog DDL | application-owned typed mutation plan | only the documented create/drop/truncate and column mutations are accepted |
+
+Query parameters, views, UDFs, procedures, connections, remote functions,
+table decorators, and `UNNEST` relations are not engine fallbacks. They require
+an explicit AST, semantic-binding, and lowering implementation before support is
+advertised.
+
 Storage Read and Storage Write implementations also satisfy consumer-owned
 resolver and factory ports. Keep the new engine concrete type from crossing
 the composition functions in `cmd/emulator`.

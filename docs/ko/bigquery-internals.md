@@ -134,11 +134,8 @@ Google은 이 차이를 [Storage Write 스트리밍
 <!-- section: overwrite-merge -->
 ## 직접 덮어쓰기와 MERGE
 
-직접 덮어쓰기는 단순한 행 추가 옵션이 아닙니다. 커넥터는 임시 테이블에 먼저
-씁니다. 이후 대상 행을 교체하는 `MERGE`를 제출하고 마지막에 임시 테이블을 정리할 수
-있습니다. 커넥터 조정 코드는
-[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)에
-있습니다.
+직접 덮어쓰기는 단순한 행 추가 옵션이 아닙니다. 호출자는 임시 테이블에 먼저 쓰고,
+대상 행을 교체하는 `MERGE`를 제출한 뒤 임시 테이블을 정리할 수 있습니다.
 
 BigQuery `MERGE`는 원본과 대상의 일치 조건, 순서가 있는 절, 원자적인 공개 시점을
 결합합니다. 항상 거짓인 조건식은 문서화된 교체 최적화입니다. 동적 파티션
@@ -146,19 +143,13 @@ BigQuery `MERGE`는 원본과 대상의 일치 조건, 순서가 있는 절, 원
 [GoogleSQL DML `MERGE`
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)에
 있습니다. 정규식으로 SQL 문구만 치환해서는 일반 `MERGE`를 구현할 수 없습니다.
-호환성 규칙은 커넥터가 생성하는 정확한 SQL 구조 하나를 인식해야 합니다. 알 수 없는
-SQL은 그대로 전달하거나 미지원으로 보고해야 합니다.
-
-현재 정적 어댑터는 이 제한된 작업만 수행합니다. 토큰 파서는 커넥터 `0.44.2`
-구현에서 파생한 항상 거짓인 조건 구조를 받습니다. 원본 테이블과 대상 테이블을
-해석한 뒤 원자적인 [DuckDB `MERGE
-INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실행합니다.
-[`direct-overwrite-static`](../../contract/golden/direct-overwrite-static-0.44.2.json)
-기준 결과는 `jobs.insert`, 상태 확인, 임시 테이블 삭제를 다룹니다. 출시된 Spark
-`3.5.8`의 [공개 API 검증 자료](../../tests/spark/evidence/direct-static-overwrite-0.44.2.json)는
-`PENDING` 스트림 4개, 원자적 그룹 커밋 1회, 교체 결과의 공개, 정리까지 검증합니다.
-동적 시간·범위 파티션 덮어쓰기와 일반 BigQuery `MERGE` 호환성은 아직 지원하지
-않습니다.
+BQEMU는 모든 query와 동일한 공식 GoogleSQL gateway에서 statement를 parse/analyze하고,
+원본과 대상 relation을 기준 metadata에 binding한 뒤 불변 semantic AST만 엔진
+어댑터에 전달합니다. DuckDB visitor는 bind literal과 함께 원자적인 [DuckDB `MERGE
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 생성합니다. 항상
+거짓인 교체와 지원하는 순서형 action은 이 경로를 사용합니다. 지원하지 않는
+expression, action, script control flow, partition/cardinality 의미는 실행 전에
+거부하며 남은 동작 일치는 #8에서 추적합니다.
 
 <!-- section: indirect-write -->
 ## 간접 쓰기와 적재 작업
@@ -251,15 +242,15 @@ gRPC는 인증 정보가 없는 요청을 허용하며 `Authorization` 값이 �
 <!-- section: implementation-map -->
 ## 구현 매핑
 
-| BigQuery/커넥터 단계 | 필요한 에뮬레이터 경계 | 현재 상태 |
+| BigQuery 단계 | 필요한 에뮬레이터 경계 | 현재 상태 |
 | --- | --- | --- |
 | REST 메타데이터 | 카탈로그 사용 사례와 JSON 전송 계층 | 기본 수명 주기, 부분·전체 갱신, 페이지 조회, ETag 검증 완료 |
 | 스키마 필드 추가 | 스키마 검증기와 웨어하우스 트랜잭션 | 최상위·중첩·반복 레코드 필드 추가 검증 완료 |
-| 쿼리 작업 | 작업 저장소와 쿼리 엔진 포트 | 공식 Python 동기·비동기 절차 검증 완료, 프로세스 내부 상태는 부분 구현 |
+| 쿼리 작업 | 작업 저장소, GoogleSQL gateway, statement 포트 | 공개 동기·비동기 절차 검증 완료, 결과 payload는 프로세스 내부에 유지 |
 | `CreateReadSession`/`ReadRows` | 스냅샷·세션 원장과 Arrow/Avro 인코더 | 공개 API 부분 지원: 크기 제한이 있는 DuckDB 스냅샷, 논리 스트림, 안정된 오프셋 지원. 분할, 압축, 과거 스냅샷, 중첩 필드 선택은 미지원 |
 | `AppendRows`/확정/커밋 | 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋 지원. 고급 스트림 유형과 영속성은 미지원 |
 | 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 선택형 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 대상 Parquet 지원. 다른 형식, 생성, 스키마 변경, 다운로드 방식은 미지원 |
-| 직접 덮어쓰기 `MERGE` | 구조 기반 커넥터 SQL 어댑터 | 정적 비파티션 커넥터 `0.44.2` 공개 API 검증 완료. 동적 시간·범위 파티션과 일반 `MERGE` 호환성은 미지원 |
+| 덮어쓰기 `MERGE` | 공식 analyzer, 불변 semantic AST, 엔진 visitor | 항상 거짓인 교체 검증 완료. 동적 파티션과 일반 동작 일치는 #8에 남아 있음 |
 | BigQuery 호환 요청 인증 | REST/gRPC 전송 동작 | 의도적으로 제공하지 않으며 인증 정보 값을 무시함 |
 | ADC/WIF 획득 | 클라이언트 인증 정보 라이브러리 | 공개 BQEMU 실행 환경의 범위 밖 |
 

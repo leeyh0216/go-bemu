@@ -148,47 +148,40 @@ hidden dataset follows normal delete rules: live tables require
 `deleteContents=true`; after lazy expiration empties it, a normal dataset delete
 succeeds. There is no cache-hit reuse, background sweeper, or restart-durable TTL ledger.
 
-Before a job is inserted, the structural analyzer resolves all supported
-backtick table paths plus cross-project `defaultDataset.projectId` and explicit
-destination dataset. Omitted location uses their common location; an explicit
-or inferred cross-location mismatch fails before repository or engine side
-effects, following BigQuery's [location
+Before a job is inserted, the official GoogleSQL analyzer resolves supported
+quoted and unquoted table paths, cross-project `defaultDataset.projectId`, and
+the explicit destination dataset. Omitted location uses their common location;
+an explicit or inferred cross-location mismatch fails before repository or
+engine side effects, following BigQuery's [location
 rules](https://cloud.google.com/bigquery/docs/locations#specify_locations).
-Unquoted relation paths outside the current lexical adapter, connections,
-remote functions, and dynamic SQL do
-not yet participate in inference. When no supported candidate exists, the
-configured default remains the fallback.
+Connections, remote functions, table decorators, and dynamic SQL do not yet
+participate in inference. When no supported relation exists, the configured
+default remains the fallback.
 
 <!-- section: sql -->
 ## SQL and MERGE
 
 | Behavior | Status | Limit |
 | --- | --- | --- |
-| fully qualified table reference | Verified narrow case | backtick table token translated |
-| `SELECT`/`INSERT` | Partial | DuckDB syntax and functions |
-| `UPDATE`/`DELETE` | Partial | DuckDB statement behavior |
-| basic `MERGE` | Partial | one tested DuckDB-compatible form |
-| connector `0.44.2` static overwrite | Verified narrow | released Spark temporary-table write, atomic DuckDB `MERGE`, polling, and cleanup |
-| dynamic partition overwrite | Unsupported | scripts/arrays/partition semantics absent |
-| parameters/scripts/views/UDFs | Unsupported | no semantic adapter |
+| canonical table references | Verified | official analyzer binding; no engine-side path inference |
+| `SELECT`/`INSERT`/`UPDATE`/`DELETE` | Partial | supported AST nodes, operators, functions, and types only |
+| `MERGE` | Partial | ordered matched/not-matched actions and constant-false replacement; unsupported nodes fail closed |
+| multi-statement scripts | Partial | transactional `DECLARE`, `SET`, and supported query/DML children; no control flow or temporary routines |
+| catalog DDL | Partial | create/drop/truncate and the documented column mutations |
+| dynamic partition overwrite | Partial | typed arrays and script-to-`MERGE` execution exist; full partition and cardinality parity remains #8 |
+| parameters/views/UDFs/procedures | Unsupported | tracked separately; no raw SQL fallback |
 
 The [GoogleSQL lexical
 contract](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)
-distinguishes quoted identifiers by syntactic position. The current broad
-backtick rewrite cannot safely classify quoted columns, comments, or strings;
-therefore arbitrary backtick SQL is not supported. General `MERGE` must follow
-the [official DML
-rules](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),
-including source cardinality and atomic visibility.
-
-The narrow static adapter recognizes only the source-derived connector shape
-orchestrated by
-[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java),
-parses its identifiers and clauses as tokens, and executes one atomic [DuckDB
-`MERGE INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). Exact
-Spark `3.5.8` process evidence covers four PENDING streams, one group commit,
-one MERGE job, replacement visibility, and temporary-table cleanup. Dynamic
-time/range partition overwrite and general BigQuery `MERGE` parity remain gaps.
+distinguishes identifiers, comments, strings, relations, and expressions by
+syntax position. One official parse/analyze gateway maps those structures into
+an immutable semantic statement. The DuckDB visitor then renders adapter-private
+SQL and bind arguments; it never tokenizes or retries the original input.
+General `MERGE` follows the [official DML
+rules](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement).
+The implemented subset preserves clause order and one transaction, while
+unsupported expressions, actions, or cardinality semantics fail before an
+engine side effect.
 
 <!-- section: types -->
 ## Types

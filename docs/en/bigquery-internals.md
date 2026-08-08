@@ -128,10 +128,8 @@ and `FlushRows` remain unsupported.
 <!-- section: overwrite-merge -->
 ## Direct Overwrite and MERGE
 
-Direct overwrite is not simply an append flag. The connector can write a
-temporary table, then submit a `MERGE` that replaces destination rows, and
-finally clean up. Connector orchestration is in
-[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java).
+Direct overwrite is not simply an append flag. A caller can write a temporary
+table, submit a `MERGE` that replaces destination rows, and finally clean up.
 
 BigQuery `MERGE` combines source/target matching with ordered clauses and atomic
 visibility. A constant-false predicate is a documented replace optimization, but
@@ -139,20 +137,16 @@ dynamic partition overwrite also depends on expressions, partition values,
 scripts, and source-row cardinality. The authoritative rules are in the
 [GoogleSQL DML `MERGE`
 reference](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement).
-Regex text substitution cannot implement general `MERGE`; a compatibility rule
-must recognize one exact connector template and pass unknown SQL unchanged or
-report it unsupported.
-
-The current static adapter does exactly that narrow job: a token parser
-accepts the source-derived connector `0.44.2` constant-false shape, resolves its
-source and destination tables, and runs one atomic [DuckDB `MERGE
-INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). The
-[`direct-overwrite-static`](../../contract/golden/direct-overwrite-static-0.44.2.json)
-golden covers `jobs.insert`, polling, and temporary-table deletion. The released
-Spark `3.5.8` [public-edge evidence](../../tests/spark/evidence/direct-static-overwrite-0.44.2.json)
-also verifies four PENDING streams, one atomic group commit, replacement
-visibility, and cleanup. Dynamic time/range partition overwrite and general
-BigQuery `MERGE` parity remain gaps.
+Regex text substitution cannot implement general `MERGE`. BQEMU parses and
+analyzes the statement through the same official GoogleSQL gateway used for
+every query, binds source and destination relations to canonical metadata, and
+passes only the immutable semantic AST to the engine adapter. The DuckDB visitor
+renders one atomic [DuckDB `MERGE
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) with bound
+literal values. Constant-false replacement and the supported ordered actions
+use this path. Unsupported expressions, actions, script control flow, and
+partition/cardinality semantics fail before execution; their remaining parity
+is tracked in #8.
 
 <!-- section: indirect-write -->
 ## Indirect Write and Load Jobs
@@ -237,15 +231,15 @@ policy, token introspection, or production authorization.
 <!-- section: implementation-map -->
 ## Implementation Map
 
-| BigQuery/connector stage | Required emulator boundary | Current state |
+| BigQuery stage | Required emulator boundary | Current state |
 | --- | --- | --- |
 | REST metadata | catalog use cases and JSON transport | basic lifecycle, patch/update, paging, ETag verified |
 | additive schema | schema validator plus warehouse transaction | top-level/nested/repeated-record additions verified |
-| query job | job repository plus query-engine port | official Python sync/async path verified; process-local partial slice |
+| query job | job repository plus GoogleSQL gateway and statement ports | public sync/async path verified; result payload remains process-local |
 | CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical streams, stable offsets; Split/compression/historical snapshot/nested projection gaps |
 | AppendRows/finalize/commit | per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit; advanced stream kinds and durability gaps |
 | indirect load | object store, staging, load dispositions | opt-in public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
-| direct overwrite MERGE | structural connector-template adapter | static unpartitioned connector `0.44.2` public-edge verified; dynamic time/range and general parity gaps |
+| overwrite `MERGE` | official analyzer, immutable semantic AST, engine visitor | constant-false replacement verified; dynamic partition and general parity remain #8 |
 | BigQuery-compatible request authentication | REST/gRPC transport behavior | intentionally absent; credential values are ignored |
 | ADC/WIF acquisition | client credential library | external to the public BQEMU runtime |
 

@@ -173,49 +173,40 @@ ID를 알고 있는 숨김 데이터 세트에는 일반 삭제 규칙을 적용
 테이블이 있으면 `deleteContents=true`가 필요합니다. 조회 과정에서 만료된 테이블을
 정리해 데이터 세트가 비면 일반 삭제가 성공합니다.
 
-작업을 등록하기 전에 구조 분석기가 백틱으로 감싼 지원 대상 테이블 경로를 해석합니다.
-같은 프로젝트 안에서 다른 프로젝트를 지정한 `defaultDataset.projectId`와 명시적 대상
-데이터 세트도 검사합니다. 위치를 생략하면 모든 데이터 세트에 공통된 위치를
+작업을 등록하기 전에 공식 GoogleSQL analyzer가 지원하는 quoted/unquoted table path,
+다른 프로젝트를 지정한 `defaultDataset.projectId`, 명시적 대상 데이터 세트를
+해석합니다. 위치를 생략하면 모든 데이터 세트에 공통된 위치를
 사용합니다. 명시한 위치와 추론한 위치가 다르면 저장소나 엔진을 변경하기 전에
 실패합니다. 이 동작은 BigQuery [location
 규칙](https://cloud.google.com/bigquery/docs/locations#specify_locations)을 따릅니다.
 
-현재 어휘 분석 어댑터가 처리하지 않는 따옴표 없는 테이블 경로, 연결, 원격 함수,
-동적 SQL에서는 위치를 추론하지 않습니다. 추론할 수 있는 대상이 없을 때만 설정한
-기본 위치를 사용합니다.
+연결, 원격 함수, table decorator, 동적 SQL에서는 위치를 추론하지 않습니다. 지원하는
+relation이 없을 때만 설정한 기본 위치를 사용합니다.
 
 <!-- section: sql -->
 ## SQL과 MERGE
 
 | 동작 | 상태 | 제한 |
 | --- | --- | --- |
-| 전체 경로 테이블 참조 | 제한 검증 | 백틱으로 감싼 테이블 토큰을 변환합니다. |
-| `SELECT`, `INSERT` | 부분 지원 | DuckDB가 지원하는 구문과 함수만 실행합니다. |
-| `UPDATE`, `DELETE` | 부분 지원 | DuckDB 문장의 동작을 따릅니다. |
-| 기본 `MERGE` | 부분 지원 | DuckDB와 호환되는 형식 하나를 테스트했습니다. |
-| 커넥터 `0.44.2` 정적 덮어쓰기 | 제한 검증 | 배포된 Spark의 임시 테이블 쓰기, 원자적 DuckDB `MERGE`, 작업 조회, 정리를 확인했습니다. |
-| 동적 파티션 덮어쓰기 | 미지원 | 스크립트, 배열, 파티션 의미를 구현하지 않았습니다. |
-| 매개변수, 스크립트, 뷰, UDF | 미지원 | 구문의 의미를 변환하는 어댑터가 없습니다. |
+| 기준 테이블 참조 | 검증 완료 | 공식 analyzer가 binding하며 엔진이 경로를 다시 추론하지 않습니다. |
+| `SELECT`, `INSERT`, `UPDATE`, `DELETE` | 부분 지원 | 지원하는 AST node, operator, function, type만 실행합니다. |
+| `MERGE` | 부분 지원 | 순서가 있는 matched/not-matched action과 항상 거짓인 교체를 지원하며 나머지는 실행 전에 안전하게 거부합니다. |
+| 여러 명령문 script | 부분 지원 | `DECLARE`, `SET`, 지원하는 query/DML child를 한 트랜잭션에서 실행하며 제어 흐름과 임시 routine은 미지원입니다. |
+| catalog DDL | 부분 지원 | create/drop/truncate와 문서에 적은 column mutation을 지원합니다. |
+| 동적 파티션 덮어쓰기 | 부분 지원 | typed array와 script-to-`MERGE` 실행은 있으며 전체 partition/cardinality 일치는 #8에 남아 있습니다. |
+| parameter, view, UDF, procedure | 미지원 | 별도로 추적하며 raw SQL fallback은 없습니다. |
 
 [GoogleSQL lexical
-계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)은 구문에서
-쓰인 위치에 따라 따옴표로 감싼 식별자를 구분합니다. 현재의 백틱 변환은 따옴표로 감싼
-열, 주석, 문자열을 모두 안전하게 분류하지 못합니다. 따라서 백틱이 들어간 임의의
-SQL을 지원하지 않습니다. 일반 `MERGE`는 원본 행의 수와 원자적인 공개 시점을 포함한
-[공식 DML
+계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)은 identifier,
+comment, string, relation, expression을 구문 위치로 구분합니다. 하나의 공식
+parse/analyze gateway가 이 구조를 불변 semantic statement로 옮깁니다. DuckDB visitor는
+그 statement에서 어댑터 내부 SQL과 bind argument를 만들며 원문을 tokenize하거나
+재시도하지 않습니다.
+
+일반 `MERGE`는 [공식 DML
 규칙](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
-따라야 합니다.
-
-정적 덮어쓰기 어댑터는
-[`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)가
-생성하는 커넥터 `0.44.2`의 SQL 구조만 인식합니다. 식별자와 절을 토큰으로 해석한
-뒤 원자적인 [DuckDB `MERGE
-INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실행합니다.
-
-Spark `3.5.8` 프로세스 테스트에서는 `PENDING` 스트림 4개, 그룹 커밋 1회,
-`MERGE` 작업 1회를 확인했습니다. 교체 결과의 공개 시점과 임시 테이블 정리도
-확인했습니다. 시간 및 범위 파티션의 동적 덮어쓰기와 일반 BigQuery `MERGE`의 동작
-일치 여부는 아직 검증하지 않았습니다.
+따릅니다. 구현한 부분집합은 clause 순서와 단일 transaction을 보존합니다. 지원하지
+않는 expression, action, cardinality 의미는 엔진 부작용 전에 거부합니다.
 
 <!-- section: types -->
 ## 자료형

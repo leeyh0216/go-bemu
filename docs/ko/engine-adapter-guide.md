@@ -113,6 +113,20 @@ statement를 반환합니다. 엔진 어댑터는 이 statement를 방문해 비
 만들며, 원문 SQL을 tokenize 또는 재파싱하거나 미해결 table path를 추론해서는 안
 됩니다.
 
+공통 AST 경계는 현재 다음 실행 root를 제공합니다.
+
+| Root | 엔진 계약 | 명시적 경계 |
+| --- | --- | --- |
+| `SELECT` | 기준 relation/type binding을 사용하는 relational visitor | 알 수 없는 relation, operator, function, expression, type은 실행 전에 안전하게 거부 |
+| `INSERT`, `UPDATE`, `DELETE` | 타입 있는 DML statement 하나와 bind argument | 지원하지 않는 source/action 구조는 실행 전에 거부 |
+| `MERGE` | 하나의 transaction 안에서 순서가 있는 matched/not-matched clause | 지원하지 않는 action, expression, cardinality 규칙은 실행 전에 안전하게 거부 |
+| script | `DECLARE`, `SET`, 지원하는 query/DML child를 한 transaction에서 순서대로 실행 | control flow, dynamic SQL, temporary routine, exception block은 미지원 |
+| catalog DDL | application이 소유하는 타입 있는 mutation plan | 문서에 적은 create/drop/truncate와 column mutation만 허용 |
+
+Query parameter, view, UDF, procedure, connection, remote function, table
+decorator, `UNNEST` relation은 엔진 fallback이 아닙니다. 지원을 표시하기 전에 AST,
+semantic binding, lowering을 명시적으로 구현해야 합니다.
+
 Storage Read와 Storage Write 구현도 소비자가 소유한 `resolver`와 `factory` 포트를
 구현합니다. 새 엔진의 구체 타입이 `cmd/emulator`의 조립 함수 밖으로 넘어가지 않도록
 합니다.

@@ -8,7 +8,7 @@
 <!-- section: status -->
 ## Status
 
-Accepted as a constraint; parser/semantic implementation is pending.
+Accepted and implemented.
 
 <!-- section: context -->
 ## Context
@@ -24,19 +24,25 @@ comments, strings, decorators, or scripts.
 <!-- section: decision -->
 ## Decision
 
-Treat the current backtick mapper as a narrow bootstrap implementation. New SQL
-compatibility must use a parser/AST or an exact versioned connector-template
-recognizer. Unknown SQL passes to a declared engine subset or fails explicitly;
-it is never broadly rewritten by a permissive regex.
+Every public query and job SQL request enters the official GoogleSQL parser
+exactly once. The adapter copies that parser tree into an immutable BQEMU AST,
+binds relations and expression types against canonical metadata, and returns an
+engine-neutral semantic statement. Engine adapters visit that statement to
+produce private SQL and bind arguments.
+
+The engine never receives user SQL or a foreign parser handle. There is no
+keyword pre-classifier, version-specific template parser, or raw engine-SQL
+fallback. A syntax, semantic, or lowering node outside the supported subset
+fails before an engine side effect.
 
 <!-- section: consequences -->
 ## Consequences
 
-General GoogleSQL queries remain a declared subset. Catalog DDL now uses a
-GoogleSQL AST adapter and typed semantic commands. Exact connector template
-rules record version, fingerprint, authoritative source, negative cases, and
-removal condition. SQL DDL must not mutate physical catalog without
-synchronizing canonical metadata.
+GoogleSQL support remains an explicit AST subset, but `SELECT`, DML, supported
+scripts, and catalog DDL share one gateway and statement root. Catalog DDL uses
+typed mutation plans and must synchronize canonical metadata with the physical
+catalog. Adding a statement, expression, function, or type requires mapper,
+semantic-binding, engine-lowering, and negative fail-closed tests.
 
 <!-- section: alternatives -->
 ## Alternatives

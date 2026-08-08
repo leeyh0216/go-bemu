@@ -8,7 +8,7 @@
 <!-- section: status -->
 ## 상태
 
-제약 사항으로 승인했습니다. 파서 및 의미 분석은 아직 구현하지 않았습니다.
+승인했고 구현했습니다.
 
 <!-- section: context -->
 ## 배경
@@ -24,19 +24,23 @@ GoogleSQL은 여러 구문 위치의 식별자에 백틱을 사용합니다. `ME
 <!-- section: decision -->
 ## 결정
 
-현재의 백틱 변환기는 초기 구현에 필요한 좁은 범위에서만 사용합니다. 새로운 SQL
-호환 기능은 파서와 AST를 사용해야 합니다. 또는 버전이 정확히 정해진 커넥터
-템플릿 인식기를 사용할 수 있습니다. 알 수 없는 SQL은 지원 범위로 명시한 엔진
-SQL에 그대로 전달하거나 명확한 오류를 반환합니다. 이를 조건이 느슨한 정규식으로
-폭넓게 변환하지 않습니다.
+모든 공개 query와 job SQL 요청은 공식 GoogleSQL parser에 정확히 한 번 들어갑니다.
+어댑터는 parser tree를 불변 BQEMU AST로 복사하고 relation과 expression type을 기준
+메타데이터에 결합한 뒤 엔진 중립 semantic statement를 반환합니다. 엔진 어댑터는 이
+statement를 방문하여 비공개 SQL과 bind argument를 만듭니다.
+
+엔진은 사용자 SQL이나 외부 parser handle을 받지 않습니다. keyword 선분류기, 버전별
+template parser, raw engine SQL fallback도 두지 않습니다. 지원 범위 밖의 문법, 의미,
+lowering node는 엔진 부작용 전에 실패합니다.
 
 <!-- section: consequences -->
 ## 결과
 
-일반 GoogleSQL 쿼리는 명시한 부분집합만 지원합니다. 카탈로그 DDL은 GoogleSQL AST
-어댑터와 타입 있는 의미 명령으로 처리합니다. 커넥터 템플릿 규칙을 추가할 때는
-정확한 버전, 지문, 공식 근거, 실패 사례, 제거 조건을 기록합니다. SQL DDL은 BigQuery
-기준 메타데이터를 함께 반영해야 하며 물리 카탈로그만 변경해서는 안 됩니다.
+GoogleSQL은 명시한 AST 부분집합만 지원하지만 `SELECT`, DML, 지원하는 script,
+catalog DDL은 하나의 gateway와 statement root를 공유합니다. Catalog DDL은 타입 있는
+mutation plan을 사용하며 물리 catalog와 기준 metadata를 함께 반영해야 합니다.
+statement, expression, function, type을 추가할 때는 mapper, semantic binding, engine
+lowering, 실행 전에 안전하게 거부하는 음성 테스트를 함께 추가해야 합니다.
 
 <!-- section: alternatives -->
 ## 대안
