@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/leeyh0216/go-bemu/internal/contracttest"
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
 	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
 	"github.com/leeyh0216/go-bemu/internal/storageread/ports"
@@ -487,7 +488,7 @@ func newWireReadServiceWithLimitsAndLogger(t *testing.T, materializer ports.Snap
 		MaxSessions:           maxSessions,
 		MaxSnapshotBytes:      maxSnapshotBytes,
 		MaxTotalSnapshotBytes: maxTotalSnapshotBytes,
-	}, materializer, wireClock{}, &wireIDs{}, logger)
+	}, materializer, wireRowRestrictionParser{}, wireClock{}, &wireIDs{}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,6 +511,14 @@ func grpcTestContext(t *testing.T) (context.Context, context.CancelFunc) {
 type wireClock struct{}
 
 func (wireClock) Now() time.Time { return time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC) }
+
+type wireRowRestrictionParser struct{}
+
+func (wireRowRestrictionParser) ParseExpression(context.Context, string) (queryast.Expression, error) {
+	span, _ := queryast.NewSpan(0, 1)
+	key, _ := queryast.NewNodeKey(strings.Repeat("0", 64), span, "wire-row-restriction", 0)
+	return queryast.NewBooleanLiteral(key, true)
+}
 
 type wireIDs struct {
 	mu   sync.Mutex
@@ -552,7 +561,7 @@ func wireCreateSessionRequest(format storagepb.DataFormat) *storagepb.CreateRead
 	}
 }
 
-func (m *wireMaterializer) Materialize(context.Context, domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+func (m *wireMaterializer) Materialize(context.Context, ports.MaterializeRequest) (ports.ReadSnapshot, error) {
 	m.calls++
 	return m.snapshot, m.err
 }
@@ -589,7 +598,7 @@ type wireCallerCancelMaterializer struct {
 	started  chan struct{}
 }
 
-func (m *wireCallerCancelMaterializer) Materialize(ctx context.Context, _ domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+func (m *wireCallerCancelMaterializer) Materialize(ctx context.Context, _ ports.MaterializeRequest) (ports.ReadSnapshot, error) {
 	m.mu.Lock()
 	m.calls++
 	call := m.calls
@@ -626,7 +635,7 @@ func newWireShutdownMaterializer(snapshot *wireSnapshot, stubborn bool) *wireShu
 	}
 }
 
-func (m *wireShutdownMaterializer) Materialize(ctx context.Context, _ domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+func (m *wireShutdownMaterializer) Materialize(ctx context.Context, _ ports.MaterializeRequest) (ports.ReadSnapshot, error) {
 	close(m.started)
 	<-ctx.Done()
 	close(m.canceled)

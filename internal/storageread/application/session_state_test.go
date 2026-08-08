@@ -24,7 +24,7 @@ func TestPersistedReadStreamsAreNotRematerializedAfterRestart(t *testing.T) {
 		MaxStreams: 16, DefaultStreamCount: 4, SessionTTL: time.Hour,
 		CleanupInterval: time.Minute, MaxRowsPerResponse: 2, MaxSessions: 32,
 		MaxSnapshotBytes: 1 << 20, MaxTotalSnapshotBytes: 32 << 20,
-	}, materializer, clock, &fakeIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, materializer, acceptingRowRestrictionParser{}, clock, &fakeIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)),
 		WithSessionStateRepository(repository))
 	if err != nil {
 		t.Fatal(err)

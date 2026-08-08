@@ -445,7 +445,7 @@ func newAdmissionTestService(t *testing.T, materializer ports.SnapshotMaterializ
 	if overrides.MaxTotalSnapshotBytes != 0 {
 		config.MaxTotalSnapshotBytes = overrides.MaxTotalSnapshotBytes
 	}
-	service, err := New(config, materializer, newFakeClock(), &fakeIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := New(config, materializer, acceptingRowRestrictionParser{}, newFakeClock(), &fakeIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func newBlockingMaterializer(retained int64) *blockingMaterializer {
 	}
 }
 
-func (m *blockingMaterializer) Materialize(ctx context.Context, _ domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+func (m *blockingMaterializer) Materialize(ctx context.Context, _ ports.MaterializeRequest) (ports.ReadSnapshot, error) {
 	m.mu.Lock()
 	m.calls++
 	m.active++
@@ -554,7 +554,7 @@ func newStubbornMaterializer(snapshot ports.ReadSnapshot) *stubbornMaterializer 
 	}
 }
 
-func (m *stubbornMaterializer) Materialize(ctx context.Context, _ domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+func (m *stubbornMaterializer) Materialize(ctx context.Context, _ ports.MaterializeRequest) (ports.ReadSnapshot, error) {
 	close(m.started)
 	<-ctx.Done()
 	close(m.canceled)
@@ -568,7 +568,7 @@ type scriptedMaterializer struct {
 	next     int
 }
 
-func (m *scriptedMaterializer) Materialize(context.Context, domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+func (m *scriptedMaterializer) Materialize(context.Context, ports.MaterializeRequest) (ports.ReadSnapshot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.next >= len(m.outcomes) {

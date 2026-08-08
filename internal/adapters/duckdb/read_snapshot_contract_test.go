@@ -23,6 +23,7 @@ import (
 
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	readdomain "github.com/leeyh0216/go-bemu/internal/storageread/domain"
+	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
 
 func TestArrowReferenceSchemaPreservesOfficialTypesModesOrderAndMetadata(t *testing.T) {
@@ -231,7 +232,7 @@ func TestReadSnapshotClassifiesUnsupportedSchemaBeforePhysicalQuery(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	_, err = materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 	})
 	if code := readdomain.CodeOf(err); code != readdomain.ErrorUnimplemented {
@@ -288,7 +289,7 @@ func TestDuckDBReadSnapshotEmitsConcatenatedRawAvroDatums(t *testing.T) {
 	warehouse := newReadTestWarehouse(t, ctx, table)
 	insertReadTestRows(t, ctx, warehouse, table, "(3, 'abc', ['x', 'yz']), (4, NULL, [])")
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
-	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatAvro,
 	})
 	if err != nil {
@@ -359,7 +360,7 @@ func TestDuckDBReadSnapshotEncodesEverySupportedDriverTypeInBothFormats(t *testi
 		t.Run(strings.ToLower(format.String()), func(t *testing.T) {
 			ctx, cancel := duckDBReadTestContext(t)
 			defer cancel()
-			snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+			snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 				Table: readTestTableResource(table), Format: format,
 			})
 			if err != nil {
@@ -404,7 +405,7 @@ func TestDuckDBReadSnapshotPreservesExactTopLevelJSONNumberText(t *testing.T) {
 	want := `{"number":12345678901234567890123456789012345678}`
 	insertReadTestRows(t, ctx, warehouse, table, "('"+want+"')")
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
-	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatAvro,
 	})
 	if err != nil {
@@ -467,7 +468,9 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 		{Name: "active", Type: "BOOL"},
 		{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "rank", Type: "FLOAT64"}}},
 	}
-	sql, args, err := compileRowRestriction("NOT (id < 2 OR profile.rank >= 3.5) AND active = TRUE", schema)
+	sql, args, err := compileRowRestriction(
+		mustParseReadRestriction(t, "NOT (id < 2 OR profile.rank >= 3.5) AND active = TRUE"), schema,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,8 +486,8 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 			t.Errorf("arg %d = %#v, want %#v", index, args[index], wantArgs[index])
 		}
 	}
-	for _, unsupported := range []string{"id IN (1)", "CAST(id AS STRING) = '1'", "id BETWEEN 1 AND 2", "id = 1; SELECT 1"} {
-		if _, _, err := compileRowRestriction(unsupported, schema); err == nil {
+	for _, unsupported := range []string{"id IN (1)", "CAST(id AS STRING) = '1'", "id LIKE '1'"} {
+		if _, _, err := compileRowRestriction(mustParseReadRestriction(t, unsupported), schema); err == nil {
 			t.Errorf("unsupported restriction %q unexpectedly accepted", unsupported)
 		}
 	}

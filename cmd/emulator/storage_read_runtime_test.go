@@ -62,7 +62,10 @@ func TestStorageReadRuntimeServesEightLogicalStreamsFromDuckDB(t *testing.T) {
 
 	cfg := config.Defaults()
 	cfg.Database.TempDirectory = t.TempDir()
-	runtime, err := composeStorageRead(cfg, warehouse, repository, clock, system.IDGenerator{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	runtime, err := composeStorageRead(
+		cfg, warehouse, newStorageReadPredicateParser(t), repository, clock, system.IDGenerator{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
