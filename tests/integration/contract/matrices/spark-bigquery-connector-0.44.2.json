@@ -207,7 +207,7 @@
         "read-session"
       ],
       "issueRef": "read",
-      "limitation": "Top-level selected fields are implemented; nested-field projection remains deliberately unverified."
+      "limitation": "Nested Spark projection is verified end to end; the DSv1 artifact requests its top-level parent while exact nested selected-field paths remain transport-tested."
     },
     {
       "id": "SBQ-READ-ARROW-FILTER-V1",
@@ -231,7 +231,7 @@
         "read-session"
       ],
       "issueRef": "read",
-      "limitation": "A bounded comparison and boolean-expression subset is implemented; arbitrary Storage API row restrictions are not."
+      "limitation": "Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported."
     },
     {
       "id": "SBQ-READ-ARROW-COUNT-V1",
@@ -753,13 +753,13 @@
         "parallelism": "read-stream-negotiated",
         "tablePartitioning": "time"
       },
-      "state": "gap",
+      "state": "partial",
       "officialSourceRefs": [
         "connector-readme",
         "read-session"
       ],
-      "issueRef": "types",
-      "limitation": "Time partition metadata and pseudo-column pruning are not implemented."
+      "issueRef": "read",
+      "limitation": "Field-based time partition metadata and filters are implemented; ingestion-time pseudo columns and physical partition pruning remain unsupported."
     },
     {
       "id": "SBQ-READ-INGESTION-PARTITION-V1",

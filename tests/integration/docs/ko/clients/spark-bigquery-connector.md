@@ -100,6 +100,12 @@ val rows = spark.read
 
 프로젝트, 데이터 세트, 테이블은 [시작하기](../../../../../docs/ko/getting-started.md)의 절차로 만듭니다.
 
+공개 통합 시나리오는 중첩 RECORD projection과 `IN`, null-safe 동등 비교,
+null predicate, 중첩 `AND`/`OR`/`NOT`, starts-with/ends-with/contains 문자열
+predicate, DATE/TIMESTAMP 비교의 pushdown을 검증합니다. 필드 기반 시간
+파티션 filter도 포함합니다. 함수 호출, filter subquery, ingestion-time
+`_PARTITIONDATE`/`_PARTITIONTIME`, 물리 파티션 pruning은 지원하지 않습니다.
+
 <!-- section: direct -->
 ## 직접 읽기와 쓰기 호출
 

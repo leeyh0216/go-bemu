@@ -99,6 +99,13 @@ val rows = spark.read
 Create the project, dataset, and table by following [Getting
 started](../../../../../docs/en/getting-started.md).
 
+The public integration scenarios verify nested RECORD projection and pushed
+filters for `IN`, null-safe equality, null predicates, nested `AND`/`OR`/`NOT`,
+starts-with/ends-with/contains string predicates, and DATE/TIMESTAMP
+comparisons. Field-based time partition filters are covered. Function calls,
+filter subqueries, ingestion-time `_PARTITIONDATE`/`_PARTITIONTIME`, and
+physical partition pruning are not supported.
+
 <!-- section: direct -->
 ## Direct Read And Write Calls
 

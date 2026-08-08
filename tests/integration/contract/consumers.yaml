@@ -152,6 +152,9 @@ scenarios:
     testEvidence:
       - spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge
       - spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge
+      - spark:tests/integration/spark/test_public_edge.py:test_nested_projection_through_storage_read
+      - spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read
+      - spark:tests/integration/spark/test_public_edge.py:test_time_partition_field_filter_through_storage_read
     operationIds:
       - bigquery.tables.insert
       - bigquery.tables.get
@@ -188,6 +191,7 @@ scenarios:
       - pytest:tests/integration/spark/test_scala_decimal_edge.py
     testEvidence:
       - spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge
+      - spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector
     operationIds:
       - bigquery.tables.insert
       - bigquery.tables.get

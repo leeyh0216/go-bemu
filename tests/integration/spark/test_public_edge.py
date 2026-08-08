@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -55,6 +56,50 @@ def seeded_table(public_edge: PublicEdge, test_timeout: float) -> str:
             f"INSERT INTO `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}` "
             "VALUES (1, 'one', 1.5, true), (2, 'two', 2.5, false), "
             "(3, 'three', 3.5, true), (4, 'four', 4.5, false)"
+        ),
+    )
+    return f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}"
+
+
+@pytest.fixture(scope="session")
+def advanced_read_table(public_edge: PublicEdge, test_timeout: float) -> str:
+    table_id = "advanced_read_rows"
+    create_table(
+        public_edge,
+        test_timeout,
+        table_id,
+        [
+            {"name": "id", "type": "INTEGER", "mode": "REQUIRED"},
+            {"name": "label", "type": "STRING", "mode": "NULLABLE"},
+            {"name": "event_date", "type": "DATE", "mode": "REQUIRED"},
+            {"name": "event_time", "type": "TIMESTAMP", "mode": "REQUIRED"},
+            {"name": "optional_label", "type": "STRING", "mode": "NULLABLE"},
+            {
+                "name": "details",
+                "type": "RECORD",
+                "mode": "NULLABLE",
+                "fields": [
+                    {"name": "city", "type": "STRING", "mode": "NULLABLE"},
+                    {"name": "code", "type": "INTEGER", "mode": "NULLABLE"},
+                ],
+            },
+        ],
+        time_partitioning={"type": "DAY", "field": "event_date"},
+    )
+    query(
+        public_edge,
+        test_timeout,
+        (
+            f"INSERT INTO `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}` "
+            "(id, label, event_date, event_time, optional_label, details) VALUES "
+            "(1, 'alpha', DATE '2024-01-10', TIMESTAMP '2024-01-10T01:00:00Z', "
+            "NULL, STRUCT('Seoul' AS city, 10 AS code)), "
+            "(2, 'beta', DATE '2024-01-15', TIMESTAMP '2024-01-15T02:00:00Z', "
+            "'keep', STRUCT('Busan' AS city, 20 AS code)), "
+            "(3, 'alphabet', DATE '2024-01-20', TIMESTAMP '2024-01-20T03:00:00Z', "
+            "'keep', STRUCT('Incheon' AS city, 30 AS code)), "
+            "(4, 'delta', DATE '2024-02-01', TIMESTAMP '2024-02-01T04:00:00Z', "
+            "NULL, STRUCT('Daegu' AS city, 40 AS code))"
         ),
     )
     return f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}"
@@ -294,6 +339,152 @@ def test_storage_read_arrow_and_avro(
     record_capability(
         capability_ids[(wire_format, requested_streams)],
         f"{wire_format.lower()}-rows+streams:{requested_streams}",
+    )
+
+
+@pytest.mark.capability("SBQ-READ-ARROW-PROJECTION-V1")
+@pytest.mark.operation("grpc.bigquery-read.create-read-session")
+@pytest.mark.operation("grpc.bigquery-read.read-rows")
+def test_nested_projection_through_storage_read(
+    spark_session,
+    public_edge: PublicEdge,
+    advanced_read_table: str,
+) -> None:
+    from pyspark.sql import functions as sql
+
+    log_position = public_edge_log_position(public_edge)
+    frame = load_connector_source(
+        spark_session,
+        public_edge,
+        source=advanced_read_table,
+        source_kind="table",
+        wire_format="ARROW",
+        requested_streams=2,
+    )
+    rows = (
+        frame.select("id", sql.col("details.city").alias("city"))
+        .orderBy("id")
+        .collect()
+    )
+    actual = [(row.id, row.city) for row in rows]
+    _assert_rows(
+        actual,
+        [(1, "Seoul"), (2, "Busan"), (3, "Incheon"), (4, "Daegu")],
+    )
+    observation = observe_query_read_flow(public_edge, since=log_position)
+    _assert_read_session_shape(
+        observation,
+        wire_format="ARROW",
+        selected_field_count=2,
+        has_row_restriction=False,
+    )
+    record_capability(
+        "SBQ-READ-ARROW-PROJECTION-V1",
+        (
+            "arrow nested-struct-projection:verified selected-fields:2 rows:4 "
+            f"row-fingerprint:sha256:{_row_fingerprint(actual)}"
+        ),
+    )
+
+
+@pytest.mark.capability("SBQ-READ-ARROW-FILTER-V1")
+@pytest.mark.operation("grpc.bigquery-read.create-read-session")
+@pytest.mark.operation("grpc.bigquery-read.read-rows")
+def test_advanced_filter_pushdown_through_storage_read(
+    spark_session,
+    public_edge: PublicEdge,
+    advanced_read_table: str,
+) -> None:
+    from pyspark.sql import functions as sql
+
+    log_position = public_edge_log_position(public_edge)
+    frame = load_connector_source(
+        spark_session,
+        public_edge,
+        source=advanced_read_table,
+        source_kind="table",
+        wire_format="ARROW",
+        requested_streams=2,
+    )
+    predicate = (
+        sql.col("id").isin(1, 3, 4)
+        & (sql.col("label").startswith("alph") | sql.col("label").endswith("ta"))
+        & sql.col("event_date").between(date(2024, 1, 1), date(2024, 1, 31))
+        & (
+            sql.col("optional_label").isNull()
+            | sql.col("optional_label").eqNullSafe("keep")
+        )
+        & ~sql.col("label").contains("zzz")
+        & (sql.col("event_time") >= datetime(2024, 1, 9, tzinfo=timezone.utc))
+    )
+    rows = (
+        frame.where(predicate)
+        .select("id", sql.col("details.city").alias("city"))
+        .orderBy("id")
+        .collect()
+    )
+    actual = [(row.id, row.city) for row in rows]
+    _assert_rows(actual, [(1, "Seoul"), (3, "Incheon")])
+    observation = observe_query_read_flow(public_edge, since=log_position)
+    _assert_read_session_shape(
+        observation,
+        wire_format="ARROW",
+        selected_field_count=2,
+        has_row_restriction=True,
+    )
+    record_capability(
+        "SBQ-READ-ARROW-FILTER-V1",
+        (
+            "arrow in+like+null-safe+boolean+date+timestamp-filter:verified "
+            "selected-fields:2 rows:2 "
+            f"row-fingerprint:sha256:{_row_fingerprint(actual)}"
+        ),
+    )
+
+
+@pytest.mark.capability("SBQ-READ-TIME-PARTITION-V1")
+@pytest.mark.operation("grpc.bigquery-read.create-read-session")
+@pytest.mark.operation("grpc.bigquery-read.read-rows")
+def test_time_partition_field_filter_through_storage_read(
+    spark_session,
+    public_edge: PublicEdge,
+    advanced_read_table: str,
+) -> None:
+    from pyspark.sql import functions as sql
+
+    log_position = public_edge_log_position(public_edge)
+    frame = load_connector_source(
+        spark_session,
+        public_edge,
+        source=advanced_read_table,
+        source_kind="table",
+        wire_format="ARROW",
+        requested_streams=2,
+    )
+    rows = (
+        frame.where(
+            (sql.col("event_date") >= date(2024, 1, 15))
+            & (sql.col("event_date") < date(2024, 2, 1))
+        )
+        .select("id")
+        .orderBy("id")
+        .collect()
+    )
+    actual = [(row.id,) for row in rows]
+    _assert_rows(actual, [(2,), (3,)])
+    observation = observe_query_read_flow(public_edge, since=log_position)
+    _assert_read_session_shape(
+        observation,
+        wire_format="ARROW",
+        selected_field_count=1,
+        has_row_restriction=True,
+    )
+    record_capability(
+        "SBQ-READ-TIME-PARTITION-V1",
+        (
+            "arrow field-partition-date-filter:verified selected-fields:1 rows:2 "
+            f"row-fingerprint:sha256:{_row_fingerprint(actual)}"
+        ),
     )
 
 
