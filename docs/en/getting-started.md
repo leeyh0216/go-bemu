@@ -1,6 +1,8 @@
 <!-- doc-id: getting-started -->
 <!-- lang: en -->
 
+[English](getting-started.md) | [한국어](../ko/getting-started.md)
+
 # Getting Started
 
 This guide starts BQEMU for local client and connector tests. For the exact
@@ -149,7 +151,8 @@ project=test-project
 The required runtime contract is Spark `3.5.8`, Scala `2.12`, and Spark BigQuery
 Connector `0.44.2`. PySpark and Scala `spark-shell` are tested as separate
 entrypoints. Indirect writes additionally need the Hadoop GCS settings from the
-previous section.
+previous section. The connector behavior is bound to the reviewed
+[0.44.2 source revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92).
 
 <!-- section: tls -->
 ## TLS

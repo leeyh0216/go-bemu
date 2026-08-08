@@ -1,6 +1,8 @@
 <!-- doc-id: getting-started -->
 <!-- lang: ko -->
 
+[English](../en/getting-started.md) | [한국어](getting-started.md)
+
 # 시작하기
 
 이 문서는 로컬 클라이언트와 커넥터 테스트를 위해 BQEMU를 실행하는 방법을 설명합니다. 정확한 API 구현 범위는 [호환성](compatibility.md)에서 확인할 수 있습니다. 인증 파일과 로컬 인증서는 [로컬 클라이언트 인증 파일과 TLS](client-credentials-and-tls.md)를 참고해 주십시오.
@@ -92,7 +94,7 @@ client = bigquery.Client(
 )
 ```
 
-라이브러리가 service account, authorized user, WIF 또는 access token 파일을 요구한다면 생성된 fixture를 사용해 주십시오. 명령은 [로컬 클라이언트 인증 파일과 TLS](client-credentials-and-tls.md)에 있습니다.
+라이브러리가 service account, authorized user, WIF 또는 access token 파일을 요구한다면 생성 도구가 만든 파일을 사용해 주십시오. 명령은 [로컬 클라이언트 인증 파일과 TLS](client-credentials-and-tls.md)에 있습니다.
 
 <!-- section: bq -->
 ## bq CLI
@@ -134,6 +136,7 @@ project=test-project
 ```
 
 필수 실행 계약은 Spark `3.5.8`, Scala `2.12`, Spark BigQuery Connector `0.44.2`입니다. PySpark와 Scala `spark-shell`은 별도 진입점으로 검증합니다. 간접 쓰기에는 앞 절의 Hadoop GCS 설정도 필요합니다.
+커넥터 동작은 검토한 [0.44.2 소스 리비전](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)을 기준으로 합니다.
 
 <!-- section: tls -->
 ## TLS
