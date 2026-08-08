@@ -25,6 +25,8 @@ func TestRuntimeCatalogMetadataSurvivesRestart(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
 	contracttest.Operation(t, "bqemu.projects.get")
+	contracttest.Operation(t, "bqemu.projects.create")
+	contracttest.Operation(t, "bigquery.datasets.insert")
 	contracttest.Operation(t, "bigquery.datasets.get")
 	contracttest.Operation(t, "bigquery.tables.insert")
 	contracttest.Operation(t, "bigquery.tables.get")
