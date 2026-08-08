@@ -256,7 +256,7 @@ func TestNewValidatesLocalDependenciesAndBounds(t *testing.T) {
 	for name, config := range map[string]Config{
 		"zero-min":              {MinTokenBytes: 0, MaxTokenBytes: 1, MaxAuthorizationBytes: 8},
 		"unordered-token-bound": {MinTokenBytes: 2, MaxTokenBytes: 1, MaxAuthorizationBytes: 8},
-		"small-header-bound":    {MinTokenBytes: 2, MaxTokenBytes: 4, MaxAuthorizationBytes: 8},
+		"small-header-bound":    {MinTokenBytes: 1, MaxTokenBytes: 4, MaxAuthorizationBytes: 8},
 		"overflowing-bound":     {MinTokenBytes: maxInt, MaxTokenBytes: maxInt, MaxAuthorizationBytes: maxInt},
 	} {
 		t.Run(name, func(t *testing.T) {

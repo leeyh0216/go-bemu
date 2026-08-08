@@ -246,9 +246,26 @@ remain explicit gaps.
 The process composes one warehouse, process-local catalog/job repositories,
 system clock/ID adapters, application services, public REST/gRPC listeners, and
 the optional separate admin listener. One certificate pair enables TLS on the
-public listeners and on admin when enabled. Authentication is currently
-permissive. Transport security and identity are separate; the service does not
-implement the ADC or IAM behavior in [Google Cloud
+public listeners and on admin when enabled. Before any warehouse side effect,
+the composition root builds one authentication application service around a
+replaceable verifier port. `disabled`, syntax-only `bearer-present`, and bounded
+file-backed `static` adapters use that same service at the REST and gRPC edges.
+Observability is outermost; authentication then runs before HTTP body decoding,
+gRPC `RecvMsg`, routing, or application side effects. Static snapshots are
+immutable and atomic: invalid startup is fatal, invalid reload installs
+deny-all, and the next valid reload recovers. Only REST health/readiness and the
+gRPC health service are public; REST discovery and gRPC reflection remain
+protected. Bearer parsing follows [RFC
+6750](https://www.rfc-editor.org/rfc/rfc6750#section-2.1).
+
+Transport security, token acquisition, authentication, and authorization remain
+separate capabilities. Service-account, authorized-user ADC, and external-
+account WIF can acquire bearer tokens according to [Application Default
+Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)
+and [Workload Identity
+Federation](https://cloud.google.com/iam/docs/workload-identity-federation), but
+the service does not emulate Google signature validation, token exchange, or
+IAM authorization described by [Google Cloud
 authentication](https://cloud.google.com/docs/authentication).
 
 <!-- section: observability -->

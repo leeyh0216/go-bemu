@@ -223,10 +223,15 @@ Credentials](https://cloud.google.com/docs/authentication/application-default-cr
 and WIF exchange is documented in [Workload Identity
 Federation](https://cloud.google.com/iam/docs/workload-identity-federation).
 
-A local OAuth/STS stub can test acquisition and propagation. It does not emulate
-signature trust, IAM roles, permission inheritance, federation policy, token
-introspection, or production authorization. TLS, authentication, and
-authorization must remain separate capability claims.
+BQEMU does not acquire or exchange these credentials. Its REST and gRPC adapters
+pass every Authorization value to one bounded [RFC 6750 bearer
+parser](https://www.rfc-editor.org/rfc/rfc6750#section-2.1), then apply the
+configured `disabled`, syntax-only `bearer-present`, or local `StaticTokenSet`
+verifier. A local OAuth/STS stub can still test client acquisition and
+propagation. Neither path emulates signature trust, IAM roles, permission
+inheritance, federation policy, token introspection, or production
+authorization. TLS, acquisition, authentication, and authorization remain
+separate capability claims.
 
 <!-- section: implementation-map -->
 ## Implementation Map
@@ -240,7 +245,8 @@ authorization must remain separate capability claims.
 | AppendRows/finalize/commit | per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit; advanced stream kinds and durability gaps |
 | indirect load | object store, staging, load dispositions | opt-in public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
 | direct overwrite MERGE | structural connector-template adapter | static unpartitioned connector `0.44.2` public-edge verified; dynamic time/range and general parity gaps |
-| ADC/WIF | optional token stub plus auth middleware | planned |
+| bearer public edge | one application service plus REST/gRPC adapters | disabled, syntax-only presence, and bounded static verification implemented |
+| ADC/WIF acquisition | client credential library or optional external token stub | external to BQEMU; resulting bearer follows the selected local verifier |
 
 Capability changes require public-boundary tests and a compatibility update in
 both documentation languages.

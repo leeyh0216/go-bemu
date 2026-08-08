@@ -215,10 +215,15 @@ WIF exchange는 [Workload Identity
 Federation](https://cloud.google.com/iam/docs/workload-identity-federation)에 정의되어
 있다.
 
-로컬 OAuth/STS stub은 acquisition과 propagation을 테스트할 수 있다. Signature
-trust, IAM role, permission inheritance, federation policy, token introspection,
-production authorization을 에뮬레이션하지 않는다. TLS, authentication,
-authorization은 서로 다른 capability 주장으로 유지해야 한다.
+BQEMU는 이 credential을 획득하거나 exchange하지 않는다. REST와 gRPC adapter는 모든
+Authorization value를 하나의 bounded [RFC 6750 bearer
+parser](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)에 전달한 뒤 설정된
+`disabled`, syntax-only `bearer-present`, local `StaticTokenSet` verifier를 적용한다.
+로컬 OAuth/STS stub은 여전히 client acquisition과 propagation을 테스트할 수 있다.
+두 경로 모두 signature trust, IAM role, permission inheritance, federation policy,
+token introspection, production authorization을 에뮬레이션하지 않는다. TLS,
+acquisition, authentication, authorization은 서로 다른 capability 주장으로
+유지한다.
 
 <!-- section: implementation-map -->
 ## 구현 매핑
@@ -232,6 +237,7 @@ authorization은 서로 다른 capability 주장으로 유지해야 한다.
 | AppendRows/finalize/commit | stream별 ledger와 transaction coordinator | public Partial: PENDING/default ProtoRows, offset, finalize, atomic commit, advanced stream kind와 durability gap |
 | indirect load | object store, staging, load disposition | opt-in public Partial: fake-GCS JSON과 기존 table 대상 Parquet, 다른 format/create/evolution/download gap |
 | direct overwrite MERGE | 구조적인 connector-template adapter | static unpartitioned connector `0.44.2` public-edge verified, dynamic time/range와 일반 parity gap |
-| ADC/WIF | 선택적 token stub과 auth middleware | 계획 |
+| bearer public edge | 하나의 application service와 REST/gRPC adapter | disabled, syntax-only presence, bounded static verification 구현 |
+| ADC/WIF acquisition | client credential library 또는 optional external token stub | BQEMU 외부, 결과 bearer는 선택한 local verifier를 따름 |
 
 Capability 변경에는 공개 경계 테스트와 두 문서 언어의 호환성 갱신이 필요하다.

@@ -144,7 +144,11 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"load.enabled=true", "load.gcsEndpoint=http://fake-gcs:4443", "load.allowFileSources=true",
 		"load.operationTimeout=30s", "load.maxObjects=20", "load.maxObjectBytes=1048576",
 		"load.maxTotalBytes=2097152", "load.maxMetadataBytes=65536", "load.maxListedObjects=30",
-		"auth.mode=static", "auth.staticTokensFile=tokens.txt", "logging.level=debug", "logging.format=text", "logging.unsafePayloads=true",
+		"auth.mode=static", "auth.minTokenBytes=8", "auth.maxTokenBytes=4096",
+		"auth.maxAuthorizationBytes=8192", "auth.staticTokensFile=tokens.yaml",
+		"auth.staticTokensMaxFileBytes=524288", "auth.staticTokensMaxEntries=128",
+		"auth.staticPrincipalMaxBytes=256", "auth.staticTokensReloadInterval=750ms",
+		"logging.level=debug", "logging.format=text", "logging.unsafePayloads=true",
 		"admin.enabled=true", "admin.address=0.0.0.0:19051", "admin.tokenFile=admin-token", "admin.readHeaderTimeout=2s", "admin.maxStackBytes=65536",
 		"ui.enabled=true", "ui.directory=web/dist",
 		"contracts.profileDirectory=contract/profiles",
@@ -176,6 +180,78 @@ func TestQueryPolicyLoadsFromEnvironmentAndRejectsNonPositiveValues(t *testing.T
 		if _, err := load([]string{"--set", path + "=0s"}, lookup(nil)); err == nil {
 			t.Fatalf("expected positive-duration validation for %s", path)
 		}
+	}
+}
+
+func TestAuthPolicyLoadsFromEnvironmentAndRejectsInconsistentBounds(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_AUTH_MODE":                          "bearer-present",
+		"BQEMU_AUTH_MIN_TOKEN_BYTES":               "8",
+		"BQEMU_AUTH_MAX_TOKEN_BYTES":               "4096",
+		"BQEMU_AUTH_MAX_AUTHORIZATION_BYTES":       "8192",
+		"BQEMU_AUTH_STATIC_TOKENS_FILE":            "tokens.yaml",
+		"BQEMU_AUTH_STATIC_TOKENS_MAX_FILE_BYTES":  "524288",
+		"BQEMU_AUTH_STATIC_TOKENS_MAX_ENTRIES":     "128",
+		"BQEMU_AUTH_STATIC_PRINCIPAL_MAX_BYTES":    "256",
+		"BQEMU_AUTH_STATIC_TOKENS_RELOAD_INTERVAL": "750ms",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := result.Config.Auth
+	if auth.Mode != "bearer-present" || auth.MinTokenBytes != 8 || auth.MaxTokenBytes != 4_096 ||
+		auth.MaxAuthorizationBytes != 8_192 || auth.StaticTokensFile != "tokens.yaml" ||
+		auth.StaticTokensMaxFileBytes != 512<<10 || auth.StaticTokensMaxEntries != 128 ||
+		auth.StaticPrincipalMaxBytes != 256 || auth.StaticTokensReloadInterval.Value() != 750*time.Millisecond {
+		t.Fatalf("unexpected auth policy: %#v", auth)
+	}
+
+	for _, override := range []string{
+		"auth.minTokenBytes=0",
+		"auth.maxTokenBytes=0",
+		"auth.maxAuthorizationBytes=16390",
+		"auth.staticTokensMaxFileBytes=0",
+		"auth.staticTokensMaxFileBytes=9223372036854775807",
+		"auth.staticTokensMaxEntries=0",
+		"auth.staticPrincipalMaxBytes=0",
+		"auth.staticTokensReloadInterval=0s",
+	} {
+		if _, err := load([]string{"--set", override}, lookup(nil)); err == nil {
+			t.Fatalf("expected auth validation failure for %s", override)
+		}
+	}
+}
+
+func TestAuthPolicyLoadsFromFileBeforeEnvironmentAndCLI(t *testing.T) {
+	path := writeConfig(t, `
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+auth:
+  mode: static
+  minTokenBytes: 8
+  maxTokenBytes: 4096
+  maxAuthorizationBytes: 8192
+  staticTokensFile: /run/secrets/bqemu-tokens.yaml
+  staticTokensMaxFileBytes: 524288
+  staticTokensMaxEntries: 128
+  staticPrincipalMaxBytes: 256
+  staticTokensReloadInterval: "750ms"
+`)
+	result, err := load([]string{
+		"--config", path,
+		"--set", "auth.staticTokensReloadInterval=250ms",
+	}, lookup(map[string]string{
+		"BQEMU_AUTH_MAX_TOKEN_BYTES": "2048",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := result.Config.Auth
+	if auth.Mode != "static" || auth.MinTokenBytes != 8 || auth.MaxTokenBytes != 2_048 ||
+		auth.MaxAuthorizationBytes != 8_192 || auth.StaticTokensFile != "/run/secrets/bqemu-tokens.yaml" ||
+		auth.StaticTokensMaxFileBytes != 512<<10 || auth.StaticTokensMaxEntries != 128 ||
+		auth.StaticPrincipalMaxBytes != 256 || auth.StaticTokensReloadInterval.Value() != 250*time.Millisecond {
+		t.Fatalf("unexpected file-first auth policy: %#v", auth)
 	}
 }
 

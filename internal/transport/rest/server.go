@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/leeyh0216/go-bemu/internal/application"
+	authapp "github.com/leeyh0216/go-bemu/internal/auth/application"
+	authdomain "github.com/leeyh0216/go-bemu/internal/auth/domain"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
@@ -41,8 +43,15 @@ var _ CatalogUseCases = (*application.CatalogService)(nil)
 type routeRegistration func(*http.ServeMux)
 type discoveryExtension func(map[string]any)
 
+type AuthenticationUseCases interface {
+	Authenticate(context.Context, []string) (context.Context, authdomain.Decision, error)
+}
+
+var _ AuthenticationUseCases = (*authapp.Service)(nil)
+
 type Server struct {
 	catalog             CatalogUseCases
+	authentication      AuthenticationUseCases
 	readiness           ports.HealthChecker
 	baseURL             string
 	requestBodyLimits   requestBodyLimits
@@ -61,6 +70,12 @@ func withRoutes(registration routeRegistration) Option {
 func withDiscovery(extension discoveryExtension) Option {
 	return func(server *Server) {
 		server.discoveryExtensions = append(server.discoveryExtensions, extension)
+	}
+}
+
+func WithAuthentication(authentication AuthenticationUseCases) Option {
+	return func(server *Server) {
+		server.authentication = authentication
 	}
 }
 
@@ -85,7 +100,11 @@ func (s *Server) Handler() http.Handler {
 	for _, register := range s.routeExtensions {
 		register(mux)
 	}
-	return observability.HTTPMiddleware(methodOverrideMiddleware(recoverMiddleware(requestBodyMiddleware(s.requestBodyLimits, mux))))
+	handler := requestBodyMiddleware(s.requestBodyLimits, mux)
+	handler = methodOverrideMiddleware(handler)
+	handler = authenticationMiddleware(s.authentication, handler)
+	handler = recoverMiddleware(handler)
+	return observability.HTTPMiddleware(handler)
 }
 
 // google-api-java-client may tunnel PATCH through POST with

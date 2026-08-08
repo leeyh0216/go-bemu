@@ -97,8 +97,50 @@ transient admission은 전체 `AppendRowsRequest`를 계산한다. Startup 시�
 weighted coordinator admission 이전부터 제한한다.
 `load.enabled`에는 absolute `load.gcsEndpoint`가 필요하고
 `load.allowFileSources`는 default false이며 object/list/download limit을 적용한다.
-Authentication과 runtime contract-profile negotiation은 아직 composition되지 않는다.
-유효한 setting은 각 Partial capability를 넘어서는 주장이 아니다.
+Runtime contract-profile negotiation은 아직 composition되지 않는다. 유효한
+setting은 각 Partial capability를 넘어서는 주장이 아니다.
+
+Authentication은 file-first이며 database나 listener side effect 전에 composition된다.
+`auth.mode`는 `disabled`, `bearer-present`, `static`을 허용한다. `disabled`는 malformed
+credential을 의도적으로 무시하고 anonymous principal을 설치한다. `bearer-present`는
+syntax와 존재만 강제하는 connector compatibility gate이며 identity 검증이 아니다.
+`static`은 엄격한 `auth.bqemu.dev/v1alpha1` `StaticTokenSet` YAML file 하나를
+검증한다. REST와 gRPC가 하나의 authentication application service와 immutable
+verifier snapshot을 공유하므로 duplicate header/metadata, principal digest,
+allow/deny decision의 의미가 같다. Parser는 [RFC 6750 bearer
+usage](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)를 따른다.
+
+```yaml
+apiVersion: auth.bqemu.dev/v1alpha1
+kind: StaticTokenSet
+tokens:
+  - principal: local-developer
+    token: replace-with-mounted-secret
+```
+
+Token-set decoder는 unknown/duplicate field, custom tag, scalar coercion,
+credential field alias, multiple document, duplicate token, configured bound 밖의 값을
+거부한다. Source principal은 publish 전에 digest로 변환되며 text 상태로 log나 request
+context에 들어가지 않는다.
+
+File, token, Authorization field, entry count, principal byte bound는 모두 명시적인
+`auth.*` leaf이며 대응하는 `BQEMU_AUTH_*` environment mapping과 typed `--set` path를
+제공한다. `auth.staticTokensReloadInterval` default는 `5s`이고 양수여야 한다. 초기
+content가 invalid이면 storage를 열기 전에 startup을 중단한다. Periodic reload가
+invalid이면 deny-all snapshot을 atomic publish하고, 이후 valid reload가 새 active
+digest를 publish하여 restart 없이 복구한다. Log에는 policy, reason, byte count,
+SHA-256 digest만 남는다. REST `/healthz`, `/readyz`와 gRPC health `Check`, `List`,
+`Watch`만 public이다. REST discovery, gRPC reflection, 모든 data-plane method는
+보호한다. Deny는 body decode, `RecvMsg`, routing, application side effect 전에 generic
+REST `401` 또는 gRPC `UNAUTHENTICATED`를 반환한다.
+
+Service-account, authorized-user, external-account credential file은 [Application
+Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)와
+[Workload Identity
+Federation](https://cloud.google.com/iam/docs/workload-identity-federation)에 정의된
+client-side token acquisition mechanism으로 남는다. BQEMU는 선택한 local policy에
+따라 결과 bearer token을 받지만 credential exchange, Google signature 검증, IAM을
+에뮬레이션하지 않는다.
 
 HTTP edge는 `identity`와 `gzip` request body를 허용한다.
 `server.http.maxCompressedRequestBytes`는 gzip decode 전 wire에서 읽는 byte를
@@ -124,10 +166,12 @@ override path, invalid cross-field 조합은 listener 시작 전에 실패한다
 effective-model SHA-256 fingerprint로 drift를 재현할 수 있게 한다. Schema는
 [YAML 1.2.2 명세](https://yaml.org/spec/1.2.2/)를 따른다.
 
-Secret byte를 YAML이나 environment variable에 넣지 않는다. TLS key, static
-token, remote admin token은 mounted file path로 참조한다. Effective configuration은
-이 reference path를 포함할 수 있지만 file content를 읽거나 출력하지 않는다.
-Output은 operational metadata로 다룬다. TLS는 전송만 보호하며 [Google Cloud
+Secret byte를 runtime-configuration YAML이나 environment variable에 넣지 않는다.
+TLS key, 전용 StaticTokenSet document, remote admin token은 mounted file path로
+참조한다. Secret file은 deployment에 맞는 permission으로 read-only mount한다.
+Effective configuration은 이 reference path를 포함할 수 있지만 file content를
+읽거나 출력하지 않는다. Output은 operational metadata로 다룬다. TLS는 전송만
+보호하며 [Google Cloud
 인증](https://cloud.google.com/docs/authentication)을 구현하지 않는다.
 
 <!-- section: logging-safety -->
@@ -266,6 +310,8 @@ shutdown이 commit 성공을 만들어내면 안 된다.
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go duration, `5s` | Storage Read application test context 하나 |
 | `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go duration, `5s` | Storage Write application, adapter, public gRPC test context |
 | `BQEMU_REST_TEST_TIMEOUT` | Go duration, `5s` | REST request, gzip boundary, pagination, overwrite test context |
+| `BQEMU_AUTH_RUNTIME_TEST_TIMEOUT` | Go duration, `5s` | authentication composition, reload, recovery, scheduler test context |
+| `BQEMU_AUTH_TRANSPORT_TEST_TIMEOUT` | Go duration, `5s` | REST 및 gRPC authentication boundary test context |
 | `BQEMU_PYTEST_TIMEOUT_SECONDS` | 양의 초, suite default `90`; direnv default `300` | 공식 Python-client build, readiness, request, shutdown budget |
 | `BQEMU_BQCLI_TIMEOUT_SECONDS` | 양의 초, `300` | 각 bq CLI subprocess와 emulator readiness budget |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | 양의 초, `120` | `docker compose --wait` startup budget |

@@ -261,8 +261,10 @@ service and connector
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | Implemented when configured |
-| authentication disabled | Current mode |
-| static token, ADC, OAuth, STS/WIF | Planned |
+| authentication disabled | Implemented mode; anonymous principal, credentials ignored |
+| bearer-present | Implemented syntax/presence compatibility gate; no identity proof |
+| bounded static token set | Implemented; startup fail-closed and reload deny-all/recovery |
+| ADC/OAuth/STS/WIF token acquisition | Client-owned; resulting bearer can use a configured local policy |
 | IAM authorization | Unsupported |
 
 The load target is
@@ -272,8 +274,10 @@ workspace, then applies the selected disposition atomically. Download is outside
 the destination transaction, and load jobs and idempotency records are
 process-local.
 Identity claims are separated according to [Google Cloud
-authentication](https://cloud.google.com/docs/authentication); local token
-acquisition must never be described as IAM parity.
+authentication](https://cloud.google.com/docs/authentication). The public edge
+parses the Authorization header/metadata using [RFC
+6750](https://www.rfc-editor.org/rfc/rfc6750#section-2.1); local static verification
+and client-owned token acquisition must never be described as IAM parity.
 
 <!-- section: persistence-atomicity -->
 ## Persistence and Atomicity

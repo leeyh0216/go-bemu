@@ -35,7 +35,7 @@ func DefaultConfig() Config {
 func (c Config) validate() error {
 	if c.MinTokenBytes < 1 || c.MaxTokenBytes < c.MinTokenBytes ||
 		c.MaxAuthorizationBytes < len("Bearer ") ||
-		c.MinTokenBytes > c.MaxAuthorizationBytes-len("Bearer ") {
+		c.MaxTokenBytes > c.MaxAuthorizationBytes-len("Bearer ") {
 		return authdomain.NewError(
 			authdomain.ReasonVerifierUnavailable,
 			authdomain.DiagnosticServiceBoundsInvalid,

@@ -257,8 +257,10 @@ service와 connector
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | 하나의 DuckDB transaction에서 Verified |
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | 설정 시 구현 |
-| authentication disabled | 현재 mode |
-| static token, ADC, OAuth, STS/WIF | Planned |
+| authentication disabled | 구현된 mode, anonymous principal이며 credential 무시 |
+| bearer-present | 구현된 syntax/presence compatibility gate, identity proof 없음 |
+| bounded static token set | 구현, startup fail-closed와 reload deny-all/recovery |
+| ADC/OAuth/STS/WIF token acquisition | client-owned, 결과 bearer는 설정된 local policy 사용 가능 |
 | IAM authorization | Unsupported |
 
 Load 목표는
@@ -267,7 +269,9 @@ Opt-in path는 bounded immutable object를 private temporary workspace에 downlo
 선택 disposition을 atomic하게 적용한다. Download는 destination transaction 밖에서
 실행되고 load job과 idempotency record는 process-local이다.
 Identity 주장은 [Google Cloud
-인증](https://cloud.google.com/docs/authentication)에 따라 구분한다. 로컬 token
+인증](https://cloud.google.com/docs/authentication)에 따라 구분한다. Public edge는
+[RFC 6750](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)에 따라 Authorization
+header/metadata를 parse한다. Local static verification과 client-owned token
 acquisition을 IAM parity로 설명하면 안 된다.
 
 <!-- section: persistence-atomicity -->

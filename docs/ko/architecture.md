@@ -234,10 +234,25 @@ gap으로 남는다.
 프로세스는 warehouse 하나, process-local catalog/job repository, system clock/ID
 adapter, application service, public REST/gRPC listener, optional 별도 admin
 listener를 구성한다. 하나의 certificate pair로 public listener와 enabled admin에서
-TLS를 활성화할 수 있다. 현재 인증은 permissive다. 전송 보안과 identity는 별개이며
-[Google Cloud
-인증](https://cloud.google.com/docs/authentication)의 ADC 또는 IAM 동작을
-구현하지 않는다.
+TLS를 활성화할 수 있다. Composition root는 warehouse side effect 전에 replaceable
+verifier port를 감싼 하나의 authentication application service를 만든다. `disabled`,
+syntax-only `bearer-present`, bounded file-backed `static` adapter는 REST와 gRPC
+edge에서 같은 service를 사용한다. Observability가 가장 바깥이고, authentication은
+HTTP body decode, gRPC `RecvMsg`, routing, application side effect 전에 실행된다.
+Static snapshot은 immutable하고 atomic하다. Invalid startup은 fatal이고 invalid
+reload는 deny-all을 설치하며 다음 valid reload가 복구한다. REST health/readiness와
+gRPC health service만 public이고 REST discovery와 gRPC reflection은 보호한다. Bearer
+parser는 [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)을 따른다.
+
+전송 보안, token acquisition, authentication, authorization은 서로 다른
+capability다. Service-account, authorized-user ADC, external-account WIF는
+[Application Default
+Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)와
+[Workload Identity
+Federation](https://cloud.google.com/iam/docs/workload-identity-federation)에 따라
+bearer token을 얻을 수 있지만, service는 [Google Cloud
+인증](https://cloud.google.com/docs/authentication)의 Google signature 검증, token
+exchange, IAM authorization을 에뮬레이션하지 않는다.
 
 <!-- section: observability -->
 ## Capability와 관측성

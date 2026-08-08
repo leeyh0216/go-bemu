@@ -109,7 +109,19 @@ load:
 
 auth:
   mode: disabled
+  # RFC 6750 bearer parsing is shared by the REST and gRPC public edges.
+  # https://www.rfc-editor.org/rfc/rfc6750#section-2.1
+  minTokenBytes: 1
+  maxTokenBytes: 16384
+  maxAuthorizationBytes: 32768
+  # StaticTokenSet is a local credential adapter, not IAM emulation. Mount this
+  # file read-only in containers; invalid startup content is fatal and an
+  # invalid reload atomically changes the verifier to deny-all until recovery.
   staticTokensFile: ""
+  staticTokensMaxFileBytes: 1048576
+  staticTokensMaxEntries: 1024
+  staticPrincipalMaxBytes: 512
+  staticTokensReloadInterval: "5s"
 
 logging:
   level: info

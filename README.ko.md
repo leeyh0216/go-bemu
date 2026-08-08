@@ -70,7 +70,8 @@ source](https://github.com/goccy/bigquery-emulator/tree/v0.8.1)에 고정한다.
   staging은 gap이다.
 - load는 partial이다. Parquet 이외 format, table이 없을 때 `CREATE_IF_NEEDED`,
   schema-update option, autodetect, multipart/resumable transfer는 gap이다.
-- 인증은 비활성 상태이며 IAM을 에뮬레이션하지 않는다.
+- 로컬 bearer admission은 disabled, syntax-only presence, bounded static-token
+  mode를 지원하지만 credential acquisition과 IAM은 에뮬레이션하지 않는다.
 - DuckDB 파일에 table data가 남아도 canonical BigQuery metadata는 메모리
   repository와 함께 프로세스 종료 시 사라진다.
 
