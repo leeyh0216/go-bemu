@@ -26,6 +26,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
 type QueryInput struct {
@@ -43,28 +44,31 @@ type QueryInput struct {
 }
 
 type QueryService struct {
-	jobs                ports.JobRepository
-	warehouse           ports.QueryEngine
-	analyzer            ports.QueryAnalyzer
-	operationAnalyzer   ports.QueryOperationAnalyzer
-	operationExecutor   ports.QueryOperationEngine
-	operationCatalog    ports.QueryOperationCatalog
-	ddlParser           ports.DDLParser
-	ddlExecutor         ports.DDLExecutor
-	materializer        ports.QueryMaterializer
-	destinations        ports.QueryDestinationCatalog
-	clock               ports.Clock
-	ids                 ports.IDGenerator
-	defaultLocation     string
-	anonymousTTL        time.Duration
-	operationTimeout    time.Duration
-	compensationTimeout time.Duration
-	runtimeCtx          context.Context
-	cancelRuntime       context.CancelFunc
-	runtimeMu           sync.Mutex
-	closing             bool
-	activeWork          int
-	idle                chan struct{}
+	jobs                  ports.JobRepository
+	warehouse             ports.QueryEngine
+	analyzer              ports.QueryAnalyzer
+	operationAnalyzer     ports.QueryOperationAnalyzer
+	operationExecutor     ports.QueryOperationEngine
+	operationCatalog      ports.QueryOperationCatalog
+	googleSQLGateway      ports.GoogleSQLGateway
+	statementExecutor     ports.StatementExecutor
+	statementMaterializer ports.StatementMaterializer
+	ddlParser             ports.DDLParser
+	ddlExecutor           ports.DDLExecutor
+	materializer          ports.QueryMaterializer
+	destinations          ports.QueryDestinationCatalog
+	clock                 ports.Clock
+	ids                   ports.IDGenerator
+	defaultLocation       string
+	anonymousTTL          time.Duration
+	operationTimeout      time.Duration
+	compensationTimeout   time.Duration
+	runtimeCtx            context.Context
+	cancelRuntime         context.CancelFunc
+	runtimeMu             sync.Mutex
+	closing               bool
+	activeWork            int
+	idle                  chan struct{}
 }
 
 // ErrQueryServiceClosed rejects execution admission once shutdown begins.
@@ -72,6 +76,12 @@ type QueryService struct {
 var ErrQueryServiceClosed = errors.New("query service is closing")
 
 type QueryOption func(*QueryService)
+
+type preparedQuery struct {
+	statement semantic.Statement
+	analysis  ports.QueryAnalysis
+	valid     bool
+}
 
 // WithQueryDefaultLocation supplies the configured location when callers omit
 // jobReference.location. Values follow the BigQuery location catalog:
@@ -105,6 +115,20 @@ func WithQueryMaterializer(materializer ports.QueryMaterializer) QueryOption {
 // https://cloud.google.com/bigquery/docs/locations#specify_locations
 func WithQueryAnalyzer(analyzer ports.QueryAnalyzer) QueryOption {
 	return func(service *QueryService) { service.analyzer = analyzer }
+}
+
+// WithGoogleSQLGateway installs the single official parse/analyze boundary.
+// Its immutable result is retained through execution without reparsing SQL.
+func WithGoogleSQLGateway(gateway ports.GoogleSQLGateway) QueryOption {
+	return func(service *QueryService) { service.googleSQLGateway = gateway }
+}
+
+func WithStatementExecutor(executor ports.StatementExecutor) QueryOption {
+	return func(service *QueryService) { service.statementExecutor = executor }
+}
+
+func WithStatementMaterializer(materializer ports.StatementMaterializer) QueryOption {
+	return func(service *QueryService) { service.statementMaterializer = materializer }
 }
 
 // WithAnonymousQueryTTL overrides the documented approximately 24-hour
@@ -188,6 +212,15 @@ func NewQueryService(
 	for _, option := range options {
 		option(service)
 	}
+	if !queryServiceDependencyIsNil(service.googleSQLGateway) {
+		if queryServiceDependencyIsNil(service.statementExecutor) {
+			cancelRuntime()
+			return nil, fmt.Errorf("%w: analyzed statement executor is required with the GoogleSQL gateway", domain.ErrPrecondition)
+		}
+	} else if !queryServiceDependencyIsNil(service.statementExecutor) || !queryServiceDependencyIsNil(service.statementMaterializer) {
+		cancelRuntime()
+		return nil, fmt.Errorf("%w: analyzed statement ports require the GoogleSQL gateway", domain.ErrPrecondition)
+	}
 	return service, nil
 }
 
@@ -212,7 +245,7 @@ func (s *QueryService) RunSync(ctx context.Context, input QueryInput) (*domain.J
 	workCtx, cancelWork := s.withRuntimeCancellation(ctx)
 	defer cancelWork()
 
-	job, created, err := s.newJob(workCtx, input)
+	job, prepared, created, err := s.newJob(workCtx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +253,7 @@ func (s *QueryService) RunSync(ctx context.Context, input QueryInput) (*domain.J
 		return nil, fmt.Errorf("%w: query job ID %q already exists", domain.ErrConflict, job.Reference.JobID)
 	}
 	executionCtx, cancelExecution := context.WithTimeout(workCtx, s.operationTimeout)
-	s.execute(executionCtx, job)
+	s.execute(executionCtx, job, prepared)
 	cancelExecution()
 	readBase, cancelReadBase := s.withRuntimeCancellation(context.WithoutCancel(ctx))
 	defer cancelReadBase()
@@ -234,7 +267,7 @@ func (s *QueryService) Submit(ctx context.Context, input QueryInput) (*domain.Jo
 		return nil, err
 	}
 	workCtx, cancelWork := s.withRuntimeCancellation(ctx)
-	job, created, err := s.newJob(workCtx, input)
+	job, prepared, created, err := s.newJob(workCtx, input)
 	cancelWork()
 	if err != nil {
 		s.finishWork()
@@ -251,7 +284,7 @@ func (s *QueryService) Submit(ctx context.Context, input QueryInput) (*domain.Jo
 		defer cancelExecutionBase()
 		executionCtx, cancelExecution := context.WithTimeout(executionBase, s.operationTimeout)
 		defer cancelExecution()
-		s.execute(executionCtx, &executionJob)
+		s.execute(executionCtx, &executionJob, prepared)
 	}()
 	return job, nil
 }
@@ -324,7 +357,7 @@ func (s *QueryService) List(ctx context.Context, projectID, location string) ([]
 	return s.jobs.List(ctx, projectID, location)
 }
 
-func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Job, bool, error) {
+func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Job, preparedQuery, bool, error) {
 	if input.JobID == "" {
 		input.JobID = "job_" + s.ids.NewID()
 	}
@@ -337,22 +370,25 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		ProjectID: input.ProjectID, DefaultProjectID: input.DefaultProjectID,
 		DefaultDataset: input.DefaultDataset, SQL: input.SQL,
 	}
-	analysis, err := s.analyzeQueryAdmission(ctx, request)
+	prepared, err := s.prepareQueryAdmission(ctx, request)
 	if err != nil {
-		return nil, false, err
+		return nil, preparedQuery{}, false, err
 	}
+	analysis := prepared.analysis
 	if analysis.RequiresCatalogMutation && input.Destination != nil {
-		return nil, false, fmt.Errorf("%w: destinationTable is not valid for catalog DDL", domain.ErrInvalid)
+		return nil, preparedQuery{}, false, fmt.Errorf("%w: destinationTable is not valid for catalog DDL", domain.ErrInvalid)
 	}
 	location, err := s.resolveQueryLocation(ctx, input, analysis)
 	if err != nil {
-		return nil, false, err
+		return nil, preparedQuery{}, false, err
 	}
 	input.Location = location
 	anonymousDestination := false
-	if s.analyzer != nil && analysis.ProducesRows && input.Destination == nil {
-		if s.materializer == nil || s.destinations == nil {
-			return nil, false, fmt.Errorf("%w: anonymous query results require analyzer, materializer, and destination catalog ports", domain.ErrPrecondition)
+	if (s.analyzer != nil || prepared.valid) && analysis.ProducesRows && input.Destination == nil {
+		legacyMissing := !prepared.valid && s.materializer == nil
+		semanticMissing := prepared.valid && s.statementMaterializer == nil
+		if legacyMissing || semanticMissing || s.destinations == nil {
+			return nil, preparedQuery{}, false, fmt.Errorf("%w: anonymous query results require analyzer, materializer, and destination catalog ports", domain.ErrPrecondition)
 		}
 		destination := anonymousQueryDestination(input.ProjectID, input.Location, input.JobID)
 		input.Destination = &destination
@@ -371,7 +407,7 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		Priority: input.Priority, Labels: input.Labels, AnonymousDestination: anonymousDestination,
 	}, s.clock.Now())
 	if err != nil {
-		return nil, false, err
+		return nil, preparedQuery{}, false, err
 	}
 	started := observability.LogSideEffectStart(ctx, "job_repository", "create_job",
 		"project_id", job.Reference.ProjectID, "job_id", job.Reference.JobID,
@@ -383,7 +419,7 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 	if err != nil {
 		observability.LogSideEffectEnd(ctx, "job_repository", "create_job", started, err,
 			"project_id", job.Reference.ProjectID, "job_id", job.Reference.JobID)
-		return nil, false, err
+		return nil, preparedQuery{}, false, err
 	}
 	if !created {
 		reason := "same query configuration"
@@ -396,12 +432,12 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 			"project_id", job.Reference.ProjectID, "job_id", job.Reference.JobID,
 			"configuration_fingerprint", job.ConfigurationDigest,
 			"existing_configuration_fingerprint", stored.ConfigurationDigest)
-		return nil, false, err
+		return nil, preparedQuery{}, false, err
 	}
 	observability.LogSideEffectEnd(ctx, "job_repository", "create_job", started, nil,
 		"project_id", job.Reference.ProjectID, "job_id", job.Reference.JobID, "job_state", stored.State,
 		"configuration_fingerprint", job.ConfigurationDigest, "created", created)
-	return stored, created, nil
+	return stored, prepared, created, nil
 }
 
 func queryLabelKeysFingerprint(labels map[string]string) string {
@@ -413,7 +449,7 @@ func queryLabelKeysFingerprint(labels map[string]string) string {
 	return observability.Digest([]byte(strings.Join(keys, "\x00")))
 }
 
-func (s *QueryService) execute(ctx context.Context, job *domain.Job) {
+func (s *QueryService) execute(ctx context.Context, job *domain.Job, prepared preparedQuery) {
 	boundaryAttrs := append(observability.ContextAttrs(ctx),
 		"event", "boundary.enter", "boundary", "application.query",
 		"project_id", job.Reference.ProjectID, "job_id", job.Reference.JobID,
@@ -432,7 +468,7 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job) {
 		slog.ErrorContext(ctx, "query job state persistence failed", attrs...)
 		return
 	}
-	result, err := s.executeQuery(ctx, job)
+	result, err := s.executeQuery(ctx, job, prepared)
 	if err != nil {
 		reason := queryTerminalReason(err)
 		_ = job.Fail(reason, err.Error(), s.clock.Now())
@@ -462,16 +498,22 @@ func (s *QueryService) execute(ctx context.Context, job *domain.Job) {
 	slog.InfoContext(ctx, "query job", exitAttrs...)
 }
 
-func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domain.QueryResult, error) {
+func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job, prepared preparedQuery) (domain.QueryResult, error) {
 	configuration := job.Configuration
 	request := ports.QueryRequest{
 		ProjectID: job.Reference.ProjectID, DefaultProjectID: configuration.DefaultProjectID,
 		DefaultDataset: configuration.DefaultDataset, SQL: configuration.SQL,
 	}
 	if configuration.Destination == nil {
+		if prepared.valid {
+			return s.executeAnalyzedStatement(ctx, prepared.statement, job.Reference.JobID)
+		}
 		return s.executeQueryWithoutDestinationForJob(ctx, request, job.Reference.JobID)
 	}
-	if s.materializer == nil || s.destinations == nil {
+	if prepared.valid && (s.statementMaterializer == nil || s.destinations == nil) {
+		return domain.QueryResult{}, fmt.Errorf("%w: query destination requires analyzed statement materializer and destination catalog ports", domain.ErrPrecondition)
+	}
+	if !prepared.valid && (s.materializer == nil || s.destinations == nil) {
 		return domain.QueryResult{}, fmt.Errorf("%w: query destination requires query materializer and destination catalog ports; fix_hint=compose WithQueryDestinationCatalog", domain.ErrPrecondition)
 	}
 
@@ -498,11 +540,24 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domai
 		return domain.QueryResult{}, fmt.Errorf("%w: destination table does not exist and createDisposition is CREATE_NEVER", domain.ErrNotFound)
 	}
 
-	materialized, err := s.materializer.MaterializeQuery(ctx, ports.QueryMaterializationRequest{
-		Query: request, Destination: destination, DestinationExists: destinationExists,
-		DestinationSchema: existing.Schema, WriteDisposition: configuration.WriteDisposition,
-		CreateDisposition: configuration.CreateDisposition,
-	})
+	var materialized ports.QueryMaterializationResult
+	if prepared.valid {
+		result, materializeErr := s.statementMaterializer.MaterializeAnalyzedStatement(ctx, prepared.statement, ports.StatementMaterializationRequest{
+			Destination: destination, DestinationExists: destinationExists,
+			DestinationSchema: existing.Schema, WriteDisposition: configuration.WriteDisposition,
+			CreateDisposition: configuration.CreateDisposition,
+		})
+		materialized = ports.QueryMaterializationResult{
+			QueryResult: result.QueryResult, DestinationCreated: result.DestinationCreated,
+		}
+		err = materializeErr
+	} else {
+		materialized, err = s.materializer.MaterializeQuery(ctx, ports.QueryMaterializationRequest{
+			Query: request, Destination: destination, DestinationExists: destinationExists,
+			DestinationSchema: existing.Schema, WriteDisposition: configuration.WriteDisposition,
+			CreateDisposition: configuration.CreateDisposition,
+		})
+	}
 	if err != nil {
 		return domain.QueryResult{}, err
 	}
@@ -550,7 +605,13 @@ func (s *QueryService) compensateMaterializedDestination(ctx context.Context, de
 	defer cancelCleanupBase()
 	cleanupCtx, cancelCleanup := context.WithTimeout(cleanupBase, s.compensationTimeout)
 	defer cancelCleanup()
-	if err := s.materializer.DropMaterializedDestination(cleanupCtx, destination); err != nil {
+	var err error
+	if s.googleSQLGateway != nil {
+		err = s.statementMaterializer.DropMaterializedDestination(cleanupCtx, destination)
+	} else {
+		err = s.materializer.DropMaterializedDestination(cleanupCtx, destination)
+	}
+	if err != nil {
 		return fmt.Errorf("compensate unpublished destination: %w", err)
 	}
 	return nil
