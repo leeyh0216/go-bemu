@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,7 +24,10 @@ const (
 	consumerNormalizedPath = "contract/consumers.normalized.json"
 )
 
-var consumerDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var (
+	consumerCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	consumerDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
 type ConsumerManifest struct {
 	SchemaVersion         string                 `yaml:"schemaVersion" json:"schemaVersion"`
@@ -272,6 +276,9 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 			if provenance.Name == "" || provenance.Version == "" || provenance.URI == "" {
 				return NormalizedConsumerManifest{}, fmt.Errorf("compatibility profile %s has incomplete source provenance", profile.ID)
 			}
+			if err := validateSourceProvenance(provenance); err != nil {
+				return NormalizedConsumerManifest{}, fmt.Errorf("compatibility profile %s: %w", profile.ID, err)
+			}
 		}
 	}
 
@@ -337,6 +344,9 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 			artifactIDs = append(artifactIDs, artifact.ID)
 			if artifact.ID == "" || artifact.URI == "" || !consumerDigestPattern.MatchString(artifact.SHA256) {
 				return NormalizedConsumerManifest{}, fmt.Errorf("case %s artifact %s must define an immutable URI and lowercase SHA-256", consumerCase.ID, artifact.ID)
+			}
+			if strings.HasPrefix(artifact.URI, "oci://") && !strings.Contains(artifact.URI, "@sha256:"+artifact.SHA256) {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s OCI artifact %s URI digest does not match its SHA-256", consumerCase.ID, artifact.ID)
 			}
 		}
 		if duplicate := firstDuplicate(artifactIDs); duplicate != "" {
@@ -406,6 +416,35 @@ func cloneStringMap(values map[string]string) map[string]string {
 		result[key] = value
 	}
 	return result
+}
+
+func validateSourceProvenance(provenance ConsumerSourceProvenance) error {
+	parsed, err := url.Parse(provenance.URI)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return fmt.Errorf("source provenance %s must use an absolute HTTPS URI", provenance.Name)
+	}
+	if parsed.Host != "github.com" {
+		if parsed.Fragment == "" {
+			return fmt.Errorf("source provenance %s must select an immutable release anchor", provenance.Name)
+		}
+		return nil
+	}
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) < 4 || (segments[2] != "tree" && segments[2] != "blob") {
+		return fmt.Errorf("GitHub source provenance %s must select an exact tree or blob ref", provenance.Name)
+	}
+	ref := segments[3]
+	switch strings.ToLower(ref) {
+	case "main", "master", "head", "develop", "latest":
+		return fmt.Errorf("GitHub source provenance %s uses mutable ref %s", provenance.Name, ref)
+	}
+	if consumerCommitPattern.MatchString(ref) {
+		return nil
+	}
+	if !strings.Contains(ref, provenance.Version) {
+		return fmt.Errorf("GitHub source provenance %s ref %s does not identify version %s", provenance.Name, ref, provenance.Version)
+	}
+	return nil
 }
 func firstDuplicate(values []string) string {
 	seen := make(map[string]bool, len(values))

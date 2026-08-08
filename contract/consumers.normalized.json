@@ -111,7 +111,7 @@
           {
             "name": "google-cloud-bigquery-python",
             "version": "3.43.0",
-            "uri": "https://github.com/googleapis/python-bigquery/tree/v3.43.0"
+            "uri": "https://github.com/googleapis/google-cloud-python/tree/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery"
           }
         ]
       },

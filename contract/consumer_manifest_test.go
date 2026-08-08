@@ -55,6 +55,12 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 		"duplicate scenario ID": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
 			manifest.Scenarios = append(manifest.Scenarios, manifest.Scenarios[0])
 		},
+		"mutable source provenance": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
+			manifest.CompatibilityProfiles[0].SourceProvenance = []ConsumerSourceProvenance{{Name: "client", Version: "3.43.0", URI: "https://github.com/googleapis/google-cloud-python/tree/main/packages/google-cloud-bigquery"}}
+		},
+		"OCI digest mismatch": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
+			(*cases)[0].Artifacts[0].URI = "oci://example.invalid/client@sha256:" + strings.Repeat("b", 64)
+		},
 		"duplicate case ID": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
 			*cases = append(*cases, (*cases)[0])
 		},
