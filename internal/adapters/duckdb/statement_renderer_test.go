@@ -112,6 +112,49 @@ func TestLowerDuckDBSelectUsesCanonicalBindingsAndTypedArguments(t *testing.T) {
 	}
 }
 
+func TestLowerDuckDBBetweenUsesBoundOperands(t *testing.T) {
+	t.Parallel()
+	fixture := newRendererASTFixture(t)
+	table := fixture.table([]string{"unresolved-project", "unresolved-dataset", "unresolved-table"}, nil)
+	between, err := queryast.NewBetweenExpression(
+		fixture.key("between"), fixture.identifierExpression("id"),
+		fixture.integer("2"), fixture.integer("4"), false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := queryast.NewSelectQuery(
+		false, []queryast.SelectItem{fixture.selectItem(fixture.identifierExpression("id"), "")},
+		table, between, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := queryast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := queryast.NewSelectStatement(fixture.source(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "events"}
+	plan := fixture.lower(statement, map[queryast.NodeKey]duckDBTableBinding{
+		table.NodeKey(): fixture.physicalBinding(reference),
+	})
+	physical, err := renderPhysicalTable(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT "id" FROM ` + physical + ` WHERE ("id" BETWEEN ? AND ?)`
+	if plan.statementSQL() != want {
+		t.Fatalf("BETWEEN plan = %q, want %q", plan.statementSQL(), want)
+	}
+	if got := plan.bindArguments(); !reflect.DeepEqual(got, []any{int64(2), int64(4)}) {
+		t.Fatalf("BETWEEN arguments = %#v", got)
+	}
+}
+
 func TestLowerDuckDBQuerySupportsCTEUnionAndAggregateModifiers(t *testing.T) {
 	t.Parallel()
 	fixture := newRendererASTFixture(t)

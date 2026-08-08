@@ -229,6 +229,14 @@ func (collector *relationCollector) expression(expression Expression) error {
 			return err
 		}
 		return collector.expression(value.right)
+	case *BetweenExpression:
+		if err := collector.expression(value.value); err != nil {
+			return err
+		}
+		if err := collector.expression(value.low); err != nil {
+			return err
+		}
+		return collector.expression(value.high)
 	case *CastExpression:
 		return collector.expression(value.value)
 	case *InExpression:

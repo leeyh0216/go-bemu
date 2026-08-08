@@ -355,6 +355,27 @@ func (visitor *duckDBExpressionVisitor) VisitBinaryExpression(expression *querya
 	return nil
 }
 
+func (visitor *duckDBExpressionVisitor) VisitBetweenExpression(expression *queryast.BetweenExpression) error {
+	value, err := visitor.renderer.renderExpression(expression.Value())
+	if err != nil {
+		return err
+	}
+	low, err := visitor.renderer.renderExpression(expression.Low())
+	if err != nil {
+		return err
+	}
+	high, err := visitor.renderer.renderExpression(expression.High())
+	if err != nil {
+		return err
+	}
+	operator := " BETWEEN "
+	if expression.Not() {
+		operator = " NOT BETWEEN "
+	}
+	visitor.result = "(" + value + operator + low + " AND " + high + ")"
+	return nil
+}
+
 func (visitor *duckDBExpressionVisitor) VisitCastExpression(expression *queryast.CastExpression) error {
 	value, err := visitor.renderer.renderExpression(expression.Value())
 	if err != nil {

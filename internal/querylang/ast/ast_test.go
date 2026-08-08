@@ -115,6 +115,49 @@ func TestNodeConstructorsRejectZeroNodeKey(t *testing.T) {
 	if _, err := queryast.NewScalarType(queryast.NodeKey{}, queryast.TypeInt64, nil, nil); err == nil {
 		t.Fatal("scalar type accepted a zero NodeKey")
 	}
+	if _, err := queryast.NewBetweenExpression(
+		queryast.NodeKey{}, mustInteger(t, 11, "1"), mustInteger(t, 12, "2"), mustInteger(t, 13, "3"), false,
+	); err == nil {
+		t.Fatal("BETWEEN accepted a zero NodeKey")
+	}
+}
+
+func TestBetweenExpressionOwnsTypedOperandsAndTraversesInSourceOrder(t *testing.T) {
+	value := mustInteger(t, 1, "7")
+	low := mustInteger(t, 2, "2")
+	high := mustInteger(t, 3, "9")
+	between, err := queryast.NewBetweenExpression(mustKey(t, 4, "between", 0, 13), value, low, high, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if between.Kind() != queryast.ExpressionBetween || !between.Not() ||
+		between.Value() != value || between.Low() != low || between.High() != high {
+		t.Fatalf("BETWEEN expression = %#v", between)
+	}
+	item, err := queryast.NewSelectItem(between, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := queryast.NewSelectQuery(false, []queryast.SelectItem{item}, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := queryast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := queryast.NewSelectStatement(mustSource(t, 0, 13), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expressions, err := queryast.Expressions(statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expressions) != 4 || expressions[0] != between || expressions[1] != value ||
+		expressions[2] != low || expressions[3] != high {
+		t.Fatalf("BETWEEN traversal = %#v", expressions)
+	}
 }
 
 func TestDecimalLiteralPreservesExactCanonicalValueAndType(t *testing.T) {

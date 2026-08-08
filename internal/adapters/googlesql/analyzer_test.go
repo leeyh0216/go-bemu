@@ -80,6 +80,36 @@ func TestAnalyzerResolvesCanonicalRecursiveSchema(t *testing.T) {
 	assertDecimalType(t, amountType, semantic.TypeNumeric, false, false, 38, 9, "")
 }
 
+func TestAnalyzerResolvesPublicBetweenPredicate(t *testing.T) {
+	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
+	statement, err := gateway.Analyze(t.Context(), ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics",
+		SQL: "SELECT id FROM analytics.events WHERE id BETWEEN 2 AND 4",
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	where := statement.Syntax().(*queryast.SelectStatement).Query().Body().(*queryast.SelectQuery).Where()
+	between, ok := where.(*queryast.BetweenExpression)
+	if !ok || between.Not() {
+		t.Fatalf("WHERE expression = %#v", where)
+	}
+	expressions, err := queryast.Expressions(statement.Syntax())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expressions) != 5 || !statement.ExpressionsComplete() {
+		t.Fatalf("BETWEEN bindings incomplete: expressions=%d complete=%t", len(expressions), statement.ExpressionsComplete())
+	}
+	typ, err := statement.RequireExpressionType(between.NodeKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typ.Kind() != semantic.TypeBool {
+		t.Fatalf("BETWEEN type = %q, want BOOL", typ.Kind())
+	}
+}
+
 func TestGatewayUsesOneEntrypointForInsertAndDDL(t *testing.T) {
 	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
 	tests := []struct {

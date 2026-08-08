@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -485,6 +486,16 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 		if args[index] != wantArgs[index] {
 			t.Errorf("arg %d = %#v, want %#v", index, args[index], wantArgs[index])
 		}
+	}
+	betweenSQL, betweenArgs, err := compileRowRestriction(
+		mustParseReadRestriction(t, "id NOT BETWEEN 2 AND 4"), schema,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if betweenSQL != `("id" NOT BETWEEN ? AND ?)` ||
+		!reflect.DeepEqual(betweenArgs, []any{int64(2), int64(4)}) {
+		t.Fatalf("BETWEEN restriction = %q args=%#v", betweenSQL, betweenArgs)
 	}
 	for _, unsupported := range []string{"id IN (1)", "CAST(id AS STRING) = '1'", "id LIKE '1'"} {
 		if _, _, err := compileRowRestriction(mustParseReadRestriction(t, unsupported), schema); err == nil {

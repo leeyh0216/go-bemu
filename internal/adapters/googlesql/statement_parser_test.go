@@ -32,6 +32,11 @@ func TestStatementParserMapsPublicGoogleSQLCorpus(t *testing.T) {
 			kind: queryast.StatementSelect,
 		},
 		{
+			name: "public Spark query source between predicate",
+			sql:  "SELECT id, label, score, active FROM `test-project.analytics.events` WHERE id BETWEEN 2 AND 4",
+			kind: queryast.StatementSelect,
+		},
+		{
 			name: "insert values",
 			sql: "INSERT INTO `test-project.analytics.events` (ordinal, observed_at, payload, tags) VALUES " +
 				"(1, TIMESTAMP '2026-08-08 01:02:03+00', STRUCT(3 AS score, 'nested' AS name), ['alpha', 'beta'])",
@@ -168,6 +173,16 @@ func TestStatementParserMapsQueryAndDMLStructure(t *testing.T) {
 	if numeric.Type() != queryast.TypeNumeric || numeric.CanonicalValue() != "1.25" ||
 		bigNumeric.Type() != queryast.TypeBigNumeric || bigNumeric.CanonicalValue() != "1200" {
 		t.Fatalf("decimal literals = (%q %q), (%q %q)", numeric.Type(), numeric.CanonicalValue(), bigNumeric.Type(), bigNumeric.CanonicalValue())
+	}
+
+	statement, err = parser.Parse(context.Background(), ports.QueryRequest{SQL: "SELECT id FROM `p.d.t` WHERE id NOT BETWEEN 2 AND 4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	between := statement.(*queryast.SelectStatement).Query().Body().(*queryast.SelectQuery).Where().(*queryast.BetweenExpression)
+	if !between.Not() || between.Value().Kind() != queryast.ExpressionIdentifier ||
+		between.Low().Kind() != queryast.ExpressionInteger || between.High().Kind() != queryast.ExpressionInteger {
+		t.Fatalf("NOT BETWEEN expression = %#v", between)
 	}
 }
 
