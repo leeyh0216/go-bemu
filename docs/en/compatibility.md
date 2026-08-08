@@ -60,38 +60,36 @@ single-row hard cap while streaming accepted fragments. These deterministic loca
 10,000,000/100,000,000-byte rules emulate Cloud's approximate [pagination
 limits](https://cloud.google.com/bigquery/docs/paging-results#api-limits). Mutation-aware
 page invalidation, `selectedFields`, and `timestampOutputFormat` remain explicit
-gaps. `formatOptions.useInt64Timestamp=true` returns epoch-microsecond strings as
-required by the pinned Python client; its E2E contract also pins explicit
-`maxResults=0` as one empty page with exact `totalRows` and no continuation, and decodes both a post-epoch
-microsecond value and a signed pre-epoch value as UTC datetimes. FLOAT64 cells
+gaps. `formatOptions.useInt64Timestamp=true` returns epoch-microsecond strings.
+Explicit `maxResults=0` returns one empty page with exact `totalRows` and no
+continuation. Both post-epoch microsecond values and signed pre-epoch values use
+the same UTC representation. FLOAT64 cells
 use JSON numbers when finite and the exact `NaN`, `Infinity`, and `-Infinity`
 spellings otherwise, following the
 official [`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType)
 contract.
 
-`CAP-REST-METADATA-PATCH-V1` and `CAP-SCHEMA-ADDITIVE-V1` are also exercised by
-the official [Python client
-`3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) against a real
-process. Schema support is append-only `NULLABLE`/`REPEATED`, including nested
-and repeated records; DDL conversion, relaxation, and job-driven evolution are
-not implied.
+`CAP-REST-METADATA-PATCH-V1` and `CAP-SCHEMA-ADDITIVE-V1` are exercised at the
+public transport boundary. Schema support is append-only
+`NULLABLE`/`REPEATED`, including nested and repeated records; DDL conversion,
+relaxation, and job-driven evolution are not implied.
 
 <!-- section: jobs -->
 ## Query and Jobs
 
 | Operation | Status | Limit |
 | --- | --- | --- |
-| `jobs.query` | Partial | Python 3.43.0 path verified; synchronous DuckDB-compatible SQL subset |
-| query `jobs.insert` | Partial | Python 3.43.0 polling path verified; execution is process-local while configuration, status, errors, timestamps, and statistics are SQLite-durable |
+| `jobs.query` | Partial | synchronous execution through the unified GoogleSQL AST subset |
+| query `jobs.insert` | Partial | asynchronous polling; execution is process-local while configuration, status, errors, timestamps, and statistics are SQLite-durable |
 | `jobs.get` | Verified basic | `PENDING/RUNNING/DONE`, terminal errors |
 | `jobs.list` | Partial | location-aware SQLite metadata and opaque cursor token |
 | `jobs.getQueryResults` | Partial | location-aware lookup, `startIndex`, `maxResults`, and job/result-bound opaque page tokens |
 | explicit destination table | Partial | scalar exact-schema `WRITE_EMPTY`/`WRITE_APPEND`/`WRITE_TRUNCATE`; capability `query.destination.exact-schema-v1` |
-| connector query metadata | Verified basic | `INTERACTIVE`/`BATCH` priority and validated labels, including an explicitly empty label map, are fingerprinted and round-tripped |
+| query metadata | Verified basic | `INTERACTIVE`/`BATCH` priority and validated labels, including an explicitly empty label map, are fingerprinted and round-tripped |
 | anonymous destination table | Partial | row-producing query jobs publish a generated hidden-dataset destination with 24-hour lazy expiration; capability `query.destination.anonymous-v1` |
 | `WRITE_TRUNCATE` schema replacement | Unsupported | exact-schema subset only; gap `query.destination.truncate-schema-replacement-v1` |
 | semantic SQL DDL | Partial | GoogleSQL AST plans execute `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, top-level `ADD`/`RENAME`/`DROP COLUMN`, and `ALTER COLUMN SET DATA TYPE`; unsupported clauses fail before mutation under `query.ddl.catalog-sync-v1`, while crash recovery between SQLite and the engine remains #26 |
-| multi-statement queries | Unsupported | literal/comment-aware scanning permits one optional trailing semicolon and rejects scripts before job or engine side effects; gap `query.scripts.unsupported-v1`; see the official [multi-statement query contract](https://cloud.google.com/bigquery/docs/multi-statement-queries) |
+| multi-statement queries | Partial | transactional `DECLARE`, `SET`, and supported query/DML statements; control flow, dynamic SQL, and temporary routines remain unsupported under the official [multi-statement query contract](https://cloud.google.com/bigquery/docs/multi-statement-queries) |
 | cancellation | Partial | runtime shutdown rejects new work, cancels and drains admitted sync/async work before closing Storage or DuckDB; public [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel) and cancellation state remain unsupported |
 | Parquet load `jobs.insert` / `jobs.get` / `jobs.list` | Partial | opt-in; configuration, status, errors, timestamps, and statistics are SQLite-durable |
 | copy/extract | Unsupported | configuration rejected |
@@ -131,15 +129,11 @@ fingerprint alongside the raw configuration for drift diagnostics. See the offic
 For a row-producing query without `destinationTable`, BQEMU generates the
 destination before `JobRepository.CreateOrGet`, returns it in
 `configuration.query.destinationTable`, and materializes the result with
-`WRITE_EMPTY`/`CREATE_IF_NEEDED`. This is the contract used by connector
-`0.44.2`'s
-[`TempTableBuilder`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L1150-L1240).
+`WRITE_EMPTY`/`CREATE_IF_NEEDED`.
 The generated dataset starts with `_`, is omitted from `datasets.list` unless
 [`all=true`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/list),
-and its tables expose an expiration 24 hours after publication, matching the
-connector's default
-[`MaterializationConfiguration`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/MaterializationConfiguration.java)
-and BigQuery's approximate [anonymous-table
+and its tables expose an expiration 24 hours after publication, matching
+BigQuery's approximate [anonymous-table
 lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored).
 Cleanup is lazy at `tables.get`, `tables.list`, and Storage Read resolution; the
 hidden dataset is retained for later results. There is no cleanup goroutine or
@@ -204,8 +198,8 @@ REST metadata. The same applies to `roundingMode`: omission,
 `ROUND_HALF_EVEN` remain distinct canonical metadata values. Effective
 parameters are applied only at an engine or wire
 boundary. Precision above 38 is rejected before table, load-job, or row
-mutation because Spark `DecimalType` cannot represent it. `GEOGRAPHY` is also
-rejected before a physical side effect.
+mutation because the current runtime representation is limited to 38 digits.
+`GEOGRAPHY` is also rejected before a physical side effect.
 
 ProtoRows writes apply BigQuery's default half-away-from-zero rounding and the
 explicit half-even mode with exact decimal arithmetic, including recursive
@@ -231,10 +225,9 @@ table default and using explicit field modes remains supported.
 NUMERIC and the supported BIGNUMERIC subset are covered by REST table/query and
 tabledata cells, Arrow/Avro Storage Read schemas and values, direct ProtoRows,
 and scalar Parquet loads. Recursive STRUCT and REPEATED decimal metadata is
-covered for REST, Storage Read, and Storage Write. Spark `3.5.8` with connector
-`0.44.2` verifies Arrow and AVRO read schemas and direct scalar decimal writes. The
-connector options set omitted BIGNUMERIC parameters to the emulator default of
-precision 38 and scale 18.
+covered for REST, Storage Read, and Storage Write. Omitted BIGNUMERIC parameters
+use the emulator default of precision 38 and scale 18 at physical and wire
+boundaries.
 
 One query limitation remains. A new DuckDB result typed only as
 `DECIMAL(P,S)` cannot reveal whether a value inside NUMERIC's range originated
@@ -267,8 +260,7 @@ stream returns `NOT_FOUND`; snapshot row bytes are not reconstructed.
 
 The target contract is the official
 [`BigQueryRead`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryRead)
-service and connector
-[`ReadSessionCreator.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java).
+service.
 
 <!-- section: storage-write -->
 ## Storage Write
@@ -278,21 +270,22 @@ service and connector
 | official service registration/reflection | Verified |
 | write service health | lifecycle-aware `SERVING` while enabled and not draining |
 | PENDING create/get/append/finalize/commit | Partial; ProtoRows, exact offsets, hidden DuckDB staging, and finalized row count |
-| default stream | Partial; official and connector `0.44.2` legacy aliases, immediate append |
+| default stream | Partial; official resource name and immediate append |
 | multiple logical streams | Partial; weighted in-flight/staged-byte admission over one serialized DuckDB coordinator |
 | atomic batch commit | Verified for a validated group: destination insert and staging/receipt deletion share one transaction |
 | ArrowRows, BUFFERED/explicit COMMITTED streams, and `FlushRows` | Unsupported |
 
-CDC, missing-value default expressions, durable staging/recovery after restart,
-and distributed write concurrency remain unsupported. PENDING rows no longer
-accumulate as decoded Go objects, but the stable staged-byte charge is not an
-exact DuckDB physical-size measurement. The serialized backend is an intentional
+CDC, missing-value default expressions, independent-store restore proof, and
+distributed write concurrency remain unsupported. SQLite persists stream,
+receipt, and commit-group phases; startup classifies interrupted operations as
+unresolved before accepting requests. PENDING rows do not accumulate as decoded
+Go objects, but the stable staged-byte charge is not an exact DuckDB
+physical-size measurement. The serialized backend is an intentional
 embedded-engine bound, not BigQuery throughput parity.
 
 The target contract is the official
 [`BigQueryWrite`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite)
-service and connector
-[`BigQueryDirectDataWriterHelper.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java).
+service.
 
 <!-- section: load-auth -->
 ## Load, Object Storage, and Public Access
@@ -303,8 +296,6 @@ service and connector
 | embedded GCS server | Not provided; configure an external GCS-compatible JSON endpoint |
 | GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
 | Parquet load into an existing table | Partial; scalar fields only, with explicit schema/cast validation; nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1`, and decimal narrowing fails before destination mutation with `load.decimal-rounding.unsupported-v1` |
-| Python `load_table_from_uri` and bq `load --source_format=PARQUET` | Verified against the public REST endpoint and one external fake GCS service |
-| Spark indirect Parquet write | Verified with separate PySpark and Scala Spark entrypoints, four non-empty partitions, and zero Storage Write RPCs |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
@@ -319,11 +310,11 @@ The load target is
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad).
 The opt-in path downloads bounded immutable objects into a private temporary
 workspace, then applies the selected disposition atomically. Download is outside
-the destination transaction, and load jobs and idempotency records are
-process-local.
-Spark configures the Hadoop GCS Connector independently from BQEMU's
-`load.gcsEndpoint`; both must resolve to the same object-store service. See
-[Getting started](getting-started.md) for the Compose and client settings.
+the destination transaction. Load job metadata and idempotency identity persist
+in SQLite; downloaded objects and temporary workspaces do not. The uploading
+process and BQEMU configure their GCS endpoints independently, and both must
+resolve to the same object-store service. See [Getting
+started](getting-started.md) for the Compose settings.
 The public edge does not parse or validate `Authorization` header or metadata
 values. Client credential requirements, TLS, the separate diagnostics admin
 token, and IAM are distinct compatibility claims. See [Local client credentials
@@ -333,51 +324,31 @@ contract, and strict-client setup.
 <!-- section: persistence-atomicity -->
 ## Persistence and Atomicity
 
-DuckDB file storage can retain physical rows, but catalog, jobs, read sessions,
-write streams, and load idempotency records are process-local. Additive physical
-columns use one DuckDB transaction, but in-memory catalog publication is not
-crash-atomic with it. Load dispositions, default-stream appends, and a validated
-PENDING-stream group commit each use a destination transaction. This provides
-atomicity only within a live process; restart recovery and durable replay are
-unsupported.
+DuckDB file storage retains physical rows. SQLite retains canonical catalog,
+query/load job metadata, Storage Read lifecycle metadata, and the Storage Write
+ledger. Query result rows and Storage Read snapshot bytes remain process-local.
+Cross-store catalog mutations are not yet crash-atomic at every failure point.
+Load dispositions, default-stream appends, and a validated PENDING-stream group
+commit each use a destination transaction. Startup reconciles interrupted job
+and write-ledger phases, while independent restore of only one state file is
+still unsupported.
 
 <!-- section: client-coverage -->
-## Client Coverage
+## Integration Coverage
 
-The exact [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)
-from [Google Cloud SDK `566.0.0`](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28)
-runs in its own CI layer with UI disabled. It verifies project listing, dataset
-and table lifecycle, additive nullable schema update, query polling, job/table
-listing, cleanup, and the not-found exit contract. Six passing official [Python
-client `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/) E2E tests verify
-dataset administration, table metadata/schema administration, `tabledata.list`
-pagination with nested/repeated and post-/pre-epoch TIMESTAMP decoding, synchronous
-[`jobs.query`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query),
-and asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert)
-through [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults).
-The corresponding [`python-query-sync`](../../tests/integration/contract/golden/python-query-sync-3.43.0.json)
-[`python-query-async`](../../tests/integration/contract/golden/python-query-async-3.43.0.json), and
-[`python-tabledata-list`](../../tests/integration/contract/golden/python-tabledata-list-3.43.0.json)
-goldens pin those shapes. Load/copy/extract and `insertAll` remain four strict
-unsupported xfails; lost-response `requestId` replay is one separate strict
-partial-contract xfail. The exact connector `0.44.2` matrix now records 21 of 75
-entries as verified, including Arrow/Avro multi-stream table and query reads,
-projection/filter pushdown, explicit materialization, optimized count, exact
-PENDING append, default-stream append, and unpartitioned direct static
-overwrite. It still does not claim complete Spark compatibility. Every
-promotion requires public-edge evidence and a negative or boundary test.
-
-The [`bq-project-dataset-admin`](../../tests/integration/contract/golden/bq-project-dataset-admin-2.1.31.json),
-[`bq-table-schema-admin`](../../tests/integration/contract/golden/bq-table-schema-admin-2.1.31.json),
-[`bq-query-job`](../../tests/integration/contract/golden/bq-query-job-2.1.31.json), and
-[`bq-not-found-error`](../../tests/integration/contract/golden/bq-not-found-error-2.1.31.json)
-goldens pin the CLI wire stages. Load, copy, and extract remain Planned in that
-profile and therefore keep issue #13 open.
+Product compatibility is defined by the operation manifest and the capability
+tables above. Exact external executable versions, immutable artifacts,
+scenario IDs, expected calls, and generated evidence belong to the
+[integration test framework](../../tests/integration/docs/en/framework.md) and
+[consumer compatibility](../../tests/integration/docs/en/consumer-compatibility.md).
+They verify callers against the public process without becoming product runtime
+dependencies. Every compatibility promotion requires public-process evidence
+and a negative or boundary test.
 
 <!-- section: removal-criteria -->
 ## Workaround Removal Criteria
 
-A compatibility workaround may be removed only after its pinned upstream defect
-is reproduced, the exact upstream version no longer exhibits it, golden wire
-traces agree, and direct connector tests pass without the rule. Generalizing a
-workaround requires a protocol or semantic source, not another regex example.
+A compatibility workaround may be removed only after its original behavior is
+reproduced, the affected integration cases no longer require it, and public
+operation traces agree without the rule. Generalizing a workaround requires a
+protocol or semantic source, not another regex example.
