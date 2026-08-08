@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "aggregate-group",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "ordered"
+}

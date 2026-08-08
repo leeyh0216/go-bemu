@@ -253,8 +253,6 @@ func (mapper *statementMapper) mapSelectQuery(statementKind queryast.StatementKi
 		kind string
 		get  func() (gsql.ASTNode, error)
 	}{
-		{kind: "group-by", get: func() (gsql.ASTNode, error) { return selectNode.GroupBy() }},
-		{kind: "having", get: func() (gsql.ASTNode, error) { return selectNode.Having() }},
 		{kind: "qualify", get: func() (gsql.ASTNode, error) { return selectNode.Qualify() }},
 		{kind: "window", get: func() (gsql.ASTNode, error) { return selectNode.WindowClause() }},
 		{kind: "select-modifier", get: func() (gsql.ASTNode, error) { return selectNode.WithModifier() }},
@@ -339,7 +337,103 @@ func (mapper *statementMapper) mapSelectQuery(statementKind queryast.StatementKi
 	if err != nil {
 		return nil, parserFailure()
 	}
-	return queryast.NewSelectQuery(distinct, items, from, where, nil, nil, nil)
+	groupByNode, err := selectNode.GroupBy()
+	if err != nil {
+		return nil, parserFailure()
+	}
+	groupBy, err := mapper.mapGroupBy(statementKind, groupByNode)
+	if err != nil {
+		return nil, err
+	}
+	havingNode, err := selectNode.Having()
+	if err != nil {
+		return nil, parserFailure()
+	}
+	having, err := mapper.mapHaving(statementKind, havingNode)
+	if err != nil {
+		return nil, err
+	}
+	return queryast.NewSelectQuery(distinct, items, from, where, groupBy, having, nil)
+}
+
+func (mapper *statementMapper) mapGroupBy(
+	statementKind queryast.StatementKind,
+	node *gsql.ASTGroupBy,
+) ([]queryast.Expression, error) {
+	if node == nil {
+		return nil, nil
+	}
+	if all, err := node.All(); err != nil {
+		return nil, parserFailure()
+	} else if all != nil {
+		return nil, unsupportedNode(statementKind, "group-by-all", all)
+	}
+	if andOrderBy, err := node.AndOrderBy(); err != nil {
+		return nil, parserFailure()
+	} else if andOrderBy {
+		return nil, unsupportedNode(statementKind, "group-by-and-order-by", node)
+	}
+	if hint, err := node.Hint(); err != nil {
+		return nil, parserFailure()
+	} else if hint != nil {
+		return nil, unsupportedNode(statementKind, "group-by-hint", hint)
+	}
+	children, err := astChildren(node)
+	if err != nil {
+		return nil, err
+	}
+	expressions := make([]queryast.Expression, 0, len(children))
+	for _, child := range children {
+		item, ok := child.(*gsql.ASTGroupingItem)
+		if !ok {
+			return nil, unsupportedNode(statementKind, "grouping-item", child)
+		}
+		for _, optional := range []struct {
+			kind string
+			get  func() (gsql.ASTNode, error)
+		}{
+			{kind: "grouping-alias", get: func() (gsql.ASTNode, error) { return item.Alias() }},
+			{kind: "grouping-cube", get: func() (gsql.ASTNode, error) { return item.Cube() }},
+			{kind: "grouping-order", get: func() (gsql.ASTNode, error) { return item.GroupingItemOrder() }},
+			{kind: "grouping-set", get: func() (gsql.ASTNode, error) { return item.GroupingSetList() }},
+			{kind: "grouping-rollup", get: func() (gsql.ASTNode, error) { return item.Rollup() }},
+		} {
+			value, inspectErr := optional.get()
+			if inspectErr != nil {
+				return nil, parserFailure()
+			}
+			if !gsqlNodeIsNil(value) {
+				return nil, unsupportedNode(statementKind, optional.kind, value)
+			}
+		}
+		expressionNode, err := item.Expression()
+		if err != nil || expressionNode == nil {
+			return nil, parserFailure()
+		}
+		expression, err := mapper.mapExpression(statementKind, expressionNode)
+		if err != nil {
+			return nil, err
+		}
+		expressions = append(expressions, expression)
+	}
+	if len(expressions) == 0 {
+		return nil, parserFailure()
+	}
+	return expressions, nil
+}
+
+func (mapper *statementMapper) mapHaving(
+	statementKind queryast.StatementKind,
+	node *gsql.ASTHaving,
+) (queryast.Expression, error) {
+	if node == nil {
+		return nil, nil
+	}
+	expressionNode, err := node.Expression()
+	if err != nil || expressionNode == nil {
+		return nil, parserFailure()
+	}
+	return mapper.mapExpression(statementKind, expressionNode)
 }
 
 func (mapper *statementMapper) mapSetOperation(statementKind queryast.StatementKind, node *gsql.ASTSetOperation) (queryast.QueryBody, error) {

@@ -1,0 +1,12 @@
+{
+  "kind": "rows",
+  "schema": [
+    {"name": "category", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "event_count", "type": "INT64", "mode": "NULLABLE"},
+    {"name": "total_amount", "type": "INT64", "mode": "NULLABLE"}
+  ],
+  "rows": [
+    ["a", 2, 40],
+    ["b", 2, 25]
+  ]
+}

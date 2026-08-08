@@ -1,0 +1,29 @@
+{
+  "projects": [
+    {
+      "projectId": "test-project",
+      "datasets": [
+        {
+          "datasetId": "analytics",
+          "location": "US",
+          "tables": [
+            {
+              "tableId": "events",
+              "schema": [
+                {"name": "category", "type": "STRING", "mode": "NULLABLE"},
+                {"name": "amount", "type": "INT64", "mode": "NULLABLE"}
+              ],
+              "rows": [
+                ["a", 10],
+                ["a", 30],
+                ["b", 20],
+                ["b", 5],
+                ["c", null]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

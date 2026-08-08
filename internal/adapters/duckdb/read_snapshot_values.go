@@ -11,6 +11,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"reflect"
 	"strconv"
 	"strings"
@@ -264,6 +265,10 @@ func snapshotInt64(raw any) (int64, bool) {
 	case json.Number:
 		parsed, err := value.Int64()
 		return parsed, err == nil
+	case big.Int:
+		if value.IsInt64() {
+			return value.Int64(), true
+		}
 	}
 	return 0, false
 }
