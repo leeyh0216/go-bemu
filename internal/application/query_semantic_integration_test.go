@@ -44,12 +44,12 @@ func TestGoogleSQLGatewayExecutesDDLAndDMLThroughOnePreparedBoundary(t *testing.
 
 	for _, input := range []QueryInput{
 		{
-			ProjectID: "test-project", DefaultDataset: "analytics", JobID: "create-table",
-			SQL: "CREATE TABLE analytics.events (id INT64, amount NUMERIC(20, 4))",
+			ProjectID: "test-project", JobID: "create-table",
+			SQL: "CREATE TABLE `test-project.analytics.events` (id INT64, amount NUMERIC(20, 4))",
 		},
 		{
-			ProjectID: "test-project", DefaultDataset: "analytics", JobID: "insert-row",
-			SQL: "INSERT INTO analytics.events (id, amount) VALUES (1, NUMERIC '12.3400')",
+			ProjectID: "test-project", JobID: "insert-row",
+			SQL: "INSERT INTO `test-project.analytics.events` (id, amount) VALUES (1, NUMERIC '12.3400')",
 		},
 	} {
 		job, err := queries.RunSync(ctx, input)
@@ -62,8 +62,8 @@ func TestGoogleSQLGatewayExecutesDDLAndDMLThroughOnePreparedBoundary(t *testing.
 	}
 
 	job, err := queries.RunSync(ctx, QueryInput{
-		ProjectID: "test-project", DefaultDataset: "analytics", JobID: "select-row",
-		SQL: "SELECT id, amount FROM analytics.events WHERE id = 1",
+		ProjectID: "test-project", JobID: "select-row",
+		SQL: "SELECT id, amount FROM `test-project.analytics.events` WHERE id = 1",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,13 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
+func (prepared preparedQuery) statementType() string {
+	if !prepared.valid || prepared.statement.Syntax() == nil {
+		return ""
+	}
+	return string(prepared.statement.Kind())
+}
+
 func (s *QueryService) prepareQueryAdmission(
 	ctx context.Context,
 	request ports.QueryRequest,
