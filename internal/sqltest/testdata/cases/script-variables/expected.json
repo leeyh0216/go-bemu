@@ -1,0 +1,7 @@
+{
+  "kind": "rows",
+  "schema": [
+    {"name": "id", "type": "INT64", "mode": "NULLABLE"}
+  ],
+  "rows": [[2]]
+}

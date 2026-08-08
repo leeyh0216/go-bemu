@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "script-variables",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "ordered"
+}

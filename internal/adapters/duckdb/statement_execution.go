@@ -33,7 +33,8 @@ func (w *Warehouse) ExecuteStatement(
 	statement semantic.Statement,
 ) (result domain.QueryResult, err error) {
 	if statement.Kind() == queryast.StatementScript {
-		return w.executeGoogleSQLScript(ctx, statement)
+		result, err := w.executeGoogleSQLScript(ctx, statement)
+		return result, classifyDuckDBStatementError(err)
 	}
 	plan, err := lowerDuckDBStatement(statement)
 	if err != nil {
