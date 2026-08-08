@@ -351,7 +351,7 @@ func TestDuckDBReadSnapshotByteLimitIsResourceExhaustedAndRemovesPartialSpill(t 
 	}
 }
 
-func TestDuckDBReadSnapshotLogsOpaquePayloadShapesAndSideEffects(t *testing.T) {
+func TestDuckDBReadSnapshotLogsStatementAndEncodedPayloadSideEffects(t *testing.T) {
 	ctx, cancel := duckDBReadTestContext(t)
 	defer cancel()
 	table := catalogdomain.Table{
@@ -391,7 +391,10 @@ func TestDuckDBReadSnapshotLogsOpaquePayloadShapesAndSideEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := logs.String()
-	for _, raw := range []string{"restriction-secret", tempDir, "SELECT "} {
+	// The application boundary logs the submitted row restriction. This adapter
+	// receives only its immutable AST and logs the lowered statement and encoded
+	// storage payloads.
+	for _, raw := range []string{tempDir, "SELECT "} {
 		if !strings.Contains(output, raw) {
 			t.Fatalf("structured logs omitted raw value %q: %s", raw, output)
 		}
