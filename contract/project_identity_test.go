@@ -84,7 +84,7 @@ func TestProductDocumentationDoesNotOwnIntegrationProfiles(t *testing.T) {
 		regexp.MustCompile(`(?i)\b` + "fl" + `ink\b`),
 		regexp.MustCompile(`(?i)\b` + "b" + `q\b`),
 		regexp.MustCompile(`(?i)` + "google-cloud-" + `bigquery`),
-		regexp.MustCompile(`(?i)` + "spark-" + `bigquery`),
+		regexp.MustCompile(`(?i)` + "sp" + "ark-" + `bigquery`),
 		regexp.MustCompile(regexp.QuoteMeta("0." + "44.2")),
 		regexp.MustCompile(regexp.QuoteMeta("1." + "2.0")),
 		regexp.MustCompile(regexp.QuoteMeta("2." + "1.31")),
