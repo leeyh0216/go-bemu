@@ -97,6 +97,72 @@ func TestParquetLoadRejectsSchemaMismatchWithoutChangingDestination(t *testing.T
 	assertNoLoadStagingTables(t, warehouse)
 }
 
+func TestParquetLoadPreservesNumericAndBigNumericPhysicalDecimals(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	precision, scale := int64(20), int64(4)
+	fields := []catalogDomain.Field{
+		{Name: "numeric_value", Type: "NUMERIC", Precision: &precision, Scale: &scale},
+		{Name: "bignumeric_value", Type: "BIGNUMERIC"},
+	}
+	if err := warehouse.CreateTable(ctx, catalogDomain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "items", Schema: fields,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	parquet := createLoadParquet(t, warehouse, "SELECT 123.4500::DECIMAL(20,4) AS numeric_value, 12345678901234567890.123456789012345678::DECIMAL(38,18) AS bignumeric_value")
+	result, err := warehouse.Load(ctx, loadports.LoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+			Schema:    fields,
+		},
+		Schema: fields, Objects: []loadports.LocalObject{{Path: parquet}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OutputRows != 1 {
+		t.Fatalf("output rows = %d", result.OutputRows)
+	}
+	var numeric, bignumeric string
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT CAST(numeric_value AS VARCHAR), CAST(bignumeric_value AS VARCHAR) FROM "bq_746573742d70726f6a656374_64617461736574"."items"`).Scan(&numeric, &bignumeric); err != nil {
+		t.Fatal(err)
+	}
+	if numeric != "123.4500" || bignumeric != "12345678901234567890.123456789012345678" {
+		t.Fatalf("loaded decimals = %q, %q", numeric, bignumeric)
+	}
+}
+
+func TestParquetLoadRejectsUnsupportedSchemaBeforeReadingObjects(t *testing.T) {
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	precision := int64(39)
+	for _, field := range []loadDomain.Field{
+		{Name: "amount", Type: "BIGNUMERIC", Precision: &precision},
+		{Name: "location", Type: "GEOGRAPHY"},
+	} {
+		_, err := warehouse.Load(context.Background(), loadports.LoadRequest{
+			Destination: loadDomain.Table{Reference: loadDomain.TableReference{ProjectID: "p", DatasetID: "d", TableID: "t"}},
+			Schema:      []loadDomain.Field{field}, Objects: []loadports.LocalObject{{Path: "/path/that/must/not/be-read.parquet"}},
+			SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+		})
+		if !errors.Is(err, loadDomain.ErrUnsupported) {
+			t.Fatalf("field %s error = %v, want ErrUnsupported before object read", field.Type, err)
+		}
+	}
+}
+
 func assertNoLoadStagingTables(t *testing.T, warehouse *Warehouse) {
 	t.Helper()
 	var count int64

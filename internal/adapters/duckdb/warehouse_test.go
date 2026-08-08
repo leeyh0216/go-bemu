@@ -14,9 +14,11 @@ func TestWarehouseMapsNestedAndRepeatedTypes(t *testing.T) {
 		want  string
 	}{
 		{domain.Field{Name: "n", Type: "NUMERIC"}, "DECIMAL(38,9)"},
-		{domain.Field{Name: "b", Type: "BIGNUMERIC"}, "VARCHAR"},
+		{domain.Field{Name: "b", Type: "BIGNUMERIC"}, "DECIMAL(38,18)"},
+		{domain.Field{Name: "bp", Type: "BIGNUMERIC", Precision: int64Pointer(38), Scale: int64Pointer(38)}, "DECIMAL(38,38)"},
 		{domain.Field{Name: "tags", Type: "STRING", Mode: "REPEATED"}, "VARCHAR[]"},
 		{domain.Field{Name: "r", Type: "RECORD", Fields: []domain.Field{{Name: "id", Type: "INT64"}}}, `STRUCT("id" BIGINT)`},
+		{domain.Field{Name: "rs", Type: "STRUCT", Mode: "REPEATED", Fields: []domain.Field{{Name: "amount", Type: "NUMERIC", Precision: int64Pointer(10), Scale: int64Pointer(2)}}}, `STRUCT("amount" DECIMAL(10,2))[]`},
 	}
 	for _, test := range tests {
 		got, err := duckDBType(test.field)
@@ -26,6 +28,20 @@ func TestWarehouseMapsNestedAndRepeatedTypes(t *testing.T) {
 		if got != test.want {
 			t.Errorf("%s: got %q, want %q", test.field.Name, got, test.want)
 		}
+	}
+}
+
+func int64Pointer(value int64) *int64 { return &value }
+
+func TestWarehousePublishesPortableSchemaCapabilities(t *testing.T) {
+	warehouse := &Warehouse{}
+	capabilities := warehouse.EngineCapabilities()
+	if capabilities.MaxDecimalPrecision != 38 || capabilities.MaxDecimalScale != 38 ||
+		!capabilities.SupportsStruct || !capabilities.SupportsRepeated {
+		t.Fatalf("unexpected capabilities: %#v", capabilities)
+	}
+	if err := warehouse.ValidateSchema([]domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: int64Pointer(39)}}); err == nil {
+		t.Fatal("schema planner accepted precision above the Spark DecimalType maximum")
 	}
 }
 

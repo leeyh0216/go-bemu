@@ -78,3 +78,11 @@ func TestTableValidationRejectsDuplicateNestedFields(t *testing.T) {
 		t.Fatalf("expected nested duplicate error, got %v", err)
 	}
 }
+
+func TestValidateSchemaEvolutionRejectsDecimalParameterChanges(t *testing.T) {
+	current := []Field{{Name: "amount", Type: "BIGNUMERIC", Precision: decimalPointer(38), Scale: decimalPointer(18)}}
+	proposed := []Field{{Name: "amount", Type: "BIGNUMERIC", Precision: decimalPointer(38), Scale: decimalPointer(9)}}
+	if _, err := ValidateSchemaEvolution(current, proposed); err == nil || !strings.Contains(err.Error(), "precision or scale change") {
+		t.Fatalf("expected decimal parameter change to be rejected, got %v", err)
+	}
+}

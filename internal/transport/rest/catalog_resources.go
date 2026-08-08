@@ -71,6 +71,8 @@ type tableFieldSchema struct {
 	Type        string             `json:"type"`
 	Mode        string             `json:"mode,omitempty"`
 	Description string             `json:"description,omitempty"`
+	Precision   *int64             `json:"precision,omitempty,string"`
+	Scale       *int64             `json:"scale,omitempty,string"`
 	Fields      []tableFieldSchema `json:"fields,omitempty"`
 }
 
@@ -205,7 +207,8 @@ func fieldsFromDomain(fields []domain.Field) []tableFieldSchema {
 	for i, field := range fields {
 		out[i] = tableFieldSchema{
 			Name: field.Name, Type: field.Type, Mode: field.Mode,
-			Description: field.Description, Fields: fieldsFromDomain(field.Fields),
+			Description: field.Description, Precision: field.Precision, Scale: field.Scale,
+			Fields: fieldsFromDomain(field.Fields),
 		}
 		if out[i].Mode == "" {
 			out[i].Mode = "NULLABLE"
@@ -219,7 +222,8 @@ func fieldsToDomain(fields []tableFieldSchema) []domain.Field {
 	for i, field := range fields {
 		out[i] = domain.Field{
 			Name: field.Name, Type: field.Type, Mode: field.Mode,
-			Description: field.Description, Fields: fieldsToDomain(field.Fields),
+			Description: field.Description, Precision: field.Precision, Scale: field.Scale,
+			Fields: fieldsToDomain(field.Fields),
 		}
 	}
 	return out

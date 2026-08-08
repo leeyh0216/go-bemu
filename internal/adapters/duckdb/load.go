@@ -8,12 +8,15 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	loadDomain "github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/observability"
@@ -38,6 +41,9 @@ func (w *Warehouse) Load(ctx context.Context, request loadports.LoadRequest) (re
 	}
 	if len(request.Schema) == 0 {
 		return result, fmt.Errorf("%w: destination schema is required", loadDomain.ErrInvalid)
+	}
+	if err := loadDomain.ValidateSchema(request.Schema); err != nil {
+		return result, err
 	}
 	table := request.Destination.Reference
 	started := observability.LogSideEffectStart(ctx, "duckdb", "load_parquet",
@@ -221,15 +227,24 @@ func validatedTargetType(field loadDomain.Field, sourceType string) (string, err
 		if isInteger || source == "FLOAT" || source == "DOUBLE" || decimalPattern.MatchString(source) {
 			return "DOUBLE", nil
 		}
-	case "NUMERIC":
+	case "NUMERIC", "BIGNUMERIC":
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			classification := loadDomain.ErrInvalid
+			if errors.Is(err, catalogdomain.ErrUnsupported) {
+				classification = loadDomain.ErrUnsupported
+			}
+			return "", fmt.Errorf("%w: decimal target %q: %v", classification, field.Name, err)
+		}
+		targetType := fmt.Sprintf("DECIMAL(%d,%d)", parameters.Precision, parameters.Scale)
 		if isInteger {
-			return "DECIMAL(38,9)", nil
+			return targetType, nil
 		}
 		if match := decimalPattern.FindStringSubmatch(source); match != nil {
 			precision, _ := strconv.Atoi(match[1])
 			scale, _ := strconv.Atoi(match[2])
-			if precision <= 38 && scale <= 9 {
-				return "DECIMAL(38,9)", nil
+			if scale <= int(parameters.Scale) && precision-scale <= int(parameters.Precision-parameters.Scale) {
+				return targetType, nil
 			}
 		}
 	case "STRING":
@@ -256,7 +271,7 @@ func validatedTargetType(field loadDomain.Field, sourceType string) (string, err
 		if strings.HasPrefix(source, "TIMESTAMP") {
 			return "TIMESTAMPTZ", nil
 		}
-	case "BIGNUMERIC", "GEOGRAPHY", "JSON", "RECORD", "STRUCT":
+	case "GEOGRAPHY", "JSON", "RECORD", "STRUCT":
 		return "", fmt.Errorf("%w: BigQuery type %s in Parquet loads", loadDomain.ErrUnsupported, target)
 	default:
 		return "", fmt.Errorf("%w: BigQuery type %s", loadDomain.ErrInvalid, target)
@@ -287,11 +302,8 @@ func databaseString(value any) (string, bool) {
 }
 
 func loadSchemaDigest(schema []loadDomain.Field) string {
-	parts := make([]string, 0, len(schema))
-	for _, field := range schema {
-		parts = append(parts, field.Name+":"+strings.ToUpper(field.Type)+":"+normalizeMode(field.Mode))
-	}
-	return observability.Digest([]byte(strings.Join(parts, "\x00")))
+	encoded, _ := json.Marshal(schema)
+	return observability.Digest(encoded)
 }
 
 var _ loadports.Loader = (*Warehouse)(nil)

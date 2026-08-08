@@ -123,6 +123,58 @@ func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
 	}`, latestETag, http.StatusBadRequest)
 }
 
+func TestCatalogRESTPreservesDecimalParametersAndRejectsUnsupportedTypesBeforeStorage(t *testing.T) {
+	warehouse := &catalogTestWarehouse{}
+	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, catalogTestClock{now: time.Now()})
+	server := httptest.NewServer(NewCatalogServer(catalog, warehouse, "").Handler())
+	t.Cleanup(server.Close)
+	request := catalogRequestHelper(t, server.URL)
+
+	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"test-project"}`, http.StatusOK)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets", `{"datasetReference":{"datasetId":"analytics"}}`, http.StatusOK)
+	table := request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"decimals"},
+		"schema":{"fields":[
+			{"name":"numeric_default","type":"NUMERIC"},
+			{"name":"big_explicit","type":"BIGNUMERIC","precision":"38","scale":"18"},
+			{"name":"items","type":"STRUCT","mode":"REPEATED","fields":[
+				{"name":"amount","type":"NUMERIC","precision":"20","scale":"2"}
+			]}
+		]}
+	}`, http.StatusOK)
+
+	fields := table["schema"].(map[string]any)["fields"].([]any)
+	defaultDecimal := fields[0].(map[string]any)
+	if _, present := defaultDecimal["precision"]; present {
+		t.Fatalf("omitted precision was synthesized in REST metadata: %#v", defaultDecimal)
+	}
+	explicitDecimal := fields[1].(map[string]any)
+	if explicitDecimal["precision"] != "38" || explicitDecimal["scale"] != "18" {
+		t.Fatalf("explicit decimal parameters were not preserved: %#v", explicitDecimal)
+	}
+	nested := fields[2].(map[string]any)
+	if nested["mode"] != "REPEATED" || nested["type"] != "STRUCT" {
+		t.Fatalf("nested repeated identity was not preserved: %#v", nested)
+	}
+
+	createdBefore := len(warehouse.tables)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"too_wide"},
+		"schema":{"fields":[{"name":"amount","type":"BIGNUMERIC","precision":"39","scale":"1"}]}
+	}`, http.StatusNotImplemented)
+	if len(warehouse.tables) != createdBefore {
+		t.Fatal("unsupported decimal schema reached the physical warehouse")
+	}
+
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"places"},
+		"schema":{"fields":[{"name":"location","type":"GEOGRAPHY"}]}
+	}`, http.StatusNotImplemented)
+	if len(warehouse.tables) != createdBefore {
+		t.Fatal("unsupported GEOGRAPHY schema reached the physical warehouse")
+	}
+}
+
 func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	contracttest.Operation(t, "bqemu.discovery.get")
 	contracttest.Operation(t, "bqemu.discovery.googleapis.get")

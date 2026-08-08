@@ -31,6 +31,25 @@ type HealthChecker interface {
 	Ping(context.Context) error
 }
 
+// EngineCapabilities describes portable logical-schema bounds. Engine SQL and
+// physical type names must not cross this boundary.
+type EngineCapabilities struct {
+	MaxDecimalPrecision int64
+	MaxDecimalScale     int64
+	SupportsStruct      bool
+	SupportsRepeated    bool
+}
+
+type EngineCapabilityProvider interface {
+	EngineCapabilities() EngineCapabilities
+}
+
+// SchemaPlanner verifies representability without performing a physical side
+// effect. Detailed DDL planning remains a separate engine-SPI concern.
+type SchemaPlanner interface {
+	ValidateSchema([]domain.Field) error
+}
+
 // WarehouseAdmin owns physical dataset/table lifecycle behind the application
 // boundary. Domain and application packages never import DuckDB concepts.
 type WarehouseAdmin interface {

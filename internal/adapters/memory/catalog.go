@@ -257,12 +257,7 @@ func cloneInt64Pointer(value *int64) *int64 {
 }
 
 func cloneFields(fields []domain.Field) []domain.Field {
-	clone := make([]domain.Field, len(fields))
-	for index, field := range fields {
-		clone[index] = field
-		clone[index].Fields = cloneFields(field.Fields)
-	}
-	return clone
+	return domain.CloneFields(fields)
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

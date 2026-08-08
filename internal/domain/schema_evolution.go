@@ -41,6 +41,9 @@ func validateSchemaLevel(current, proposed []Field, parent []string) ([]SchemaAd
 		if canonicalFieldType(candidate.Type) != canonicalFieldType(existing.Type) {
 			return nil, schemaEvolutionError(path, fmt.Sprintf("type change %s -> %s is not supported", existing.Type, candidate.Type))
 		}
+		if !sameOptionalInt64(candidate.Precision, existing.Precision) || !sameOptionalInt64(candidate.Scale, existing.Scale) {
+			return nil, schemaEvolutionError(path, "decimal precision or scale change is not supported")
+		}
 		if canonicalFieldMode(candidate.Mode) != canonicalFieldMode(existing.Mode) {
 			return nil, schemaEvolutionError(path, fmt.Sprintf("mode change %s -> %s is not supported", canonicalFieldMode(existing.Mode), canonicalFieldMode(candidate.Mode)))
 		}
@@ -61,6 +64,13 @@ func validateSchemaLevel(current, proposed []Field, parent []string) ([]SchemaAd
 		additions = append(additions, SchemaAddition{Path: appendPath(parent, added.Name), Field: added})
 	}
 	return additions, nil
+}
+
+func sameOptionalInt64(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func validateAddedField(field Field, path []string) error {

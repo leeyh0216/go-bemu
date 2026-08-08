@@ -70,7 +70,11 @@ type Field struct {
 	Type        string
 	Mode        string
 	Description string
-	Fields      []Field
+	// Precision and Scale retain parameter presence from the BigQuery schema.
+	// Storage adapters resolve omitted parameters without mutating this model.
+	Precision *int64
+	Scale     *int64
+	Fields    []Field
 }
 
 func (f Field) Validate() error {
@@ -79,9 +83,18 @@ func (f Field) Validate() error {
 	}
 	t := strings.ToUpper(f.Type)
 	switch t {
-	case "BOOL", "BOOLEAN", "INT64", "INTEGER", "FLOAT64", "FLOAT", "NUMERIC", "BIGNUMERIC", "STRING", "BYTES", "DATE", "DATETIME", "TIME", "TIMESTAMP", "GEOGRAPHY", "JSON", "RECORD", "STRUCT":
+	case "GEOGRAPHY":
+		return fmt.Errorf("%w: capability=%s type GEOGRAPHY has no local semantic implementation", ErrUnsupported, GapGeographyUnsupportedV1)
+	case "BOOL", "BOOLEAN", "INT64", "INTEGER", "FLOAT64", "FLOAT", "NUMERIC", "BIGNUMERIC", "STRING", "BYTES", "DATE", "DATETIME", "TIME", "TIMESTAMP", "JSON", "RECORD", "STRUCT":
 	default:
 		return fmt.Errorf("%w: unsupported field type %q", ErrInvalid, f.Type)
+	}
+	if t == "NUMERIC" || t == "BIGNUMERIC" {
+		if _, err := f.EffectiveDecimalParameters(); err != nil {
+			return err
+		}
+	} else if f.Precision != nil || f.Scale != nil {
+		return fmt.Errorf("%w: precision and scale are valid only for NUMERIC or BIGNUMERIC field %q", ErrInvalid, f.Name)
 	}
 	mode := strings.ToUpper(f.Mode)
 	if mode != "" && mode != "NULLABLE" && mode != "REQUIRED" && mode != "REPEATED" {

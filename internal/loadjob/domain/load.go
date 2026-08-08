@@ -8,9 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 )
 
 type JobState string
@@ -58,12 +61,7 @@ type TableReference struct {
 	TableID   string
 }
 
-type Field struct {
-	Name   string
-	Type   string
-	Mode   string
-	Fields []Field
-}
+type Field = catalogdomain.Field
 
 type Table struct {
 	Reference TableReference
@@ -192,21 +190,19 @@ func ValidateConfiguration(configuration LoadConfiguration) error {
 func ValidateSchema(fields []Field) error {
 	seen := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
-		if strings.TrimSpace(field.Name) == "" || strings.TrimSpace(field.Type) == "" {
-			return fmt.Errorf("%w: schema field name and type are required", ErrInvalid)
+		if err := field.Validate(); err != nil {
+			switch {
+			case errors.Is(err, catalogdomain.ErrUnsupported):
+				return fmt.Errorf("%w: %v", ErrUnsupported, err)
+			default:
+				return fmt.Errorf("%w: %v", ErrInvalid, err)
+			}
 		}
 		key := strings.ToLower(field.Name)
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("%w: duplicate schema field %q", ErrInvalid, field.Name)
 		}
 		seen[key] = struct{}{}
-		mode := strings.ToUpper(field.Mode)
-		if mode != "" && mode != "NULLABLE" && mode != "REQUIRED" && mode != "REPEATED" {
-			return fmt.Errorf("%w: invalid mode %q for field %q", ErrInvalid, field.Mode, field.Name)
-		}
-		if err := ValidateSchema(field.Fields); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -277,12 +273,7 @@ func (j *Job) Clone() *Job {
 }
 
 func cloneFields(fields []Field) []Field {
-	result := make([]Field, len(fields))
-	for index, field := range fields {
-		result[index] = field
-		result[index].Fields = cloneFields(field.Fields)
-	}
-	return result
+	return catalogdomain.CloneFields(fields)
 }
 
 func validateReference(reference JobReference) error {

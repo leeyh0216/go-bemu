@@ -26,9 +26,29 @@ type Warehouse struct {
 }
 
 var (
-	_ ports.HealthChecker  = (*Warehouse)(nil)
-	_ ports.WarehouseAdmin = (*Warehouse)(nil)
+	_ ports.HealthChecker            = (*Warehouse)(nil)
+	_ ports.WarehouseAdmin           = (*Warehouse)(nil)
+	_ ports.EngineCapabilityProvider = (*Warehouse)(nil)
+	_ ports.SchemaPlanner            = (*Warehouse)(nil)
 )
+
+func (*Warehouse) EngineCapabilities() ports.EngineCapabilities {
+	return ports.EngineCapabilities{
+		MaxDecimalPrecision: domain.SparkDecimalMaxPrecision,
+		MaxDecimalScale:     domain.SparkDecimalMaxScale,
+		SupportsStruct:      true,
+		SupportsRepeated:    true,
+	}
+}
+
+func (*Warehouse) ValidateSchema(schema []domain.Field) error {
+	for _, field := range schema {
+		if _, err := duckDBType(field); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func New(dsn string) (*Warehouse, error) {
 	db, err := sql.Open("duckdb", dsn)
@@ -88,6 +108,9 @@ func (w *Warehouse) DropDataset(ctx context.Context, projectID, datasetID string
 }
 
 func (w *Warehouse) CreateTable(ctx context.Context, table domain.Table) error {
+	if err := w.ValidateSchema(table.Schema); err != nil {
+		return err
+	}
 	schemaSummary := fmt.Sprintf("%v", table.Schema)
 	started := observability.LogSideEffectStart(ctx, "duckdb", "create_table",
 		"project_id", table.ProjectID, "dataset_id", table.DatasetID, "table_id", table.ID,
@@ -245,6 +268,9 @@ func repeatedAncestorRoot(schema []domain.Field, path []string) (domain.Field, b
 }
 
 func duckDBType(field domain.Field) (string, error) {
+	if err := field.Validate(); err != nil {
+		return "", err
+	}
 	var result string
 	switch strings.ToUpper(field.Type) {
 	case "BOOL", "BOOLEAN":
@@ -253,12 +279,13 @@ func duckDBType(field domain.Field) (string, error) {
 		result = "BIGINT"
 	case "FLOAT64", "FLOAT":
 		result = "DOUBLE"
-	case "NUMERIC":
-		result = "DECIMAL(38,9)"
-	case "BIGNUMERIC":
-		// DuckDB DECIMAL is limited to width 38; VARCHAR preserves all digits.
-		result = "VARCHAR"
-	case "STRING", "GEOGRAPHY":
+	case "NUMERIC", "BIGNUMERIC":
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return "", err
+		}
+		result = fmt.Sprintf("DECIMAL(%d,%d)", parameters.Precision, parameters.Scale)
+	case "STRING":
 		result = "VARCHAR"
 	case "BYTES":
 		result = "BLOB"

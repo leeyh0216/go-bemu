@@ -142,7 +142,11 @@ func loadJobFromDomain(job *loadDomain.Job) loadJobResource {
 func loadFieldsToWire(fields []loadDomain.Field) []tableFieldSchema {
 	result := make([]tableFieldSchema, len(fields))
 	for index, field := range fields {
-		result[index] = tableFieldSchema{Name: field.Name, Type: field.Type, Mode: field.Mode, Fields: loadFieldsToWire(field.Fields)}
+		result[index] = tableFieldSchema{
+			Name: field.Name, Type: field.Type, Mode: field.Mode,
+			Description: field.Description, Precision: field.Precision, Scale: field.Scale,
+			Fields: loadFieldsToWire(field.Fields),
+		}
 	}
 	return result
 }
@@ -150,7 +154,11 @@ func loadFieldsToWire(fields []loadDomain.Field) []tableFieldSchema {
 func loadFieldsFromWire(fields []tableFieldSchema) []loadDomain.Field {
 	result := make([]loadDomain.Field, len(fields))
 	for index, field := range fields {
-		result[index] = loadDomain.Field{Name: field.Name, Type: field.Type, Mode: field.Mode, Fields: loadFieldsFromWire(field.Fields)}
+		result[index] = loadDomain.Field{
+			Name: field.Name, Type: field.Type, Mode: field.Mode,
+			Description: field.Description, Precision: field.Precision, Scale: field.Scale,
+			Fields: loadFieldsFromWire(field.Fields),
+		}
 	}
 	return result
 }

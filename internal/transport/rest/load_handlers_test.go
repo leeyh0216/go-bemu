@@ -172,6 +172,14 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 
 	both := `{"configuration":{"query":{"query":"SELECT 1"},"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", both, http.StatusBadRequest)
+
+	for _, schema := range []string{
+		`{"fields":[{"name":"location","type":"GEOGRAPHY"}]}`,
+		`{"fields":[{"name":"amount","type":"BIGNUMERIC","precision":"39","scale":"1"}]}`,
+	} {
+		unsupportedSchema := `{"jobReference":{"jobId":"unsupported-schema","location":"US"},"configuration":{"load":{"sourceUris":["file:///must-not-be-read.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","schema":` + schema + `}}}`
+		restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", unsupportedSchema, http.StatusNotImplemented)
+	}
 }
 
 func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
