@@ -119,7 +119,7 @@ statement를 반환합니다. 엔진 어댑터는 이 statement를 방문해 비
 | --- | --- | --- |
 | `SELECT` | 기준 relation/type binding을 사용하는 relational visitor | 알 수 없는 relation, operator, function, expression, type은 실행 전에 안전하게 거부 |
 | `INSERT`, `UPDATE`, `DELETE` | 타입 있는 DML statement 하나와 bind argument | 지원하지 않는 source/action 구조는 실행 전에 거부 |
-| `MERGE` | 하나의 transaction 안에서 순서가 있는 matched/not-matched clause | 지원하지 않는 action, expression, cardinality 규칙은 실행 전에 안전하게 거부 |
+| `MERGE` | 하나의 transaction 안에서 순서가 있는 matched/not-matched clause, 첫 번째 조건 action, 원본 행 대응 개수 사전조건 | 지원하지 않는 action과 expression은 실행 전에 안전하게 거부 |
 | script | `DECLARE`, `SET`, 지원하는 query/DML child를 한 transaction에서 순서대로 실행 | control flow, dynamic SQL, temporary routine, exception block은 미지원 |
 | catalog DDL | application이 소유하는 타입 있는 mutation plan | 문서에 적은 create/drop/truncate와 column mutation만 허용 |
 

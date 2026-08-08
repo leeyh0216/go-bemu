@@ -137,10 +137,12 @@ every query, binds source and destination relations to canonical metadata, and
 passes only the immutable semantic AST to the engine adapter. The DuckDB visitor
 renders one atomic [DuckDB `MERGE
 INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) with bound
-literal values. Constant-false replacement and the supported ordered actions
-use this path. Unsupported expressions, actions, script control flow, and
-partition/cardinality semantics fail before execution; their remaining parity
-is tracked in #8.
+literal values. Constant-false replacement, ordered actions, and dynamic
+DATE/TIMESTAMP/DATETIME or integer-range partition replacement use this path.
+The first qualified `WHEN` clause wins. A correlated precondition in the same
+transaction rejects multiple source rows for one target row before an UPDATE or
+DELETE can run. Unsupported expressions, actions, and script control flow fail
+before execution; their remaining parity is tracked in #8.
 
 <!-- section: indirect-write -->
 ## Indirect Write and Load Jobs
@@ -233,7 +235,7 @@ policy, token introspection, or production authorization.
 | CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical streams, stable offsets; Split/compression/historical snapshot/nested projection gaps |
 | AppendRows/finalize/commit | durable per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit, startup reconciliation; advanced stream kinds and independent-restore proof gaps |
 | indirect load | object store, staging, load dispositions | public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
-| overwrite `MERGE` | official analyzer, immutable semantic AST, engine visitor | constant-false replacement verified; dynamic partition and general parity remain #8 |
+| overwrite `MERGE` | official analyzer, immutable semantic AST, engine visitor | constant-false, dynamic time/range partition, ordered `WHEN`, and source-cardinality behavior verified; additional AST nodes remain #8 |
 | BigQuery-compatible request authentication | REST/gRPC transport behavior | intentionally absent; credential values are ignored |
 | ADC/WIF acquisition | client credential library | external to the public BQEMU runtime |
 

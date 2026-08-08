@@ -159,10 +159,10 @@ default remains the fallback.
 | --- | --- | --- |
 | canonical table references | Verified | official analyzer binding; no engine-side path inference |
 | `SELECT`/`INSERT`/`UPDATE`/`DELETE` | Partial | supported AST nodes, operators, functions, and types only |
-| `MERGE` | Partial | ordered matched/not-matched actions and constant-false replacement; unsupported nodes fail closed |
+| `MERGE` | Partial | ordered matched/not-matched actions, first-qualified-`WHEN`, source-cardinality errors, and constant-false replacement; unsupported nodes fail closed |
 | multi-statement scripts | Partial | transactional `DECLARE`, `SET`, and supported query/DML children; no control flow or temporary routines |
 | catalog DDL | Partial | create/drop/truncate and the documented column mutations |
-| dynamic partition overwrite | Partial | typed arrays and script-to-`MERGE` execution exist; full partition and cardinality parity remains #8 |
+| dynamic partition overwrite | Partial | transactional typed-array scripts support DATE/TIMESTAMP/DATETIME and integer-range partition replacement; additional expressions remain #8 |
 | parameters/views/UDFs/procedures | Unsupported | tracked separately; no raw SQL fallback |
 
 The [GoogleSQL lexical
@@ -173,9 +173,10 @@ an immutable semantic statement. The DuckDB visitor then renders adapter-private
 SQL and bind arguments; it never tokenizes or retries the original input.
 General `MERGE` follows the [official DML
 rules](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement).
-The implemented subset preserves clause order and one transaction, while
-unsupported expressions, actions, or cardinality semantics fail before an
-engine side effect.
+The implemented subset preserves clause order and one transaction. It rejects
+multiple source matches before a target UPDATE or DELETE and supports the typed
+array/function shapes used by dynamic time and integer-range replacement.
+Unsupported expressions or actions fail before an engine side effect.
 
 <!-- section: types -->
 ## Types

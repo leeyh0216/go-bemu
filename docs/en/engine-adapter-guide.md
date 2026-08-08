@@ -127,7 +127,7 @@ The shared AST boundary currently exposes these execution roots:
 | --- | --- | --- |
 | `SELECT` | relational visitor with canonical relation/type bindings | unknown relation, operator, function, expression, or type fails closed |
 | `INSERT`, `UPDATE`, `DELETE` | one typed DML statement and bind arguments | unsupported source/action shape fails before execution |
-| `MERGE` | ordered matched/not-matched clauses in one transaction | unsupported action, expression, or cardinality rule fails closed |
+| `MERGE` | ordered matched/not-matched clauses, first-qualified action, and source-cardinality precondition in one transaction | unsupported action or expression fails closed |
 | script | ordered `DECLARE`, `SET`, and supported query/DML children in one transaction | control flow, dynamic SQL, temporary routines, and exception blocks are unsupported |
 | catalog DDL | application-owned typed mutation plan | only the documented create/drop/truncate and column mutations are accepted |
 

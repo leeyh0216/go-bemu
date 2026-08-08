@@ -139,9 +139,11 @@ BQEMU는 모든 query와 동일한 공식 GoogleSQL gateway에서 statement를 p
 원본과 대상 relation을 기준 metadata에 binding한 뒤 불변 semantic AST만 엔진
 어댑터에 전달합니다. DuckDB visitor는 bind literal과 함께 원자적인 [DuckDB `MERGE
 INTO`](https://duckdb.org/docs/current/sql/statements/merge_into)를 생성합니다. 항상
-거짓인 교체와 지원하는 순서형 action은 이 경로를 사용합니다. 지원하지 않는
-expression, action, script control flow, partition/cardinality 의미는 실행 전에
-거부하며 남은 동작 일치는 #8에서 추적합니다.
+거짓인 교체, 순서형 action, DATE/TIMESTAMP/DATETIME 또는 정수 범위 동적 파티션
+교체는 이 경로를 사용합니다. 가장 먼저 조건을 만족한 `WHEN` 절만 실행합니다. 같은
+대상 행에 여러 원본 행이 대응하면서 UPDATE 또는 DELETE를 시도하면 같은 트랜잭션의
+상관 사전조건이 본문 실행 전에 거부합니다. 지원하지 않는 expression, action,
+script control flow의 남은 동작 일치는 #8에서 추적합니다.
 
 <!-- section: indirect-write -->
 ## 간접 쓰기와 적재 작업
@@ -240,7 +242,7 @@ gRPC는 인증 정보가 없는 요청을 허용하며 `Authorization` 값이 �
 | `CreateReadSession`/`ReadRows` | 스냅샷·세션 원장과 Arrow/Avro 인코더 | 공개 API 부분 지원: 크기 제한이 있는 DuckDB 스냅샷, 논리 스트림, 안정된 오프셋 지원. 분할, 압축, 과거 스냅샷, 중첩 필드 선택은 미지원 |
 | `AppendRows`/확정/커밋 | 영속 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋, 시작 시 상태 조정 지원. 고급 스트림 유형과 한쪽 저장소 복원 증명은 미지원 |
 | 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 대상 Parquet 지원. 다른 형식, 생성, 스키마 변경, 다운로드 방식은 미지원 |
-| 덮어쓰기 `MERGE` | 공식 analyzer, 불변 semantic AST, 엔진 visitor | 항상 거짓인 교체 검증 완료. 동적 파티션과 일반 동작 일치는 #8에 남아 있음 |
+| 덮어쓰기 `MERGE` | 공식 analyzer, 불변 semantic AST, 엔진 visitor | 항상 거짓, 동적 시간·범위 파티션, 순서형 `WHEN`, 원본 행 대응 개수 동작 검증 완료. 추가 AST node는 #8에 남아 있음 |
 | BigQuery 호환 요청 인증 | REST/gRPC 전송 동작 | 의도적으로 제공하지 않으며 인증 정보 값을 무시함 |
 | ADC/WIF 획득 | 클라이언트 인증 정보 라이브러리 | 공개 BQEMU 실행 환경의 범위 밖 |
 

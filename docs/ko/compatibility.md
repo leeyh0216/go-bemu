@@ -184,10 +184,10 @@ relation이 없을 때만 설정한 기본 위치를 사용합니다.
 | --- | --- | --- |
 | 기준 테이블 참조 | 검증 완료 | 공식 analyzer가 binding하며 엔진이 경로를 다시 추론하지 않습니다. |
 | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | 부분 지원 | 지원하는 AST node, operator, function, type만 실행합니다. |
-| `MERGE` | 부분 지원 | 순서가 있는 matched/not-matched action과 항상 거짓인 교체를 지원하며 나머지는 실행 전에 안전하게 거부합니다. |
+| `MERGE` | 부분 지원 | 순서가 있는 matched/not-matched action, 첫 번째로 만족한 `WHEN`, 원본 행 대응 개수 오류, 항상 거짓인 교체를 지원하며 나머지는 실행 전에 안전하게 거부합니다. |
 | 여러 명령문 script | 부분 지원 | `DECLARE`, `SET`, 지원하는 query/DML child를 한 트랜잭션에서 실행하며 제어 흐름과 임시 routine은 미지원입니다. |
 | catalog DDL | 부분 지원 | create/drop/truncate와 문서에 적은 column mutation을 지원합니다. |
-| 동적 파티션 덮어쓰기 | 부분 지원 | typed array와 script-to-`MERGE` 실행은 있으며 전체 partition/cardinality 일치는 #8에 남아 있습니다. |
+| 동적 파티션 덮어쓰기 | 부분 지원 | typed array script를 한 트랜잭션에서 실행하며 DATE/TIMESTAMP/DATETIME과 정수 범위 파티션 교체를 지원합니다. 추가 expression은 #8에 남아 있습니다. |
 | parameter, view, UDF, procedure | 미지원 | 별도로 추적하며 raw SQL fallback은 없습니다. |
 
 [GoogleSQL lexical
@@ -199,8 +199,10 @@ parse/analyze gateway가 이 구조를 불변 semantic statement로 옮깁니다
 
 일반 `MERGE`는 [공식 DML
 규칙](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
-따릅니다. 구현한 부분집합은 clause 순서와 단일 transaction을 보존합니다. 지원하지
-않는 expression, action, cardinality 의미는 엔진 부작용 전에 거부합니다.
+따릅니다. 구현한 부분집합은 clause 순서와 단일 transaction을 보존합니다. 대상
+UPDATE 또는 DELETE 전에 여러 원본 행의 대응을 거부하고 동적 시간·정수 범위 교체에
+필요한 typed array와 function 구조를 지원합니다. 지원하지 않는 expression과 action은
+엔진 부작용 전에 거부합니다.
 
 <!-- section: types -->
 ## 자료형
