@@ -30,6 +30,7 @@ import (
 type CatalogService struct {
 	catalog                   ports.CatalogRepository
 	warehouse                 ports.CatalogStorage
+	ddlStorage                ports.DDLStorage
 	tableDataReader           ports.TableDataReader
 	clock                     ports.Clock
 	defaultLocation           string
@@ -82,6 +83,15 @@ func WithCatalogCompensationTimeout(timeout time.Duration) CatalogOption {
 func WithTableDataReader(reader ports.TableDataReader) CatalogOption {
 	return func(service *CatalogService) {
 		service.tableDataReader = reader
+	}
+}
+
+// WithDDLStorage enables planned physical table mutations for GoogleSQL DDL.
+// CatalogService remains the canonical metadata coordinator; the engine port
+// receives only typed plans and semantic mutations.
+func WithDDLStorage(storage ports.DDLStorage) CatalogOption {
+	return func(service *CatalogService) {
+		service.ddlStorage = storage
 	}
 }
 

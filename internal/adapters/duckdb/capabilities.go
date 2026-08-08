@@ -44,7 +44,9 @@ func newDuckDBCapabilities(db *sql.DB) (engine.Capabilities, error) {
 			engine.AtomicReplacementTable:     true,
 			engine.AtomicReplacementPartition: true,
 		},
-		Inspection: map[engine.InspectionScope]bool{},
+		Inspection: map[engine.InspectionScope]bool{
+			engine.InspectionTableShape: true,
+		},
 		DDL: map[engine.DDLOperation]engine.DDLCapability{
 			engine.DDLCreateTable: {
 				Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement,
@@ -54,6 +56,15 @@ func newDuckDBCapabilities(db *sql.DB) (engine.Capabilities, error) {
 			},
 			engine.DDLAddColumn: {
 				Guarantee: engine.DDLGuaranteeAtomicPhysicalTable, MaxFieldPathDepth: 15,
+			},
+			engine.DDLDropColumn: {
+				Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement, MaxFieldPathDepth: 1,
+			},
+			engine.DDLRenameColumn: {
+				Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement, MaxFieldPathDepth: 1,
+			},
+			engine.DDLChangeColumnType: {
+				Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement, MaxFieldPathDepth: 1,
 			},
 		},
 	})

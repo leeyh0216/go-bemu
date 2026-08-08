@@ -49,6 +49,8 @@ type QueryService struct {
 	operationAnalyzer   ports.QueryOperationAnalyzer
 	operationExecutor   ports.QueryOperationEngine
 	operationCatalog    ports.QueryOperationCatalog
+	ddlParser           ports.DDLParser
+	ddlExecutor         ports.DDLExecutor
 	materializer        ports.QueryMaterializer
 	destinations        ports.QueryDestinationCatalog
 	clock               ports.Clock
@@ -331,20 +333,16 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		destination.ProjectID = input.ProjectID
 		input.Destination = &destination
 	}
-	analysis := ports.QueryAnalysis{}
-	if s.analyzer != nil {
-		var err error
-		analysis, err = s.analyzer.AnalyzeQuery(ctx, ports.QueryRequest{
-			ProjectID: input.ProjectID, DefaultProjectID: input.DefaultProjectID,
-			DefaultDataset: input.DefaultDataset, SQL: input.SQL,
-		})
-		if err != nil {
-			return nil, false, err
-		}
+	request := ports.QueryRequest{
+		ProjectID: input.ProjectID, DefaultProjectID: input.DefaultProjectID,
+		DefaultDataset: input.DefaultDataset, SQL: input.SQL,
 	}
-	if analysis.RequiresCatalogMutation {
-		return nil, false, fmt.Errorf("%w: query DDL requires atomic physical and canonical catalog synchronization; capability=%s",
-			domain.ErrUnsupported, domain.GapQueryDDLCatalogSyncV1)
+	analysis, err := s.analyzeQueryAdmission(ctx, request)
+	if err != nil {
+		return nil, false, err
+	}
+	if analysis.RequiresCatalogMutation && input.Destination != nil {
+		return nil, false, fmt.Errorf("%w: destinationTable is not valid for catalog DDL", domain.ErrInvalid)
 	}
 	location, err := s.resolveQueryLocation(ctx, input, analysis)
 	if err != nil {
@@ -471,7 +469,7 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domai
 		DefaultDataset: configuration.DefaultDataset, SQL: configuration.SQL,
 	}
 	if configuration.Destination == nil {
-		return s.executeQueryWithoutDestination(ctx, request)
+		return s.executeQueryWithoutDestinationForJob(ctx, request, job.Reference.JobID)
 	}
 	if s.materializer == nil || s.destinations == nil {
 		return domain.QueryResult{}, fmt.Errorf("%w: query destination requires query materializer and destination catalog ports; fix_hint=compose WithQueryDestinationCatalog", domain.ErrPrecondition)

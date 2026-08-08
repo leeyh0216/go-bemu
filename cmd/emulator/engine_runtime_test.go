@@ -20,7 +20,7 @@ func TestComposeDuckDBEngineBuildsValidatedNarrowRuntime(t *testing.T) {
 		t.Fatalf("runtime capabilities = %#v", runtime.capabilities.Descriptor())
 	}
 	for name, dependency := range map[string]any{
-		"health": runtime.health, "catalog": runtime.catalog, "query": runtime.query,
+		"health": runtime.health, "catalog": runtime.catalog, "DDL": runtime.ddl, "query": runtime.query,
 		"query analyzer": runtime.queryAnalyzer, "query operations": runtime.queryOperations,
 		"query materializer": runtime.queryMaterializer, "table data": runtime.tableData,
 		"loader": runtime.loader, "read factory": runtime.readFactory, "write factory": runtime.writeFactory,
@@ -55,6 +55,7 @@ func TestEngineRuntimeRejectsZeroAndTypedNilDependencies(t *testing.T) {
 	for name, mutate := range map[string]func(*engineRuntimeDescriptor){
 		"health":             func(value *engineRuntimeDescriptor) { value.Health = typedNil },
 		"catalog":            func(value *engineRuntimeDescriptor) { value.Catalog = typedNil },
+		"DDL":                func(value *engineRuntimeDescriptor) { value.DDL = typedNil },
 		"query":              func(value *engineRuntimeDescriptor) { value.Query = typedNil },
 		"query analyzer":     func(value *engineRuntimeDescriptor) { value.QueryAnalyzer = typedNil },
 		"query operations":   func(value *engineRuntimeDescriptor) { value.QueryOperations = typedNil },
@@ -79,7 +80,7 @@ func TestEngineRuntimeRejectsZeroAndTypedNilDependencies(t *testing.T) {
 func descriptorFromRuntime(runtime *engineRuntime) engineRuntimeDescriptor {
 	return engineRuntimeDescriptor{
 		Capabilities: runtime.capabilities,
-		Health:       runtime.health, Catalog: runtime.catalog,
+		Health:       runtime.health, Catalog: runtime.catalog, DDL: runtime.ddl,
 		Query: runtime.query, QueryAnalyzer: runtime.queryAnalyzer,
 		QueryOperations: runtime.queryOperations, QueryMaterializer: runtime.queryMaterializer,
 		TableData: runtime.tableData, Loader: runtime.loader,

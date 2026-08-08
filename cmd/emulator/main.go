@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/admin"
@@ -99,6 +100,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	engineCapabilities := storageEngine.capabilities
 	health := storageEngine.health
 	catalogStorage := storageEngine.catalog
+	ddlStorage := storageEngine.ddl
 	queryEngine := storageEngine.query
 	queryFallbackAnalyzer := storageEngine.queryAnalyzer
 	queryOperationEngine := storageEngine.queryOperations
@@ -127,7 +129,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	catalogRepository := state.catalog
 	jobRepository := state.queryJobs
 	clock := system.Clock{}
-	catalogService := composeCatalogService(cfg, catalogRepository, catalogStorage, tableDataReader, clock)
+	catalogService := composeCatalogService(cfg, catalogRepository, catalogStorage, ddlStorage, tableDataReader, clock)
 	if err := ensureDefaultProject(ctx, catalogService, cfg.Defaults.ProjectID); err != nil {
 		return fmt.Errorf("initialize default project: %w", err)
 	}
@@ -135,10 +137,16 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure Spark BigQuery query profiles: %w", err)
 	}
+	ddlParser, err := googlesqladapter.NewParser()
+	if err != nil {
+		return fmt.Errorf("configure GoogleSQL DDL parser: %w", err)
+	}
 	queryService, err := application.NewQueryService(
 		jobRepository, queryEngine, queryAnalyzer, queryOperationEngine, catalogService, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
 		application.WithQueryAnalyzer(queryAnalyzer),
+		application.WithQueryDDLParser(ddlParser),
+		application.WithQueryDDLExecutor(catalogService),
 		application.WithQueryMaterializer(queryMaterializer),
 		application.WithQueryDestinationCatalog(catalogService),
 		application.WithQueryOperationTimeout(cfg.Query.OperationTimeout.Value()),
@@ -342,12 +350,14 @@ func composeCatalogService(
 	cfg config.Config,
 	repository ports.CatalogRepository,
 	storage ports.CatalogStorage,
+	ddlStorage ports.DDLStorage,
 	tableData ports.TableDataReader,
 	clock ports.Clock,
 ) *application.CatalogService {
 	return application.NewCatalogService(
 		repository, storage, clock, application.WithDefaultLocation(cfg.Defaults.Location),
 		application.WithCatalogCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
+		application.WithDDLStorage(ddlStorage),
 		application.WithTableDataReader(tableData),
 		application.WithTableDataOperationTimeout(cfg.TableData.OperationTimeout.Value()),
 		application.WithMaxTableDataPageRows(cfg.TableData.MaxPageRows),

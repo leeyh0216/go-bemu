@@ -164,7 +164,7 @@ tableData:
 		t.Fatal(err)
 	}
 	warehouse := &tableDataCompositionWarehouse{}
-	service := composeCatalogService(loaded.Config, memory.NewCatalogRepository(), warehouse, warehouse, shutdownClock{})
+	service := composeCatalogService(loaded.Config, memory.NewCatalogRepository(), warehouse, nil, warehouse, shutdownClock{})
 	ctx := t.Context()
 	if _, err := service.CreateProject(ctx, domain.Project{ID: "test-project"}); err != nil {
 		t.Fatal(err)

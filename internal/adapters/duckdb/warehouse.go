@@ -27,6 +27,7 @@ type Warehouse struct {
 	db            *sql.DB
 	capabilities  engine.Capabilities
 	schemaPlanner *engine.SchemaPlanner
+	ddlPlanner    *engine.Planner
 	loadPlanner   *loadports.Planner
 }
 
@@ -58,9 +59,13 @@ func New(dsn string) (*Warehouse, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("configure DuckDB load planner: %w", err)
 	}
-	warehouse := &Warehouse{
-		db: db, capabilities: capabilities, schemaPlanner: schemaPlanner, loadPlanner: loadPlanner,
+	warehouse := &Warehouse{db: db, capabilities: capabilities, schemaPlanner: schemaPlanner, loadPlanner: loadPlanner}
+	ddlPlanner, err := engine.NewPlanner(capabilities, duckDBDDLAdapterPlanner{warehouse: warehouse})
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure DuckDB DDL planner: %w", err)
 	}
+	warehouse.ddlPlanner = ddlPlanner
 	if err := warehouse.Ping(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err

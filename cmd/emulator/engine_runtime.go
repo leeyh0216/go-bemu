@@ -26,6 +26,7 @@ type engineRuntimeDescriptor struct {
 	Capabilities      enginecontract.Capabilities
 	Health            ports.HealthChecker
 	Catalog           ports.CatalogStorage
+	DDL               ports.DDLStorage
 	Query             ports.QueryEngine
 	QueryAnalyzer     ports.QueryAnalyzer
 	QueryOperations   ports.QueryOperationEngine
@@ -41,6 +42,7 @@ type engineRuntime struct {
 	capabilities      enginecontract.Capabilities
 	health            ports.HealthChecker
 	catalog           ports.CatalogStorage
+	ddl               ports.DDLStorage
 	query             ports.QueryEngine
 	queryAnalyzer     ports.QueryAnalyzer
 	queryOperations   ports.QueryOperationEngine
@@ -63,6 +65,7 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 	}{
 		{name: "health checker", value: descriptor.Health},
 		{name: "catalog storage", value: descriptor.Catalog},
+		{name: "DDL storage", value: descriptor.DDL},
 		{name: "query engine", value: descriptor.Query},
 		{name: "query analyzer", value: descriptor.QueryAnalyzer},
 		{name: "semantic query executor", value: descriptor.QueryOperations},
@@ -79,7 +82,7 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 	}
 	return &engineRuntime{
 		capabilities: capabilities,
-		health:       descriptor.Health, catalog: descriptor.Catalog,
+		health:       descriptor.Health, catalog: descriptor.Catalog, ddl: descriptor.DDL,
 		query: descriptor.Query, queryAnalyzer: descriptor.QueryAnalyzer,
 		queryOperations: descriptor.QueryOperations, queryMaterializer: descriptor.QueryMaterializer,
 		tableData: descriptor.TableData, loader: descriptor.Loader,
@@ -95,7 +98,7 @@ func composeDuckDBEngine(dsn string) (*engineRuntime, error) {
 	}
 	runtime, err := newEngineRuntime(engineRuntimeDescriptor{
 		Capabilities: warehouse.Capabilities(),
-		Health:       warehouse, Catalog: warehouse,
+		Health:       warehouse, Catalog: warehouse, DDL: warehouse,
 		Query: warehouse, QueryAnalyzer: warehouse, QueryOperations: warehouse, QueryMaterializer: warehouse,
 		TableData: warehouse, Loader: warehouse, ReadFactory: warehouse, WriteFactory: warehouse,
 		Lifecycle: warehouse,

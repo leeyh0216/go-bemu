@@ -890,7 +890,15 @@ func cloneFieldChanges(input []FieldChange) []FieldChange {
 	return result
 }
 
-func cloneField(input domain.Field) domain.Field { return domain.CloneFields([]domain.Field{input})[0] }
+func cloneField(input domain.Field) domain.Field {
+	// Preserve the zero value used to encode the absent side of ADD/DROP field
+	// changes. CloneFields intentionally materializes empty child slices, which
+	// would otherwise turn an absent field into a non-zero descriptor.
+	if isZeroField(input) {
+		return domain.Field{}
+	}
+	return domain.CloneFields([]domain.Field{input})[0]
+}
 
 func validateDesiredLogicalSchema(capabilities Capabilities, mutation TableMutation) error {
 	if mutation.kind == TableMutationDrop {

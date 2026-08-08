@@ -208,6 +208,9 @@ func statementType(sql string) string {
 	if fields[0] == "DROP" && len(fields) > 1 {
 		return "DROP_" + fields[1]
 	}
+	if fields[0] == "TRUNCATE" && len(fields) > 1 {
+		return "TRUNCATE_" + fields[1]
+	}
 	return fields[0]
 }
 

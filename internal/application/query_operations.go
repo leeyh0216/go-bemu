@@ -15,12 +15,20 @@ import (
 )
 
 func (s *QueryService) executeQueryWithoutDestination(ctx context.Context, request ports.QueryRequest) (domain.QueryResult, error) {
+	return s.executeQueryWithoutDestinationForJob(ctx, request, "query-operation")
+}
+
+func (s *QueryService) executeQueryWithoutDestinationForJob(
+	ctx context.Context,
+	request ports.QueryRequest,
+	correlationID string,
+) (domain.QueryResult, error) {
 	operation, matched, err := s.operationAnalyzer.AnalyzeQueryOperation(ctx, request)
 	if err != nil {
 		return domain.QueryResult{}, err
 	}
 	if !matched {
-		return s.warehouse.Query(ctx, request)
+		return s.executeDDLOrGenericQuery(ctx, request, correlationID)
 	}
 	if err := s.operationAnalyzer.VerifyQueryOperation(request, operation); err != nil {
 		return domain.QueryResult{}, err

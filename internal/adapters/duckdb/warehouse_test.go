@@ -79,11 +79,16 @@ func TestWarehousePublishesImmutableEngineCapabilities(t *testing.T) {
 		!capabilities.SupportsAtomicReplacement(engine.AtomicReplacementPartition) {
 		t.Fatal("DuckDB runtime omitted implemented transaction or replacement capabilities")
 	}
-	if capabilities.SupportsInspection(engine.InspectionTableShape) {
-		t.Fatal("DuckDB runtime advertised unimplemented engine-SPI inspection")
+	if !capabilities.SupportsInspection(engine.InspectionTableShape) {
+		t.Fatal("DuckDB runtime omitted implemented table-shape inspection")
 	}
-	if _, supported := capabilities.DDL(engine.DDLChangeColumnType); supported {
-		t.Fatal("DuckDB runtime advertised unimplemented type-change planning")
+	for _, operation := range []engine.DDLOperation{
+		engine.DDLCreateTable, engine.DDLDropTable, engine.DDLAddColumn,
+		engine.DDLDropColumn, engine.DDLRenameColumn, engine.DDLChangeColumnType,
+	} {
+		if _, supported := capabilities.DDL(operation); !supported {
+			t.Fatalf("DuckDB runtime omitted implemented DDL operation %q", operation)
+		}
 	}
 
 	descriptor := capabilities.Descriptor()
