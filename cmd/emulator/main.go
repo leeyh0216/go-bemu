@@ -27,6 +27,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
+	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/admin"
 	"github.com/leeyh0216/go-bemu/internal/application"
@@ -107,16 +108,23 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}); err != nil {
 		return fmt.Errorf("initialize default project: %w", err)
 	}
-	queryService := application.NewQueryService(
-		jobRepository, warehouse, clock, system.IDGenerator{},
+	queryAnalyzer, err := v0442.NewAnalyzer(warehouse)
+	if err != nil {
+		return fmt.Errorf("configure Spark BigQuery query profiles: %w", err)
+	}
+	queryService, err := application.NewQueryService(
+		jobRepository, warehouse, queryAnalyzer, warehouse, catalogService, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
-		application.WithQueryAnalyzer(warehouse),
+		application.WithQueryAnalyzer(queryAnalyzer),
 		application.WithQueryMaterializer(warehouse),
 		application.WithQueryDestinationCatalog(catalogService),
 		application.WithQueryOperationTimeout(cfg.Query.OperationTimeout.Value()),
 		application.WithQueryCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
 		application.WithAnonymousQueryTTL(cfg.Query.AnonymousResultTTL.Value()),
 	)
+	if err != nil {
+		return fmt.Errorf("configure query service: %w", err)
+	}
 	loadService, err := composeLoadJobs(cfg, catalogService, warehouse, clock, system.IDGenerator{})
 	if err != nil {
 		return err

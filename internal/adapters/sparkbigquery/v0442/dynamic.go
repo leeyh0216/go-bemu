@@ -1,4 +1,4 @@
-package duckdb
+package v0442
 
 // Spark connector dynamic time-partition overwrite parser.
 //
@@ -9,61 +9,24 @@ package duckdb
 //
 // Sources:
 //   - exact connector producer:
-//     https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryUtil.java#L796-L870
+//     https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryUtil.java#L796-L870
 //   - BigQuery multi-statement transactions and script semantics:
 //     https://cloud.google.com/bigquery/docs/multi-statement-queries
 //   - BigQuery MERGE semantics:
 //     https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
-	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 const (
-	sparkDynamicTimeOverwriteModel  = "spark-bigquery-connector-0.44.2/dynamic-time-partition-overwrite"
-	sparkDynamicRangeOverwriteModel = "spark-bigquery-connector-0.44.2/dynamic-range-partition-overwrite"
+	DynamicTimeOverwriteProfile  = "spark-bigquery-connector-0.44.2/dynamic-time-partition-overwrite"
+	DynamicRangeOverwriteProfile = "spark-bigquery-connector-0.44.2/dynamic-range-partition-overwrite"
 )
-
-var _ ports.QueryOperationAnalyzer = (*Warehouse)(nil)
-
-// AnalyzeQueryOperation returns matched=true for connector-profile candidates,
-// including drifted and range-partition variants. That distinction guarantees
-// they fail with a stable model/gap diagnostic instead of reaching generic SQL.
-func (w *Warehouse) AnalyzeQueryOperation(ctx context.Context, request ports.QueryRequest) (ports.QueryOperation, bool, error) {
-	operation, matched, err := parseSparkDynamicTimeOverwrite(request)
-	if matched && err != nil {
-		attrs := []any{
-			"event", "boundary.reject", "boundary", "duckdb.query_operation_analysis",
-			"operation", "connector-dynamic-partition-overwrite", "model_version", operation.ModelVersion,
-			"query_bytes", len(request.SQL), "query_digest", observability.Digest([]byte(request.SQL)),
-			"fix_hint", "compare BigQueryUtil.java 0.44.2 token shape before updating the versioned model",
-		}
-		var drift *dynamicOverwriteShapeError
-		if errors.As(err, &drift) {
-			attrs = append(attrs, "capability", domain.CapabilitySparkDynamicTimePartitionOverwriteV1,
-				"gap", domain.GapQueryScriptsUnsupportedV1, "token_index", drift.TokenIndex,
-				"expected_shape", drift.ExpectedShape)
-		} else if operation.ModelVersion == sparkDynamicRangeOverwriteModel {
-			attrs = append(attrs, "gap", domain.GapSparkDynamicRangePartitionOverwriteV1,
-				"token_index", -1, "expected_shape", "supported time-partition overwrite profile")
-		} else {
-			attrs = append(attrs, "capability", domain.CapabilitySparkDynamicTimePartitionOverwriteV1,
-				"gap", domain.GapQueryScriptsUnsupportedV1, "token_index", -1,
-				"expected_shape", "source-pinned connector script token profile")
-		}
-		attrs = append(attrs, observability.ErrorAttrs(err)...)
-		slog.WarnContext(ctx, "connector query operation rejected", attrs...)
-	}
-	return operation, matched, err
-}
 
 func parseSparkDynamicTimeOverwrite(request ports.QueryRequest) (ports.QueryOperation, bool, error) {
 	if leadingStatementKeyword(request.SQL) != "DECLARE" {
@@ -74,27 +37,25 @@ func parseSparkDynamicTimeOverwrite(request ports.QueryRequest) (ports.QueryOper
 		return ports.QueryOperation{}, false, nil
 	}
 	if err != nil {
-		return ports.QueryOperation{
-				Kind: ports.QueryOperationSparkDynamicTimePartitionOverwrite, ModelVersion: sparkDynamicTimeOverwriteModel,
-			}, true, dynamicOverwriteProfileError(&dynamicOverwriteShapeError{
-				TokenIndex: len(words), ExpectedShape: "well-formed quoted literal, identifier, or comment", Cause: err,
-			})
+		return ports.QueryOperation{}, true, dynamicOverwriteProfileError(&dynamicOverwriteShapeError{
+			TokenIndex: len(words), ExpectedShape: "well-formed quoted literal, identifier, or comment", Cause: err,
+		})
 	}
 	if containsDynamicWord(words, "RANGE_BUCKET") && containsDynamicWord(words, "GENERATE_ARRAY") {
-		return ports.QueryOperation{ModelVersion: sparkDynamicRangeOverwriteModel}, true, fmt.Errorf(
+		return ports.QueryOperation{}, true, fmt.Errorf(
 			"%w: connector range-partition overwrite remains an explicit gap; capability=%s model_version=%s",
-			domain.ErrUnsupported, domain.GapSparkDynamicRangePartitionOverwriteV1, sparkDynamicRangeOverwriteModel,
+			domain.ErrUnsupported, domain.GapSparkDynamicRangePartitionOverwriteV1, DynamicRangeOverwriteProfile,
 		)
 	}
 
 	tokens, err := lexDynamicTimeOverwrite(request.SQL)
 	if err != nil {
-		return ports.QueryOperation{ModelVersion: sparkDynamicTimeOverwriteModel}, true, dynamicOverwriteProfileError(err)
+		return ports.QueryOperation{}, true, dynamicOverwriteProfileError(err)
 	}
 	parser := dynamicOverwriteParser{tokens: tokens}
 	operation, err := parser.parse(request)
 	if err != nil {
-		return ports.QueryOperation{ModelVersion: sparkDynamicTimeOverwriteModel}, true, dynamicOverwriteProfileError(err)
+		return ports.QueryOperation{}, true, dynamicOverwriteProfileError(err)
 	}
 	return operation, true, nil
 }
@@ -362,12 +323,16 @@ func (p *dynamicOverwriteParser) parse(request ports.QueryRequest) (ports.QueryO
 	if destination == source {
 		return ports.QueryOperation{}, p.shapeError("distinct source and destination relations")
 	}
-	return ports.QueryOperation{
-		Kind: ports.QueryOperationSparkDynamicTimePartitionOverwrite, ModelVersion: sparkDynamicTimeOverwriteModel,
+	operation, err := ports.NewQueryOperation(ports.QueryOperationDescriptor{
+		Kind: ports.QueryOperationSparkDynamicTimeOverwrite, ProfileID: DynamicTimeOverwriteProfile,
 		Destination: destination, Source: source,
 		PartitionFunction: sourceExpression.function, PartitionField: sourceExpression.field,
-		Granularity: sourceExpression.granularity, InsertFields: insertFields,
-	}, nil
+		Granularity: sourceExpression.granularity, InsertFields: insertFields, Request: request,
+	})
+	if err != nil {
+		return ports.QueryOperation{}, err
+	}
+	return operation, nil
 }
 
 type dynamicPartitionExpression struct {
@@ -494,17 +459,14 @@ func dynamicOverwriteTableReference(request ports.QueryRequest, identifier strin
 	// BigQueryClient.fullTableName emits exactly dataset.table or
 	// project.dataset.table; a one-part default-dataset relation is not produced
 	// by the pinned connector path.
-	// https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L641-L647
+	// https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java#L641-L647
 	partCount := len(strings.Split(identifier, "."))
 	if partCount != 2 && partCount != 3 {
 		return domain.TableReference{}, fmt.Errorf("connector table reference must contain two or three parts")
 	}
-	reference, isCTE, err := queryTableReference(request, identifier, nil)
+	reference, err := connectorTableReference(request, identifier)
 	if err != nil {
 		return domain.TableReference{}, err
-	}
-	if isCTE {
-		return domain.TableReference{}, fmt.Errorf("CTE is not valid in the connector overwrite model")
 	}
 	return reference, nil
 }
@@ -534,6 +496,6 @@ func dynamicOverwriteProfileError(cause error) error {
 	return fmt.Errorf(
 		"%w: connector query profile drift remains an unsupported script; capability=%s candidate_capability=%s model_version=%s fix_hint=compare BigQueryUtil.java 0.44.2 token shape: %w",
 		domain.ErrUnsupported, domain.GapQueryScriptsUnsupportedV1,
-		domain.CapabilitySparkDynamicTimePartitionOverwriteV1, sparkDynamicTimeOverwriteModel, cause,
+		domain.CapabilitySparkDynamicTimePartitionOverwriteV1, DynamicTimeOverwriteProfile, cause,
 	)
 }

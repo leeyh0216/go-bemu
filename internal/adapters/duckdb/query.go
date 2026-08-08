@@ -22,15 +22,6 @@ import (
 var _ ports.QueryEngine = (*Warehouse)(nil)
 
 func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (result domain.QueryResult, err error) {
-	if operation, matched, operationErr := w.AnalyzeQueryOperation(ctx, request); matched {
-		if operationErr != nil {
-			return domain.QueryResult{}, operationErr
-		}
-		return domain.QueryResult{}, fmt.Errorf(
-			"%w: connector semantic operation requires canonical catalog metadata; model_version=%s fix_hint=execute through QueryService",
-			domain.ErrPrecondition, operation.ModelVersion,
-		)
-	}
 	if err := validateSingleQueryStatement(request.SQL); err != nil {
 		return domain.QueryResult{}, err
 	}
@@ -106,9 +97,6 @@ func translateSQL(request ports.QueryRequest) (string, error) {
 }
 
 func translateSQLWithModel(request ports.QueryRequest) (string, string, error) {
-	if statement, matched, err := rewriteSparkStaticOverwrite(request); matched || err != nil {
-		return statement, sparkStaticOverwriteModel, err
-	}
 	statement, err := rewriteGoogleSQLIdentifiers(request)
 	return statement, "google-sql-identifiers-v1", err
 }

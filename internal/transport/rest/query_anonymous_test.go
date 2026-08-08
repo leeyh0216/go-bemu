@@ -59,7 +59,7 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 		memory.NewCatalogRepository(), warehouse, clock,
 		application.WithTableDataReader(warehouse),
 	)
-	queries := application.NewQueryService(
+	queries := newRESTTestQueryService(
 		memory.NewJobRepository(), warehouse, clock, &testIDs{},
 		application.WithQueryAnalyzer(warehouse), application.WithQueryMaterializer(warehouse),
 		application.WithQueryDestinationCatalog(catalog), application.WithAnonymousQueryTTL(24*time.Hour),

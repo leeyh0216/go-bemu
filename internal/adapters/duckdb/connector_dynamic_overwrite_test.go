@@ -1,12 +1,13 @@
 package duckdb
 
 // Exact fixture source and partition semantics:
-// https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryUtil.java#L796-L905
+// https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryUtil.java#L796-L905
 // BigQuery ARRAY_AGG IGNORE NULLS:
 // https://cloud.google.com/bigquery/docs/reference/standard-sql/aggregate_functions#array_agg
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
@@ -35,12 +37,16 @@ func TestSparkDynamicTimePartitionOverwriteAnalysisIsSourcePinnedAndFailClosed(t
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = warehouse.Close() })
+	analyzer, err := v0442.NewAnalyzer(warehouse)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	statement := sparkDynamicTimeOverwriteFixture(
 		"test-project.analytics.destination", "test-project.analytics.temporary",
 		"partition_date", "DATE_TRUNC", "DAY", []string{"id", "partition_date", "payload"},
 	)
-	analysis, err := warehouse.AnalyzeQuery(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: statement})
+	analysis, err := analyzer.AnalyzeQuery(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: statement})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,39 +54,27 @@ func TestSparkDynamicTimePartitionOverwriteAnalysisIsSourcePinnedAndFailClosed(t
 		analysis.MutationTargets[0].TableID != "destination" || analysis.ProducesRows {
 		t.Fatalf("dynamic overwrite analysis = %#v", analysis)
 	}
-	operation, matched, err := warehouse.AnalyzeQueryOperation(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: statement})
-	if err != nil || !matched || operation.ModelVersion != sparkDynamicTimeOverwriteModel ||
-		operation.PartitionField != "partition_date" || operation.Granularity != "DAY" {
+	operation, matched, err := analyzer.AnalyzeQueryOperation(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: statement})
+	if err != nil || !matched || operation.ProfileID() != v0442.DynamicTimeOverwriteProfile ||
+		operation.PartitionField() != "partition_date" || operation.Granularity() != "DAY" {
 		t.Fatalf("dynamic overwrite operation = %#v, matched=%t err=%v", operation, matched, err)
 	}
-	if _, err := warehouse.Query(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: statement}); !errors.Is(err, domain.ErrPrecondition) || !strings.Contains(err.Error(), sparkDynamicTimeOverwriteModel) {
-		t.Fatalf("direct engine execution must require canonical metadata, got %v", err)
+	if _, err := warehouse.Query(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: statement}); !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), domain.GapQueryScriptsUnsupportedV1) ||
+		strings.Contains(err.Error(), v0442.DynamicTimeOverwriteProfile) {
+		t.Fatalf("generic DuckDB path recognized a connector profile: %v", err)
 	}
 
 	driftedAlias := strings.Replace(statement, testDynamicTargetAlias, "__target_not-a-connector-uuid", 1)
 	driftedAlias = strings.ReplaceAll(driftedAlias, "analytics.temporary", "analytics.sensitive_payload_marker")
 	logs.Reset()
-	for name, analyze := range map[string]func() error{
-		"analyzer": func() error {
-			_, err := warehouse.AnalyzeQuery(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: driftedAlias})
-			return err
-		},
-		"engine": func() error {
-			_, err := warehouse.Query(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: driftedAlias})
-			return err
-		},
-	} {
-		t.Run(name+" rejects UUID alias drift", func(t *testing.T) {
-			err := analyze()
-			if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), sparkDynamicTimeOverwriteModel) ||
-				!strings.Contains(err.Error(), domain.GapQueryScriptsUnsupportedV1) {
-				t.Fatalf("UUID alias drift error = %v", err)
-			}
-		})
+	_, err = analyzer.AnalyzeQuery(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: driftedAlias})
+	if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), v0442.DynamicTimeOverwriteProfile) ||
+		!strings.Contains(err.Error(), domain.GapQueryScriptsUnsupportedV1) {
+		t.Fatalf("UUID alias drift error = %v", err)
 	}
 	logged := logs.String()
 	for _, required := range []string{
-		"boundary.reject", "connector-dynamic-partition-overwrite", sparkDynamicTimeOverwriteModel,
+		"boundary.reject", "connector-dynamic-partition-overwrite", v0442.DynamicTimeOverwriteProfile,
 		"capability", domain.CapabilitySparkDynamicTimePartitionOverwriteV1,
 		"gap", domain.GapQueryScriptsUnsupportedV1, "token_index", "expected_shape", "query_digest", "fix_hint",
 	} {
@@ -92,22 +86,16 @@ func TestSparkDynamicTimePartitionOverwriteAnalysisIsSourcePinnedAndFailClosed(t
 		t.Fatalf("profile drift log exposed SQL payload: %s", logged)
 	}
 	onePartSource := strings.ReplaceAll(statement, "test-project.analytics.temporary", "temporary")
-	if _, err := warehouse.AnalyzeQuery(ctx, ports.QueryRequest{
+	if _, err := analyzer.AnalyzeQuery(ctx, ports.QueryRequest{
 		ProjectID: "test-project", DefaultDataset: "analytics", SQL: onePartSource,
-	}); !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), sparkDynamicTimeOverwriteModel) {
+	}); !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), v0442.DynamicTimeOverwriteProfile) {
 		t.Fatalf("one-part connector source drift error = %v", err)
 	}
 
 	generalScript := "DECLARE ordinary_value DEFAULT 1; SELECT ordinary_value"
 	for name, analyze := range map[string]func() error{
-		"analyzer": func() error {
-			_, err := warehouse.AnalyzeQuery(ctx, ports.QueryRequest{SQL: generalScript})
-			return err
-		},
-		"engine": func() error {
-			_, err := warehouse.Query(ctx, ports.QueryRequest{SQL: generalScript})
-			return err
-		},
+		"analyzer": func() error { _, err := analyzer.AnalyzeQuery(ctx, ports.QueryRequest{SQL: generalScript}); return err },
+		"engine":   func() error { _, err := warehouse.Query(ctx, ports.QueryRequest{SQL: generalScript}); return err },
 	} {
 		t.Run(name+" rejects general script", func(t *testing.T) {
 			err := analyze()
@@ -118,23 +106,44 @@ func TestSparkDynamicTimePartitionOverwriteAnalysisIsSourcePinnedAndFailClosed(t
 	}
 
 	rangeScript := sparkDynamicRangeOverwriteFixture()
-	for name, analyze := range map[string]func() error{
-		"analyzer": func() error {
-			_, err := warehouse.AnalyzeQuery(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: rangeScript})
-			return err
-		},
-		"engine": func() error {
-			_, err := warehouse.Query(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: rangeScript})
-			return err
-		},
+	_, err = analyzer.AnalyzeQuery(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: rangeScript})
+	if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), domain.GapSparkDynamicRangePartitionOverwriteV1) ||
+		!strings.Contains(err.Error(), v0442.DynamicRangeOverwriteProfile) {
+		t.Fatalf("range template error = %v", err)
+	}
+}
+
+func TestConnectorOverwriteBackendErrorsDoNotExposePhysicalCause(t *testing.T) {
+	const secretPhysicalDetail = `Catalog Error: Table "secret_physical_table" does not exist`
+	raw := errors.New(secretPhysicalDetail)
+	for _, test := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{name: "query", err: classifyDynamicOverwriteQueryError("execute overwrite", raw), want: domain.ErrInvalidQuery},
+		{name: "backend", err: classifyDynamicOverwriteBackendError("commit overwrite", raw), want: domain.ErrBackend},
 	} {
-		t.Run(name+" keeps range template explicit", func(t *testing.T) {
-			err := analyze()
-			if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), domain.GapSparkDynamicRangePartitionOverwriteV1) ||
-				!strings.Contains(err.Error(), sparkDynamicRangeOverwriteModel) {
-				t.Fatalf("range template error = %v", err)
+		t.Run(test.name, func(t *testing.T) {
+			if !errors.Is(test.err, test.want) {
+				t.Fatalf("classified error = %v, want %v", test.err, test.want)
+			}
+			if errors.Is(test.err, raw) || strings.Contains(test.err.Error(), secretPhysicalDetail) ||
+				strings.Contains(test.err.Error(), "secret_physical_table") {
+				t.Fatalf("classified error exposed physical cause: %v", test.err)
 			}
 		})
+	}
+	if got := classifyDynamicOverwriteQueryError("execute overwrite", context.Canceled); !errors.Is(got, context.Canceled) {
+		t.Fatalf("cancellation classification = %v", got)
+	}
+	if got := classifyDynamicOverwriteBackendError("commit overwrite", context.DeadlineExceeded); !errors.Is(got, context.DeadlineExceeded) {
+		t.Fatalf("deadline classification = %v", got)
+	}
+	wrappedCancellation := fmt.Errorf("%s: %w", secretPhysicalDetail, context.Canceled)
+	if got := classifyDynamicOverwriteQueryError("execute overwrite", wrappedCancellation); got != context.Canceled ||
+		strings.Contains(got.Error(), "secret_physical_table") {
+		t.Fatalf("wrapped cancellation classification = %v", got)
 	}
 }
 
@@ -307,7 +316,7 @@ func TestSparkDynamicTimePartitionOverwriteIsAtomicAndIgnoresNullTouchedPartitio
 		"partition_date", "DATE_TRUNC", "DAY", []string{"id", "partition_date", "payload"},
 	)
 	request := ports.QueryRequest{ProjectID: "test-project", SQL: statement}
-	operation, matched, err := warehouse.AnalyzeQueryOperation(ctx, request)
+	operation, matched, err := analyzeV0442QueryOperation(ctx, warehouse, request)
 	if err != nil || !matched {
 		t.Fatalf("analyze operation: matched=%t err=%v", matched, err)
 	}
@@ -342,7 +351,7 @@ func TestSparkDynamicTimePartitionOverwriteIsAtomicAndIgnoresNullTouchedPartitio
 		"partition_date", "DATE_TRUNC", "DAY", []string{"id", "partition_date", "payload"},
 	)
 	invalidRequest := ports.QueryRequest{ProjectID: "test-project", SQL: invalidStatement}
-	invalidOperation, matched, err := warehouse.AnalyzeQueryOperation(ctx, invalidRequest)
+	invalidOperation, matched, err := analyzeV0442QueryOperation(ctx, warehouse, invalidRequest)
 	if err != nil || !matched {
 		t.Fatalf("analyze invalid operation: matched=%t err=%v", matched, err)
 	}
@@ -427,7 +436,7 @@ func TestSparkDynamicTimePartitionOverwriteExecutesTimestampAndDatetimeGranulari
 				"event_time", "TIMESTAMP_TRUNC", test.granularity, []string{"id", "event_time", "payload"},
 			)
 			request := ports.QueryRequest{ProjectID: "test-project", SQL: statement}
-			operation, matched, err := warehouse.AnalyzeQueryOperation(ctx, request)
+			operation, matched, err := analyzeV0442QueryOperation(ctx, warehouse, request)
 			if err != nil || !matched {
 				t.Fatalf("analyze operation: matched=%t err=%v", matched, err)
 			}
@@ -496,4 +505,30 @@ func sparkDynamicRangeOverwriteFixture() string {
 		"IN UNNEST(partitions_to_delete) THEN DELETE\n" +
 		"WHEN NOT MATCHED BY TARGET THEN\n" +
 		"INSERT(`id`,`partition_id`,`payload`) VALUES(`" + testDynamicSourceAlias + "`.`id`,`" + testDynamicSourceAlias + "`.`partition_id`,`" + testDynamicSourceAlias + "`.`payload`)"
+}
+
+type unreachableConnectorFallback struct{}
+
+func (unreachableConnectorFallback) AnalyzeQuery(context.Context, ports.QueryRequest) (ports.QueryAnalysis, error) {
+	return ports.QueryAnalysis{}, errors.New("unexpected generic query fallback")
+}
+
+func parseSparkDynamicTimeOverwrite(request ports.QueryRequest) (ports.QueryOperation, bool, error) {
+	analyzer, err := v0442.NewAnalyzer(unreachableConnectorFallback{})
+	if err != nil {
+		return ports.QueryOperation{}, false, err
+	}
+	return analyzer.AnalyzeQueryOperation(context.Background(), request)
+}
+
+func analyzeV0442QueryOperation(
+	ctx context.Context,
+	fallback ports.QueryAnalyzer,
+	request ports.QueryRequest,
+) (ports.QueryOperation, bool, error) {
+	analyzer, err := v0442.NewAnalyzer(fallback)
+	if err != nil {
+		return ports.QueryOperation{}, false, err
+	}
+	return analyzer.AnalyzeQueryOperation(ctx, request)
 }

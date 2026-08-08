@@ -83,7 +83,7 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	queries := application.NewQueryService(memory.NewJobRepository(), warehouse, clock, ids)
+	queries := newRESTTestQueryService(memory.NewJobRepository(), warehouse, clock, ids)
 	server := httptest.NewServer(NewServerWithLoadJobs(catalog, queries, loads, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 
@@ -144,7 +144,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	queries := application.NewQueryService(memory.NewJobRepository(), warehouse, clock, ids)
+	queries := newRESTTestQueryService(memory.NewJobRepository(), warehouse, clock, ids)
 	server := httptest.NewServer(NewServerWithLoadJobs(catalog, queries, loads, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 

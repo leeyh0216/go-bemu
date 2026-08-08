@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
-	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
@@ -52,7 +51,7 @@ func TestQueryResponseEncodesNonFiniteFloatTokensAcrossPublicRESTEdge(t *testing
 	ctx, cancel := staticOverwriteRESTTestContext(t)
 	defer cancel()
 	engine := specialFloatQueryEngine{}
-	queries := application.NewQueryService(
+	queries := newRESTTestQueryService(
 		memory.NewJobRepository(), engine,
 		testClock{value: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}, &testIDs{},
 	)

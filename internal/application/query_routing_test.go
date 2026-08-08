@@ -23,7 +23,7 @@ func TestQueryCatalogDDLIsRejectedBeforeJobAndEngineSideEffects(t *testing.T) {
 	defer cancel()
 	repository := memory.NewJobRepository()
 	engine := &countingQueryEngine{}
-	service := NewQueryService(
+	service := newTestQueryService(
 		repository, engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("ddl"),
 		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{RequiresCatalogMutation: true}}),
 	)
@@ -112,7 +112,7 @@ func TestQueryLocationIsInferredBeforeJobInsertion(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			service := NewQueryService(
+			service := newTestQueryService(
 				memory.NewJobRepository(), &countingQueryEngine{}, clock, fixedQueryID("generated"),
 				WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ReferencedTables: test.references}}),
 				WithQueryDestinationCatalog(catalog),
@@ -149,7 +149,7 @@ func TestDMLCannotTargetAnonymousCachedResultTable(t *testing.T) {
 		ProjectID: "test-project", DatasetID: "_bqemu_anonymous_us", TableID: "_bqemu_query_cached",
 	}
 	repository := memory.NewJobRepository()
-	service := NewQueryService(
+	service := newTestQueryService(
 		repository, &countingQueryEngine{}, clock, fixedQueryID("generated"),
 		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{
 			ReferencedTables: []domain.TableReference{reference}, MutationTargets: []domain.TableReference{reference},
@@ -209,7 +209,7 @@ func TestQueryLocationMismatchIsRejectedBeforeJobInsertion(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repository := memory.NewJobRepository()
-			service := NewQueryService(
+			service := newTestQueryService(
 				repository, &countingQueryEngine{}, clock, fixedQueryID("generated"),
 				WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ReferencedTables: test.references}}),
 				WithQueryDestinationCatalog(catalog),
@@ -253,7 +253,7 @@ func TestQueryReferenceAppliesTableExpirationBeforeJobInsertion(t *testing.T) {
 	}
 	clock.Set(expires)
 	repository := memory.NewJobRepository()
-	service := NewQueryService(
+	service := newTestQueryService(
 		repository, &countingQueryEngine{}, clock, fixedQueryID("generated"),
 		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ReferencedTables: []domain.TableReference{{
 			ProjectID: "test-project", DatasetID: "analytics", TableID: "events",
@@ -284,7 +284,7 @@ func TestAnonymousDestinationIdentityIsGeneratedBeforeJobInsertion(t *testing.T)
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	clock := fixedClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
-	service := NewQueryService(
+	service := newTestQueryService(
 		memory.NewJobRepository(), &countingQueryEngine{}, clock, fixedQueryID("generated"),
 		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
 		WithQueryMaterializer(&compensatingMaterializer{}), WithQueryDestinationCatalog(failedPublicationCatalog{}),
@@ -310,7 +310,7 @@ func TestAnonymousMaterializationPublicationFailureIsCompensated(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	materializer := &compensatingMaterializer{}
-	service := NewQueryService(
+	service := newTestQueryService(
 		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"),
 		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
 		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),

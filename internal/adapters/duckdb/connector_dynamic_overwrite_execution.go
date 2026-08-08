@@ -7,7 +7,7 @@ package duckdb
 //
 // Sources:
 //   - connector 0.44.2 ARRAY_AGG(DISTINCT ... IGNORE NULLS) and MERGE template:
-//     https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryUtil.java#L796-L870
+//     https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryUtil.java#L796-L870
 //   - BigQuery time-partition field and granularity rules:
 //     https://cloud.google.com/bigquery/docs/creating-partitioned-tables
 //   - DATE_TRUNC and TIMESTAMP_TRUNC semantics:
@@ -39,16 +39,26 @@ func (w *Warehouse) ExecuteQueryOperation(
 	canonicalDestination domain.Table,
 	canonicalSource domain.Table,
 ) (result domain.QueryResult, err error) {
-	parsed, matched, parseErr := parseSparkDynamicTimeOverwrite(request)
-	if parseErr != nil {
-		return result, parseErr
-	}
-	if !matched || !sameQueryOperation(parsed, operation) {
-		err := fmt.Errorf("%w: semantic operation does not match the source-pinned request; model_version=%s",
-			domain.ErrPrecondition, sparkDynamicTimeOverwriteModel)
-		logDynamicOverwriteRejection(ctx, operation, canonicalDestination, canonicalSource, "semantic-operation-match", err)
+	if err := operation.ValidateRequest(request); err != nil {
 		return result, err
 	}
+	switch operation.Kind() {
+	case ports.QueryOperationSparkStaticOverwrite:
+		return w.executeStaticOverwrite(ctx, request, operation, canonicalDestination, canonicalSource)
+	case ports.QueryOperationSparkDynamicTimeOverwrite:
+		return w.executeDynamicTimeOverwrite(ctx, request, operation, canonicalDestination, canonicalSource)
+	default:
+		return result, fmt.Errorf("%w: semantic query operation kind is not executable", domain.ErrPrecondition)
+	}
+}
+
+func (w *Warehouse) executeDynamicTimeOverwrite(
+	ctx context.Context,
+	request ports.QueryRequest,
+	operation ports.QueryOperation,
+	canonicalDestination domain.Table,
+	canonicalSource domain.Table,
+) (result domain.QueryResult, err error) {
 	partitionFieldType, err := validateDynamicTimeOverwriteTables(operation, canonicalDestination, canonicalSource)
 	if err != nil {
 		logDynamicOverwriteRejection(ctx, operation, canonicalDestination, canonicalSource, "canonical-table-contract", err)
@@ -56,10 +66,11 @@ func (w *Warehouse) ExecuteQueryOperation(
 	}
 
 	queryBytes := []byte(request.SQL)
+	insertFields := operation.InsertFields()
 	operationAttrs := dynamicOverwriteSafeAttrs(operation, canonicalDestination, canonicalSource)
 	operationAttrs = append(operationAttrs,
-		"partition_type", operation.Granularity, "partition_field_type", partitionFieldType,
-		"insert_field_count", len(operation.InsertFields), "query_bytes", len(queryBytes),
+		"partition_type", operation.Granularity(), "partition_field_type", partitionFieldType,
+		"insert_field_count", len(insertFields), "query_bytes", len(queryBytes),
 		"query_digest", observability.Digest(queryBytes), "transaction_mode", "explicit")
 	transactionStarted := time.Now()
 	transactionState := "not_started"
@@ -110,13 +121,13 @@ func (w *Warehouse) ExecuteQueryOperation(
 			append(operationAttrs, "tx_state", transactionState)...)
 	}()
 
-	destination := dynamicOverwriteRelation(operation.Destination)
-	source := dynamicOverwriteRelation(operation.Source)
+	destination := dynamicOverwriteRelation(operation.Destination())
+	source := dynamicOverwriteRelation(operation.Source())
 	targetAlias := quoteIdentifier("__bqemu_dynamic_target")
 	sourceAlias := quoteIdentifier("__bqemu_dynamic_source")
-	targetPartition := dynamicOverwritePartitionExpression(partitionFieldType, operation.Granularity, operation.PartitionField, targetAlias)
-	sourcePartition := dynamicOverwritePartitionExpression(partitionFieldType, operation.Granularity, operation.PartitionField, sourceAlias)
-	partitionColumn := sourceAlias + "." + quoteIdentifier(operation.PartitionField)
+	targetPartition := dynamicOverwritePartitionExpression(partitionFieldType, operation.Granularity(), operation.PartitionField(), targetAlias)
+	sourcePartition := dynamicOverwritePartitionExpression(partitionFieldType, operation.Granularity(), operation.PartitionField(), sourceAlias)
+	partitionColumn := sourceAlias + "." + quoteIdentifier(operation.PartitionField())
 	deleteStatement := "DELETE FROM " + destination + " AS " + targetAlias +
 		" WHERE " + targetPartition + " IN (SELECT DISTINCT " + sourcePartition +
 		" FROM " + source + " AS " + sourceAlias + " WHERE " + partitionColumn + " IS NOT NULL)"
@@ -142,16 +153,16 @@ func (w *Warehouse) ExecuteQueryOperation(
 	logDynamicOverwritePhase(ctx, "delete_dynamic_partitions", "post", nil,
 		append(operationAttrs, "affected_rows", deletedRows, "tx_state", "pending_commit")...)
 
-	destinationFields := make([]string, len(operation.InsertFields))
-	sourceFields := make([]string, len(operation.InsertFields))
-	for index, field := range operation.InsertFields {
+	destinationFields := make([]string, len(insertFields))
+	sourceFields := make([]string, len(insertFields))
+	for index, field := range insertFields {
 		destinationFields[index] = quoteIdentifier(field)
 		sourceFields[index] = sourceAlias + "." + quoteIdentifier(field)
 	}
 	insertStatement := "INSERT INTO " + destination + " (" + strings.Join(destinationFields, ",") + ") SELECT " +
 		strings.Join(sourceFields, ",") + " FROM " + source + " AS " + sourceAlias
 	logDynamicOverwritePhase(ctx, "insert_dynamic_partition_source", "pre", nil,
-		append(operationAttrs, "field_count", len(operation.InsertFields), "tx_state", transactionState)...)
+		append(operationAttrs, "field_count", len(insertFields), "tx_state", transactionState)...)
 	insertResult, insertErr := tx.ExecContext(ctx, insertStatement)
 	if insertErr != nil {
 		transactionState = "rollback_pending"
@@ -190,13 +201,14 @@ func (w *Warehouse) ExecuteQueryOperation(
 }
 
 func validateDynamicTimeOverwriteDestination(operation ports.QueryOperation, table domain.Table) (string, error) {
-	if operation.Kind != ports.QueryOperationSparkDynamicTimePartitionOverwrite || operation.ModelVersion != sparkDynamicTimeOverwriteModel {
+	if operation.Kind() != ports.QueryOperationSparkDynamicTimeOverwrite {
 		return "", fmt.Errorf("%w: unknown semantic query operation model", domain.ErrPrecondition)
 	}
 	if err := table.Validate(); err != nil {
 		return "", fmt.Errorf("%w: canonical destination metadata is invalid: %v", domain.ErrPrecondition, err)
 	}
-	if table.ProjectID != operation.Destination.ProjectID || table.DatasetID != operation.Destination.DatasetID || table.ID != operation.Destination.TableID {
+	destination := operation.Destination()
+	if table.ProjectID != destination.ProjectID || table.DatasetID != destination.DatasetID || table.ID != destination.TableID {
 		return "", fmt.Errorf("%w: canonical destination does not match parsed MERGE target", domain.ErrPrecondition)
 	}
 	if table.RangePartitioning != nil {
@@ -209,7 +221,7 @@ func validateDynamicTimeOverwriteDestination(operation ports.QueryOperation, tab
 	}
 	partitioning := table.TimePartitioning
 	partitionType := strings.ToUpper(partitioning.Type)
-	if partitioning.Field != operation.PartitionField || partitionType != operation.Granularity || !validTimePartitionGranularity(partitionType) {
+	if partitioning.Field != operation.PartitionField() || partitionType != operation.Granularity() || !validTimePartitionGranularity(partitionType) {
 		return "", fmt.Errorf("%w: parsed partition expression differs from canonical partition metadata; capability=%s",
 			domain.ErrInvalidQuery, domain.CapabilitySparkDynamicTimePartitionOverwriteV1)
 	}
@@ -236,15 +248,16 @@ func validateDynamicTimeOverwriteDestination(operation ports.QueryOperation, tab
 	default:
 		return "", fmt.Errorf("%w: canonical time partition field type must be DATE, TIMESTAMP, or DATETIME", domain.ErrInvalidQuery)
 	}
-	if operation.PartitionFunction != expectedFunction {
+	if operation.PartitionFunction() != expectedFunction {
 		return "", fmt.Errorf("%w: connector partition function differs from canonical field type; capability=%s",
 			domain.ErrInvalidQuery, domain.CapabilitySparkDynamicTimePartitionOverwriteV1)
 	}
-	if len(operation.InsertFields) != len(table.Schema) {
+	insertFields := operation.InsertFields()
+	if len(insertFields) != len(table.Schema) {
 		return "", fmt.Errorf("%w: connector INSERT field count differs from canonical destination schema", domain.ErrInvalidQuery)
 	}
 	for index, field := range table.Schema {
-		if operation.InsertFields[index] != field.Name {
+		if insertFields[index] != field.Name {
 			return "", fmt.Errorf("%w: connector INSERT field order differs from canonical destination schema; field_index=%d",
 				domain.ErrInvalidQuery, index)
 		}
@@ -268,7 +281,8 @@ func validateDynamicTimeOverwriteTables(operation ports.QueryOperation, destinat
 	if err := source.Validate(); err != nil {
 		return "", fmt.Errorf("%w: canonical source metadata is invalid: %v", domain.ErrPrecondition, err)
 	}
-	if source.ProjectID != operation.Source.ProjectID || source.DatasetID != operation.Source.DatasetID || source.ID != operation.Source.TableID {
+	operationSource := operation.Source()
+	if source.ProjectID != operationSource.ProjectID || source.DatasetID != operationSource.DatasetID || source.ID != operationSource.TableID {
 		return "", fmt.Errorf("%w: canonical source does not match parsed MERGE source", domain.ErrPrecondition)
 	}
 
@@ -282,27 +296,12 @@ func validateDynamicTimeOverwriteTables(operation ports.QueryOperation, destinat
 			return "", fmt.Errorf("%w: source schema lacks a selected destination field; field_index=%d capability=%s",
 				domain.ErrInvalidQuery, index, domain.CapabilitySparkDynamicTimePartitionOverwriteV1)
 		}
-		if !sameDynamicOverwriteFieldShape(destinationField, sourceField) {
+		if !sameConnectorOverwriteFieldShape(destinationField, sourceField) {
 			return "", fmt.Errorf("%w: source and destination field shapes differ; field_index=%d capability=%s fix_hint=align canonical source and destination schemas before overwrite",
 				domain.ErrInvalidQuery, index, domain.CapabilitySparkDynamicTimePartitionOverwriteV1)
 		}
 	}
 	return partitionFieldType, nil
-}
-
-func sameDynamicOverwriteFieldShape(destination, source domain.Field) bool {
-	if !strings.EqualFold(destination.Name, source.Name) ||
-		canonicalDynamicOverwriteType(destination.Type) != canonicalDynamicOverwriteType(source.Type) ||
-		canonicalDynamicOverwriteMode(destination.Mode) != canonicalDynamicOverwriteMode(source.Mode) ||
-		len(destination.Fields) != len(source.Fields) {
-		return false
-	}
-	for index := range destination.Fields {
-		if !sameDynamicOverwriteFieldShape(destination.Fields[index], source.Fields[index]) {
-			return false
-		}
-	}
-	return true
 }
 
 func canonicalDynamicOverwriteType(fieldType string) string {
@@ -327,21 +326,6 @@ func canonicalDynamicOverwriteMode(mode string) string {
 	return strings.ToUpper(mode)
 }
 
-func sameQueryOperation(left, right ports.QueryOperation) bool {
-	if left.Kind != right.Kind || left.ModelVersion != right.ModelVersion || left.Destination != right.Destination ||
-		left.Source != right.Source || left.PartitionFunction != right.PartitionFunction ||
-		left.PartitionField != right.PartitionField || left.Granularity != right.Granularity ||
-		len(left.InsertFields) != len(right.InsertFields) {
-		return false
-	}
-	for index := range left.InsertFields {
-		if left.InsertFields[index] != right.InsertFields[index] {
-			return false
-		}
-	}
-	return true
-}
-
 func dynamicOverwriteRelation(reference domain.TableReference) string {
 	return quoteIdentifier(physicalSchema(reference.ProjectID, reference.DatasetID)) + "." + quoteIdentifier(reference.TableID)
 }
@@ -357,25 +341,33 @@ func dynamicOverwritePartitionExpression(fieldType, granularity, field, alias st
 }
 
 func classifyDynamicOverwriteQueryError(stage string, err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
 	}
-	return fmt.Errorf("%w: %s: %w", domain.ErrInvalidQuery, stage, err)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return fmt.Errorf("%w: %s failed", domain.ErrInvalidQuery, stage)
 }
 
 func classifyDynamicOverwriteBackendError(stage string, err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
 	}
-	return fmt.Errorf("%w: %s: %w", domain.ErrBackend, stage, err)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return fmt.Errorf("%w: %s failed", domain.ErrBackend, stage)
 }
 
 func dynamicOverwriteSafeAttrs(operation ports.QueryOperation, destination, source domain.Table) []any {
-	destinationReference := []byte(operation.Destination.ProjectID + "\x00" + operation.Destination.DatasetID + "\x00" + operation.Destination.TableID)
-	sourceReference := []byte(operation.Source.ProjectID + "\x00" + operation.Source.DatasetID + "\x00" + operation.Source.TableID)
-	partitionField := []byte(operation.PartitionField)
+	destinationReferenceValue := operation.Destination()
+	sourceReferenceValue := operation.Source()
+	destinationReference := []byte(destinationReferenceValue.ProjectID + "\x00" + destinationReferenceValue.DatasetID + "\x00" + destinationReferenceValue.TableID)
+	sourceReference := []byte(sourceReferenceValue.ProjectID + "\x00" + sourceReferenceValue.DatasetID + "\x00" + sourceReferenceValue.TableID)
+	partitionField := []byte(operation.PartitionField())
 	return []any{
-		"model_version", operation.ModelVersion,
+		"semantic_binding_fingerprint", operation.BindingFingerprint(),
 		"capability", domain.CapabilitySparkDynamicTimePartitionOverwriteV1,
 		"destination_reference_bytes", len(destinationReference),
 		"destination_reference_fingerprint", observability.Digest(destinationReference),
@@ -412,12 +404,21 @@ func logDynamicOverwriteRejection(
 ) {
 	attrs := append(observability.ContextAttrs(ctx),
 		"event", "boundary.reject", "boundary", "duckdb.dynamic_time_partition_overwrite",
-		"model_version", sparkDynamicTimeOverwriteModel, "shape", shape,
+		"semantic_binding_fingerprint", operation.BindingFingerprint(), "shape", shape,
 		"capability", domain.CapabilitySparkDynamicTimePartitionOverwriteV1,
-		"partition_type", operation.Granularity,
+		"partition_type", operation.Granularity(),
 		"fix_hint", "compare canonical timePartitioning and schema with the parsed connector operation",
 	)
 	attrs = append(attrs, dynamicOverwriteSafeAttrs(operation, destination, source)...)
 	attrs = append(attrs, observability.ErrorAttrs(err)...)
 	slog.WarnContext(ctx, "dynamic overwrite rejected before transaction", attrs...)
+}
+
+func validTimePartitionGranularity(value string) bool {
+	switch value {
+	case "HOUR", "DAY", "MONTH", "YEAR":
+		return true
+	default:
+		return false
+	}
 }

@@ -26,7 +26,7 @@ func (id fixedQueryID) NewID() string { return string(id) }
 func TestQueryServiceUsesConfiguredDefaultLocation(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
-	service := NewQueryService(
+	service := newTestQueryService(
 		memory.NewJobRepository(), &fakeWarehouse{},
 		fixedClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}, fixedQueryID("one"),
 		WithQueryDefaultLocation("EU"),
@@ -52,7 +52,7 @@ func TestQueryJobLogsLabelShapeWithoutValues(t *testing.T) {
 		observability.Configure(false)
 	})
 
-	service := NewQueryService(
+	service := newTestQueryService(
 		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("safe-log"),
 	)
 	const secretValue = "secret-label-value-42"
@@ -126,7 +126,7 @@ func TestQueryServiceCloseCancelsWaitsRejectsAndIsIdempotent(t *testing.T) {
 			ctx, cancel := queryApplicationTestContext(t)
 			defer cancel()
 			engine := newCloseControlledQueryEngine()
-			service := NewQueryService(
+			service := newTestQueryService(
 				memory.NewJobRepository(), engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID(name),
 				WithQueryOperationTimeout(time.Minute),
 			)
@@ -210,7 +210,7 @@ func TestQueryOperationTimeoutBoundsSyncAndAsyncExecution(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			engine := &deadlineAwareQueryEngine{deadlines: make(chan time.Time, 1)}
-			service := NewQueryService(
+			service := newTestQueryService(
 				memory.NewJobRepository(), engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID(name),
 				WithQueryOperationTimeout(20*time.Millisecond),
 			)
@@ -248,7 +248,7 @@ func TestQueryJobIdentityIncludesLocationAndConfigurationFingerprint(t *testing.
 	defer cancel()
 	repository := memory.NewJobRepository()
 	engine := &countingQueryEngine{}
-	service := NewQueryService(repository, engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"))
+	service := newTestQueryService(repository, engine, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"))
 	input := QueryInput{ProjectID: "test-project", Location: "US", JobID: "stable", SQL: "SELECT 1"}
 
 	const callers = 16
@@ -366,7 +366,7 @@ func TestMaterializedTablePublicationFailureIsCompensated(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	materializer := &compensatingMaterializer{}
-	service := NewQueryService(
+	service := newTestQueryService(
 		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"),
 		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
 	)
@@ -389,7 +389,7 @@ func TestMaterializedTableCompensationHasDetachedDeadline(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	materializer := &deadlineCompensatingMaterializer{}
-	service := NewQueryService(
+	service := newTestQueryService(
 		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("bounded-cleanup"),
 		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),
 		WithQueryCompensationTimeout(20*time.Millisecond),
@@ -410,7 +410,7 @@ func TestComplexAnonymousResultFailsWithStableGapAndCompensates(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
 	materializer := &complexResultMaterializer{}
-	service := NewQueryService(
+	service := newTestQueryService(
 		memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("complex-result"),
 		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
 		WithQueryMaterializer(materializer), WithQueryDestinationCatalog(failedPublicationCatalog{}),

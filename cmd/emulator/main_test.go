@@ -215,7 +215,7 @@ func TestShutdownCancelsOpenQueryBeforeStorageClose(t *testing.T) {
 	ctx, cancel := shutdownTestContext(t)
 	defer cancel()
 	engine := &shutdownQueryEngine{started: make(chan struct{}), canceled: make(chan struct{})}
-	queries := application.NewQueryService(
+	queries := newMainTestQueryService(
 		memory.NewJobRepository(), engine, shutdownClock{}, shutdownIDs{},
 		application.WithQueryOperationTimeout(time.Minute),
 	)
@@ -258,7 +258,7 @@ func TestShutdownSkipsStorageWhenOpenQueryExceedsCloseBudget(t *testing.T) {
 	engine := &shutdownQueryEngine{
 		started: make(chan struct{}), canceled: make(chan struct{}), release: release,
 	}
-	queries := application.NewQueryService(
+	queries := newMainTestQueryService(
 		memory.NewJobRepository(), engine, shutdownClock{}, shutdownIDs{},
 		application.WithQueryOperationTimeout(time.Minute),
 	)

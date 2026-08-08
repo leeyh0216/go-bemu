@@ -30,7 +30,7 @@ func TestQueryDestinationAndPagingCrossPublicRESTEdge(t *testing.T) {
 	t.Cleanup(func() { _ = warehouse.Close() })
 	clock := testClock{value: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
-	queries := application.NewQueryService(
+	queries := newRESTTestQueryService(
 		memory.NewJobRepository(), warehouse, clock, &testIDs{},
 		application.WithQueryMaterializer(warehouse), application.WithQueryDestinationCatalog(catalog),
 	)

@@ -1,4 +1,4 @@
-package duckdb
+package v0442
 
 // Spark connector static overwrite adapter.
 //
@@ -6,13 +6,12 @@ package duckdb
 // rewrite. spark-bigquery-connector 0.44.2 emits one exact constant-false
 // MERGE shape after direct writes to a temporary table. BigQuery defines that
 // shape as an atomic replace: every source row is inserted and every target
-// row absent from the source is deleted. DuckDB has the same atomic MERGE
-// primitive but spells BigQuery's `INSERT ROW` as `INSERT BY NAME`.
+// row absent from the source is deleted. This package only recognizes the
+// connector command; physical execution belongs to an engine adapter.
 //
 // Sources:
-//   - connector 0.44.2 producer: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java
+//   - connector 0.44.2 producer: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java
 //   - BigQuery constant-false MERGE: https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement
-//   - DuckDB MERGE: https://duckdb.org/docs/current/sql/statements/merge_into
 
 import (
 	"fmt"
@@ -22,7 +21,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
-const sparkStaticOverwriteModel = "spark-bigquery-connector-0.44.2/static-overwrite"
+const StaticOverwriteProfile = "spark-bigquery-connector-0.44.2/static-overwrite"
 
 type overwriteTokenKind uint8
 
@@ -37,31 +36,33 @@ type overwriteToken struct {
 	value string
 }
 
-// rewriteSparkStaticOverwrite returns matched=false for ordinary SQL. A MERGE
+// parseStaticOverwrite returns matched=false for ordinary SQL. A MERGE
 // containing BigQuery's INSERT ROW is treated as an adapter candidate; if its
 // token shape differs from the pinned connector profile, it fails explicitly
 // instead of falling through to a backend parser with ambiguous behavior.
-func rewriteSparkStaticOverwrite(request ports.QueryRequest) (statement string, matched bool, err error) {
-	if queryStatementType(request.SQL) != "MERGE" {
-		return "", false, nil
+func parseStaticOverwrite(request ports.QueryRequest) (ports.QueryOperation, bool, error) {
+	if leadingStatementKeyword(request.SQL) != "MERGE" {
+		return ports.QueryOperation{}, false, nil
 	}
 	candidate, err := containsUnquotedWordPair(request.SQL, "INSERT", "ROW")
-	if err != nil || !candidate {
-		return "", false, nil
+	if err != nil {
+		return ports.QueryOperation{}, true, staticOverwriteProfileError(err)
 	}
-	matched = true
+	if !candidate {
+		return ports.QueryOperation{}, false, nil
+	}
 	tokens, err := lexStaticOverwrite(request.SQL)
 	if err != nil {
-		return "", true, staticOverwriteProfileError(err)
+		return ports.QueryOperation{}, true, staticOverwriteProfileError(err)
 	}
 
 	parser := overwriteParser{tokens: tokens}
 	if err := parser.expectWord("MERGE"); err != nil {
-		return "", true, parser.profileError(err)
+		return ports.QueryOperation{}, true, parser.profileError(err)
 	}
 	destination, err := parser.expectIdentifier()
 	if err != nil {
-		return "", true, parser.profileError(err)
+		return ports.QueryOperation{}, true, parser.profileError(err)
 	}
 	for _, expected := range []overwriteToken{
 		{kind: overwriteWord, value: "USING"},
@@ -71,12 +72,12 @@ func rewriteSparkStaticOverwrite(request ports.QueryRequest) (statement string, 
 		{kind: overwriteWord, value: "FROM"},
 	} {
 		if err := parser.expect(expected); err != nil {
-			return "", true, parser.profileError(err)
+			return ports.QueryOperation{}, true, parser.profileError(err)
 		}
 	}
 	source, err := parser.expectIdentifier()
 	if err != nil {
-		return "", true, parser.profileError(err)
+		return ports.QueryOperation{}, true, parser.profileError(err)
 	}
 	for _, wordOrSymbol := range []overwriteToken{
 		{kind: overwriteSymbol, value: ")"},
@@ -97,25 +98,29 @@ func rewriteSparkStaticOverwrite(request ports.QueryRequest) (statement string, 
 		{kind: overwriteWord, value: "DELETE"},
 	} {
 		if err := parser.expect(wordOrSymbol); err != nil {
-			return "", true, parser.profileError(err)
+			return ports.QueryOperation{}, true, parser.profileError(err)
 		}
 	}
 	if parser.more() {
-		return "", true, parser.profileError(fmt.Errorf("unexpected trailing token %q", parser.peek().value))
+		return ports.QueryOperation{}, true, parser.profileError(fmt.Errorf("unexpected trailing token %q", parser.peek().value))
 	}
 
-	destinationSQL, err := translateRelationIdentifier(request, destination, nil)
+	destinationReference, err := connectorTableReference(request, destination)
 	if err != nil {
-		return "", true, err
+		return ports.QueryOperation{}, true, staticOverwriteProfileError(err)
 	}
-	sourceSQL, err := translateRelationIdentifier(request, source, nil)
+	sourceReference, err := connectorTableReference(request, source)
 	if err != nil {
-		return "", true, err
+		return ports.QueryOperation{}, true, staticOverwriteProfileError(err)
 	}
-	return fmt.Sprintf(
-		"MERGE INTO %s\nUSING (SELECT * FROM %s) AS __bqemu_source_0442\nON FALSE\nWHEN NOT MATCHED THEN INSERT BY NAME\nWHEN NOT MATCHED BY SOURCE THEN DELETE",
-		destinationSQL, sourceSQL,
-	), true, nil
+	operation, err := ports.NewQueryOperation(ports.QueryOperationDescriptor{
+		Kind: ports.QueryOperationSparkStaticOverwrite, ProfileID: StaticOverwriteProfile,
+		Destination: destinationReference, Source: sourceReference, Request: request,
+	})
+	if err != nil {
+		return ports.QueryOperation{}, true, staticOverwriteProfileError(err)
+	}
+	return operation, true, nil
 }
 
 func lexStaticOverwrite(statement string) ([]overwriteToken, error) {
@@ -142,7 +147,7 @@ func lexStaticOverwrite(statement string) ([]overwriteToken, error) {
 			tokens = append(tokens, overwriteToken{kind: overwriteSymbol, value: statement[index : index+1]})
 			index++
 		default:
-			return nil, fmt.Errorf("%w: unsupported token in %s", domain.ErrInvalid, sparkStaticOverwriteModel)
+			return nil, fmt.Errorf("%w: unsupported token in %s", domain.ErrInvalid, StaticOverwriteProfile)
 		}
 	}
 	return tokens, nil
@@ -234,5 +239,5 @@ func (p *overwriteParser) profileError(cause error) error {
 }
 
 func staticOverwriteProfileError(cause error) error {
-	return fmt.Errorf("%w: SQL resembles %s but its token shape changed: %v", domain.ErrInvalid, sparkStaticOverwriteModel, cause)
+	return fmt.Errorf("%w: SQL resembles %s but its token shape changed: %v", domain.ErrInvalid, StaticOverwriteProfile, cause)
 }

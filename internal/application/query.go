@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -45,6 +46,9 @@ type QueryService struct {
 	jobs                ports.JobRepository
 	warehouse           ports.QueryEngine
 	analyzer            ports.QueryAnalyzer
+	operationAnalyzer   ports.QueryOperationAnalyzer
+	operationExecutor   ports.QueryOperationEngine
+	operationCatalog    ports.QueryOperationCatalog
 	materializer        ports.QueryMaterializer
 	destinations        ports.QueryDestinationCatalog
 	clock               ports.Clock
@@ -135,12 +139,46 @@ func WithQueryCompensationTimeout(timeout time.Duration) QueryOption {
 	}
 }
 
-func NewQueryService(jobs ports.JobRepository, warehouse ports.QueryEngine, clock ports.Clock, ids ports.IDGenerator, options ...QueryOption) *QueryService {
+// NewQueryService requires connector semantic ports explicitly. Generic query
+// execution and connector command parsing remain independently replaceable.
+func NewQueryService(
+	jobs ports.JobRepository,
+	warehouse ports.QueryEngine,
+	operationAnalyzer ports.QueryOperationAnalyzer,
+	operationExecutor ports.QueryOperationEngine,
+	operationCatalog ports.QueryOperationCatalog,
+	clock ports.Clock,
+	ids ports.IDGenerator,
+	options ...QueryOption,
+) (*QueryService, error) {
+	for _, dependency := range []struct {
+		name  string
+		value any
+	}{
+		{name: "job repository", value: jobs},
+		{name: "query engine", value: warehouse},
+		{name: "semantic query analyzer", value: operationAnalyzer},
+		{name: "semantic query executor", value: operationExecutor},
+		{name: "semantic query catalog", value: operationCatalog},
+		{name: "clock", value: clock},
+		{name: "ID generator", value: ids},
+	} {
+		if queryServiceDependencyIsNil(dependency.value) {
+			return nil, fmt.Errorf("%w: query service %s is required", domain.ErrPrecondition, dependency.name)
+		}
+	}
+	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("%w: query service option is nil", domain.ErrPrecondition)
+		}
+	}
 	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
 	idle := make(chan struct{})
 	close(idle)
 	service := &QueryService{
-		jobs: jobs, warehouse: warehouse, clock: clock, ids: ids,
+		jobs: jobs, warehouse: warehouse,
+		operationAnalyzer: operationAnalyzer, operationExecutor: operationExecutor, operationCatalog: operationCatalog,
+		clock: clock, ids: ids,
 		defaultLocation: "US", anonymousTTL: 24 * time.Hour,
 		operationTimeout: 2 * time.Minute, compensationTimeout: 30 * time.Second,
 		runtimeCtx: runtimeCtx, cancelRuntime: cancelRuntime, idle: idle,
@@ -148,7 +186,20 @@ func NewQueryService(jobs ports.JobRepository, warehouse ports.QueryEngine, cloc
 	for _, option := range options {
 		option(service)
 	}
-	return service
+	return service, nil
+}
+
+func queryServiceDependencyIsNil(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 func (s *QueryService) RunSync(ctx context.Context, input QueryInput) (*domain.Job, error) {

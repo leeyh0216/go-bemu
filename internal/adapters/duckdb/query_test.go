@@ -2,11 +2,13 @@ package duckdb
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
@@ -181,14 +183,19 @@ func TestWarehouseExecutesSparkConnectorStaticOverwriteAtomically(t *testing.T) 
 	if err := warehouse.CreateDataset(ctx, "test-project", "analytics"); err != nil {
 		t.Fatal(err)
 	}
-	for _, tableID := range []string{"destination", "temporary"} {
-		if err := warehouse.CreateTable(ctx, domain.Table{
+	canonicalTable := func(tableID, idType string) domain.Table {
+		return domain.Table{
 			ProjectID: "test-project", DatasetID: "analytics", ID: tableID,
 			Schema: []domain.Field{
-				{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+				{Name: "id", Type: idType, Mode: "REQUIRED"},
 				{Name: "payload", Type: "STRING"},
 			},
-		}); err != nil {
+		}
+	}
+	destinationTable := canonicalTable("destination", "INT64")
+	sourceTable := canonicalTable("temporary", "INT64")
+	for _, table := range []domain.Table{destinationTable, sourceTable} {
+		if err := warehouse.CreateTable(ctx, table); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -208,14 +215,18 @@ func TestWarehouseExecutesSparkConnectorStaticOverwriteAtomically(t *testing.T) 
 		"ON FALSE\n" +
 		"WHEN NOT MATCHED THEN INSERT ROW\n" +
 		"WHEN NOT MATCHED BY SOURCE THEN DELETE"
-	translated, model, err := translateSQLWithModel(ports.QueryRequest{ProjectID: "test-project", SQL: connectorSQL})
+	request := ports.QueryRequest{ProjectID: "test-project", SQL: connectorSQL}
+	analyzer, err := v0442.NewAnalyzer(warehouse)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model != sparkStaticOverwriteModel || !strings.Contains(translated, "INSERT BY NAME") {
-		t.Fatalf("adapter model=%q SQL=%q", model, translated)
+	operation, matched, err := analyzer.AnalyzeQueryOperation(ctx, request)
+	if err != nil || !matched || operation.ProfileID() != v0442.StaticOverwriteProfile {
+		t.Fatalf("static overwrite operation=%#v matched=%t err=%v", operation, matched, err)
 	}
-	query(connectorSQL)
+	if _, err := warehouse.ExecuteQueryOperation(ctx, request, operation, destinationTable, sourceTable); err != nil {
+		t.Fatal(err)
+	}
 
 	result := query("SELECT id, payload FROM `test-project.analytics.destination` ORDER BY id")
 	if len(result.Rows) != 2 || result.Rows[0][0] != int64(3) || result.Rows[1][0] != int64(4) {
@@ -225,35 +236,67 @@ func TestWarehouseExecutesSparkConnectorStaticOverwriteAtomically(t *testing.T) 
 	// A failed replacement must not expose the delete half of the MERGE. The
 	// connector relies on one query job being atomic when it swaps the temporary
 	// direct-write table into the destination.
-	if err := warehouse.CreateTable(ctx, domain.Table{
-		ProjectID: "test-project", DatasetID: "analytics", ID: "invalid_temporary",
-		Schema: []domain.Field{
-			{Name: "id", Type: "STRING", Mode: "REQUIRED"},
-			{Name: "payload", Type: "STRING"},
-		},
-	}); err != nil {
+	invalidSource := canonicalTable("invalid_temporary", "STRING")
+	if err := warehouse.CreateTable(ctx, invalidSource); err != nil {
 		t.Fatal(err)
 	}
 	query("INSERT INTO `test-project.analytics.invalid_temporary` VALUES ('not-an-int', 'invalid')")
 	invalidOverwrite := strings.Replace(connectorSQL, "analytics.temporary", "analytics.invalid_temporary", 1)
-	if _, err := warehouse.Query(ctx, ports.QueryRequest{ProjectID: "test-project", SQL: invalidOverwrite}); err == nil {
+	invalidRequest := ports.QueryRequest{ProjectID: "test-project", SQL: invalidOverwrite}
+	invalidOperation, matched, err := analyzer.AnalyzeQueryOperation(ctx, invalidRequest)
+	if err != nil || !matched {
+		t.Fatalf("analyze incompatible overwrite: matched=%t err=%v", matched, err)
+	}
+	if _, err := warehouse.ExecuteQueryOperation(
+		ctx, invalidRequest, invalidOperation, destinationTable, invalidSource,
+	); !errors.Is(err, domain.ErrInvalidQuery) {
 		t.Fatal("expected incompatible replacement source to fail")
 	}
 	result = query("SELECT id, payload FROM `test-project.analytics.destination` ORDER BY id")
 	if len(result.Rows) != 2 || result.Rows[0][0] != int64(3) || result.Rows[1][0] != int64(4) {
 		t.Fatalf("failed overwrite changed destination: %#v", result.Rows)
 	}
+
+	for name, mutate := range map[string]func(*ports.QueryRequest){
+		"SQL": func(changed *ports.QueryRequest) {
+			changed.SQL = strings.Replace(connectorSQL, "analytics.temporary", "analytics.invalid_temporary", 1)
+		},
+		"project":         func(changed *ports.QueryRequest) { changed.ProjectID = "other-project" },
+		"default project": func(changed *ports.QueryRequest) { changed.DefaultProjectID = "other-project" },
+		"default dataset": func(changed *ports.QueryRequest) { changed.DefaultDataset = "other-dataset" },
+	} {
+		t.Run("reject changed "+name+" binding", func(t *testing.T) {
+			changedRequest := request
+			mutate(&changedRequest)
+			if _, err := warehouse.ExecuteQueryOperation(
+				ctx, changedRequest, operation, destinationTable, sourceTable,
+			); !errors.Is(err, domain.ErrPrecondition) {
+				t.Fatalf("changed request replay error = %v, want precondition", err)
+			}
+		})
+	}
 }
 
 func TestSparkConnectorStaticOverwriteRejectsProfileDrift(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	analyzer, err := v0442.NewAnalyzer(warehouse)
+	if err != nil {
+		t.Fatal(err)
+	}
 	statement := "MERGE `p.d.target`\n" +
 		"USING (SELECT * FROM `p.d.source`)\n" +
 		"ON FALSE\n" +
 		"WHEN NOT MATCHED THEN INSERT ROW\n" +
 		"WHEN MATCHED THEN DELETE"
-	_, model, err := translateSQLWithModel(ports.QueryRequest{SQL: statement})
-	if err == nil || model != sparkStaticOverwriteModel || !strings.Contains(err.Error(), sparkStaticOverwriteModel) {
-		t.Fatalf("profile drift result: model=%q err=%v", model, err)
+	_, matched, err := analyzer.AnalyzeQueryOperation(ctx, ports.QueryRequest{ProjectID: "project-id", SQL: statement})
+	if err == nil || !matched || !strings.Contains(err.Error(), v0442.StaticOverwriteProfile) {
+		t.Fatalf("profile drift result: matched=%t err=%v", matched, err)
 	}
 }
 

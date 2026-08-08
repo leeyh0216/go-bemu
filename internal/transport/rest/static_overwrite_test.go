@@ -27,6 +27,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
+	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/application"
 )
 
@@ -40,7 +41,18 @@ func TestSparkStaticOverwriteCrossesRESTJobLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = warehouse.Close() })
 	clock := testClock{value: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
-	queries := application.NewQueryService(memory.NewJobRepository(), warehouse, clock, &testIDs{})
+	analyzer, err := v0442.NewAnalyzer(warehouse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries, err := application.NewQueryService(
+		memory.NewJobRepository(), warehouse, analyzer, warehouse, catalog, clock, &testIDs{},
+		application.WithQueryAnalyzer(analyzer), application.WithQueryDestinationCatalog(catalog),
+		application.WithQueryMaterializer(warehouse),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 
