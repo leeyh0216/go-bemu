@@ -631,6 +631,7 @@
               {
                 "id": "spark-pyspark-indirect-load",
                 "operationIds": [
+                  "bigquery.tables.get",
                   "bigquery.jobs.insert",
                   "bigquery.jobs.get"
                 ],
@@ -639,10 +640,18 @@
                 ],
                 "operationExpectations": [
                   {
-                    "operationId": "bigquery.jobs.insert",
+                    "operationId": "bigquery.tables.get",
                     "min": 1,
                     "max": 0,
                     "after": []
+                  },
+                  {
+                    "operationId": "bigquery.jobs.insert",
+                    "min": 1,
+                    "max": 1,
+                    "after": [
+                      "bigquery.tables.get"
+                    ]
                   },
                   {
                     "operationId": "bigquery.jobs.get",
@@ -932,6 +941,7 @@
               {
                 "id": "spark-scala-indirect-load",
                 "operationIds": [
+                  "bigquery.tables.get",
                   "bigquery.jobs.insert",
                   "bigquery.jobs.get"
                 ],
@@ -940,10 +950,18 @@
                 ],
                 "operationExpectations": [
                   {
-                    "operationId": "bigquery.jobs.insert",
+                    "operationId": "bigquery.tables.get",
                     "min": 1,
                     "max": 0,
                     "after": []
+                  },
+                  {
+                    "operationId": "bigquery.jobs.insert",
+                    "min": 1,
+                    "max": 1,
+                    "after": [
+                      "bigquery.tables.get"
+                    ]
                   },
                   {
                     "operationId": "bigquery.jobs.get",
