@@ -112,6 +112,174 @@ func TestGatewayUsesOneEntrypointForInsertAndDDL(t *testing.T) {
 	}
 }
 
+func TestGatewayResolvesBacktickQualifiedPaths(t *testing.T) {
+	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
+	tests := []struct {
+		name string
+		sql  string
+		kind queryast.StatementKind
+	}{
+		{name: "select", sql: "SELECT id FROM `test-project.analytics.events`", kind: queryast.StatementSelect},
+		{name: "insert", sql: "INSERT INTO `test-project.analytics.events` (id) VALUES (1)", kind: queryast.StatementInsert},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statement, err := gateway.Analyze(t.Context(), ports.QueryRequest{
+				ProjectID: "test-project", DefaultDataset: "analytics", SQL: test.sql,
+			})
+			if err != nil {
+				t.Fatalf("Analyze() error = %v", err)
+			}
+			if statement.Kind() != test.kind {
+				t.Fatalf("kind = %q", statement.Kind())
+			}
+			references := statement.ReferencedTables()
+			if len(references) != 1 || references[0] != (domain.TableReference{
+				ProjectID: "test-project", DatasetID: "analytics", TableID: "events",
+			}) {
+				t.Fatalf("references = %#v", references)
+			}
+		})
+	}
+}
+
+func TestGatewayUsesOneEntrypointForUpdateDeleteAndMerge(t *testing.T) {
+	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
+	tests := []struct {
+		name string
+		sql  string
+		kind queryast.StatementKind
+	}{
+		{
+			name: "update",
+			sql:  "UPDATE analytics.events SET amount = NUMERIC '1.25' WHERE id = 1",
+			kind: queryast.StatementUpdate,
+		},
+		{
+			name: "delete",
+			sql:  "DELETE FROM analytics.events WHERE id = 1",
+			kind: queryast.StatementDelete,
+		},
+		{
+			name: "merge",
+			sql:  "MERGE analytics.events AS T USING analytics.events AS S ON T.id = S.id WHEN MATCHED THEN UPDATE SET amount = S.amount",
+			kind: queryast.StatementMerge,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statement, err := gateway.Analyze(t.Context(), ports.QueryRequest{
+				ProjectID: "test-project", DefaultDataset: "analytics", SQL: test.sql,
+			})
+			if err != nil {
+				t.Fatalf("Analyze() error = %v", err)
+			}
+			if statement.Kind() != test.kind {
+				t.Fatalf("kind = %q, want %q", statement.Kind(), test.kind)
+			}
+			if len(statement.MutationTargets()) != 1 {
+				t.Fatalf("mutation targets = %#v", statement.MutationTargets())
+			}
+			relations, err := queryast.Relations(statement.Syntax())
+			if err != nil || len(relations) == 0 {
+				t.Fatalf("syntax relations = (%#v, %v)", relations, err)
+			}
+			for _, relation := range relations {
+				if _, err := statement.RequireRelationBinding(relation.NodeKey()); err != nil {
+					t.Fatalf("RequireRelationBinding() error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayAnalyzesConnectorDeclareMergeScript(t *testing.T) {
+	snapshot := analyzerSnapshot()
+	fields := []domain.Field{
+		{Name: "id", Type: "INT64", Mode: "NULLABLE"},
+		{Name: "partition_date", Type: "DATE", Mode: "NULLABLE"},
+		{Name: "payload", Type: "STRING", Mode: "NULLABLE"},
+	}
+	for _, tableID := range []string{"temporary", "destination"} {
+		snapshot.Projects[0].Datasets[0].Tables = append(snapshot.Projects[0].Datasets[0].Tables, domain.Table{
+			ProjectID: "test-project", DatasetID: "analytics", ID: tableID, Type: "TABLE",
+			Schema: domain.CloneFields(fields),
+		})
+	}
+	gateway := newGateway(t, &snapshotReader{snapshot: snapshot})
+	sql := "DECLARE partitions_to_delete DEFAULT " +
+		"(SELECT ARRAY_AGG(DISTINCT(date_trunc(`partition_date`, DAY)) IGNORE NULLS) " +
+		"FROM `test-project.analytics.temporary`); " +
+		"MERGE `test-project.analytics.destination` AS `target` " +
+		"USING `test-project.analytics.temporary` AS `source` ON FALSE " +
+		"WHEN NOT MATCHED BY SOURCE AND (TRUE) AND date_trunc(`target`.`partition_date`, DAY) " +
+		"IN UNNEST(partitions_to_delete) THEN DELETE " +
+		"WHEN NOT MATCHED BY TARGET THEN INSERT(`id`,`partition_date`,`payload`) " +
+		"VALUES(`source`.`id`,`source`.`partition_date`,`source`.`payload`)"
+	statement, err := gateway.Analyze(t.Context(), ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics", SQL: sql,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if statement.Kind() != queryast.StatementScript || len(statement.AnalysisFingerprint()) != 64 {
+		t.Fatalf("script analysis identity is invalid")
+	}
+	targets := statement.MutationTargets()
+	if len(targets) != 1 || targets[0].TableID != "destination" {
+		t.Fatalf("mutation targets = %#v", targets)
+	}
+	references := statement.ReferencedTables()
+	if len(references) != 2 || references[0].TableID != "destination" || references[1].TableID != "temporary" {
+		t.Fatalf("references = %#v", references)
+	}
+	relations, err := queryast.Relations(statement.Syntax())
+	if err != nil || len(relations) != 3 {
+		t.Fatalf("relations = (%#v, %v)", relations, err)
+	}
+	for _, relation := range relations {
+		if _, err := statement.RequireRelationBinding(relation.NodeKey()); err != nil {
+			t.Fatalf("RequireRelationBinding() error = %v", err)
+		}
+	}
+	script := statement.Syntax().(*queryast.ScriptStatement)
+	declaration := script.Statements()[0].(*queryast.DeclareStatement)
+	variableType, err := statement.RequireExpressionType(declaration.DefaultValue().NodeKey())
+	if err != nil {
+		t.Fatalf("RequireExpressionType() error = %v", err)
+	}
+	element, ok := variableType.Element()
+	if variableType.Kind() != semantic.TypeArray || !ok || element.Kind() != semantic.TypeDate {
+		t.Fatalf("declared variable type = %#v", variableType)
+	}
+}
+
+func TestGatewayCarriesDeclaredVariableTypeThroughSetAndMerge(t *testing.T) {
+	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
+	sql := "DECLARE match_id INT64 DEFAULT 1; " +
+		"SET match_id = match_id + 1; " +
+		"MERGE analytics.events AS target USING analytics.events AS source " +
+		"ON target.id = match_id WHEN MATCHED THEN DELETE"
+	statement, err := gateway.Analyze(t.Context(), ports.QueryRequest{
+		ProjectID: "test-project", DefaultDataset: "analytics", SQL: sql,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if statement.Kind() != queryast.StatementScript || len(statement.MutationTargets()) != 1 {
+		t.Fatalf("script statement = %#v", statement)
+	}
+	script := statement.Syntax().(*queryast.ScriptStatement)
+	if len(script.Statements()) != 3 || script.Statements()[1].Kind() != queryast.StatementSet {
+		t.Fatalf("script syntax = %#v", script.Statements())
+	}
+	set := script.Statements()[1].(*queryast.SetStatement)
+	typ, err := statement.RequireExpressionType(set.Value().NodeKey())
+	if err != nil || typ.Kind() != semantic.TypeInt64 {
+		t.Fatalf("SET expression type = (%#v, %v)", typ, err)
+	}
+}
+
 func TestAnalyzerRedactsStableResolutionErrors(t *testing.T) {
 	gateway := newGateway(t, &snapshotReader{snapshot: analyzerSnapshot()})
 	tests := []struct {
@@ -191,7 +359,7 @@ func TestGatewayRejectsScriptsAndCTASBeforeEngine(t *testing.T) {
 		{
 			name: "multi statement script",
 			sql:  "SELECT id FROM analytics.events; SELECT id FROM analytics.events",
-			code: domain.GapQueryScriptsUnsupportedV1,
+			code: analyzeradapter.CapabilityConnectorScriptV1,
 		},
 		{
 			name: "create table as select",
