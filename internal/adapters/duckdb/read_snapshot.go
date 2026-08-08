@@ -144,6 +144,12 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 
 	arrowSchema, referenceSchema, err := referenceReadSchema(request.Format, fields)
 	if err != nil {
+		if errors.Is(err, catalogdomain.ErrUnsupported) {
+			return nil, classifiedReadSnapshotError(readdomain.ErrorUnimplemented, err)
+		}
+		if errors.Is(err, catalogdomain.ErrInvalid) {
+			return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument, err)
+		}
 		return nil, err
 	}
 	if len(referenceSchema.Serialized) > m.config.MaxSchemaBytes {

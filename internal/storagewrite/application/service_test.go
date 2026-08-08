@@ -48,6 +48,7 @@ type fakeCoordinator struct {
 	failCommit  bool
 	commitHook  func()
 	stageErr    error
+	describeErr error
 }
 
 func newFakeCoordinator() *fakeCoordinator {
@@ -55,6 +56,9 @@ func newFakeCoordinator() *fakeCoordinator {
 }
 
 func (c *fakeCoordinator) DescribeTable(_ context.Context, _ domain.TableReference) (domain.TableSchema, error) {
+	if c.describeErr != nil {
+		return domain.TableSchema{}, c.describeErr
+	}
 	return domain.TableSchema{Fields: []domain.Field{{Name: "id", Type: "INT64", Mode: "NULLABLE"}}}, nil
 }
 
@@ -131,6 +135,17 @@ func TestConfigAcceptsPinnedConnectorClientRequestLimit(t *testing.T) {
 	config.MaxAppendBytes++
 	if err := validateConfig(config); err == nil {
 		t.Fatal("request limit above the pinned client maximum must be rejected")
+	}
+}
+
+func TestCreateStreamClassifiesUnsupportedDestinationSchema(t *testing.T) {
+	service, coordinator, _ := newTestService(t, 1)
+	coordinator.describeErr = ports.ErrUnsupportedSchema
+	_, err := service.CreateStream(context.Background(), domain.CreateStreamRequest{
+		Parent: domain.TableReference{ProjectID: "p", DatasetID: "d", TableID: "t"}, Type: domain.StreamTypePending,
+	})
+	if code := domain.CodeOf(err); code != domain.ErrorUnimplemented {
+		t.Fatalf("CreateStream code = %s, error = %v", code, err)
 	}
 }
 

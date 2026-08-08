@@ -340,6 +340,12 @@ func fieldToProto(field writedomain.Field) *storagepb.TableFieldSchema {
 		Name: field.Name, Type: fieldTypeToProto(field.Type), Mode: fieldModeToProto(field.Mode),
 		Description: field.Description,
 	}
+	if field.Precision != nil {
+		result.Precision = *field.Precision
+	}
+	if field.Scale != nil {
+		result.Scale = *field.Scale
+	}
 	for _, nested := range field.Fields {
 		result.Fields = append(result.Fields, fieldToProto(nested))
 	}
@@ -366,16 +372,16 @@ func fieldTypeToProto(value string) storagepb.TableFieldSchema_Type {
 		return storagepb.TableFieldSchema_TIME
 	case "DATETIME":
 		return storagepb.TableFieldSchema_DATETIME
-	case "GEOGRAPHY":
-		return storagepb.TableFieldSchema_GEOGRAPHY
 	case "NUMERIC":
 		return storagepb.TableFieldSchema_NUMERIC
 	case "BIGNUMERIC":
 		return storagepb.TableFieldSchema_BIGNUMERIC
 	case "JSON":
 		return storagepb.TableFieldSchema_JSON
-	default:
+	case "STRING":
 		return storagepb.TableFieldSchema_STRING
+	default:
+		return storagepb.TableFieldSchema_TYPE_UNSPECIFIED
 	}
 }
 

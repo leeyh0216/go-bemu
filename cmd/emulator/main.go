@@ -132,7 +132,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			_ = readRuntime.Close(closeContext)
 		}
 	}()
-	writeRuntime, err := composeStorageWrite(ctx, cfg, warehouse, clock, system.IDGenerator{}, logger)
+	writeRuntime, err := composeStorageWrite(ctx, cfg, warehouse, catalogService, clock, system.IDGenerator{}, logger)
 	if err != nil {
 		return fmt.Errorf("configure Storage Write: %w", err)
 	}

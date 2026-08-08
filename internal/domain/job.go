@@ -135,10 +135,9 @@ type JobError struct {
 	Message string
 }
 
-type Column struct {
-	Name string
-	Type string
-}
+// Column is retained as a source-compatible name for the canonical recursive
+// schema field used by catalog, query, load, and Storage APIs.
+type Column = Field
 
 type QueryResult struct {
 	Columns      []Column

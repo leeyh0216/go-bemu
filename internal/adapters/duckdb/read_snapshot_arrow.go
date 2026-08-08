@@ -43,6 +43,9 @@ func buildArrowReferenceSchema(fields []catalogdomain.Field) (*arrow.Schema, []b
 }
 
 func arrowField(field catalogdomain.Field, path string) (arrow.Field, error) {
+	if err := field.Validate(); err != nil {
+		return arrow.Field{}, fmt.Errorf("map BigQuery field at %s: %w", path, err)
+	}
 	baseType, err := arrowBaseType(field, path)
 	if err != nil {
 		return arrow.Field{}, err
@@ -67,10 +70,18 @@ func arrowBaseType(field catalogdomain.Field, path string) (arrow.DataType, erro
 	case "FLOAT64", "FLOAT":
 		return arrow.PrimitiveTypes.Float64, nil
 	case "NUMERIC":
-		return &arrow.Decimal128Type{Precision: 38, Scale: 9}, nil
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return nil, fmt.Errorf("map BigQuery field at %s: %w", path, err)
+		}
+		return &arrow.Decimal128Type{Precision: int32(parameters.Precision), Scale: int32(parameters.Scale)}, nil
 	case "BIGNUMERIC":
-		return &arrow.Decimal256Type{Precision: 76, Scale: 38}, nil
-	case "STRING", "GEOGRAPHY", "JSON":
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return nil, fmt.Errorf("map BigQuery field at %s: %w", path, err)
+		}
+		return &arrow.Decimal256Type{Precision: int32(parameters.Precision), Scale: int32(parameters.Scale)}, nil
+	case "STRING", "JSON":
 		return arrow.BinaryTypes.String, nil
 	case "BYTES":
 		return arrow.BinaryTypes.Binary, nil
@@ -119,8 +130,6 @@ func arrowExtensionName(field catalogdomain.Field) string {
 	switch strings.ToUpper(field.Type) {
 	case "DATETIME":
 		return "google:sqlType:datetime"
-	case "GEOGRAPHY":
-		return "google:sqlType:geography"
 	case "JSON":
 		return "google:sqlType:json"
 	default:
@@ -193,18 +202,26 @@ func appendArrowValue(builder array.Builder, field catalogdomain.Field, value sn
 	case "FLOAT64", "FLOAT":
 		builder.(*array.Float64Builder).Append(value.Float)
 	case "NUMERIC":
-		decimal, err := decimal128.FromString(value.Text, 38, 9)
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return err
+		}
+		decimal, err := decimal128.FromString(value.Text, int32(parameters.Precision), int32(parameters.Scale))
 		if err != nil {
 			return fmt.Errorf("parse NUMERIC %q: %w", value.Text, err)
 		}
 		builder.(*array.Decimal128Builder).Append(decimal)
 	case "BIGNUMERIC":
-		decimal, err := decimal256.FromString(value.Text, 76, 38)
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return err
+		}
+		decimal, err := decimal256.FromString(value.Text, int32(parameters.Precision), int32(parameters.Scale))
 		if err != nil {
 			return fmt.Errorf("parse BIGNUMERIC %q: %w", value.Text, err)
 		}
 		builder.(*array.Decimal256Builder).Append(decimal)
-	case "STRING", "GEOGRAPHY", "JSON":
+	case "STRING", "JSON":
 		builder.(*array.StringBuilder).Append(value.Text)
 	case "BYTES":
 		builder.(*array.BinaryBuilder).Append(value.Bytes)

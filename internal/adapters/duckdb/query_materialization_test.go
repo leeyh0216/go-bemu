@@ -135,6 +135,89 @@ func TestQueryDestinationNormalizesAnonymousAggregateColumn(t *testing.T) {
 	}
 }
 
+func TestQueryMaterializationCarriesRecursiveDecimalSchemaAndValues(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, _ := newQueryMaterializationFixture(t, ctx)
+	precision10, scale2 := int64(10), int64(2)
+	schema := []domain.Field{
+		{Name: "amount", Type: "BIGNUMERIC"},
+		{Name: "details", Type: "STRUCT", Fields: []domain.Field{{Name: "nested_amount", Type: "BIGNUMERIC"}}},
+		{Name: "amounts", Type: "NUMERIC", Mode: "REPEATED", Precision: &precision10, Scale: &scale2},
+	}
+	if err := warehouse.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: "decimal_source", Schema: schema}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO "bq_746573742d70726f6a656374_616e616c7974696373"."decimal_source" VALUES
+		(12345678901234567890.123456789012345678, {'nested_amount': 1.000000000000000001}, [12.34, 56.78])`); err != nil {
+		t.Fatal(err)
+	}
+	request := queryMaterializationRequest(
+		"SELECT amount, details, amounts FROM `test-project.analytics.decimal_source`",
+		domain.WriteEmpty, false, nil,
+	)
+	request.Destination.TableID = "decimal_result"
+	result, err := warehouse.MaterializeQuery(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := result.QueryResult.Columns
+	if len(fields) != 3 || fields[0].Type != "BIGNUMERIC" || fields[0].Precision == nil || *fields[0].Precision != 38 || *fields[0].Scale != 18 ||
+		fields[1].Type != "RECORD" || fields[1].Fields[0].Type != "BIGNUMERIC" || fields[2].Mode != "REPEATED" || fields[2].Type != "NUMERIC" {
+		t.Fatalf("recursive query schema = %#v", fields)
+	}
+	row := result.QueryResult.Rows[0]
+	details, ok := row[1].(map[string]any)
+	if row[0] != "12345678901234567890.123456789012345678" || !ok || details["nested_amount"] != "1.000000000000000001" {
+		t.Fatalf("canonical decimal query row = %#v", row)
+	}
+}
+
+func TestExistingDestinationRestoresAmbiguousBigNumericIdentity(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, _ := newQueryMaterializationFixture(t, ctx)
+	precision, scale := int64(10), int64(2)
+	schema := []domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale}}
+	for _, tableID := range []string{"ambiguous_source", "ambiguous_destination"} {
+		if err := warehouse.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: tableID, Schema: schema}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO "bq_746573742d70726f6a656374_616e616c7974696373"."ambiguous_source" VALUES (12345678.90)`); err != nil {
+		t.Fatal(err)
+	}
+	request := queryMaterializationRequest(
+		"SELECT amount FROM `test-project.analytics.ambiguous_source`", domain.WriteAppend, true, schema,
+	)
+	request.Destination.TableID = "ambiguous_destination"
+	result, err := warehouse.MaterializeQuery(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	field := result.QueryResult.Columns[0]
+	if field.Type != "BIGNUMERIC" || field.Precision == nil || *field.Precision != 10 || field.Scale == nil || *field.Scale != 2 {
+		t.Fatalf("destination metadata did not restore BIGNUMERIC identity: %#v", field)
+	}
+}
+
+func TestQuerySchemaInfersBigNumericWhenNumericRangeCannotRepresentDecimal(t *testing.T) {
+	field, err := parseDuckDBResultType("DECIMAL(38,2)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if field.Type != "BIGNUMERIC" || field.Precision == nil || *field.Precision != 38 || field.Scale == nil || *field.Scale != 2 {
+		t.Fatalf("DECIMAL(38,2) query field = %#v, want unambiguous BIGNUMERIC", field)
+	}
+	ambiguous, err := parseDuckDBResultType("DECIMAL(10,2)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ambiguous.Type != "NUMERIC" {
+		t.Fatalf("DECIMAL(10,2) query field = %#v, want conservative NUMERIC", ambiguous)
+	}
+}
+
 func TestQueryMaterializationLogsShapeAndDigestWithoutRawSQLOrRows(t *testing.T) {
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()

@@ -104,7 +104,7 @@ func normalizeSnapshotValue(field catalogdomain.Field, raw any) (snapshotValue, 
 			return snapshotValue{}, err
 		}
 		return snapshotValue{Text: value}, nil
-	case "STRING", "GEOGRAPHY":
+	case "STRING":
 		value, err := snapshotString(raw)
 		if err != nil {
 			return snapshotValue{}, err

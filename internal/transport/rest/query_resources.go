@@ -211,7 +211,7 @@ func statementType(sql string) string {
 	return fields[0]
 }
 
-func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPageToken string) queryResponse {
+func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPageToken string) (queryResponse, error) {
 	response := queryResponse{
 		Kind: "bigquery#getQueryResultsResponse",
 		JobReference: jobReferenceResource{
@@ -223,12 +223,9 @@ func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPage
 		response.Errors = []errorProto{{Reason: job.Error.Reason, Message: job.Error.Message}}
 	}
 	if job.Result == nil {
-		return response
+		return response, nil
 	}
-	fields := make([]tableFieldSchema, len(job.Result.Columns))
-	for i, column := range job.Result.Columns {
-		fields[i] = tableFieldSchema{Name: column.Name, Type: column.Type, Mode: "NULLABLE"}
-	}
+	fields := fieldsFromDomain(job.Result.Columns)
 	if len(fields) > 0 {
 		response.Schema = &tableSchema{Fields: fields}
 	}
@@ -240,9 +237,16 @@ func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPage
 	}
 	response.Rows = make([]tableRow, 0, endIndex-startIndex)
 	for _, row := range job.Result.Rows[startIndex:endIndex] {
+		if len(row) != len(job.Result.Columns) {
+			return queryResponse{}, fmt.Errorf("query result row has %d values for %d fields", len(row), len(job.Result.Columns))
+		}
 		cells := make([]tableCell, len(row))
 		for i, value := range row {
-			cells[i] = tableCell{Value: encodeCell(value)}
+			encoded, err := tableDataValue(job.Result.Columns[i], value, tableDataFormatOptions{})
+			if err != nil {
+				return queryResponse{}, fmt.Errorf("encode query result field %q: %w", job.Result.Columns[i].Name, err)
+			}
+			cells[i] = tableCell{Value: encoded}
 		}
 		response.Rows = append(response.Rows, tableRow{Fields: cells})
 	}
@@ -251,7 +255,7 @@ func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPage
 	if job.Result.AffectedRows != 0 {
 		response.NumDMLAffectedRows = strconv.FormatInt(job.Result.AffectedRows, 10)
 	}
-	return response
+	return response, nil
 }
 
 func encodeCell(value any) any {

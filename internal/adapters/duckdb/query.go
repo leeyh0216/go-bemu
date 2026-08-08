@@ -71,9 +71,9 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 	if err != nil {
 		return domain.QueryResult{}, fmt.Errorf("read result schema: %w", err)
 	}
-	result = domain.QueryResult{Columns: make([]domain.Column, len(columnTypes))}
-	for i, columnType := range columnTypes {
-		result.Columns[i] = domain.Column{Name: columnType.Name(), Type: bigQueryType(columnType.DatabaseTypeName())}
+	result.Columns, err = queryResultSchema(columnTypes)
+	if err != nil {
+		return domain.QueryResult{}, err
 	}
 	for rows.Next() {
 		values := make([]any, len(columnTypes))
@@ -84,7 +84,11 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 		if err := rows.Scan(destinations...); err != nil {
 			return domain.QueryResult{}, fmt.Errorf("scan result row: %w", err)
 		}
-		result.Rows = append(result.Rows, values)
+		normalized, normalizeErr := normalizeSnapshotRow(result.Columns, values)
+		if normalizeErr != nil {
+			return domain.QueryResult{}, fmt.Errorf("normalize result row: %w", normalizeErr)
+		}
+		result.Rows = append(result.Rows, tableDataCanonicalRow(result.Columns, normalized))
 	}
 	if err := rows.Err(); err != nil {
 		return domain.QueryResult{}, fmt.Errorf("read result rows: %w", err)

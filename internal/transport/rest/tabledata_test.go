@@ -422,7 +422,8 @@ func TestTableDataListPagesNestedRowsAcrossPublicRESTEdge(t *testing.T) {
 		t.Fatalf("INT64 cell = %#v", cells[0])
 	}
 	record := cells[2].(map[string]any)["v"].(map[string]any)["f"].([]any)
-	if record[0].(map[string]any)["v"] != "3" || record[1].(map[string]any)["v"] != "nested-one" {
+	if record[0].(map[string]any)["v"] != "3" || record[1].(map[string]any)["v"] != "nested-one" ||
+		record[2].(map[string]any)["v"] != "1.000000000000000001" {
 		t.Fatalf("STRUCT cell = %#v", record)
 	}
 	repeated := cells[3].(map[string]any)["v"].([]any)
@@ -432,6 +433,13 @@ func TestTableDataListPagesNestedRowsAcrossPublicRESTEdge(t *testing.T) {
 	wantTimestamp := time.Date(2026, 8, 8, 1, 2, 3, 123456000, time.UTC)
 	if cells[4].(map[string]any)["v"] != "1786150923.123456" {
 		t.Fatalf("default TIMESTAMP cell = %#v", cells[4])
+	}
+	if cells[5].(map[string]any)["v"] != "12.34" {
+		t.Fatalf("NUMERIC cell = %#v", cells[5])
+	}
+	repeatedDecimals := cells[6].(map[string]any)["v"].([]any)
+	if len(repeatedDecimals) != 2 || repeatedDecimals[0].(map[string]any)["v"] != "2.000000000000000002" {
+		t.Fatalf("REPEATED BIGNUMERIC cell = %#v", repeatedDecimals)
 	}
 	int64Timestamp := request(path+"&formatOptions.useInt64Timestamp=true", http.StatusOK)
 	int64Cells := int64Timestamp["rows"].([]any)[0].(map[string]any)["f"].([]any)
@@ -463,24 +471,27 @@ func createTableDataRESTFixture(t *testing.T, ctx context.Context, catalog *appl
 	if _, err := catalog.CreateDataset(ctx, domain.Dataset{ProjectID: "test-project", ID: "analytics", Location: "US"}); err != nil {
 		t.Fatal(err)
 	}
+	precision10, scale2 := int64(10), int64(2)
 	if _, err := catalog.CreateTable(ctx, domain.Table{
 		ProjectID: "test-project", DatasetID: "analytics", ID: "events",
 		Schema: []domain.Field{
 			{Name: "id", Type: "INT64", Mode: "REQUIRED"},
 			{Name: "label", Type: "STRING"},
 			{Name: "payload", Type: "RECORD", Fields: []domain.Field{
-				{Name: "score", Type: "INT64"}, {Name: "name", Type: "STRING"},
+				{Name: "score", Type: "INT64"}, {Name: "name", Type: "STRING"}, {Name: "amount", Type: "BIGNUMERIC"},
 			}},
 			{Name: "tags", Type: "STRING", Mode: "REPEATED"},
 			{Name: "event_time", Type: "TIMESTAMP"},
+			{Name: "amount", Type: "NUMERIC", Precision: &precision10, Scale: &scale2},
+			{Name: "large_amounts", Type: "BIGNUMERIC", Mode: "REPEATED"},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	_, err := warehouse.Query(ctx, ports.QueryRequest{SQL: `
 		INSERT INTO ` + "`test-project.analytics.events`" + ` VALUES
-		(1, 'first', {'score': 3, 'name': 'nested-one'}, ['alpha', 'beta'], TIMESTAMPTZ '2026-08-08 01:02:03.123456+00'),
-		(2, NULL, {'score': NULL, 'name': 'nested-two'}, [], TIMESTAMPTZ '1969-12-31 23:59:59.000001+00')
+		(1, 'first', {'score': 3, 'name': 'nested-one', 'amount': 1.000000000000000001}, ['alpha', 'beta'], TIMESTAMPTZ '2026-08-08 01:02:03.123456+00', 12.34, [2.000000000000000002, 3.000000000000000003]),
+		(2, NULL, {'score': NULL, 'name': 'nested-two', 'amount': NULL}, [], TIMESTAMPTZ '1969-12-31 23:59:59.000001+00', NULL, [])
 	`})
 	if err != nil {
 		t.Fatal(err)

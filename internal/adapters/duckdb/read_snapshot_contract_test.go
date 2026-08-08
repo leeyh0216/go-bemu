@@ -50,7 +50,7 @@ func TestArrowReferenceSchemaPreservesOfficialTypesModesOrderAndMetadata(t *test
 	wantTypes := []arrow.Type{
 		arrow.BOOL, arrow.INT64, arrow.FLOAT64, arrow.DECIMAL128, arrow.DECIMAL256,
 		arrow.STRING, arrow.BINARY, arrow.DATE32, arrow.TIMESTAMP, arrow.TIME64,
-		arrow.TIMESTAMP, arrow.STRING, arrow.STRING, arrow.STRUCT, arrow.LIST,
+		arrow.TIMESTAMP, arrow.STRING, arrow.STRUCT, arrow.LIST,
 	}
 	for index, want := range wantTypes {
 		got := schema.Field(index)
@@ -70,16 +70,16 @@ func TestArrowReferenceSchemaPreservesOfficialTypesModesOrderAndMetadata(t *test
 	if !schema.Field(1).Nullable {
 		t.Fatal("default mode must be nullable")
 	}
-	list, ok := schema.Field(14).Type.(*arrow.ListType)
-	if !ok || schema.Field(14).Nullable || list.ElemField().Nullable {
-		t.Fatalf("REPEATED mapping = %#v; want non-null list and element", schema.Field(14))
+	list, ok := schema.Field(13).Type.(*arrow.ListType)
+	if !ok || schema.Field(13).Nullable || list.ElemField().Nullable {
+		t.Fatalf("REPEATED mapping = %#v; want non-null list and element", schema.Field(13))
 	}
 	decimal128Type := schema.Field(3).Type.(*arrow.Decimal128Type)
 	if decimal128Type.Precision != 38 || decimal128Type.Scale != 9 {
 		t.Fatalf("NUMERIC Arrow type = %v", decimal128Type)
 	}
 	decimal256Type := schema.Field(4).Type.(*arrow.Decimal256Type)
-	if decimal256Type.Precision != 76 || decimal256Type.Scale != 38 {
+	if decimal256Type.Precision != 38 || decimal256Type.Scale != 18 {
 		t.Fatalf("BIGNUMERIC Arrow type = %v", decimal256Type)
 	}
 	dateTimeType := schema.Field(8).Type.(*arrow.TimestampType)
@@ -92,8 +92,7 @@ func TestArrowReferenceSchemaPreservesOfficialTypesModesOrderAndMetadata(t *test
 	}
 	wantExtensions := map[int]string{
 		8:  "google:sqlType:datetime",
-		11: "google:sqlType:geography",
-		12: "google:sqlType:json",
+		11: "google:sqlType:json",
 	}
 	for index, want := range wantExtensions {
 		if extension, ok := schema.Field(index).Metadata.GetValue("ARROW:extension:name"); !ok || extension != want {
@@ -140,15 +139,14 @@ func TestAvroReferenceSchemaPreservesOfficialTypesAndNullFirstUnion(t *testing.T
 	}
 	checks := map[int][]string{
 		3:  {`"logicalType":"decimal"`, `"precision":38`, `"scale":9`},
-		4:  {`"logicalType":"decimal"`, `"precision":77`, `"scale":38`},
+		4:  {`"logicalType":"decimal"`, `"precision":38`, `"scale":18`},
 		7:  {`"logicalType":"date"`},
 		8:  {`"logicalType":"datetime"`},
 		9:  {`"logicalType":"time-micros"`},
 		10: {`"logicalType":"timestamp-micros"`},
-		11: {`"sqlType":"GEOGRAPHY"`},
-		12: {`"sqlType":"JSON"`},
-		13: {`"type":"record"`},
-		14: {`"type":"array"`},
+		11: {`"sqlType":"JSON"`},
+		12: {`"type":"record"`},
+		13: {`"type":"array"`},
 	}
 	for index, fragments := range checks {
 		for _, fragment := range fragments {
@@ -156,6 +154,123 @@ func TestAvroReferenceSchemaPreservesOfficialTypesAndNullFirstUnion(t *testing.T
 				t.Errorf("Avro field %q lacks %s: %s", fields[index].Name, fragment, schema.Fields[index].Type)
 			}
 		}
+	}
+}
+
+func TestReferenceSchemasPreserveExplicitDecimalParameters(t *testing.T) {
+	precision20, scale4 := int64(20), int64(4)
+	precision38, scale12 := int64(38), int64(12)
+	fields := []catalogdomain.Field{
+		{Name: "numeric_value", Type: "NUMERIC", Precision: &precision20, Scale: &scale4},
+		{Name: "bignumeric_value", Type: "BIGNUMERIC", Precision: &precision38, Scale: &scale12},
+	}
+
+	arrowSchema, _, err := buildArrowReferenceSchema(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	numericType := arrowSchema.Field(0).Type.(*arrow.Decimal128Type)
+	if numericType.Precision != 20 || numericType.Scale != 4 {
+		t.Fatalf("explicit NUMERIC Arrow type = %v", numericType)
+	}
+	bignumericType := arrowSchema.Field(1).Type.(*arrow.Decimal256Type)
+	if bignumericType.Precision != 38 || bignumericType.Scale != 12 {
+		t.Fatalf("explicit BIGNUMERIC Arrow type = %v", bignumericType)
+	}
+
+	avroSchema, err := buildAvroReferenceSchema(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`"precision":20,"scale":4`, `"precision":38,"scale":12`} {
+		if !strings.Contains(string(avroSchema), fragment) {
+			t.Fatalf("Avro decimal schema lacks %s: %s", fragment, avroSchema)
+		}
+	}
+}
+
+func TestReferenceSchemasRejectUnsupportedLogicalTypesBeforeEncoding(t *testing.T) {
+	precision := int64(39)
+	for _, testCase := range []struct {
+		name   string
+		fields []catalogdomain.Field
+	}{
+		{name: "geography", fields: []catalogdomain.Field{{Name: "location", Type: "GEOGRAPHY"}}},
+		{name: "decimal precision 39", fields: []catalogdomain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: &precision}}},
+		{name: "nested geography", fields: []catalogdomain.Field{{
+			Name: "items", Type: "RECORD", Mode: "REPEATED",
+			Fields: []catalogdomain.Field{{Name: "location", Type: "GEOGRAPHY"}},
+		}}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, _, err := buildArrowReferenceSchema(testCase.fields); !errors.Is(err, catalogdomain.ErrUnsupported) {
+				t.Fatalf("Arrow schema error = %v, want ErrUnsupported", err)
+			}
+			if _, err := buildAvroReferenceSchema(testCase.fields); !errors.Is(err, catalogdomain.ErrUnsupported) {
+				t.Fatalf("Avro schema error = %v, want ErrUnsupported", err)
+			}
+		})
+	}
+}
+
+func TestReadSnapshotClassifiesUnsupportedSchemaBeforePhysicalQuery(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "unsupported", Type: "TABLE",
+		Schema: []catalogdomain.Field{{Name: "location", Type: "GEOGRAPHY"}},
+	}
+	materializer, err := NewReadSnapshotMaterializer(
+		warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = materializer.Materialize(ctx, readdomain.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+	})
+	if code := readdomain.CodeOf(err); code != readdomain.ErrorUnimplemented {
+		t.Fatalf("Storage Read unsupported schema code = %s, error = %v", code, err)
+	}
+}
+
+func TestReferenceSchemasPreserveRecursiveRepeatedDecimalIdentity(t *testing.T) {
+	precision, scale := int64(38), int64(18)
+	fields := []catalogdomain.Field{{
+		Name: "items", Type: "STRUCT", Mode: "REPEATED", Fields: []catalogdomain.Field{{
+			Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale,
+		}},
+	}}
+	arrowSchema, _, err := buildArrowReferenceSchema(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := arrowSchema.Field(0).Type.(*arrow.ListType)
+	structure := list.Elem().(*arrow.StructType)
+	decimal := structure.Field(0).Type.(*arrow.Decimal256Type)
+	if decimal.Precision != 38 || decimal.Scale != 18 {
+		t.Fatalf("recursive Arrow decimal type = %v", decimal)
+	}
+	avroSchema, err := buildAvroReferenceSchema(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`"type":"array"`, `"type":"record"`, `"precision":38`, `"scale":18`} {
+		if !strings.Contains(string(avroSchema), fragment) {
+			t.Fatalf("recursive Avro schema lacks %s: %s", fragment, avroSchema)
+		}
+	}
+	rows := [][]snapshotValue{{{Children: []snapshotValue{{Children: []snapshotValue{{Text: "1.000000000000000001"}}}}}}}
+	if _, err := encodeArrowRecordBatch(arrowSchema, fields, rows); err != nil {
+		t.Fatal(err)
+	}
+	if encoded, err := encodeAvroRows(fields, rows); err != nil || len(encoded) == 0 {
+		t.Fatalf("recursive Avro decimal row bytes=%d err=%v", len(encoded), err)
 	}
 }
 
@@ -224,14 +339,13 @@ func TestDuckDBReadSnapshotEncodesEverySupportedDriverTypeInBothFormats(t *testi
 		"-42",
 		"1.25",
 		"CAST('123.456789012' AS DECIMAL(38,9))",
-		"'1.00000000000000000000000000000000000000'",
+		"CAST('1.000000000000000000' AS DECIMAL(38,18))",
 		"'text-value'",
 		"from_hex('00ff')",
 		"DATE '2026-08-08'",
 		"TIMESTAMP '2026-08-08 12:34:56.123456'",
 		"TIME '12:34:56.123456'",
 		"TIMESTAMPTZ '2026-08-08 12:34:56.123456+00'",
-		"'POINT(1 2)'",
 		"'{\"answer\":42}'",
 		"{'child':'nested-value'}",
 		"[1, 2, 3]",
@@ -326,7 +440,7 @@ func TestAvroDecimalUsesMinimalSignedTwosComplement(t *testing.T) {
 		{input: "-129", scale: 0, want: []byte{0xff, 0x7f}},
 	}
 	for _, testCase := range tests {
-		got, err := avroDecimalBytes(testCase.input, testCase.scale)
+		got, err := avroDecimalBytes(testCase.input, 38, testCase.scale)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,8 +448,11 @@ func TestAvroDecimalUsesMinimalSignedTwosComplement(t *testing.T) {
 			t.Errorf("decimal %s = %x, want %x", testCase.input, got, testCase.want)
 		}
 	}
-	if _, err := avroDecimalBytes("1.001", 2); err == nil {
+	if _, err := avroDecimalBytes("1.001", 38, 2); err == nil {
 		t.Fatal("expected a value exceeding the declared scale to fail")
+	}
+	if _, err := avroDecimalBytes("1000", 3, 0); err == nil {
+		t.Fatal("expected a value exceeding the declared precision to fail")
 	}
 	if err := ctx.Err(); err != nil {
 		t.Fatal(err)
@@ -389,7 +506,6 @@ func readContractFields() []catalogdomain.Field {
 		{Name: "datetime_value", Type: "DATETIME"},
 		{Name: "time_value", Type: "TIME"},
 		{Name: "timestamp_value", Type: "TIMESTAMP"},
-		{Name: "geography_value", Type: "GEOGRAPHY"},
 		{Name: "json_value", Type: "JSON"},
 		{Name: "record_value", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "child", Type: "STRING"}}},
 		{Name: "repeated_value", Type: "INT64", Mode: "REPEATED"},

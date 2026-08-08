@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
+	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/config"
 	"github.com/leeyh0216/go-bemu/internal/contracttest"
 )
@@ -29,15 +31,16 @@ func TestComposeStorageWriteSupportsExplicitDisableAndCleanClose(t *testing.T) {
 	t.Cleanup(func() { _ = warehouse.Close() })
 	cfg := config.Defaults()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, system.Clock{})
 
 	cfg.Storage.Write.Enabled = false
-	disabled, err := composeStorageWrite(ctx, cfg, warehouse, system.Clock{}, system.IDGenerator{}, logger)
+	disabled, err := composeStorageWrite(ctx, cfg, warehouse, catalog, system.Clock{}, system.IDGenerator{}, logger)
 	if err != nil || disabled.Service != nil {
 		t.Fatalf("disabled Storage Write = %#v, %v", disabled, err)
 	}
 
 	cfg.Storage.Write.Enabled = true
-	runtime, err := composeStorageWrite(ctx, cfg, warehouse, system.Clock{}, system.IDGenerator{}, logger)
+	runtime, err := composeStorageWrite(ctx, cfg, warehouse, catalog, system.Clock{}, system.IDGenerator{}, logger)
 	if err != nil || runtime.Service == nil {
 		t.Fatalf("enabled Storage Write = %#v, %v", runtime, err)
 	}

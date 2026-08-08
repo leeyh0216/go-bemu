@@ -467,17 +467,16 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domai
 		return domain.QueryResult{}, fmt.Errorf("%w: materializer did not create the requested destination", domain.ErrPrecondition)
 	}
 
-	fields := make([]domain.Field, len(materialized.QueryResult.Columns))
-	for index, column := range materialized.QueryResult.Columns {
-		if column.Type == "ARRAY" || column.Type == "RECORD" {
-			resultErr := fmt.Errorf("%w: complex query-result schemas require recursive mode/field metadata; capability=%s",
-				domain.ErrPrecondition, domain.GapQueryComplexResultSchemaV1)
+	fields := domain.CloneFields(materialized.QueryResult.Columns)
+	for _, field := range fields {
+		if fieldErr := field.Validate(); fieldErr != nil {
+			resultErr := fmt.Errorf("%w: query result lacks a canonical recursive schema; capability=%s: %v",
+				domain.ErrPrecondition, domain.GapQueryComplexResultSchemaV1, fieldErr)
 			if cleanupErr := s.compensateMaterializedDestination(ctx, destination); cleanupErr != nil {
 				return domain.QueryResult{}, errors.Join(resultErr, cleanupErr)
 			}
 			return domain.QueryResult{}, resultErr
 		}
-		fields[index] = domain.Field{Name: column.Name, Type: column.Type, Mode: "NULLABLE"}
 	}
 	table := domain.Table{
 		ProjectID: destination.ProjectID, DatasetID: destination.DatasetID, ID: destination.TableID,

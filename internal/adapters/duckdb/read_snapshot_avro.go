@@ -50,6 +50,9 @@ func buildAvroReferenceSchema(fields []catalogdomain.Field) ([]byte, error) {
 }
 
 func avroFieldType(field catalogdomain.Field, path string) (any, error) {
+	if err := field.Validate(); err != nil {
+		return nil, fmt.Errorf("map BigQuery field at %s: %w", path, err)
+	}
 	base, err := avroBaseType(field, path)
 	if err != nil {
 		return nil, err
@@ -84,11 +87,17 @@ func avroBaseType(field catalogdomain.Field, path string) (any, error) {
 	case "TIME":
 		return map[string]any{"type": "long", "logicalType": "time-micros"}, nil
 	case "NUMERIC":
-		return map[string]any{"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 9}, nil
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return nil, fmt.Errorf("map BigQuery field at %s: %w", path, err)
+		}
+		return map[string]any{"type": "bytes", "logicalType": "decimal", "precision": parameters.Precision, "scale": parameters.Scale}, nil
 	case "BIGNUMERIC":
-		return map[string]any{"type": "bytes", "logicalType": "decimal", "precision": 77, "scale": 38}, nil
-	case "GEOGRAPHY":
-		return map[string]any{"type": "string", "sqlType": "GEOGRAPHY"}, nil
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return nil, fmt.Errorf("map BigQuery field at %s: %w", path, err)
+		}
+		return map[string]any{"type": "bytes", "logicalType": "decimal", "precision": parameters.Precision, "scale": parameters.Scale}, nil
 	case "JSON":
 		return map[string]any{"type": "string", "sqlType": "JSON"}, nil
 	case "RECORD", "STRUCT":
@@ -175,7 +184,7 @@ func appendAvroValue(output *bytes.Buffer, field catalogdomain.Field, value snap
 		var encoded [8]byte
 		binary.LittleEndian.PutUint64(encoded[:], math.Float64bits(value.Float))
 		output.Write(encoded[:])
-	case "STRING", "GEOGRAPHY", "JSON":
+	case "STRING", "JSON":
 		appendAvroBytes(output, []byte(value.Text))
 	case "BYTES":
 		appendAvroBytes(output, value.Bytes)
@@ -184,13 +193,21 @@ func appendAvroValue(output *bytes.Buffer, field catalogdomain.Field, value snap
 	case "DATETIME":
 		appendAvroBytes(output, []byte(value.Text))
 	case "NUMERIC":
-		decimal, err := avroDecimalBytes(value.Text, 9)
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return err
+		}
+		decimal, err := avroDecimalBytes(value.Text, parameters.Precision, parameters.Scale)
 		if err != nil {
 			return err
 		}
 		appendAvroBytes(output, decimal)
 	case "BIGNUMERIC":
-		decimal, err := avroDecimalBytes(value.Text, 38)
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return err
+		}
+		decimal, err := avroDecimalBytes(value.Text, parameters.Precision, parameters.Scale)
 		if err != nil {
 			return err
 		}
@@ -222,7 +239,7 @@ func appendAvroBytes(output *bytes.Buffer, value []byte) {
 	output.Write(value)
 }
 
-func avroDecimalBytes(input string, scale int64) ([]byte, error) {
+func avroDecimalBytes(input string, precision, scale int64) ([]byte, error) {
 	rational, ok := new(big.Rat).SetString(input)
 	if !ok {
 		return nil, fmt.Errorf("invalid decimal %q", input)
@@ -231,6 +248,13 @@ func avroDecimalBytes(input string, scale int64) ([]byte, error) {
 	rational.Mul(rational, new(big.Rat).SetInt(factor))
 	if rational.Denom().Cmp(big.NewInt(1)) != 0 {
 		return nil, fmt.Errorf("decimal %q exceeds scale %d", input, scale)
+	}
+	digits := len(new(big.Int).Abs(rational.Num()).String())
+	if rational.Num().Sign() == 0 {
+		digits = 1
+	}
+	if int64(digits) > precision {
+		return nil, fmt.Errorf("decimal %q exceeds precision %d", input, precision)
 	}
 	return signedBigEndian(rational.Num()), nil
 }

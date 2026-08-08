@@ -517,6 +517,8 @@ func (s *Service) describeTable(ctx context.Context, operation string, table dom
 		code := coordinatorErrorCode(err, domain.ErrorInternal)
 		if errors.Is(err, ports.ErrTableNotFound) {
 			code = domain.ErrorNotFound
+		} else if errors.Is(err, ports.ErrUnsupportedSchema) {
+			code = domain.ErrorUnimplemented
 		}
 		return domain.TableSchema{}, domain.NewError(code, operation, err)
 	}

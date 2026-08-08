@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 )
 
 var resourceSegmentPattern = regexp.MustCompile(`^[^/]+$`)
@@ -27,13 +29,7 @@ const (
 	StreamStateCommitted StreamState = "COMMITTED"
 )
 
-type Field struct {
-	Name        string
-	Type        string
-	Mode        string
-	Description string
-	Fields      []Field
-}
+type Field = catalogdomain.Field
 
 type TableSchema struct {
 	Fields []Field

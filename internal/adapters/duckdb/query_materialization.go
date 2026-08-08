@@ -17,6 +17,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -81,12 +82,13 @@ func (w *Warehouse) MaterializeQuery(ctx context.Context, request ports.QueryMat
 	if err := normalizeMaterializedColumnNames(ctx, tx, staging, &queryResult); err != nil {
 		return result, err
 	}
-	result.QueryResult = queryResult
 	if request.DestinationExists {
 		if err := validateExistingQueryDestinationShape(queryResult.Columns, request.DestinationSchema, request.WriteDisposition); err != nil {
 			return result, err
 		}
+		queryResult.Columns = queryResultSchemaFromDestination(request.DestinationSchema)
 	}
+	result.QueryResult = queryResult
 
 	destinationName := quoteIdentifier(physicalSchema(destination.ProjectID, destination.DatasetID)) + "." + quoteIdentifier(destination.TableID)
 	if request.DestinationExists {
@@ -197,14 +199,46 @@ func validateExistingQueryDestinationShape(columns []domain.Column, fields []dom
 	}
 	for index := range fields {
 		field := fields[index]
-		if len(field.Fields) != 0 || strings.EqualFold(field.Mode, "REPEATED") {
-			return fmt.Errorf("%w: nested or repeated existing query destinations are not implemented; capability=%s field_index=%d", domain.ErrPrecondition, domain.CapabilityQueryDestinationExactSchemaV1, index)
-		}
-		if !strings.EqualFold(columns[index].Name, field.Name) || canonicalQueryDestinationType(columns[index].Type) != canonicalQueryDestinationType(field.Type) {
+		if !strings.EqualFold(columns[index].Name, field.Name) || !queryDestinationFieldsCompatible(columns[index], field) {
 			return fmt.Errorf("%w: query output and destination schemas differ; capability=%s field_index=%d writeDisposition=%s fix_hint=use the Spark 0.44.2 SELECT-star copyData shape or pre-create an exact schema", domain.ErrPrecondition, domain.CapabilityQueryDestinationExactSchemaV1, index, disposition)
 		}
 	}
 	return nil
+}
+
+func queryDestinationFieldsCompatible(output, destination domain.Field) bool {
+	outputType := canonicalQueryDestinationType(output.Type)
+	destinationType := canonicalQueryDestinationType(destination.Type)
+	if (outputType == "NUMERIC" || outputType == "BIGNUMERIC") && (destinationType == "NUMERIC" || destinationType == "BIGNUMERIC") {
+		outputParameters, outputErr := output.EffectiveDecimalParameters()
+		destinationParameters, destinationErr := destination.EffectiveDecimalParameters()
+		return outputErr == nil && destinationErr == nil && outputParameters == destinationParameters &&
+			strings.EqualFold(output.Mode, "REPEATED") == strings.EqualFold(destination.Mode, "REPEATED")
+	}
+	if outputType != destinationType || strings.EqualFold(output.Mode, "REPEATED") != strings.EqualFold(destination.Mode, "REPEATED") || len(output.Fields) != len(destination.Fields) {
+		return false
+	}
+	for index := range output.Fields {
+		if !strings.EqualFold(output.Fields[index].Name, destination.Fields[index].Name) || !queryDestinationFieldsCompatible(output.Fields[index], destination.Fields[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func queryResultSchemaFromDestination(fields []domain.Field) []domain.Field {
+	result := domain.CloneFields(fields)
+	var normalize func([]domain.Field)
+	normalize = func(fields []domain.Field) {
+		for index := range fields {
+			if !strings.EqualFold(fields[index].Mode, "REPEATED") {
+				fields[index].Mode = "NULLABLE"
+			}
+			normalize(fields[index].Fields)
+		}
+	}
+	normalize(result)
+	return result
 }
 
 func canonicalQueryDestinationType(value string) string {
@@ -221,6 +255,8 @@ func canonicalQueryDestinationType(value string) string {
 		return "BYTES"
 	case "NUMERIC":
 		return "NUMERIC"
+	case "BIGNUMERIC":
+		return "BIGNUMERIC"
 	case "DATE":
 		return "DATE"
 	case "DATETIME":
@@ -246,9 +282,10 @@ func readMaterializedQueryResult(ctx context.Context, tx *sql.Tx, staging string
 	if err != nil {
 		return domain.QueryResult{}, fmt.Errorf("read materialized result schema: %w", err)
 	}
-	result := domain.QueryResult{Columns: make([]domain.Column, len(columnTypes))}
-	for index, columnType := range columnTypes {
-		result.Columns[index] = domain.Column{Name: columnType.Name(), Type: bigQueryType(columnType.DatabaseTypeName())}
+	result := domain.QueryResult{}
+	result.Columns, err = queryResultSchema(columnTypes)
+	if err != nil {
+		return domain.QueryResult{}, err
 	}
 	for rows.Next() {
 		values := make([]any, len(columnTypes))
@@ -259,7 +296,11 @@ func readMaterializedQueryResult(ctx context.Context, tx *sql.Tx, staging string
 		if err := rows.Scan(destinations...); err != nil {
 			return domain.QueryResult{}, fmt.Errorf("scan materialized result row: %w", err)
 		}
-		result.Rows = append(result.Rows, values)
+		normalized, normalizeErr := normalizeSnapshotRow(result.Columns, values)
+		if normalizeErr != nil {
+			return domain.QueryResult{}, fmt.Errorf("normalize materialized result row: %w", normalizeErr)
+		}
+		result.Rows = append(result.Rows, tableDataCanonicalRow(result.Columns, normalized))
 	}
 	if err := rows.Err(); err != nil {
 		return domain.QueryResult{}, fmt.Errorf("read materialized result rows: %w", err)
@@ -272,17 +313,11 @@ func (w *Warehouse) DropMaterializedDestination(ctx context.Context, destination
 }
 
 func queryMaterializationSchemaDigest(columns []domain.Column) string {
-	parts := make([]string, len(columns))
-	for index, column := range columns {
-		parts[index] = column.Name + ":" + strings.ToUpper(column.Type)
-	}
-	return observability.Digest([]byte(strings.Join(parts, "\x00")))
+	encoded, _ := json.Marshal(columns)
+	return observability.Digest(encoded)
 }
 
 func queryDestinationSchemaDigest(fields []domain.Field) string {
-	parts := make([]string, len(fields))
-	for index, field := range fields {
-		parts[index] = field.Name + ":" + strings.ToUpper(field.Type) + ":" + strings.ToUpper(field.Mode)
-	}
-	return observability.Digest([]byte(strings.Join(parts, "\x00")))
+	encoded, _ := json.Marshal(fields)
+	return observability.Digest(encoded)
 }

@@ -31,6 +31,7 @@ func composeStorageWrite(
 	ctx context.Context,
 	cfg config.Config,
 	warehouse *duckdb.Warehouse,
+	resolver duckdb.StorageWriteTableSchemaResolver,
 	clock writeports.Clock,
 	ids writeports.IDGenerator,
 	logger *slog.Logger,
@@ -38,7 +39,7 @@ func composeStorageWrite(
 	if !cfg.Storage.Write.Enabled {
 		return &storageWriteRuntime{}, nil
 	}
-	coordinator, err := duckdb.NewStorageWriteCoordinator(ctx, warehouse, duckdb.StorageWriteCoordinatorConfig{
+	coordinator, err := duckdb.NewStorageWriteCoordinator(ctx, warehouse, resolver, duckdb.StorageWriteCoordinatorConfig{
 		QueueCapacity:             cfg.Storage.Write.QueueCapacity,
 		QueueWaitTimeout:          cfg.Storage.Write.QueueWaitTimeout.Value(),
 		OperationTimeout:          cfg.Storage.Write.OperationTimeout.Value(),

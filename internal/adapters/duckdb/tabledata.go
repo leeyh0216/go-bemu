@@ -141,7 +141,7 @@ func tableDataCanonicalValue(field domain.Field, value snapshotValue) any {
 		return value.Int
 	case "FLOAT64", "FLOAT":
 		return value.Float
-	case "NUMERIC", "BIGNUMERIC", "STRING", "GEOGRAPHY", "JSON", "DATETIME":
+	case "NUMERIC", "BIGNUMERIC", "STRING", "JSON", "DATETIME":
 		return value.Text
 	case "BYTES":
 		return bytes.Clone(value.Bytes)

@@ -82,7 +82,12 @@ func (h *queryHandlers) query(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, queryResponseFromDomain(job, start, end, next))
+	response, err := queryResponseFromDomain(job, start, end, next)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *queryHandlers) insertJob(w http.ResponseWriter, r *http.Request) {
@@ -258,5 +263,10 @@ func (h *queryHandlers) getQueryResults(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, queryResponseFromDomain(job, start, end, next))
+	response, err := queryResponseFromDomain(job, start, end, next)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }

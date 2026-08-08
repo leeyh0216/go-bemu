@@ -46,7 +46,7 @@ func cloneJob(job *domain.Job) *domain.Job {
 	}
 	if job.Result != nil {
 		result := *job.Result
-		result.Columns = append([]domain.Column(nil), job.Result.Columns...)
+		result.Columns = domain.CloneFields(job.Result.Columns)
 		result.Rows = make([][]any, len(job.Result.Rows))
 		for rowIndex, row := range job.Result.Rows {
 			result.Rows[rowIndex] = make([]any, len(row))

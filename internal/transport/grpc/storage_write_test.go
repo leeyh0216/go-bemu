@@ -240,6 +240,27 @@ func (c *wireWriteCoordinator) DiscardPending(_ context.Context, name string) er
 	return nil
 }
 
+func TestStorageWriteProtoSchemaPreservesRecursiveDecimalIdentity(t *testing.T) {
+	precision, scale := int64(38), int64(18)
+	message := tableSchemaToProto(writedomain.TableSchema{Fields: []writedomain.Field{{
+		Name: "items", Type: "STRUCT", Mode: "REPEATED", Fields: []writedomain.Field{{
+			Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale,
+		}},
+	}}})
+	field := message.GetFields()[0]
+	decimal := field.GetFields()[0]
+	if field.GetType() != storagepb.TableFieldSchema_STRUCT || field.GetMode() != storagepb.TableFieldSchema_REPEATED ||
+		decimal.GetType() != storagepb.TableFieldSchema_BIGNUMERIC || decimal.GetPrecision() != 38 || decimal.GetScale() != 18 {
+		t.Fatalf("Storage Write proto schema lost recursive decimal identity: %v", message)
+	}
+}
+
+func TestFieldTypeToProtoDoesNotAdvertiseGeography(t *testing.T) {
+	if got := fieldTypeToProto("GEOGRAPHY"); got != storagepb.TableFieldSchema_TYPE_UNSPECIFIED {
+		t.Fatalf("GEOGRAPHY proto type = %v, want TYPE_UNSPECIFIED", got)
+	}
+}
+
 func newWireWriteService(t *testing.T, coordinator writeports.Coordinator) *writeapp.Service {
 	t.Helper()
 	service, err := writeapp.New(writeapp.Config{

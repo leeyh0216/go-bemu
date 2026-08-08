@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 		{Name: "event_date", Type: "DATE"},
 		{Name: "event_at", Type: "TIMESTAMP"},
 		{Name: "amount", Type: "NUMERIC"},
-		{Name: "geo", Type: "GEOGRAPHY"},
+		{Name: "large_amount", Type: "BIGNUMERIC"},
 		{Name: "tags", Type: "STRING", Mode: "REPEATED"},
 	})
 	descriptor := storageWriteDescriptor(t,
@@ -48,13 +49,13 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 		protoField("event_date", 3, descriptorpb.FieldDescriptorProto_TYPE_INT32, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
 		protoField("event_at", 4, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
 		protoField("amount", 5, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
-		protoField("geo", 6, descriptorpb.FieldDescriptorProto_TYPE_BYTES, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+		protoField("large_amount", 6, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
 		protoField("tags", 7, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_REPEATED),
 	)
 	row := storageWriteRow(t, descriptor, map[string]any{
 		"id": int64(7), "name": "first", "event_date": int32(1),
 		"event_at": int64(1_500_000), "amount": "12.340000000",
-		"geo": []byte("POINT(1 2)"), "tags": []any{"alpha", "beta"},
+		"large_amount": "12345678901234567890.123456789012345678", "tags": []any{"alpha", "beta"},
 	})
 	pendingName := table.Name() + "/streams/pending-a"
 	batch := writeports.AppendBatch{
@@ -87,15 +88,65 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 		t.Fatalf("DEFAULT append was not immediately visible: %d", got)
 	}
 
-	query := `SELECT "name", CAST("event_date" AS VARCHAR), epoch_us("event_at"), CAST("amount" AS VARCHAR), "geo", "tags"[1] FROM ` +
+	query := `SELECT "name", CAST("event_date" AS VARCHAR), epoch_us("event_at"), CAST("amount" AS VARCHAR), CAST("large_amount" AS VARCHAR), "tags"[1] FROM ` +
 		quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + `.` + quoteIdentifier(table.TableID) + ` WHERE "id" = 7`
-	var name, date, amount, geography, firstTag string
+	var name, date, amount, largeAmount, firstTag string
 	var timestampMicros int64
-	if err := warehouse.db.QueryRowContext(ctx, query).Scan(&name, &date, &timestampMicros, &amount, &geography, &firstTag); err != nil {
+	if err := warehouse.db.QueryRowContext(ctx, query).Scan(&name, &date, &timestampMicros, &amount, &largeAmount, &firstTag); err != nil {
 		t.Fatal(err)
 	}
-	if name != "first" || date != "1970-01-02" || timestampMicros != 1_500_000 || amount != "12.340000000" || geography != "POINT(1 2)" || firstTag != "alpha" {
-		t.Fatalf("unexpected converted row: %q %q %d %q %q %q", name, date, timestampMicros, amount, geography, firstTag)
+	if name != "first" || date != "1970-01-02" || timestampMicros != 1_500_000 || amount != "12.340000000" || largeAmount != "12345678901234567890.123456789012345678" || firstTag != "alpha" {
+		t.Fatalf("unexpected converted row: %q %q %d %q %q %q", name, date, timestampMicros, amount, largeAmount, firstTag)
+	}
+}
+
+func TestStorageWriteRejectsDecimalOverflowBeforeRowMutation(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	precision, scale := int64(5), int64(2)
+	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{
+		Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale,
+	}})
+	descriptor := storageWriteDescriptor(t,
+		protoField("amount", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+	)
+	row := storageWriteRow(t, descriptor, map[string]any{"amount": "1234.56"})
+	err := coordinator.AppendDefault(ctx, writeports.AppendBatch{
+		StreamName: table.Name() + "/streams/_default", Table: table,
+		Descriptor: descriptor, Rows: [][]byte{row}, SchemaFingerprint: "decimal", PayloadDigest: "overflow",
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds precision 5") {
+		t.Fatalf("decimal overflow error = %v", err)
+	}
+	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
+		t.Fatalf("decimal overflow inserted %d rows", got)
+	}
+}
+
+func TestStorageWriteRejectsUnsupportedCanonicalSchemaBeforePhysicalAccess(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := domain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "items",
+		Schema: []domain.Field{{Name: "location", Type: "GEOGRAPHY"}},
+	}
+	coordinator, err := NewStorageWriteCoordinator(ctx, warehouse, staticStorageWriteResolver{table: table}, storageWriteCoordinatorTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeContext, closeCancel := duckDBStorageWriteTestContext(t)
+		defer closeCancel()
+		_ = coordinator.Close(closeContext)
+		_ = warehouse.Close()
+	})
+	_, err = coordinator.DescribeTable(ctx, writedomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"})
+	if !errors.Is(err, writeports.ErrUnsupportedSchema) {
+		t.Fatalf("DescribeTable error = %v, want ErrUnsupportedSchema before physical access", err)
 	}
 }
 
@@ -738,7 +789,7 @@ func TestStorageWriteCloseDeadlineStopsWorkerAndReleasesAdmission(t *testing.T) 
 	if got := storageWriteStagingTableCount(t, ctx, warehouse); got != 1 {
 		t.Fatalf("deadline close staging table count = %d, want 1", got)
 	}
-	restarted, err := NewStorageWriteCoordinator(ctx, warehouse, storageWriteCoordinatorTestConfig())
+	restarted, err := NewStorageWriteCoordinator(ctx, warehouse, coordinator.resolver, storageWriteCoordinatorTestConfig())
 	if err != nil {
 		t.Fatalf("restart coordinator cleanup: %v", err)
 	}
@@ -908,9 +959,15 @@ func TestStorageWriteLostStageAcknowledgementRecoversOnNewBidiCall(t *testing.T)
 func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 	ctx, cancel := duckDBStorageWriteTestContext(t)
 	defer cancel()
+	precision10, precision6, scale2 := int64(10), int64(6), int64(2)
 	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{
-		{Name: "payload", Type: "RECORD", Fields: []domain.Field{{Name: "code", Type: "INT64"}, {Name: "label", Type: "STRING"}}},
-		{Name: "payloads", Type: "RECORD", Mode: "REPEATED", Fields: []domain.Field{{Name: "code", Type: "INT64"}}},
+		{Name: "payload", Type: "RECORD", Fields: []domain.Field{
+			{Name: "code", Type: "INT64"}, {Name: "label", Type: "STRING"},
+			{Name: "amount", Type: "BIGNUMERIC", Precision: &precision10, Scale: &scale2},
+		}},
+		{Name: "payloads", Type: "RECORD", Mode: "REPEATED", Fields: []domain.Field{
+			{Name: "code", Type: "INT64"}, {Name: "amount", Type: "NUMERIC", Precision: &precision6, Scale: &scale2},
+		}},
 	})
 	optional, repeated := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL, descriptorpb.FieldDescriptorProto_LABEL_REPEATED
 	messageType, intType, stringType := descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_TYPE_STRING
@@ -926,9 +983,9 @@ func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 		},
 		NestedType: []*descriptorpb.DescriptorProto{
 			{Name: &payloadName, Field: []*descriptorpb.FieldDescriptorProto{
-				protoField("code", 1, intType, optional), protoField("label", 2, stringType, optional),
+				protoField("code", 1, intType, optional), protoField("label", 2, stringType, optional), protoField("amount", 3, stringType, optional),
 			}},
-			{Name: &payloadsName, Field: []*descriptorpb.FieldDescriptorProto{protoField("code", 1, intType, optional)}},
+			{Name: &payloadsName, Field: []*descriptorpb.FieldDescriptorProto{protoField("code", 1, intType, optional), protoField("amount", 2, stringType, optional)}},
 		},
 	}
 	serializedDescriptor, err := proto.Marshal(descriptor)
@@ -944,11 +1001,13 @@ func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 	payload := dynamicpb.NewMessage(payloadField.Message())
 	payload.Set(payload.Descriptor().Fields().ByName("code"), protoreflect.ValueOfInt64(7))
 	payload.Set(payload.Descriptor().Fields().ByName("label"), protoreflect.ValueOfString("primary"))
+	payload.Set(payload.Descriptor().Fields().ByName("amount"), protoreflect.ValueOfString("12345678.90"))
 	row.Set(payloadField, protoreflect.ValueOfMessage(payload))
 	payloadsField := message.Fields().ByName("payloads")
-	for _, code := range []int64{8, 9} {
+	for index, code := range []int64{8, 9} {
 		item := dynamicpb.NewMessage(payloadsField.Message())
 		item.Set(item.Descriptor().Fields().ByName("code"), protoreflect.ValueOfInt64(code))
+		item.Set(item.Descriptor().Fields().ByName("amount"), protoreflect.ValueOfString([]string{"12.34", "56.78"}[index]))
 		row.Mutable(payloadsField).List().Append(protoreflect.ValueOfMessage(item))
 	}
 	serializedRow, err := proto.Marshal(row)
@@ -962,15 +1021,23 @@ func TestStorageWriteDecodesNestedAndRepeatedSparkProtoRows(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	statement := `SELECT "payload"."code", "payload"."label", "payloads"[1]."code", "payloads"[2]."code" FROM ` +
-		quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + `.` + quoteIdentifier(table.TableID)
-	var code, first, second int64
-	var label string
-	if err := warehouse.db.QueryRowContext(ctx, statement).Scan(&code, &label, &first, &second); err != nil {
+	schema, err := coordinator.DescribeTable(ctx, table)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if code != 7 || label != "primary" || first != 8 || second != 9 {
-		t.Fatalf("unexpected nested row: %d %q %d %d", code, label, first, second)
+	if schema.Fields[0].Fields[2].Type != "BIGNUMERIC" || schema.Fields[0].Fields[2].Precision == nil || *schema.Fields[0].Fields[2].Precision != 10 ||
+		schema.Fields[1].Mode != "REPEATED" || schema.Fields[1].Fields[1].Type != "NUMERIC" {
+		t.Fatalf("canonical Storage Write schema lost recursive decimal identity: %#v", schema)
+	}
+	statement := `SELECT "payload"."code", "payload"."label", CAST("payload"."amount" AS VARCHAR), "payloads"[1]."code", "payloads"[2]."code", CAST("payloads"[2]."amount" AS VARCHAR) FROM ` +
+		quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + `.` + quoteIdentifier(table.TableID)
+	var code, first, second int64
+	var label, amount, repeatedAmount string
+	if err := warehouse.db.QueryRowContext(ctx, statement).Scan(&code, &label, &amount, &first, &second, &repeatedAmount); err != nil {
+		t.Fatal(err)
+	}
+	if code != 7 || label != "primary" || amount != "12345678.90" || first != 8 || second != 9 || repeatedAmount != "56.78" {
+		t.Fatalf("unexpected nested row: %d %q %q %d %d %q", code, label, amount, first, second, repeatedAmount)
 	}
 }
 
@@ -1031,7 +1098,7 @@ func newStorageWriteFixtureWithConfig(t *testing.T, fields []domain.Field, confi
 	if err := warehouse.CreateTable(ctx, table); err != nil {
 		t.Fatal(err)
 	}
-	coordinator, err := NewStorageWriteCoordinator(ctx, warehouse, config)
+	coordinator, err := NewStorageWriteCoordinator(ctx, warehouse, staticStorageWriteResolver{table: table}, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1042,6 +1109,19 @@ func newStorageWriteFixtureWithConfig(t *testing.T, fields []domain.Field, confi
 		_ = warehouse.Close()
 	})
 	return warehouse, coordinator, writedomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}
+}
+
+type staticStorageWriteResolver struct {
+	table domain.Table
+}
+
+func (resolver staticStorageWriteResolver) GetTable(_ context.Context, projectID, datasetID, tableID string) (domain.Table, error) {
+	if resolver.table.ProjectID != projectID || resolver.table.DatasetID != datasetID || resolver.table.ID != tableID {
+		return domain.Table{}, fmt.Errorf("%w: table", domain.ErrNotFound)
+	}
+	result := resolver.table
+	result.Schema = domain.CloneFields(result.Schema)
+	return result, nil
 }
 
 func storageWriteDescriptor(t *testing.T, fields ...*descriptorpb.FieldDescriptorProto) []byte {
