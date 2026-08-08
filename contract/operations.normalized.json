@@ -1332,8 +1332,8 @@
         "method": "CreateReadSession"
       },
       "supportedInput": {
-        "en": "Arrow or Avro, top-level selected fields, restricted row filters, and bounded stream counts are supported.",
-        "ko": "Arrow 또는 Avro와 최상위 필드 선택, 제한된 행 필터, 제한된 스트림 수를 지원합니다."
+        "en": "Arrow or Avro, recursive selected fields in catalog order, restricted row filters, and bounded stream counts are supported.",
+        "ko": "Arrow 또는 Avro와 카탈로그 순서를 유지하는 재귀 필드 선택, 제한된 행 필터, 제한된 스트림 수를 지원합니다."
       },
       "conditions": [
         {
@@ -1351,8 +1351,8 @@
       "limitations": {
         "policy": "tracked",
         "byDesign": [],
-        "en": "Nested projection, historical snapshots, and compression are not implemented.",
-        "ko": "중첩 프로젝션과 과거 스냅샷, 압축은 지원하지 않습니다."
+        "en": "Historical snapshots, compression, stream splitting, and durable snapshot recovery are not implemented.",
+        "ko": "과거 스냅샷, 압축, 스트림 분할, 스냅샷 영속 복구는 지원하지 않습니다."
       },
       "issues": [
         "#6"

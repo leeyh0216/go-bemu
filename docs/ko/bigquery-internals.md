@@ -47,8 +47,8 @@ Storage Read 호출자는 먼저 REST로 테이블이나 쿼리를 확인합니�
 구체화합니다. 결과는 설정된 수의 고정된 논리 범위로 나눕니다. 각 스트림은 자체
 오프셋에서 읽기를 재개할 수 있습니다.
 
-최상위 열 선택과 제한된 행 조건은 부분 지원(`Partial`)입니다. `SplitReadStream`,
-과거 `snapshot_time`, 중첩 필드 선택, 재시작 복구는 지원하지 않습니다.
+재귀 열 선택은 카탈로그 필드 순서를 유지합니다. 행 조건은 부분 지원(`Partial`)입니다.
+`SplitReadStream`, 과거 `snapshot_time`, 압축, 재시작 복구는 지원하지 않습니다.
 
 <!-- section: read-wire -->
 ## Arrow와 Avro 읽기 전송 형식
@@ -239,7 +239,7 @@ gRPC는 인증 정보가 없는 요청을 허용하며 `Authorization` 값이 �
 | REST 메타데이터 | 카탈로그 사용 사례와 JSON 전송 계층 | 기본 수명 주기, 부분·전체 갱신, 페이지 조회, ETag 검증 완료 |
 | 스키마 필드 추가 | 스키마 검증기와 웨어하우스 트랜잭션 | 최상위·중첩·반복 레코드 필드 추가 검증 완료 |
 | 쿼리 작업 | 작업 저장소, GoogleSQL gateway, statement 포트 | 공개 동기·비동기 절차 검증 완료, 결과 payload는 프로세스 내부에 유지 |
-| `CreateReadSession`/`ReadRows` | 스냅샷·세션 원장과 Arrow/Avro 인코더 | 공개 API 부분 지원: 크기 제한이 있는 DuckDB 스냅샷, 논리 스트림, 안정된 오프셋 지원. 분할, 압축, 과거 스냅샷, 중첩 필드 선택은 미지원 |
+| `CreateReadSession`/`ReadRows` | 스냅샷·세션 원장과 Arrow/Avro 인코더 | 공개 API 부분 지원: 크기 제한이 있는 DuckDB 스냅샷, 재귀 필드 선택, 논리 스트림, 안정된 오프셋 지원. 분할, 압축, 과거 스냅샷, 복구는 미지원 |
 | `AppendRows`/확정/커밋 | 영속 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋, 시작 시 상태 조정 지원. 고급 스트림 유형과 한쪽 저장소 복원 증명은 미지원 |
 | 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 대상 Parquet 지원. 다른 형식, 생성, 스키마 변경, 다운로드 방식은 미지원 |
 | 덮어쓰기 `MERGE` | 공식 analyzer, 불변 semantic AST, 엔진 visitor | 항상 거짓, 동적 시간·범위 파티션, 순서형 `WHEN`, 원본 행 대응 개수 동작 검증 완료. 추가 AST node는 #8에 남아 있음 |

@@ -43,9 +43,9 @@ messages.
 
 The current public runtime materializes one bounded DuckDB result per live
 session, divides it into a configured number of stable logical ranges, and
-resumes from a stream-relative offset. Top-level projection and a bounded row
-restriction subset are Partial. `SplitReadStream`, historical `snapshot_time`,
-nested projection, and restart recovery are unsupported.
+resumes from a stream-relative offset. Recursive projection preserves catalog
+field order; row restrictions remain Partial. `SplitReadStream`, historical
+`snapshot_time`, compression, and restart recovery are unsupported.
 
 <!-- section: read-wire -->
 ## Arrow and Avro Read Wire Formats
@@ -232,7 +232,7 @@ policy, token introspection, or production authorization.
 | REST metadata | catalog use cases and JSON transport | basic lifecycle, patch/update, paging, ETag verified |
 | additive schema | schema validator plus warehouse transaction | top-level/nested/repeated-record additions verified |
 | query job | job repository plus GoogleSQL gateway and statement ports | public sync/async path verified; result payload remains process-local |
-| CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical streams, stable offsets; Split/compression/historical snapshot/nested projection gaps |
+| CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, recursive projection, logical streams, stable offsets; split/compression/historical snapshot/recovery gaps |
 | AppendRows/finalize/commit | durable per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit, startup reconciliation; advanced stream kinds and independent-restore proof gaps |
 | indirect load | object store, staging, load dispositions | public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
 | overwrite `MERGE` | official analyzer, immutable semantic AST, engine visitor | constant-false, dynamic time/range partition, ordered `WHEN`, and source-cardinality behavior verified; additional AST nodes remain #8 |

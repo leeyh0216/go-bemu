@@ -249,14 +249,14 @@ metadata.
 | public `CreateReadSession` / `ReadRows` | Partial; one bounded DuckDB materialization per session |
 | public `SplitReadStream` | Unsupported; returns `UNIMPLEMENTED` |
 | Arrow/Avro schema and row payloads | Partial; encoded from bounded DuckDB rows and response bytes |
-| projection and row restriction | Partial; top-level fields and a bounded expression subset; nested projection unsupported |
+| projection and row restriction | Partial; recursive STRUCT/REPEATED projection preserves catalog order; row restrictions support a bounded expression subset |
 | logical streams and offset resume | Partial; stable ranges and stream-relative offsets within a live session, with SQLite-durable lifecycle metadata |
 | historical snapshot and compression | Unsupported |
 
 The public capability is Partial. Each live session owns one stable, bounded
 DuckDB materialization and exposes configurable logical streams. Split RPC,
-wire compression, historical `snapshot_time`, and nested projection remain
-gaps. After restart, an unexpired stream returns `UNAVAILABLE` and an expired
+wire compression, and historical `snapshot_time` remain gaps. After restart,
+an unexpired stream returns `UNAVAILABLE` and an expired
 stream returns `NOT_FOUND`; snapshot row bytes are not reconstructed.
 
 The target contract is the official

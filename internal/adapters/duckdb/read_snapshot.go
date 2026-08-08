@@ -34,8 +34,6 @@ import (
 
 const storageReadMaterializeOperation = "storage_read.snapshot.materialize"
 
-var errNestedReadProjectionUnsupported = errors.New("nested Storage Read projection is not implemented")
-
 // Request-derived failures are classified before they cross the outbound
 // port. INVALID_ARGUMENT means the projection/filter cannot be valid for this
 // table, NOT_FOUND means the catalog resource is absent, and UNIMPLEMENTED
@@ -123,9 +121,6 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 	}
 	fields, err := projectReadFields(table.Schema, request.SelectedFields)
 	if err != nil {
-		if errors.Is(err, errNestedReadProjectionUnsupported) {
-			return nil, classifiedReadSnapshotError(readdomain.ErrorUnimplemented, err)
-		}
 		return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument, err)
 	}
 	filterSQL, filterArgs, err := compileRowRestriction(request.RowRestriction, table.Schema)
@@ -254,68 +249,116 @@ func projectReadFields(schema []catalogdomain.Field, selected []string) ([]catal
 	if len(selected) == 0 {
 		return cloneCatalogFields(schema), nil
 	}
-	wanted := make(map[string]struct{}, len(selected))
+	selection := newReadProjectionNode()
 	for _, name := range selected {
-		if strings.Contains(name, ".") {
-			// Nested projection is valid in the official API. Classify this
-			// adapter limitation separately from a missing/invalid field name.
-			// Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
-			return nil, fmt.Errorf("%w: %q", errNestedReadProjectionUnsupported, name)
-		}
-		key := strings.ToLower(name)
-		if _, duplicate := wanted[key]; duplicate {
-			continue
-		}
-		if _, found := findCatalogFieldPath(schema, []string{name}); !found {
+		path, found := canonicalReadFieldPath(schema, name)
+		if !found {
 			return nil, fmt.Errorf("selected_field %q does not exist", name)
 		}
-		wanted[key] = struct{}{}
+		selection.add(path)
 	}
-	projected := make([]catalogdomain.Field, 0, len(wanted))
-	for _, field := range schema {
-		if _, ok := wanted[strings.ToLower(field.Name)]; ok {
-			projected = append(projected, cloneCatalogField(field))
-		}
+	projected, err := projectReadFieldList(schema, selection)
+	if err != nil {
+		return nil, err
 	}
 	return projected, nil
 }
 
-func findCatalogFieldPath(schema []catalogdomain.Field, path []string) (catalogdomain.Field, bool) {
-	fields := schema
-	for pathIndex, component := range path {
-		found := false
-		for _, field := range fields {
-			if !strings.EqualFold(field.Name, component) {
-				continue
-			}
-			if pathIndex == len(path)-1 {
-				return field, true
-			}
-			fields = field.Fields
-			found = true
-			break
-		}
-		if !found {
-			return catalogdomain.Field{}, false
-		}
+type readProjectionNode struct {
+	all      bool
+	children map[string]*readProjectionNode
+}
+
+func newReadProjectionNode() *readProjectionNode {
+	return &readProjectionNode{children: make(map[string]*readProjectionNode)}
+}
+
+func (node *readProjectionNode) add(path []string) {
+	if node.all || len(path) == 0 {
+		return
 	}
-	return catalogdomain.Field{}, false
+	key := strings.ToLower(path[0])
+	child := node.children[key]
+	if child == nil {
+		child = newReadProjectionNode()
+		node.children[key] = child
+	}
+	if len(path) == 1 {
+		child.all = true
+		clear(child.children)
+		return
+	}
+	child.add(path[1:])
+}
+
+func canonicalReadFieldPath(schema []catalogdomain.Field, selected string) ([]string, bool) {
+	if selected == "" || strings.TrimSpace(selected) != selected {
+		return nil, false
+	}
+	requested := strings.Split(selected, ".")
+	fields := schema
+	canonical := make([]string, 0, len(requested))
+	for index, component := range requested {
+		if component == "" {
+			return nil, false
+		}
+		var matched *catalogdomain.Field
+		for fieldIndex := range fields {
+			if strings.EqualFold(fields[fieldIndex].Name, component) {
+				matched = &fields[fieldIndex]
+				break
+			}
+		}
+		if matched == nil {
+			return nil, false
+		}
+		canonical = append(canonical, matched.Name)
+		if index == len(requested)-1 {
+			return canonical, true
+		}
+		if !isReadRecordField(*matched) {
+			return nil, false
+		}
+		fields = matched.Fields
+	}
+	return nil, false
+}
+
+func projectReadFieldList(schema []catalogdomain.Field, selection *readProjectionNode) ([]catalogdomain.Field, error) {
+	projected := make([]catalogdomain.Field, 0, len(selection.children))
+	for _, field := range schema {
+		node := selection.children[strings.ToLower(field.Name)]
+		if node == nil {
+			continue
+		}
+		clone := cloneCatalogField(field)
+		if !node.all {
+			if !isReadRecordField(field) {
+				return nil, fmt.Errorf("selected_field descends through scalar field %q", field.Name)
+			}
+			children, err := projectReadFieldList(field.Fields, node)
+			if err != nil {
+				return nil, err
+			}
+			if len(children) == 0 {
+				return nil, fmt.Errorf("selected_field for record %q selects no children", field.Name)
+			}
+			clone.Fields = children
+		}
+		projected = append(projected, clone)
+	}
+	return projected, nil
+}
+
+func isReadRecordField(field catalogdomain.Field) bool {
+	return strings.EqualFold(field.Type, "RECORD") || strings.EqualFold(field.Type, "STRUCT")
 }
 
 func materializeReadStatement(projectID, datasetID, tableID string, fields []catalogdomain.Field, filter string) string {
 	columns := make([]string, len(fields))
 	for index, field := range fields {
 		identifier := quoteIdentifier(field.Name)
-		if strings.EqualFold(field.Type, "JSON") && !strings.EqualFold(field.Mode, "REPEATED") {
-			// duckdb-go can decode JSON objects into map[string]any, which may
-			// coerce JSON numbers through float64. Storage Read represents JSON as
-			// a string, so casting at the SQL boundary preserves DuckDB's exact
-			// serialized number text.
-			// Source: https://cloud.google.com/bigquery/docs/reference/storage#schema_conversion
-			columns[index] = "CAST(" + identifier + " AS VARCHAR) AS " + identifier
-			continue
-		}
-		columns[index] = identifier
+		columns[index] = renderReadProjection(field, identifier, 0) + " AS " + identifier
 	}
 	statement := "SELECT " + strings.Join(columns, ", ") + " FROM " +
 		quoteIdentifier(physicalSchema(projectID, datasetID)) + "." + quoteIdentifier(tableID)
@@ -323,6 +366,35 @@ func materializeReadStatement(projectID, datasetID, tableID string, fields []cat
 		statement += " WHERE " + filter
 	}
 	return statement
+}
+
+func renderReadProjection(field catalogdomain.Field, source string, depth int) string {
+	if isReadRecordField(field) {
+		if strings.EqualFold(field.Mode, "REPEATED") {
+			item := fmt.Sprintf("__bqemu_item_%d", depth)
+			return "list_transform(" + source + ", " + item + " -> " +
+				renderReadStruct(field.Fields, item, depth+1) + ")"
+		}
+		return "CASE WHEN " + source + " IS NULL THEN NULL ELSE " +
+			renderReadStruct(field.Fields, source, depth+1) + " END"
+	}
+	if strings.EqualFold(field.Type, "JSON") {
+		if strings.EqualFold(field.Mode, "REPEATED") {
+			item := fmt.Sprintf("__bqemu_item_%d", depth)
+			return "list_transform(" + source + ", " + item + " -> CAST(" + item + " AS VARCHAR))"
+		}
+		return "CAST(" + source + " AS VARCHAR)"
+	}
+	return source
+}
+
+func renderReadStruct(fields []catalogdomain.Field, source string, depth int) string {
+	items := make([]string, len(fields))
+	for index, field := range fields {
+		name := quoteIdentifier(field.Name)
+		items[index] = name + " := " + renderReadProjection(field, source+"."+name, depth)
+	}
+	return "struct_pack(" + strings.Join(items, ", ") + ")"
 }
 
 func cloneCatalogFields(fields []catalogdomain.Field) []catalogdomain.Field {

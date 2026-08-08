@@ -12,6 +12,7 @@ package duckdb
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 
@@ -212,6 +214,84 @@ func TestDuckDBReadSnapshotReadsNestedAndRepeatedDriverValues(t *testing.T) {
 	}
 }
 
+func TestDuckDBReadSnapshotProjectsNestedFieldsInCatalogOrder(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "nested_projection", Type: "TABLE",
+		Schema: []catalogdomain.Field{
+			{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+			{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{
+				{Name: "name", Type: "STRING"},
+				{Name: "rank", Type: "INT64"},
+				{Name: "ignored", Type: "STRING"},
+			}},
+			{Name: "events", Type: "RECORD", Mode: "REPEATED", Fields: []catalogdomain.Field{
+				{Name: "code", Type: "STRING"},
+				{Name: "score", Type: "INT64"},
+				{Name: "ignored", Type: "STRING"},
+			}},
+		},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table,
+		"(1, {'name':'alice', 'rank':7, 'ignored':'profile-secret'}, "+
+			"[{'code':'a', 'score':10, 'ignored':'event-secret'}])")
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+
+	for _, format := range []readdomain.Format{readdomain.FormatArrow, readdomain.FormatAvro} {
+		t.Run(format.String(), func(t *testing.T) {
+			snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
+				Table: readTestTableResource(table), Format: format,
+				SelectedFields: []string{"events.score", "PROFILE.RANK", "id", "events.score"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := snapshotPort.(*duckDBReadSnapshot)
+			defer closeReadSnapshot(t, snapshot)
+			assertNestedProjectionFields(t, snapshot.fields)
+			assertNestedProjectionReferenceSchema(t, format, snapshot.Metadata().Schema.Serialized)
+
+			iterator, err := snapshot.OpenRange(ctx, 0, 1, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch, err := iterator.Next(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch.RowCount != 1 || len(batch.SerializedRows) == 0 {
+				t.Fatalf("nested %s batch = rows %d bytes %d", format, batch.RowCount, len(batch.SerializedRows))
+			}
+			if err := iterator.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestProjectReadFieldsParentSelectionWinsAndPreservesSchemaOrder(t *testing.T) {
+	schema := []catalogdomain.Field{
+		{Name: "first", Type: "INT64"},
+		{Name: "record", Type: "RECORD", Fields: []catalogdomain.Field{
+			{Name: "alpha", Type: "STRING"},
+			{Name: "beta", Type: "STRING"},
+		}},
+		{Name: "last", Type: "STRING"},
+	}
+	projected, err := projectReadFields(schema, []string{"last", "record.beta", "FIRST", "record", "record.alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fieldNames(projected), []string{"first", "record", "last"}; !slices.Equal(got, want) {
+		t.Fatalf("projected fields = %v, want %v", got, want)
+	}
+	if got, want := fieldNames(projected[1].Fields), []string{"alpha", "beta"}; !slices.Equal(got, want) {
+		t.Fatalf("projected record fields = %v, want parent selection %v", got, want)
+	}
+}
+
 func newReadTestWarehouse(t *testing.T, ctx context.Context, table catalogdomain.Table) *Warehouse {
 	t.Helper()
 	warehouse, err := New("")
@@ -347,6 +427,81 @@ func readTestTableResource(table catalogdomain.Table) string {
 }
 
 func fieldNames(fields []catalogdomain.Field) []string {
+	result := make([]string, len(fields))
+	for index, field := range fields {
+		result[index] = field.Name
+	}
+	return result
+}
+
+func assertNestedProjectionFields(t *testing.T, fields []catalogdomain.Field) {
+	t.Helper()
+	if got, want := fieldNames(fields), []string{"id", "profile", "events"}; !slices.Equal(got, want) {
+		t.Fatalf("nested projection fields = %v, want %v", got, want)
+	}
+	if got, want := fieldNames(fields[1].Fields), []string{"rank"}; !slices.Equal(got, want) {
+		t.Fatalf("projected profile fields = %v, want %v", got, want)
+	}
+	if got, want := fieldNames(fields[2].Fields), []string{"score"}; !slices.Equal(got, want) {
+		t.Fatalf("projected events fields = %v, want %v", got, want)
+	}
+}
+
+func assertNestedProjectionReferenceSchema(t *testing.T, format readdomain.Format, serialized []byte) {
+	t.Helper()
+	switch format {
+	case readdomain.FormatArrow:
+		var stream bytes.Buffer
+		stream.Write(serialized)
+		stream.Write([]byte{0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0})
+		reader, err := ipc.NewReader(&stream)
+		if err != nil {
+			t.Fatalf("open projected Arrow schema: %v", err)
+		}
+		defer reader.Release()
+		fields := reader.Schema().Fields()
+		if got, want := arrowFieldNames(fields), []string{"id", "profile", "events"}; !slices.Equal(got, want) {
+			t.Fatalf("Arrow projected fields = %v, want %v", got, want)
+		}
+		profile, ok := fields[1].Type.(*arrow.StructType)
+		if !ok {
+			t.Fatalf("Arrow profile type = %T, want *arrow.StructType", fields[1].Type)
+		}
+		if got, want := arrowFieldNames(profile.Fields()), []string{"rank"}; !slices.Equal(got, want) {
+			t.Fatalf("Arrow profile fields = %v, want %v", got, want)
+		}
+		events, ok := fields[2].Type.(*arrow.ListType)
+		if !ok {
+			t.Fatalf("Arrow events type = %T, want *arrow.ListType", fields[2].Type)
+		}
+		event, ok := events.Elem().(*arrow.StructType)
+		if !ok {
+			t.Fatalf("Arrow event type = %T, want *arrow.StructType", events.Elem())
+		}
+		if got, want := arrowFieldNames(event.Fields()), []string{"score"}; !slices.Equal(got, want) {
+			t.Fatalf("Arrow event fields = %v, want %v", got, want)
+		}
+	case readdomain.FormatAvro:
+		if !json.Valid(serialized) {
+			t.Fatalf("projected Avro schema is not JSON: %s", serialized)
+		}
+		schema := string(serialized)
+		for _, fragment := range []string{`"name":"id"`, `"name":"profile"`, `"name":"rank"`, `"name":"events"`, `"name":"score"`, `"type":"array"`} {
+			if !strings.Contains(schema, fragment) {
+				t.Fatalf("projected Avro schema lacks %s: %s", fragment, schema)
+			}
+		}
+		for _, fragment := range []string{`"name":"name"`, `"name":"code"`, `"name":"ignored"`} {
+			if strings.Contains(schema, fragment) {
+				t.Fatalf("projected Avro schema contains unselected field %s: %s", fragment, schema)
+			}
+		}
+	default:
+		t.Fatalf("unsupported reference schema format %s", format)
+	}
+}
+
+func arrowFieldNames(fields []arrow.Field) []string {
 	result := make([]string, len(fields))
 	for index, field := range fields {
 		result[index] = field.Name
@@ -634,10 +789,10 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 			want: readdomain.ErrorInvalidArgument,
 		},
 		{
-			name: "nested projection",
+			name: "projection descends through scalar",
 			request: readports.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 				SelectedFields: []string{"tags.value"}},
-			want: readdomain.ErrorUnimplemented,
+			want: readdomain.ErrorInvalidArgument,
 		},
 		{
 			name: "missing projection",

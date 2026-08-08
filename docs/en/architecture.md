@@ -269,8 +269,8 @@ that every flow succeeds.
    transactional system tables.
 2. Replace broad regex SQL translation with structural adapters without
    generalizing the pinned static-overwrite shape.
-3. Add Storage Read split/compression, historical snapshot support, nested
-   projection, and durable session recovery without weakening the current
+3. Add Storage Read split/compression, historical snapshot support, and
+   durable session recovery without weakening the current
    byte/row/session bounds.
 4. Add Storage Write ArrowRows, BUFFERED/explicit COMMITTED streams, FlushRows,
    default expressions, CDC, and durable pending recovery.

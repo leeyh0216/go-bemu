@@ -276,14 +276,14 @@ STRUCT 내부와 REPEATED 필드의 10진수 메타데이터를 재귀적으로 
 | 공개 `CreateReadSession`, `ReadRows` | 부분 지원입니다. 세션마다 크기에 상한을 둔 DuckDB 결과 하나를 만듭니다. |
 | 공개 `SplitReadStream` | 미지원이며 `UNIMPLEMENTED`를 반환합니다. |
 | Arrow/Avro 스키마와 행 데이터 | 부분 지원입니다. 행과 응답 바이트 수에 상한을 두고 DuckDB 결과를 인코딩합니다. |
-| 열 선택과 행 제한 | 최상위 필드와 제한된 표현식만 지원합니다. 중첩 필드 선택은 지원하지 않습니다. |
+| 열 선택과 행 제한 | 재귀 STRUCT/REPEATED 선택은 카탈로그 순서를 유지합니다. 행 제한은 일부 표현식만 지원합니다. |
 | 논리 스트림과 오프셋 재개 | 실행 중인 세션에서 고정된 범위와 스트림 기준 오프셋을 지원하며 수명 주기 메타데이터는 SQLite에 저장합니다. |
 | 과거 시점 스냅샷과 압축 | 지원하지 않습니다. |
 
 공개 기능은 일부만 지원합니다. 실행 중인 세션마다 고정된 DuckDB 결과 하나를
 소유하며, 설정한 수의 논리 스트림으로 나눕니다. 결과 크기에는 상한을 둡니다.
 
-스트림 분할 RPC, 전송 압축, 과거 시점의 `snapshot_time`, 중첩 필드 선택은 지원하지
+스트림 분할 RPC, 전송 압축, 과거 시점의 `snapshot_time`은 지원하지
 않습니다. 재시작 후 만료되지 않은 이전 스트림은 `UNAVAILABLE`, 만료된 스트림은
 `NOT_FOUND`를 반환하며 snapshot 행 데이터는 다시 만들지 않습니다. 목표 동작은 공식
 [`BigQueryRead`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryRead)
