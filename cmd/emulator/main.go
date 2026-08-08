@@ -83,13 +83,6 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		"source_fingerprint", emptyAs(loaded.SourceFingerprint, "none"),
 		"effective_fingerprint", loaded.EffectiveFingerprint,
 	)
-	authentication, err := composeAuthentication(ctx, cfg.Auth, logger)
-	if err != nil {
-		return err
-	}
-	stopAuthentication := authentication.Start(ctx)
-	defer stopAuthentication()
-
 	if err := prepareDirectory(ctx, cfg.Database.TempDirectory); err != nil {
 		return err
 	}
@@ -150,11 +143,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}()
 
-	restOptions := make([]rest.Option, 0, 4)
+	restOptions := make([]rest.Option, 0, 3)
 	restOptions = append(restOptions, rest.WithRequestBodyLimits(
 		cfg.Server.HTTP.MaxCompressedRequestBytes, cfg.Server.HTTP.MaxUncompressedRequestBytes,
 	))
-	restOptions = append(restOptions, rest.WithAuthentication(authentication.Service()))
 	restOptions = append(restOptions, rest.WithTableDataAPI(catalogService))
 	if cfg.UI.Enabled {
 		restOptions = append(restOptions, rest.WithConsoleDirectory(cfg.UI.Directory))
@@ -191,7 +183,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	// retains the generated RPC surface but reports NOT_SERVING and returns
 	// UNIMPLEMENTED rather than advertising a false capability.
 	grpcRuntime := grpcserver.NewRuntimeWithServices(grpcserver.Services{
-		Read: readRuntime.Service, Write: writeRuntime.Service, Authentication: authentication.Service(),
+		Read: readRuntime.Service, Write: writeRuntime.Service,
 	}, grpcOptions...)
 	grpcService := grpcRuntime.Server()
 

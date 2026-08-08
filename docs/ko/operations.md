@@ -145,54 +145,17 @@ HTTP 경계에서 실제로 쓴 바이트의 해시만 기록합니다. 메모�
 실행 중에 프로토콜 기준 버전을 협상하는 기능은 아직 구성하지 않았습니다. 설정값이
 유효하더라도 부분 지원 기능의 범위가 넓어지는 것은 아닙니다.
 
-### 인증 설정
+### 공개 접근
 
-인증 설정은 파일을 기준으로 구성하며, 데이터베이스를 열거나 리스너를 시작하기 전에
-완료합니다. `auth.mode`에는 `disabled`, `bearer-present`, `static`을 지정할 수
-있습니다. `disabled`는 형식이 잘못된 인증 정보도 무시하고 익명 주체를 사용합니다.
-`bearer-present`는 Bearer 인증 정보의 형식과 존재 여부만 확인하며 신원을 검증하지
-않습니다. `static`은 `auth.bqemu.dev/v1alpha1` 형식의 `StaticTokenSet` YAML 파일
-하나를 엄격히 검사합니다.
+BigQuery 호환 REST와 gRPC 수신기는 요청을 인증하거나 인가하지 않습니다.
+`Authorization` 값이 없거나, 임의 값이거나, 형식이 잘못되었거나, 중복되었거나,
+만료된 형태여도 무시합니다. 공개 요청 인증을 위한 `auth.*` 설정과 `BQEMU_AUTH_*`
+환경 변수 계약은 없습니다. 알 수 없는 YAML 필드와 `--set` 경로는 기존과 같이 엄격한
+설정 검증에서 거부합니다.
 
-REST와 gRPC는 같은 인증 애플리케이션 서비스와 변경할 수 없는 검증기 스냅샷을
-공유합니다. 따라서 중복 헤더와 메타데이터, 주체 해시, 허용 및 거부 결정은 두
-프로토콜에서 같은 의미를 가집니다. Bearer 인증 정보는 [RFC 6750 bearer
-usage](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)에 따라 해석합니다.
-
-```yaml
-apiVersion: auth.bqemu.dev/v1alpha1
-kind: StaticTokenSet
-tokens:
-  - principal: local-developer
-    token: replace-with-mounted-secret
-```
-
-토큰 파일 해석기는 알 수 없거나 중복된 필드, 사용자 정의 태그, 스칼라 값의 암시적
-형 변환을 거부합니다. 인증 필드의 별칭, 여러 YAML 문서, 중복 토큰, 설정한 범위를
-벗어난 값도 거부합니다. 파일의 주체 값은 공개하기 전에 해시로 바꿉니다. 원문은
-로그나 요청 컨텍스트에 넣지 않습니다.
-
-파일, 토큰, `Authorization` 필드, 항목 수, 주체의 최대 바이트 수는 모두 `auth.*`
-설정으로 정의합니다. 각 설정에는 대응하는 `BQEMU_AUTH_*` 환경 변수와 자료형을
-검사하는 `--set` 경로가 있습니다. `auth.staticTokensReloadInterval`의 기본값은
-`5s`이며 양수여야 합니다.
-
-첫 토큰 파일이 유효하지 않으면 저장소를 열기 전에 시작을 중단합니다. 주기적으로
-다시 읽은 파일이 유효하지 않으면 모든 요청을 거부하는 스냅샷을 원자적으로
-반영합니다. 이후 유효한 파일을 읽으면 새 활성 해시를 반영하므로 재시작하지 않고
-복구할 수 있습니다. 로그에는 정책, 사유, 바이트 수, SHA-256 해시만 남깁니다.
-
-공개 상태 확인 API는 REST `/healthz`, `/readyz`와 gRPC Health의 `Check`, `List`,
-`Watch`뿐입니다. REST 탐색 API, gRPC 리플렉션, 모든 데이터 처리 메서드는 인증으로
-보호합니다. 요청을 거부할 때는 본문 디코딩, `RecvMsg`, 라우팅, 애플리케이션의 상태
-변경보다 먼저 일반 REST `401` 또는 gRPC `UNAUTHENTICATED`를 반환합니다.
-
-서비스 계정, 승인된 사용자, 외부 계정 인증 파일은 [Application Default
-Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)와
-[Workload Identity
-Federation](https://cloud.google.com/iam/docs/workload-identity-federation)에 정의된
-클라이언트 측 토큰 획득 방식입니다. BQEMU는 로컬 정책에 따라 최종 Bearer 토큰을
-받습니다. 인증 정보 교환, Google 서명 검증, IAM은 에뮬레이션하지 않습니다.
+TLS는 별도의 전송 보안 설정입니다. 클라이언트 라이브러리가 요청 전에 인증 정보를
+요구할 수 있지만 토큰 획득은 이 실행 환경의 책임이 아닙니다. `admin.tokenFile`은
+진단용 관리 수신기만 보호하며 BigQuery 호환 엔드포인트에는 적용하지 않습니다.
 
 ### HTTP 요청 본문 제한
 
@@ -230,8 +193,8 @@ HTTP API는 `identity`와 `gzip`으로 인코딩한 요청 본문을 허용합�
 모델의 SHA-256 해시를 함께 제공하므로 설정 불일치를 재현할 수 있습니다. 스키마는
 [YAML 1.2.2 명세](https://yaml.org/spec/1.2.2/)를 따릅니다.
 
-실행 설정 YAML이나 환경 변수에 민감정보 원문을 넣으면 안 됩니다. TLS 키, 전용
-`StaticTokenSet` 문서, 원격 관리 토큰은 마운트한 파일의 경로로 참조합니다. 민감정보
+실행 설정 YAML이나 환경 변수에 민감정보 원문을 넣으면 안 됩니다. TLS 키와 원격 관리
+토큰은 마운트한 파일의 경로로 참조합니다. 민감정보
 파일은 배포 환경에 맞는 권한으로 읽기 전용 마운트해야 합니다.
 
 최종 설정에는 참조 경로가 포함될 수 있지만 파일 내용은 읽거나 출력하지 않습니다.
@@ -391,8 +354,6 @@ Storage Write의 공개 시점은 공식
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go 기간, `5s` | Storage Read 애플리케이션 테스트 컨텍스트 하나 |
 | `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go 기간, `5s` | Storage Write 애플리케이션, 어댑터, 공개 gRPC 테스트 컨텍스트 |
 | `BQEMU_REST_TEST_TIMEOUT` | Go 기간, `5s` | REST 요청, gzip 경계, 페이지 나누기, 덮어쓰기 테스트 컨텍스트 |
-| `BQEMU_AUTH_RUNTIME_TEST_TIMEOUT` | Go 기간, `5s` | 인증 구성, 다시 읽기, 복구, 스케줄러 테스트 컨텍스트 |
-| `BQEMU_AUTH_TRANSPORT_TEST_TIMEOUT` | Go 기간, `5s` | REST 및 gRPC 인증 경계 테스트 컨텍스트 |
 | `BQEMU_PYTEST_TIMEOUT_SECONDS` | 양의 초, 테스트 모음 `90`, direnv `300` | 공식 Python 클라이언트 빌드, 준비 상태, 요청, 종료 |
 | `BQEMU_BQCLI_TIMEOUT_SECONDS` | 양의 초, `300` | 각 `bq` CLI 하위 프로세스와 에뮬레이터 준비 상태 |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | 양의 초, `120` | `docker compose --wait` 시작 과정 |

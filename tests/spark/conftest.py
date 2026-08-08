@@ -1073,7 +1073,6 @@ def public_edge(
             "read": {"enabled": True, "defaultStreamCount": 4, "maxStreams": 64},
             "write": {"enabled": True},
         },
-        "auth": {"mode": "bearer-present"},
         "logging": {"level": "info", "format": "json", "unsafePayloads": False},
         "admin": {"enabled": False},
         "ui": {"enabled": False},

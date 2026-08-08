@@ -223,15 +223,12 @@ Credentials](https://cloud.google.com/docs/authentication/application-default-cr
 and WIF exchange is documented in [Workload Identity
 Federation](https://cloud.google.com/iam/docs/workload-identity-federation).
 
-BQEMU does not acquire or exchange these credentials. Its REST and gRPC adapters
-pass every Authorization value to one bounded [RFC 6750 bearer
-parser](https://www.rfc-editor.org/rfc/rfc6750#section-2.1), then apply the
-configured `disabled`, syntax-only `bearer-present`, or local `StaticTokenSet`
-verifier. A local OAuth/STS stub can still test client acquisition and
-propagation. Neither path emulates signature trust, IAM roles, permission
-inheritance, federation policy, token introspection, or production
-authorization. TLS, acquisition, authentication, and authorization remain
-separate capability claims.
+BQEMU does not authenticate or authorize its BigQuery-compatible endpoints.
+REST and gRPC allow requests without credentials and ignore `Authorization`
+values when present. Client token acquisition, TLS, the separate diagnostics
+admin token, and IAM remain distinct capability claims. The public runtime does
+not emulate signature trust, IAM roles, permission inheritance, federation
+policy, token introspection, or production authorization.
 
 <!-- section: implementation-map -->
 ## Implementation Map
@@ -245,8 +242,8 @@ separate capability claims.
 | AppendRows/finalize/commit | per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit; advanced stream kinds and durability gaps |
 | indirect load | object store, staging, load dispositions | opt-in public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
 | direct overwrite MERGE | structural connector-template adapter | static unpartitioned connector `0.44.2` public-edge verified; dynamic time/range and general parity gaps |
-| bearer public edge | one application service plus REST/gRPC adapters | disabled, syntax-only presence, and bounded static verification implemented |
-| ADC/WIF acquisition | client credential library or optional external token stub | external to BQEMU; resulting bearer follows the selected local verifier |
+| BigQuery-compatible request authentication | REST/gRPC transport behavior | intentionally absent; credential values are ignored |
+| ADC/WIF acquisition | client credential library | external to the public BQEMU runtime |
 
 Capability changes require public-boundary tests and a compatibility update in
 both documentation languages.

@@ -250,7 +250,7 @@ service and connector
 [`BigQueryDirectDataWriterHelper.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java).
 
 <!-- section: load-auth -->
-## Load, Object Storage, and Identity
+## Load, Object Storage, and Public Access
 
 | Capability | Status |
 | --- | --- |
@@ -261,10 +261,9 @@ service and connector
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | Implemented when configured |
-| authentication disabled | Implemented mode; anonymous principal, credentials ignored |
-| bearer-present | Implemented syntax/presence compatibility gate; no identity proof |
-| bounded static token set | Implemented; startup fail-closed and reload deny-all/recovery |
-| ADC/OAuth/STS/WIF token acquisition | Client-owned; resulting bearer can use a configured local policy |
+| BigQuery-compatible endpoint authentication | Intentionally absent; missing, arbitrary, and malformed credentials are ignored |
+| ADC/OAuth/STS/WIF token acquisition | Outside the public emulator runtime; clients may still require credentials before sending a request |
+| diagnostics admin token | Optional and limited to the separate admin listener |
 | IAM authorization | Unsupported |
 
 The load target is
@@ -273,11 +272,9 @@ The opt-in path downloads bounded immutable objects into a private temporary
 workspace, then applies the selected disposition atomically. Download is outside
 the destination transaction, and load jobs and idempotency records are
 process-local.
-Identity claims are separated according to [Google Cloud
-authentication](https://cloud.google.com/docs/authentication). The public edge
-parses the Authorization header/metadata using [RFC
-6750](https://www.rfc-editor.org/rfc/rfc6750#section-2.1); local static verification
-and client-owned token acquisition must never be described as IAM parity.
+The public edge does not parse or validate `Authorization` header or metadata
+values. Client credential requirements, TLS, the separate diagnostics admin
+token, and IAM are distinct compatibility claims.
 
 <!-- section: persistence-atomicity -->
 ## Persistence and Atomicity

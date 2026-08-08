@@ -295,38 +295,23 @@ INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실�
 명시적인 미지원 항목입니다.
 
 <!-- section: runtime-security -->
-## 실행 환경, TLS, 인증 정보
+## 실행 환경, TLS, 공개 접근
 
 프로세스는 웨어하우스 하나와 프로세스 내부 카탈로그·작업 저장소를 구성합니다.
 시스템 시계와 ID 어댑터, 애플리케이션 서비스, 공개 REST/gRPC 수신기도 구성합니다.
 관리용 수신기는 선택 사항입니다.
 
 인증서 한 쌍으로 공개 수신기와 활성화된 관리 수신기에 TLS를 적용할 수 있습니다.
-객체 조립 지점은 웨어하우스에 변경을 가하기 전에 인증 애플리케이션 서비스를
-만듭니다. 이 서비스는 교체 가능한 검증 포트를 감쌉니다.
 
-REST와 gRPC 경계는 `disabled`, 문법만 확인하는 `bearer-present`, 파일에서 읽고 크기
-상한을 적용하는 `static` 어댑터를 같은 서비스로 사용합니다. 관측성 처리는 가장
-바깥에 둡니다. 인증은 HTTP 본문 디코딩, gRPC `RecvMsg`, 라우팅, 애플리케이션 변경
-작업보다 먼저 실행합니다.
+BigQuery 호환 REST와 gRPC 엔드포인트는 호출자를 인증하거나 인가하지 않습니다.
+`Authorization` 값이 없거나, 임의 값이거나, 형식이 잘못되었거나, 만료된 형태여도
+동일한 프로토콜 핸들러로 전달합니다. 공개 실행 환경은 인증 정보를 해석하거나 호출자
+신원을 요청 컨텍스트에 넣지 않습니다. 경계 로그에는 값 대신 가린 메타데이터 키만
+기록합니다.
 
-정적 스냅샷은 변경할 수 없으며 원자적으로 교체합니다. 시작할 때 잘못된 설정을
-발견하면 프로세스를 종료합니다. 다시 읽은 설정이 잘못되면 모든 요청을 거부합니다.
-다음에 올바른 설정을 읽으면 복구합니다.
-
-공개 API에서는 REST 상태 확인과 준비 상태 확인, gRPC 상태 확인 서비스만 인증 없이
-제공합니다. REST 탐색 API와 gRPC 리플렉션은 보호합니다. Bearer 파서는 [RFC
-6750](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)을 따릅니다.
-
-전송 보안, 토큰 획득, 인증, 인가는 서로 다른 지원 범위입니다. 서비스 계정,
-사용자 인증 ADC, 외부 계정 WIF는
-[Application Default
-Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)와
-[Workload Identity
-Federation](https://cloud.google.com/iam/docs/workload-identity-federation)에 따라
-Bearer 토큰을 얻을 수 있습니다. 서비스는 [Google Cloud
-인증](https://cloud.google.com/docs/authentication)의 Google 서명 검증, 토큰 교환,
-IAM 인가를 재현하지 않습니다.
+TLS는 전송 구간을 보호할 뿐 호출자 신원을 추가하지 않습니다. 클라이언트의 토큰 획득
+절차는 에뮬레이터 실행 환경 밖의 책임입니다. `admin.tokenFile`은 별도의 진단용
+수신기만 보호하며, 공개 BigQuery 요청의 인증 정책으로 사용하지 않습니다.
 
 <!-- section: observability -->
 ## 지원 범위와 관측성

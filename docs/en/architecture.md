@@ -241,32 +241,23 @@ generalize to dynamic time/range partition overwrite or arbitrary `MERGE`; those
 remain explicit gaps.
 
 <!-- section: runtime-security -->
-## Runtime, TLS, and Identity
+## Runtime, TLS, and Public Access
 
 The process composes one warehouse, process-local catalog/job repositories,
 system clock/ID adapters, application services, public REST/gRPC listeners, and
 the optional separate admin listener. One certificate pair enables TLS on the
-public listeners and on admin when enabled. Before any warehouse side effect,
-the composition root builds one authentication application service around a
-replaceable verifier port. `disabled`, syntax-only `bearer-present`, and bounded
-file-backed `static` adapters use that same service at the REST and gRPC edges.
-Observability is outermost; authentication then runs before HTTP body decoding,
-gRPC `RecvMsg`, routing, or application side effects. Static snapshots are
-immutable and atomic: invalid startup is fatal, invalid reload installs
-deny-all, and the next valid reload recovers. Only REST health/readiness and the
-gRPC health service are public; REST discovery and gRPC reflection remain
-protected. Bearer parsing follows [RFC
-6750](https://www.rfc-editor.org/rfc/rfc6750#section-2.1).
+public listeners and on admin when enabled.
 
-Transport security, token acquisition, authentication, and authorization remain
-separate capabilities. Service-account, authorized-user ADC, and external-
-account WIF can acquire bearer tokens according to [Application Default
-Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)
-and [Workload Identity
-Federation](https://cloud.google.com/iam/docs/workload-identity-federation), but
-the service does not emulate Google signature validation, token exchange, or
-IAM authorization described by [Google Cloud
-authentication](https://cloud.google.com/docs/authentication).
+BigQuery-compatible REST and gRPC endpoints do not authenticate or authorize
+callers. Missing, arbitrary, malformed, and expired-looking `Authorization`
+values reach the same protocol handlers. The public runtime neither parses
+credentials nor propagates a caller principal. Boundary observability records
+only the redacted metadata key, never its value.
+
+TLS protects transport without adding caller identity. Client-side token
+acquisition remains outside the emulator runtime. `admin.tokenFile` is an
+independent option that protects only the separate diagnostics listener; it is
+not a public BigQuery authentication policy.
 
 <!-- section: observability -->
 ## Capabilities and Observability

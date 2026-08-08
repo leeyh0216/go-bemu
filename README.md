@@ -74,8 +74,8 @@ Important limits:
   restart-durable pending staging are gaps;
 - load remains partial: non-Parquet formats, missing-table `CREATE_IF_NEEDED`,
   schema-update options, autodetect, and multipart/resumable transfer are gaps;
-- local bearer admission supports disabled, syntax-only presence, and bounded
-  static-token modes; credential acquisition and IAM are not emulated;
+- BigQuery-compatible REST and gRPC endpoints do not authenticate callers;
+  client credentials and IAM are not emulated;
 - canonical BigQuery metadata can outlive neither the process nor the in-memory
   repositories, even if a DuckDB file retains table data.
 

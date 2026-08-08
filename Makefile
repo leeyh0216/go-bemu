@@ -127,7 +127,6 @@ ci-test-core:
 	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) \
 		./internal/admin \
 		./internal/application \
-		./internal/auth/... \
 		./internal/domain \
 		./internal/loadjob/... \
 		./internal/observability \

@@ -107,49 +107,16 @@ and object/list/download limits are enforced. Runtime contract-profile
 negotiation remains uncomposed. A valid setting is not a claim beyond each
 Partial capability.
 
-Authentication is file-first and is composed before database or listener side
-effects. `auth.mode` accepts `disabled`, `bearer-present`, and `static`.
-`disabled` deliberately ignores malformed credentials and installs an anonymous
-principal. `bearer-present` enforces syntax and presence only; it is a connector
-compatibility gate, not identity verification. `static` verifies against one
-strict `auth.bqemu.dev/v1alpha1` `StaticTokenSet` YAML file. One authentication
-application service and one immutable verifier snapshot serve both REST and
-gRPC, so duplicate headers/metadata, principal digests, and allow/deny decisions
-have the same semantics. Parsing follows [RFC 6750 bearer
-usage](https://www.rfc-editor.org/rfc/rfc6750#section-2.1).
+The BigQuery-compatible REST and gRPC listeners do not authenticate or authorize
+requests. They ignore missing, arbitrary, malformed, duplicate, and
+expired-looking `Authorization` values. There is no public `auth.*` configuration
+or `BQEMU_AUTH_*` environment contract. Unknown YAML and `--set` paths still fail
+strict configuration validation.
 
-```yaml
-apiVersion: auth.bqemu.dev/v1alpha1
-kind: StaticTokenSet
-tokens:
-  - principal: local-developer
-    token: replace-with-mounted-secret
-```
-
-The token-set decoder rejects unknown/duplicate fields, custom tags, scalar
-coercion, aliases in credential fields, multiple documents, duplicate tokens,
-and values outside the configured bounds. The source principal is converted to
-a digest before publication and never enters logs or request context as text.
-
-The file, token, Authorization field, entry-count, and principal byte bounds are
-all explicit `auth.*` leaves with matching `BQEMU_AUTH_*` environment mappings
-and typed `--set` paths. `auth.staticTokensReloadInterval` defaults to `5s` and
-must be positive. Invalid initial content aborts startup before storage is
-opened. An invalid periodic reload atomically publishes a deny-all snapshot; a
-later valid reload publishes a new active digest and recovers without restart.
-Logs retain policy, reason, byte counts, and SHA-256 digests only. The REST
-`/healthz` and `/readyz` paths and the gRPC health `Check`, `List`, and `Watch`
-methods are public. REST discovery, gRPC reflection, and every data-plane method
-remain protected. A denial is a generic REST `401` or gRPC `UNAUTHENTICATED`
-response before body decoding, `RecvMsg`, routing, or application side effects.
-
-Service-account, authorized-user, and external-account credential files remain
-client-side token acquisition mechanisms described by [Application Default
-Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)
-and [Workload Identity
-Federation](https://cloud.google.com/iam/docs/workload-identity-federation).
-BQEMU accepts the resulting bearer token according to the selected local policy;
-it does not exchange credentials, validate Google signatures, or emulate IAM.
+TLS remains independent transport protection. Client libraries may require a
+credential before making a request, but token acquisition is outside this
+runtime. `admin.tokenFile` is a separate option for the diagnostics listener and
+does not protect BigQuery-compatible endpoints.
 
 The HTTP edge accepts `identity` and `gzip` request bodies.
 `server.http.maxCompressedRequestBytes` bounds bytes read from the wire before
@@ -178,8 +145,8 @@ drift reproducible. The schema follows the [YAML 1.2.2
 specification](https://yaml.org/spec/1.2.2/).
 
 Secret bytes never belong in runtime-configuration YAML or environment
-variables. TLS keys, the dedicated StaticTokenSet document, and a remote admin
-token are referenced by mounted file path. Mount secret files read-only with
+variables. TLS keys and a remote admin token are referenced by mounted file
+path. Mount secret files read-only with
 deployment-appropriate permissions. Effective configuration can contain those
 reference paths but never reads or prints file contents. Treat the output as
 operational metadata. TLS only secures transport; it does not implement [Google
@@ -326,8 +293,6 @@ their units and scope:
 | `BQEMU_STORAGE_READ_TEST_TIMEOUT` | Go duration, `5s` | one Storage Read application-test context |
 | `BQEMU_STORAGE_WRITE_TEST_TIMEOUT` | Go duration, `5s` | Storage Write application, adapter, and public gRPC test contexts |
 | `BQEMU_REST_TEST_TIMEOUT` | Go duration, `5s` | REST request, gzip boundary, pagination, and overwrite test contexts |
-| `BQEMU_AUTH_RUNTIME_TEST_TIMEOUT` | Go duration, `5s` | authentication composition, reload, recovery, and scheduler test contexts |
-| `BQEMU_AUTH_TRANSPORT_TEST_TIMEOUT` | Go duration, `5s` | REST and gRPC authentication boundary test contexts |
 | `BQEMU_PYTEST_TIMEOUT_SECONDS` | positive seconds, suite default `90`; direnv default `300` | official Python-client build, readiness, request, and shutdown budget |
 | `BQEMU_BQCLI_TIMEOUT_SECONDS` | positive seconds, `300` | each bq CLI subprocess plus emulator readiness budget |
 | `BQEMU_DOCKER_START_TIMEOUT_SECONDS` | positive seconds, `120` | `docker compose --wait` startup budget |

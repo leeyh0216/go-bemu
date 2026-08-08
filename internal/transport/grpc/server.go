@@ -7,7 +7,6 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	authapp "github.com/leeyh0216/go-bemu/internal/auth/application"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
 	writeapp "github.com/leeyh0216/go-bemu/internal/storagewrite/application"
@@ -21,9 +20,8 @@ const (
 // Services keeps protocol adapters dependent on application services rather
 // than concrete databases. A nil service remains explicitly UNIMPLEMENTED.
 type Services struct {
-	Read           *readapp.Service
-	Write          *writeapp.Service
-	Authentication *authapp.Service
+	Read  *readapp.Service
+	Write *writeapp.Service
 }
 
 // Runtime retains the health controller so the composition root can announce
@@ -62,21 +60,10 @@ func NewWithServices(services Services, options ...grpc.ServerOption) *grpc.Serv
 }
 
 func NewRuntimeWithServices(services Services, options ...grpc.ServerOption) *Runtime {
-	// grpc-go applies chained interceptors in declaration order. Keep public
-	// boundary logging outermost, then authenticate before any service method or
-	// stream RecvMsg side effect. Composition-root size/TLS options remain inner.
-	// https://pkg.go.dev/google.golang.org/grpc#ChainUnaryInterceptor
-	transportOptions := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(
-			observability.UnaryServerInterceptor,
-			authenticationUnaryServerInterceptor(services.Authentication),
-		),
-		grpc.ChainStreamInterceptor(
-			observability.StreamServerInterceptor,
-			authenticationStreamServerInterceptor(services.Authentication),
-		),
-	}
-	options = append(transportOptions, options...)
+	options = append(options,
+		grpc.ChainUnaryInterceptor(observability.UnaryServerInterceptor),
+		grpc.ChainStreamInterceptor(observability.StreamServerInterceptor),
+	)
 	server := grpc.NewServer(options...)
 	storage := &StorageServer{read: services.Read}
 	storagepb.RegisterBigQueryReadServer(server, storage)

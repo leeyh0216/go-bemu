@@ -77,7 +77,6 @@ type Config struct {
 	TableData  TableDataConfig `yaml:"tableData" json:"tableData"`
 	Storage    StorageConfig   `yaml:"storage" json:"storage"`
 	Load       LoadConfig      `yaml:"load" json:"load"`
-	Auth       AuthConfig      `yaml:"auth" json:"auth"`
 	Logging    LoggingConfig   `yaml:"logging" json:"logging"`
 	Admin      AdminConfig     `yaml:"admin" json:"admin"`
 	UI         UIConfig        `yaml:"ui" json:"ui"`
@@ -254,26 +253,6 @@ type LoadConfig struct {
 	MaxListedObjects int      `yaml:"maxListedObjects" json:"maxListedObjects"`
 }
 
-// AuthConfig controls local bearer-token admission. It does not emulate IAM or
-// credential acquisition: service-account, authorized-user ADC, and external-
-// account WIF all obtain an OAuth bearer token before calling this public edge.
-//
-// Official contracts:
-//   - https://www.rfc-editor.org/rfc/rfc6750#section-2.1
-//   - https://cloud.google.com/docs/authentication/application-default-credentials
-//   - https://cloud.google.com/iam/docs/workload-identity-federation
-type AuthConfig struct {
-	Mode                       string   `yaml:"mode" json:"mode"`
-	MinTokenBytes              int      `yaml:"minTokenBytes" json:"minTokenBytes"`
-	MaxTokenBytes              int      `yaml:"maxTokenBytes" json:"maxTokenBytes"`
-	MaxAuthorizationBytes      int      `yaml:"maxAuthorizationBytes" json:"maxAuthorizationBytes"`
-	StaticTokensFile           string   `yaml:"staticTokensFile" json:"staticTokensFile"`
-	StaticTokensMaxFileBytes   int64    `yaml:"staticTokensMaxFileBytes" json:"staticTokensMaxFileBytes"`
-	StaticTokensMaxEntries     int      `yaml:"staticTokensMaxEntries" json:"staticTokensMaxEntries"`
-	StaticPrincipalMaxBytes    int      `yaml:"staticPrincipalMaxBytes" json:"staticPrincipalMaxBytes"`
-	StaticTokensReloadInterval Duration `yaml:"staticTokensReloadInterval" json:"staticTokensReloadInterval"`
-}
-
 type LoggingConfig struct {
 	Level  string `yaml:"level" json:"level"`
 	Format string `yaml:"format" json:"format"`
@@ -381,11 +360,6 @@ func Defaults() Config {
 			OperationTimeout: Duration(2 * time.Minute), MaxObjects: 1_000,
 			MaxObjectBytes: 1 << 30, MaxTotalBytes: 4 << 30,
 			MaxMetadataBytes: 8 << 20, MaxListedObjects: 10_000,
-		},
-		Auth: AuthConfig{
-			Mode: "disabled", MinTokenBytes: 1, MaxTokenBytes: 16 << 10, MaxAuthorizationBytes: 32 << 10,
-			StaticTokensMaxFileBytes: 1 << 20, StaticTokensMaxEntries: 1_024,
-			StaticPrincipalMaxBytes: 512, StaticTokensReloadInterval: Duration(5 * time.Second),
 		},
 		Logging: LoggingConfig{Level: "info", Format: "json"},
 		Admin: AdminConfig{
@@ -554,15 +528,6 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STORAGE_WRITE_ORPHAN_TTL", "storage.write.orphanTtl"},
 	{"BQEMU_STORAGE_WRITE_CLEANUP_INTERVAL", "storage.write.cleanupInterval"},
 	{"BQEMU_STORAGE_WRITE_PROTOCOL_MODEL_VERSION", "storage.write.protocolModelVersion"},
-	{"BQEMU_AUTH_MODE", "auth.mode"},
-	{"BQEMU_AUTH_MIN_TOKEN_BYTES", "auth.minTokenBytes"},
-	{"BQEMU_AUTH_MAX_TOKEN_BYTES", "auth.maxTokenBytes"},
-	{"BQEMU_AUTH_MAX_AUTHORIZATION_BYTES", "auth.maxAuthorizationBytes"},
-	{"BQEMU_AUTH_STATIC_TOKENS_FILE", "auth.staticTokensFile"},
-	{"BQEMU_AUTH_STATIC_TOKENS_MAX_FILE_BYTES", "auth.staticTokensMaxFileBytes"},
-	{"BQEMU_AUTH_STATIC_TOKENS_MAX_ENTRIES", "auth.staticTokensMaxEntries"},
-	{"BQEMU_AUTH_STATIC_PRINCIPAL_MAX_BYTES", "auth.staticPrincipalMaxBytes"},
-	{"BQEMU_AUTH_STATIC_TOKENS_RELOAD_INTERVAL", "auth.staticTokensReloadInterval"},
 	{"BQEMU_LOG_LEVEL", "logging.level"}, {"BQEMU_LOG_FORMAT", "logging.format"},
 	{"BQEMU_LOG_UNSAFE_PAYLOADS", "logging.unsafePayloads"}, {"BQEMU_ADMIN_ENABLED", "admin.enabled"},
 	{"BQEMU_ADMIN_ADDRESS", "admin.address"}, {"BQEMU_ADMIN_TOKEN_FILE", "admin.tokenFile"},
@@ -743,24 +708,6 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt64(&cfg.Load.MaxMetadataBytes)
 	case "load.maxListedObjects":
 		return setInt(&cfg.Load.MaxListedObjects)
-	case "auth.mode":
-		return setString(&cfg.Auth.Mode)
-	case "auth.minTokenBytes":
-		return setInt(&cfg.Auth.MinTokenBytes)
-	case "auth.maxTokenBytes":
-		return setInt(&cfg.Auth.MaxTokenBytes)
-	case "auth.maxAuthorizationBytes":
-		return setInt(&cfg.Auth.MaxAuthorizationBytes)
-	case "auth.staticTokensFile":
-		return setString(&cfg.Auth.StaticTokensFile)
-	case "auth.staticTokensMaxFileBytes":
-		return setInt64(&cfg.Auth.StaticTokensMaxFileBytes)
-	case "auth.staticTokensMaxEntries":
-		return setInt(&cfg.Auth.StaticTokensMaxEntries)
-	case "auth.staticPrincipalMaxBytes":
-		return setInt(&cfg.Auth.StaticPrincipalMaxBytes)
-	case "auth.staticTokensReloadInterval":
-		return setDuration(&cfg.Auth.StaticTokensReloadInterval)
 	case "logging.level":
 		return setString(&cfg.Logging.Level)
 	case "logging.format":
@@ -933,24 +880,6 @@ func (cfg Config) Validate() error {
 		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 			return errors.New("load.gcsEndpoint must be an absolute HTTP(S) URL when load is enabled")
 		}
-	}
-	if !oneOf(cfg.Auth.Mode, "disabled", "bearer-present", "static") {
-		return fmt.Errorf("unsupported auth.mode %q", cfg.Auth.Mode)
-	}
-	if cfg.Auth.MinTokenBytes < 1 || cfg.Auth.MaxTokenBytes < cfg.Auth.MinTokenBytes ||
-		cfg.Auth.MaxAuthorizationBytes < len("Bearer ") ||
-		cfg.Auth.MaxTokenBytes > cfg.Auth.MaxAuthorizationBytes-len("Bearer ") {
-		return errors.New("auth token bounds must satisfy 1 <= minTokenBytes <= maxTokenBytes <= maxAuthorizationBytes - bearer prefix")
-	}
-	if cfg.Auth.StaticTokensMaxFileBytes < 1 || cfg.Auth.StaticTokensMaxFileBytes == math.MaxInt64 ||
-		cfg.Auth.StaticTokensMaxEntries < 1 || cfg.Auth.StaticPrincipalMaxBytes < 1 {
-		return errors.New("auth static token file, entry, and principal bounds must be positive and safely bounded")
-	}
-	if cfg.Auth.StaticTokensReloadInterval.Value() <= 0 {
-		return errors.New("auth.staticTokensReloadInterval must be positive")
-	}
-	if cfg.Auth.Mode == "static" && strings.TrimSpace(cfg.Auth.StaticTokensFile) == "" {
-		return errors.New("auth.staticTokensFile is required in static mode")
 	}
 	if !oneOf(cfg.Logging.Level, "debug", "info", "warn", "error") {
 		return fmt.Errorf("unsupported logging.level %q", cfg.Logging.Level)
