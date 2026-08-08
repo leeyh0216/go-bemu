@@ -26,7 +26,7 @@ IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test build run format format-check contract-generate contract-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test build run format format-check contract-generate contract-check test test-race python-test bq-test spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -44,6 +44,7 @@ help:
 	  'make python-test  Run the official Python client real-process contract' \
 	  'make bq-test      Run the exact-version official bq CLI contract' \
 	  'make spark-contract Install exact Spark locks and run the released connector contract' \
+	  'make spark-scala-contract Run the standalone Scala decimal public-edge contract' \
 	  'make ci-static     Validate formatting, vet, configuration, and GitHub Actions policy' \
 	  'make ci-test-*     Run the same functional Go test groups used by CI' \
 	  'make docker-build Build the standalone non-root image' \
@@ -136,7 +137,7 @@ bq-test:
 	BQEMU_BQCLI_ARTIFACT_DIR="$(CURDIR)/.artifacts/bqcli" \
 	"$(PYTHON3)" tests/bqcli/run_contract.py
 
-spark-contract:
+spark-contract-setup:
 	mkdir -p "$(CURDIR)/.artifacts/spark/diagnostics"
 	@if test -x "$(BQEMU_SPARK_PYTHON)"; then \
 	  "$(BQEMU_SPARK_PYTHON)" -c 'import sys; assert sys.version_info[:2] == (3, 11), "Spark contract requires Python 3.11"'; \
@@ -146,6 +147,8 @@ spark-contract:
 	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
 	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py
+
+spark-contract: spark-contract-setup
 	BQEMU_SPARK_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
 	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
@@ -153,6 +156,16 @@ spark-contract:
 	"$(BQEMU_SPARK_PYTHON)" -m pytest -c tests/spark/pytest.ini tests/spark \
 	  --basetemp="$(CURDIR)/.artifacts/spark/pytest" \
 	  --junitxml="$(CURDIR)/.artifacts/spark/diagnostics/junit.xml"
+
+spark-scala-contract: spark-contract-setup
+	BQEMU_SPARK_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
+	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
+	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
+	PYTHONPYCACHEPREFIX="$(CURDIR)/.artifacts/spark/pycache" \
+	"$(BQEMU_SPARK_PYTHON)" -m pytest -c tests/spark/pytest.ini \
+	  tests/spark/test_scala_decimal_edge.py \
+	  --basetemp="$(CURDIR)/.artifacts/spark/pytest-scala" \
+	  --junitxml="$(CURDIR)/.artifacts/spark/diagnostics/junit-scala.xml"
 
 vet:
 	CGO_ENABLED=1 go vet ./...

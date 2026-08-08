@@ -295,7 +295,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 type catalogWarehouse interface {
-	ports.WarehouseAdmin
+	ports.CatalogStorage
 	ports.TableDataReader
 }
 

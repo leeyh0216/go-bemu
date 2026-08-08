@@ -9,3 +9,5 @@ var (
 	ErrPrecondition = errors.New("load job precondition failed")
 	ErrUnsupported  = errors.New("load job feature is not implemented")
 )
+
+const CapabilityParquetNestedRepeatedV1 = "load.parquet.nested-repeated.unsupported-v1"

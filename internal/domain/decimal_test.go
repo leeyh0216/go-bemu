@@ -68,14 +68,28 @@ func TestFieldValidationClassifiesDecimalPrecisionAndGeographyAsUnsupported(t *t
 	}
 }
 
+func TestFieldValidationRejectsNestedFieldsOnScalars(t *testing.T) {
+	field := Field{
+		Name: "amount", Type: "NUMERIC",
+		Fields: []Field{{Name: "unexpected", Type: "STRING"}},
+	}
+	err := field.Validate()
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "must not define nested fields") {
+		t.Fatalf("scalar nested-field error = %v", err)
+	}
+}
+
 func TestValidateDecimalValueRejectsRoundingAndOverflow(t *testing.T) {
 	field := Field{Name: "amount", Type: "BIGNUMERIC", Precision: decimalPointer(5), Scale: decimalPointer(2)}
-	for _, value := range []string{"123.45", "-0.01", "0"} {
+	for _, value := range []string{"123.45", "-0.01", "+1.2e2", ".5", "1.", "0"} {
 		if err := field.ValidateDecimalValue(value); err != nil {
 			t.Fatalf("valid decimal %q: %v", value, err)
 		}
 	}
-	for _, value := range []string{"1234.56", "1.001", "not-decimal"} {
+	for _, value := range []string{
+		"1234.56", "1.001", "not-decimal", "1/2", "0x10", "0b10",
+		"0o10", "0x1p2", "1p2", "1_000", "NaN", "Inf", " 1.0",
+	} {
 		if err := field.ValidateDecimalValue(value); err == nil {
 			t.Fatalf("invalid decimal %q was accepted", value)
 		}

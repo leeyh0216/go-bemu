@@ -75,7 +75,11 @@ func (w *Warehouse) MaterializeQuery(ctx context.Context, request ports.QueryMat
 	if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE "+quoteIdentifier(staging)+" AS "+statement); err != nil {
 		return result, fmt.Errorf("evaluate query destination source: %w", err)
 	}
-	queryResult, err := readMaterializedQueryResult(ctx, tx, staging)
+	var schemaHints []domain.Field
+	if request.DestinationExists {
+		schemaHints = request.DestinationSchema
+	}
+	queryResult, err := readMaterializedQueryResult(ctx, tx, staging, schemaHints)
 	if err != nil {
 		return result, err
 	}
@@ -272,7 +276,7 @@ func canonicalQueryDestinationType(value string) string {
 	}
 }
 
-func readMaterializedQueryResult(ctx context.Context, tx *sql.Tx, staging string) (domain.QueryResult, error) {
+func readMaterializedQueryResult(ctx context.Context, tx *sql.Tx, staging string, schemaHints []domain.Field) (domain.QueryResult, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+quoteIdentifier(staging))
 	if err != nil {
 		return domain.QueryResult{}, fmt.Errorf("read materialized query result: %w", err)
@@ -283,7 +287,7 @@ func readMaterializedQueryResult(ctx context.Context, tx *sql.Tx, staging string
 		return domain.QueryResult{}, fmt.Errorf("read materialized result schema: %w", err)
 	}
 	result := domain.QueryResult{}
-	result.Columns, err = queryResultSchema(columnTypes)
+	result.Columns, err = queryResultSchema(columnTypes, schemaHints)
 	if err != nil {
 		return domain.QueryResult{}, err
 	}

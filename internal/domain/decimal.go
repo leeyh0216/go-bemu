@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"math/big"
+	"regexp"
 	"strings"
 )
 
@@ -11,8 +12,12 @@ const (
 	SparkDecimalMaxScale     int64 = 38
 
 	CapabilitySparkDecimal38V1 = "schema.decimal.spark-precision-38-v1"
+	CapabilityEngineSchemaV1   = "schema.engine-capabilities-v1"
+	GapQueryDecimalLineageV1   = "query.results.decimal-lineage-v1"
 	GapGeographyUnsupportedV1  = "schema.geography.unsupported-v1"
 )
+
+var decimalLiteralPattern = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
 
 // DecimalParameters is the effective decimal shape supplied to an engine or
 // wire codec. Field.Precision and Field.Scale remain unchanged so canonical
@@ -28,6 +33,12 @@ func (f Field) ValidateDecimalValue(input string) error {
 	parameters, err := f.EffectiveDecimalParameters()
 	if err != nil {
 		return err
+	}
+	// big.Rat also accepts fractions, base-prefixed integers, and hexadecimal
+	// floats. BigQuery decimal values use only base-10 integer/fraction syntax
+	// with an optional base-10 exponent, so reject the wider Go grammar first.
+	if !decimalLiteralPattern.MatchString(input) {
+		return fmt.Errorf("%w: decimal field %q has invalid value %q", ErrInvalid, f.Name, input)
 	}
 	rational, ok := new(big.Rat).SetString(input)
 	if !ok {

@@ -22,6 +22,7 @@ from conftest import (
     assert_ordered_operations,
     connector_options,
     create_table,
+    list_table_data,
     load_connector_source,
     observe_default_append_offsets,
     observe_direct_overwrite_flow,
@@ -313,6 +314,9 @@ def test_storage_read_arrow_and_avro(
         ),
     ],
 )
+@pytest.mark.operation("bigquery.tables.insert")
+@pytest.mark.operation("grpc.bigquery-read.create-read-session")
+@pytest.mark.operation("grpc.bigquery-read.read-rows")
 def test_decimal_schema_through_public_storage_read_edge(
     spark_session,
     public_edge: PublicEdge,
@@ -825,6 +829,12 @@ def test_direct_pending_exact_append(
     )
 
 
+@pytest.mark.operation("bigquery.tables.insert")
+@pytest.mark.operation("grpc.bigquery-write.create-write-stream")
+@pytest.mark.operation("grpc.bigquery-write.append-rows")
+@pytest.mark.operation("grpc.bigquery-write.finalize-write-stream")
+@pytest.mark.operation("grpc.bigquery-write.batch-commit-write-streams")
+@pytest.mark.operation("bigquery.tabledata.list")
 @pytest.mark.capability("SBQ-WRITE-DIRECT-DECIMAL-V1")
 def test_direct_decimal_write_through_public_proto_rows_edge(
     spark_session,
@@ -879,11 +889,7 @@ def test_direct_decimal_write_through_public_proto_rows_edge(
         .save(destination)
     )
 
-    result = query(
-        public_edge,
-        test_timeout,
-        f"SELECT numeric_value, bignumeric_value FROM `{destination}`",
-    )
+    result = list_table_data(public_edge, test_timeout, table_id)
     values = [Decimal(str(cell["v"])) for cell in result["rows"][0]["f"]]
     if values != [
         Decimal("12.3400"),

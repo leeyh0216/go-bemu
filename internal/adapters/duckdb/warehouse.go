@@ -26,10 +26,9 @@ type Warehouse struct {
 }
 
 var (
-	_ ports.HealthChecker            = (*Warehouse)(nil)
-	_ ports.WarehouseAdmin           = (*Warehouse)(nil)
-	_ ports.EngineCapabilityProvider = (*Warehouse)(nil)
-	_ ports.SchemaPlanner            = (*Warehouse)(nil)
+	_ ports.HealthChecker  = (*Warehouse)(nil)
+	_ ports.CatalogStorage = (*Warehouse)(nil)
+	_ ports.SchemaPlanner  = (*Warehouse)(nil)
 )
 
 func (*Warehouse) EngineCapabilities() ports.EngineCapabilities {

@@ -97,7 +97,7 @@ not implied.
 | copy/extract | Unsupported | configuration rejected |
 | durable job/result state | Unsupported | in-memory repository |
 | bounded query result retention | Unsupported | all result rows remain in Go memory; gap `query.results.unbounded-memory-v1` |
-| complex query-result schema | Strict gap | ARRAY/STRUCT results fail before metadata publication rather than flattening mode/children; gap `query.results.complex-schema-v1` |
+| complex query-result schema | Partial | ARRAY/STRUCT schemas and nested/repeated `TableRow` cells are preserved; ambiguous decimal subfields and unsupported physical shapes fail before metadata publication |
 | bounded async query execution | Partial | file-configured `query.operationTimeout` bounds service-owned sync/async execution; shutdown admission/cancel/wait is implemented, while worker capacity and exact request `timeoutMs` remain gaps; capability `query.execution.bounded-v1` |
 | same-ID query insert | Verified basic | atomic `(project, location, jobId)` uniqueness; every reuse returns `409 duplicate`, fingerprint retained for diagnostics |
 | exact-request replay extension | Unsupported | future opt-in only; gap `query.jobs.exact-replay-extension-v1` |
@@ -109,9 +109,10 @@ not implied.
 
 Canonical job state and error fields come from the official
 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job) resource.
-Nested/repeated result cells and type-specific temporal values are not yet full
+Nested/repeated result cells use recursive
 [`TableRow`](https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow)
-encodings. Scalar query and `tabledata.list` rows do share JSON-number finite
+encoding. Type-specific temporal values do not yet cover the complete BigQuery
+surface. Scalar query and `tabledata.list` rows do share JSON-number finite
 FLOAT64 values and the exact non-finite tokens defined by the official
 [`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType).
 Explicit destinations follow
@@ -219,11 +220,12 @@ connector options set omitted BIGNUMERIC parameters to the emulator default of
 precision 38 and scale 18.
 
 One query limitation remains. A new DuckDB result typed only as
-`DECIMAL(P,S)` cannot reveal whether a scale of 9 or less originated as
-NUMERIC or BIGNUMERIC. An existing destination restores the identity from its
-catalog schema. A new arbitrary query destination uses NUMERIC when the
-physical precision and scale fit NUMERIC's range and BIGNUMERIC otherwise,
-until query lineage metadata is available.
+`DECIMAL(P,S)` cannot reveal whether a value inside NUMERIC's range originated
+as NUMERIC or BIGNUMERIC. A supported existing scalar destination restores the
+identity from its catalog schema, and a physical shape outside NUMERIC's range is
+unambiguously BIGNUMERIC. Other ambiguous query results fail before metadata
+publication with `query.results.decimal-lineage-v1` until issue #27 provides
+query lineage metadata.
 
 <!-- section: storage-read -->
 ## Storage Read
@@ -280,7 +282,7 @@ service and connector
 | --- | --- |
 | filesystem object-store adapter | Verified only behind explicit local opt-in |
 | GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
-| Parquet load into an existing table | Partial; explicit schema/cast validation |
+| Parquet load into an existing table | Partial; scalar fields only, with explicit schema/cast validation; nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1` |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |

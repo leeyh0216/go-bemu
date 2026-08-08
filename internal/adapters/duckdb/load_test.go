@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	catalogDomain "github.com/leeyh0216/go-bemu/internal/domain"
@@ -151,6 +152,7 @@ func TestParquetLoadRejectsUnsupportedSchemaBeforeReadingObjects(t *testing.T) {
 	for _, field := range []loadDomain.Field{
 		{Name: "amount", Type: "BIGNUMERIC", Precision: &precision},
 		{Name: "location", Type: "GEOGRAPHY"},
+		{Name: "amounts", Type: "NUMERIC", Mode: "REPEATED"},
 	} {
 		_, err := warehouse.Load(context.Background(), loadports.LoadRequest{
 			Destination: loadDomain.Table{Reference: loadDomain.TableReference{ProjectID: "p", DatasetID: "d", TableID: "t"}},
@@ -159,6 +161,9 @@ func TestParquetLoadRejectsUnsupportedSchemaBeforeReadingObjects(t *testing.T) {
 		})
 		if !errors.Is(err, loadDomain.ErrUnsupported) {
 			t.Fatalf("field %s error = %v, want ErrUnsupported before object read", field.Type, err)
+		}
+		if strings.EqualFold(field.Mode, "REPEATED") && !strings.Contains(err.Error(), loadDomain.CapabilityParquetNestedRepeatedV1) {
+			t.Fatalf("repeated Parquet error = %v, want stable capability", err)
 		}
 	}
 }

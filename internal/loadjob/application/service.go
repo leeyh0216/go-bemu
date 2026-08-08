@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 	"github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/observability"
@@ -170,6 +171,9 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	if len(configuration.Schema) > 0 && !schemasEqual(configuration.Schema, table.Schema) {
 		return statistics, fmt.Errorf("%w: requested schema does not match the destination table", domain.ErrInvalid)
 	}
+	if err := validateLoadSchema(s.loader, configuration.SourceFormat, table.Schema); err != nil {
+		return statistics, err
+	}
 
 	objects, err := s.resolveObjects(ctx, configuration.SourceURIs)
 	if err != nil {
@@ -228,6 +232,30 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		statistics.OutputBytes = downloaded
 	}
 	return statistics, err
+}
+
+func validateLoadSchema(loader ports.Loader, format domain.SourceFormat, schema []domain.Field) error {
+	if err := domain.ValidateSchema(schema); err != nil {
+		return err
+	}
+	if err := loader.EngineCapabilities().ValidateSchema(schema); err != nil {
+		return translateCatalogSchemaError(err)
+	}
+	if err := loader.ValidateSchema(schema); err != nil {
+		return translateCatalogSchemaError(err)
+	}
+	return loader.ValidateLoadSchema(format, schema)
+}
+
+func translateCatalogSchemaError(err error) error {
+	switch {
+	case errors.Is(err, catalogdomain.ErrUnsupported):
+		return fmt.Errorf("%w: %v", domain.ErrUnsupported, err)
+	case errors.Is(err, catalogdomain.ErrInvalid):
+		return fmt.Errorf("%w: %v", domain.ErrInvalid, err)
+	default:
+		return err
+	}
 }
 
 func (s *Service) resolveObjects(ctx context.Context, patterns []string) ([]ports.ObjectInfo, error) {
@@ -355,6 +383,9 @@ func (s *Service) download(ctx context.Context, job *domain.Job, objects []ports
 func terminalError(err error) (string, string) {
 	switch {
 	case errors.Is(err, domain.ErrUnsupported):
+		if strings.Contains(err.Error(), domain.CapabilityParquetNestedRepeatedV1) {
+			return "notImplemented", "the requested load-job feature is not implemented; capability=" + domain.CapabilityParquetNestedRepeatedV1
+		}
 		return "notImplemented", "the requested load-job feature is not implemented"
 	case errors.Is(err, domain.ErrInvalid):
 		return "invalid", "the load configuration or source schema is invalid"

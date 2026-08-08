@@ -12,8 +12,8 @@ import (
 
 var queryDecimalTypePattern = regexp.MustCompile(`(?i)^DECIMAL\(([0-9]+),\s*([0-9]+)\)$`)
 
-func bigQueryResultField(name, databaseType string) (domain.Field, error) {
-	field, err := parseDuckDBResultType(strings.TrimSpace(databaseType))
+func bigQueryResultField(name, databaseType string, hint *domain.Field) (domain.Field, error) {
+	field, err := parseDuckDBResultTypeWithHint(strings.TrimSpace(databaseType), hint)
 	if err != nil {
 		return domain.Field{}, fmt.Errorf("map DuckDB query column %q type %q: %w", name, databaseType, err)
 	}
@@ -22,6 +22,10 @@ func bigQueryResultField(name, databaseType string) (domain.Field, error) {
 }
 
 func parseDuckDBResultType(input string) (domain.Field, error) {
+	return parseDuckDBResultTypeWithHint(input, nil)
+}
+
+func parseDuckDBResultTypeWithHint(input string, hint *domain.Field) (domain.Field, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return domain.Field{}, fmt.Errorf("empty result type")
@@ -55,7 +59,7 @@ func parseDuckDBResultType(input string) (domain.Field, error) {
 			if err != nil {
 				return domain.Field{}, err
 			}
-			child, err := parseDuckDBResultType(childType)
+			child, err := parseDuckDBResultTypeWithHint(childType, querySchemaHintByName(hint, childName))
 			if err != nil {
 				return domain.Field{}, fmt.Errorf("STRUCT field %q: %w", childName, err)
 			}
@@ -67,9 +71,26 @@ func parseDuckDBResultType(input string) (domain.Field, error) {
 	if match := queryDecimalTypePattern.FindStringSubmatch(input); match != nil {
 		precision, _ := strconv.ParseInt(match[1], 10, 64)
 		scale, _ := strconv.ParseInt(match[2], 10, 64)
-		fieldType := "NUMERIC"
+		fieldType := ""
 		if scale > 9 || precision-scale > 29 {
 			fieldType = "BIGNUMERIC"
+		} else if hint != nil && (strings.EqualFold(hint.Type, "NUMERIC") || strings.EqualFold(hint.Type, "BIGNUMERIC")) {
+			parameters, err := hint.EffectiveDecimalParameters()
+			if err != nil {
+				return domain.Field{}, err
+			}
+			if parameters.Precision != precision || parameters.Scale != scale {
+				return domain.Field{}, fmt.Errorf(
+					"%w: decimal result shape differs from canonical destination field %q",
+					domain.ErrPrecondition, hint.Name,
+				)
+			}
+			fieldType = strings.ToUpper(hint.Type)
+		} else {
+			return domain.Field{}, fmt.Errorf(
+				"%w: capability=%s DECIMAL(%d,%d) does not identify NUMERIC versus BIGNUMERIC",
+				domain.ErrUnsupported, domain.GapQueryDecimalLineageV1, precision, scale,
+			)
 		}
 		field := domain.Field{Type: fieldType, Mode: mode, Precision: &precision, Scale: &scale}
 		if _, err := field.EffectiveDecimalParameters(); err != nil {
@@ -83,6 +104,18 @@ func parseDuckDBResultType(input string) (domain.Field, error) {
 		return domain.Field{}, fmt.Errorf("unsupported result type %q", input)
 	}
 	return domain.Field{Type: fieldType, Mode: mode}, nil
+}
+
+func querySchemaHintByName(parent *domain.Field, name string) *domain.Field {
+	if parent == nil {
+		return nil
+	}
+	for index := range parent.Fields {
+		if strings.EqualFold(parent.Fields[index].Name, name) {
+			return &parent.Fields[index]
+		}
+	}
+	return nil
 }
 
 func splitDuckDBTypeList(input string) ([]string, error) {
@@ -162,10 +195,14 @@ func splitDuckDBStructField(input string) (string, string, error) {
 	return "", "", fmt.Errorf("STRUCT field %q has no type", input)
 }
 
-func queryResultSchema(columnTypes []*sql.ColumnType) ([]domain.Field, error) {
+func queryResultSchema(columnTypes []*sql.ColumnType, hints []domain.Field) ([]domain.Field, error) {
 	fields := make([]domain.Field, len(columnTypes))
 	for index, columnType := range columnTypes {
-		field, err := bigQueryResultField(columnType.Name(), columnType.DatabaseTypeName())
+		var hint *domain.Field
+		if index < len(hints) {
+			hint = &hints[index]
+		}
+		field, err := bigQueryResultField(columnType.Name(), columnType.DatabaseTypeName(), hint)
 		if err != nil {
 			return nil, err
 		}

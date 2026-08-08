@@ -71,7 +71,7 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 	if err != nil {
 		return domain.QueryResult{}, fmt.Errorf("read result schema: %w", err)
 	}
-	result.Columns, err = queryResultSchema(columnTypes)
+	result.Columns, err = queryResultSchema(columnTypes, nil)
 	if err != nil {
 		return domain.QueryResult{}, err
 	}

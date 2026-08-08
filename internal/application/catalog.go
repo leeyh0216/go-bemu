@@ -28,7 +28,7 @@ import (
 // worker ordering requirement. A durable bounded sweeper remains a named gap.
 type CatalogService struct {
 	catalog                   ports.CatalogRepository
-	warehouse                 ports.WarehouseAdmin
+	warehouse                 ports.CatalogStorage
 	tableDataReader           ports.TableDataReader
 	clock                     ports.Clock
 	defaultLocation           string
@@ -126,7 +126,7 @@ func WithMaxTableDataRowBytes(maximum int64) CatalogOption {
 	}
 }
 
-func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.WarehouseAdmin, clock ports.Clock, options ...CatalogOption) *CatalogService {
+func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.CatalogStorage, clock ports.Clock, options ...CatalogOption) *CatalogService {
 	service := &CatalogService{
 		catalog: catalog, warehouse: warehouse, clock: clock,
 		defaultLocation: "US", compensationTimeout: 30 * time.Second,
@@ -316,6 +316,9 @@ func (s *CatalogService) createTable(ctx context.Context, table domain.Table) (d
 	if err := table.Validate(); err != nil {
 		return domain.Table{}, err
 	}
+	if err := validateEngineSchema(s.warehouse, table.Schema); err != nil {
+		return domain.Table{}, err
+	}
 	dataset, err := s.catalog.GetDataset(ctx, table.ProjectID, table.DatasetID)
 	if err != nil {
 		return domain.Table{}, err
@@ -500,6 +503,9 @@ func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table dom
 	if err := table.Validate(); err != nil {
 		return err
 	}
+	if err := validateEngineSchema(s.warehouse, table.Schema); err != nil {
+		return err
+	}
 	dataset, err := s.catalog.GetDataset(ctx, table.ProjectID, table.DatasetID)
 	if err != nil {
 		return err
@@ -520,6 +526,13 @@ func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table dom
 	table.CreatedAt = now
 	table.UpdatedAt = now
 	return s.catalog.CreateTable(ctx, table)
+}
+
+func validateEngineSchema(planner ports.SchemaPlanner, schema []domain.Field) error {
+	if err := planner.EngineCapabilities().ValidateSchema(schema); err != nil {
+		return err
+	}
+	return planner.ValidateSchema(schema)
 }
 
 func (s *CatalogService) ListTables(ctx context.Context, projectID, datasetID string) ([]domain.Table, error) {

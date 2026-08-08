@@ -103,6 +103,9 @@ func (f Field) Validate() error {
 	if (t == "RECORD" || t == "STRUCT") && len(f.Fields) == 0 {
 		return fmt.Errorf("%w: %s field %q requires nested fields", ErrInvalid, t, f.Name)
 	}
+	if t != "RECORD" && t != "STRUCT" && len(f.Fields) != 0 {
+		return fmt.Errorf("%w: scalar field %q of type %s must not define nested fields", ErrInvalid, f.Name, t)
+	}
 	for _, nested := range f.Fields {
 		if err := nested.Validate(); err != nil {
 			return err

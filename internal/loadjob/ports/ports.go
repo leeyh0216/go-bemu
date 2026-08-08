@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/loadjob/domain"
+	catalogports "github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 type ObjectInfo struct {
@@ -45,6 +46,8 @@ type LoadResult struct {
 }
 
 type Loader interface {
+	catalogports.SchemaPlanner
+	ValidateLoadSchema(domain.SourceFormat, []domain.Field) error
 	Load(context.Context, LoadRequest) (LoadResult, error)
 }
 

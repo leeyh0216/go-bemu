@@ -115,7 +115,7 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 | 복사와 추출 | 미지원 | 해당 설정을 거부합니다. |
 | 작업과 결과의 영속 상태 | 미지원 | 메모리 저장소만 사용합니다. |
 | 쿼리 결과 보관 크기 제한 | 미지원 | 모든 결과 행을 Go 메모리에 보관합니다. 미지원 ID는 `query.results.unbounded-memory-v1`입니다. |
-| 복합 쿼리 결과 스키마 | 엄격히 거부 | `ARRAY`와 `STRUCT` 결과의 모드와 자식 필드를 평탄화하지 않습니다. 메타데이터 반영 전에 실패하며 ID는 `query.results.complex-schema-v1`입니다. |
+| 복합 쿼리 결과 스키마 | 부분 지원 | `ARRAY`와 `STRUCT` 스키마, 중첩 및 반복 `TableRow` 셀을 보존합니다. 자료형을 구분할 수 없는 10진수 하위 필드와 지원하지 않는 물리 스키마는 메타데이터 반영 전에 거부합니다. |
 | 비동기 쿼리 실행 시간 제한 | 부분 지원 | `query.operationTimeout`으로 동기 및 비동기 실행을 제한합니다. 종료 시 승인 거부, 취소, 대기를 처리합니다. 작업자 용량과 요청의 정확한 `timeoutMs` 동작은 미지원이며 ID는 `query.execution.bounded-v1`입니다. |
 | 같은 ID의 쿼리 등록 | 기본 검증 | `(project, location, jobId)`를 원자적으로 중복 검사합니다. 모든 재사용은 `409 duplicate`이며 해시는 진단에만 사용합니다. |
 | 같은 요청 재실행 확장 기능 | 미지원 | 이후 별도 활성화 기능으로 계획합니다. 미지원 ID는 `query.jobs.exact-replay-extension-v1`입니다. |
@@ -126,9 +126,10 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 | 최종 상태 저장 실패 복구 | 미지원 | 저장소 갱신에 실패하면 `RUNNING` 상태가 남을 수 있습니다. 미지원 ID는 `query.terminal-persistence-v1`입니다. |
 
 작업 상태와 오류 필드는 공식 [`Job`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job)
-리소스를 기준으로 합니다. 중첩 및 반복 결과 셀과 자료형별 날짜 및 시간 값은 아직
-완전한 [`TableRow`](https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow)
-형식으로 인코딩하지 않습니다. 스칼라 쿼리와 `tabledata.list` 행에서 유한한
+리소스를 기준으로 합니다. 중첩 및 반복 결과 셀은 재귀적인
+[`TableRow`](https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow)
+형식으로 인코딩합니다. 자료형별 날짜 및 시간 값은 BigQuery의 전체 범위를 아직
+지원하지 않습니다. 스칼라 쿼리와 `tabledata.list` 행에서 유한한
 `FLOAT64`는 JSON 숫자로 반환합니다. 그 밖의 값은 공식
 [`StandardSqlDataType`](https://cloud.google.com/bigquery/docs/reference/rest/v2/StandardSqlDataType)에
 정의된 유한하지 않은 `FLOAT64` 표기를 사용합니다.
@@ -248,11 +249,12 @@ Spark `3.5.8`과 커넥터 `0.44.2`로 Arrow 및 AVRO 읽기 스키마와 직접
 쓰기를 검증했습니다. 커넥터 설정은 매개변수를 생략한 BIGNUMERIC에 정밀도 38과 소수부
 자릿수 18을 적용합니다.
 
-새 쿼리 결과에는 한 가지 제한이 있습니다. DuckDB의 `DECIMAL(P,S)`만으로는 소수부
-자릿수가 9 이하인 값의 원래 자료형이 NUMERIC인지 BIGNUMERIC인지 알 수 없습니다.
-기존 대상 테이블이 있으면 카탈로그 스키마에서 자료형을 복원합니다. 새 임의 쿼리
-대상은 계보 메타데이터를 제공하기 전까지 물리 정밀도와 소수부 자릿수가 NUMERIC 범위에
-들어가면 NUMERIC으로 처리합니다. 이 범위를 벗어나면 BIGNUMERIC으로 처리합니다.
+새 쿼리 결과에는 한 가지 제한이 있습니다. DuckDB의 `DECIMAL(P,S)`만으로는 NUMERIC
+범위에 들어가는 값의 원래 자료형이 NUMERIC인지 BIGNUMERIC인지 알 수 없습니다. 지원하는
+기존 스칼라 대상 테이블이 있으면 카탈로그 스키마에서 자료형을 복원합니다. NUMERIC 범위를 벗어나는
+물리 스키마는 BIGNUMERIC으로 명확하게 구분할 수 있습니다. 그 밖의 모호한 쿼리 결과는
+#27에서 계보 메타데이터를 제공하기 전까지 메타데이터 반영 전에
+`query.results.decimal-lineage-v1`로 거부합니다.
 
 <!-- section: storage-read -->
 ## Storage Read
@@ -309,7 +311,7 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 | --- | --- |
 | 파일 시스템 객체 저장소 어댑터 | 로컬에서 별도로 활성화한 경우만 검증했습니다. |
 | GCS 및 fake GCS JSON 어댑터 | 목록, 조회, 미디어 요청의 크기에 상한을 둡니다. URI 글로브 확장은 부분 지원입니다. |
-| 기존 테이블로 Parquet 로드 | 부분 지원입니다. 명시한 스키마와 형 변환을 검사합니다. |
+| 기존 테이블로 Parquet 로드 | 스칼라 필드만 부분 지원합니다. 명시한 스키마와 형 변환을 검사하며 중첩 또는 반복 필드는 객체를 읽기 전에 `load.parquet.nested-repeated.unsupported-v1`로 거부합니다. |
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
 | 대상 생성, 자동 감지, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |

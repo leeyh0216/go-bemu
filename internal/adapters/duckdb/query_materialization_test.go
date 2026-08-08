@@ -139,11 +139,10 @@ func TestQueryMaterializationCarriesRecursiveDecimalSchemaAndValues(t *testing.T
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()
 	warehouse, _ := newQueryMaterializationFixture(t, ctx)
-	precision10, scale2 := int64(10), int64(2)
 	schema := []domain.Field{
 		{Name: "amount", Type: "BIGNUMERIC"},
 		{Name: "details", Type: "STRUCT", Fields: []domain.Field{{Name: "nested_amount", Type: "BIGNUMERIC"}}},
-		{Name: "amounts", Type: "NUMERIC", Mode: "REPEATED", Precision: &precision10, Scale: &scale2},
+		{Name: "amounts", Type: "BIGNUMERIC", Mode: "REPEATED"},
 	}
 	if err := warehouse.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: "decimal_source", Schema: schema}); err != nil {
 		t.Fatal(err)
@@ -163,7 +162,7 @@ func TestQueryMaterializationCarriesRecursiveDecimalSchemaAndValues(t *testing.T
 	}
 	fields := result.QueryResult.Columns
 	if len(fields) != 3 || fields[0].Type != "BIGNUMERIC" || fields[0].Precision == nil || *fields[0].Precision != 38 || *fields[0].Scale != 18 ||
-		fields[1].Type != "RECORD" || fields[1].Fields[0].Type != "BIGNUMERIC" || fields[2].Mode != "REPEATED" || fields[2].Type != "NUMERIC" {
+		fields[1].Type != "RECORD" || fields[1].Fields[0].Type != "BIGNUMERIC" || fields[2].Mode != "REPEATED" || fields[2].Type != "BIGNUMERIC" {
 		t.Fatalf("recursive query schema = %#v", fields)
 	}
 	row := result.QueryResult.Rows[0]
@@ -209,12 +208,9 @@ func TestQuerySchemaInfersBigNumericWhenNumericRangeCannotRepresentDecimal(t *te
 	if field.Type != "BIGNUMERIC" || field.Precision == nil || *field.Precision != 38 || field.Scale == nil || *field.Scale != 2 {
 		t.Fatalf("DECIMAL(38,2) query field = %#v, want unambiguous BIGNUMERIC", field)
 	}
-	ambiguous, err := parseDuckDBResultType("DECIMAL(10,2)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ambiguous.Type != "NUMERIC" {
-		t.Fatalf("DECIMAL(10,2) query field = %#v, want conservative NUMERIC", ambiguous)
+	_, err = parseDuckDBResultType("DECIMAL(10,2)")
+	if !errors.Is(err, domain.ErrUnsupported) || !strings.Contains(err.Error(), domain.GapQueryDecimalLineageV1) {
+		t.Fatalf("ambiguous DECIMAL error = %v, want fail-closed lineage capability", err)
 	}
 }
 

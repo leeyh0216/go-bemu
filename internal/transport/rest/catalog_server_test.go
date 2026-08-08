@@ -32,6 +32,15 @@ type catalogTestWarehouse struct {
 var _ ports.Warehouse = (*catalogTestWarehouse)(nil)
 
 func (*catalogTestWarehouse) Ping(context.Context) error { return nil }
+func (*catalogTestWarehouse) EngineCapabilities() ports.EngineCapabilities {
+	return ports.EngineCapabilities{
+		MaxDecimalPrecision: domain.SparkDecimalMaxPrecision,
+		MaxDecimalScale:     domain.SparkDecimalMaxScale,
+		SupportsStruct:      true,
+		SupportsRepeated:    true,
+	}
+}
+func (*catalogTestWarehouse) ValidateSchema([]domain.Field) error { return nil }
 func (w *catalogTestWarehouse) CreateDataset(_ context.Context, projectID, datasetID string) error {
 	w.datasets = append(w.datasets, projectID+"/"+datasetID)
 	return nil
@@ -172,6 +181,14 @@ func TestCatalogRESTPreservesDecimalParametersAndRejectsUnsupportedTypesBeforeSt
 	}`, http.StatusNotImplemented)
 	if len(warehouse.tables) != createdBefore {
 		t.Fatal("unsupported GEOGRAPHY schema reached the physical warehouse")
+	}
+
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"malformed_scalar"},
+		"schema":{"fields":[{"name":"amount","type":"NUMERIC","fields":[{"name":"child","type":"STRING"}]}]}
+	}`, http.StatusBadRequest)
+	if len(warehouse.tables) != createdBefore {
+		t.Fatal("scalar field with nested children reached the physical warehouse")
 	}
 }
 

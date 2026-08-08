@@ -1370,6 +1370,23 @@ def create_table(
     )
 
 
+def list_table_data(
+    edge: PublicEdge, timeout: float, table_id: str
+) -> dict[str, object]:
+    result = _json_request(
+        edge,
+        (
+            edge.http_endpoint
+            + f"/bigquery/v2/projects/{edge.project_id}/datasets/{edge.dataset_id}/tables/{table_id}/data"
+        ),
+        "GET",
+        timeout,
+    )
+    if result is None:
+        raise RuntimeError("tabledata.list returned an empty response")
+    return result
+
+
 def query(edge: PublicEdge, timeout: float, sql: str) -> dict[str, object]:
     result = _json_request(
         edge,

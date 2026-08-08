@@ -33,17 +33,14 @@ type stagingColumn struct {
 }
 
 func (w *Warehouse) Load(ctx context.Context, request loadports.LoadRequest) (result loadports.LoadResult, err error) {
-	if request.SourceFormat != loadDomain.FormatParquet {
-		return result, fmt.Errorf("%w: DuckDB loader supports only PARQUET", loadDomain.ErrUnsupported)
-	}
-	if len(request.Objects) == 0 {
-		return result, fmt.Errorf("%w: at least one local Parquet object is required", loadDomain.ErrInvalid)
-	}
 	if len(request.Schema) == 0 {
 		return result, fmt.Errorf("%w: destination schema is required", loadDomain.ErrInvalid)
 	}
-	if err := loadDomain.ValidateSchema(request.Schema); err != nil {
+	if err := w.ValidateLoadSchema(request.SourceFormat, request.Schema); err != nil {
 		return result, err
+	}
+	if len(request.Objects) == 0 {
+		return result, fmt.Errorf("%w: at least one local Parquet object is required", loadDomain.ErrInvalid)
 	}
 	table := request.Destination.Reference
 	started := observability.LogSideEffectStart(ctx, "duckdb", "load_parquet",
@@ -142,6 +139,41 @@ func (w *Warehouse) Load(ctx context.Context, request loadports.LoadRequest) (re
 	return result, nil
 }
 
+func (w *Warehouse) ValidateLoadSchema(format loadDomain.SourceFormat, schema []loadDomain.Field) error {
+	if format != loadDomain.FormatParquet {
+		return fmt.Errorf("%w: loader supports only PARQUET", loadDomain.ErrUnsupported)
+	}
+	if err := loadDomain.ValidateSchema(schema); err != nil {
+		return err
+	}
+	if err := w.EngineCapabilities().ValidateSchema(schema); err != nil {
+		return translateCatalogLoadSchemaError(err)
+	}
+	if err := w.ValidateSchema(schema); err != nil {
+		return translateCatalogLoadSchemaError(err)
+	}
+	for _, field := range schema {
+		if len(field.Fields) != 0 || strings.EqualFold(field.Mode, "REPEATED") {
+			return fmt.Errorf(
+				"%w: capability=%s nested and repeated Parquet loads",
+				loadDomain.ErrUnsupported, loadDomain.CapabilityParquetNestedRepeatedV1,
+			)
+		}
+	}
+	return nil
+}
+
+func translateCatalogLoadSchemaError(err error) error {
+	switch {
+	case errors.Is(err, catalogdomain.ErrUnsupported):
+		return fmt.Errorf("%w: %v", loadDomain.ErrUnsupported, err)
+	case errors.Is(err, catalogdomain.ErrInvalid):
+		return fmt.Errorf("%w: %v", loadDomain.ErrInvalid, err)
+	default:
+		return err
+	}
+}
+
 func describeStaging(ctx context.Context, tx *sql.Tx, staging string) ([]stagingColumn, error) {
 	rows, err := tx.QueryContext(ctx, "DESCRIBE SELECT * FROM "+quoteIdentifier(staging))
 	if err != nil {
@@ -193,9 +225,6 @@ func validateLoadShape(schema []loadDomain.Field, columns []stagingColumn) ([]st
 	selectExpressions := make([]string, len(schema))
 	destinationColumns := make([]string, len(schema))
 	for index, field := range schema {
-		if len(field.Fields) > 0 || strings.EqualFold(field.Mode, "REPEATED") {
-			return nil, nil, fmt.Errorf("%w: nested and repeated Parquet loads", loadDomain.ErrUnsupported)
-		}
 		column, ok := byName[strings.ToLower(field.Name)]
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: Parquet field %q is missing", loadDomain.ErrInvalid, field.Name)

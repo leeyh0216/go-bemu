@@ -8,12 +8,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 	"github.com/leeyh0216/go-bemu/internal/loadjob/ports"
+	catalogports "github.com/leeyh0216/go-bemu/internal/ports"
 )
 
 type testClock struct{ value time.Time }
@@ -64,6 +67,7 @@ func (c testCatalog) GetTable(_ context.Context, reference domain.TableReference
 }
 
 type testLoader struct {
+	testLoadPlanner
 	mu    sync.Mutex
 	calls int
 	paths []string
@@ -71,9 +75,40 @@ type testLoader struct {
 }
 
 type gatedLoader struct {
+	testLoadPlanner
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type testLoadPlanner struct {
+	capabilities  *catalogports.EngineCapabilities
+	plannerErr    error
+	loadPlanErr   error
+	plannerCalls  int
+	loadPlanCalls int
+}
+
+func (planner *testLoadPlanner) EngineCapabilities() catalogports.EngineCapabilities {
+	if planner.capabilities != nil {
+		return *planner.capabilities
+	}
+	return catalogports.EngineCapabilities{
+		MaxDecimalPrecision: catalogdomain.SparkDecimalMaxPrecision,
+		MaxDecimalScale:     catalogdomain.SparkDecimalMaxScale,
+		SupportsStruct:      true,
+		SupportsRepeated:    true,
+	}
+}
+
+func (planner *testLoadPlanner) ValidateSchema([]catalogdomain.Field) error {
+	planner.plannerCalls++
+	return planner.plannerErr
+}
+
+func (planner *testLoadPlanner) ValidateLoadSchema(domain.SourceFormat, []domain.Field) error {
+	planner.loadPlanCalls++
+	return planner.loadPlanErr
 }
 
 func (l *gatedLoader) Load(ctx context.Context, _ ports.LoadRequest) (ports.LoadResult, error) {
@@ -302,6 +337,82 @@ func TestServicePersistsTimeoutAsTerminalError(t *testing.T) {
 	job := waitForDone(t, service, reference)
 	if job.Error == nil || job.Error.Reason != "backendError" {
 		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestServiceRejectsReplaceableEngineSchemaBoundsBeforeObjectAccess(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	capabilities := catalogports.EngineCapabilities{
+		MaxDecimalPrecision: 10,
+		MaxDecimalScale:     4,
+		SupportsStruct:      true,
+		SupportsRepeated:    true,
+	}
+	loader := &testLoader{testLoadPlanner: testLoadPlanner{capabilities: &capabilities}}
+	precision, scale := int64(11), int64(2)
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Location: "US",
+		Schema: []domain.Field{{Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale}},
+	}
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		NewMemoryJobRepository(), objects, testCatalog{table: table}, loader,
+		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "engine-bound"}
+	if _, err := service.Submit(context.Background(), reference, testConfiguration(domain.FormatParquet)); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "notImplemented" {
+		t.Fatalf("job = %+v", job)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	loader.mu.Lock()
+	loads := loader.calls
+	loader.mu.Unlock()
+	if opens != 0 || loads != 0 || loader.plannerCalls != 0 || loader.loadPlanCalls != 0 {
+		t.Fatalf("capability rejection crossed a side-effect boundary: opens=%d loads=%d planner=%d load_plan=%d", opens, loads, loader.plannerCalls, loader.loadPlanCalls)
+	}
+}
+
+func TestServiceReportsStableNestedRepeatedParquetCapabilityBeforeObjectAccess(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	loader := &testLoader{testLoadPlanner: testLoadPlanner{
+		loadPlanErr: fmt.Errorf("%w: capability=%s nested and repeated Parquet loads", domain.ErrUnsupported, domain.CapabilityParquetNestedRepeatedV1),
+	}}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Location: "US",
+		Schema: []domain.Field{{Name: "amounts", Type: "NUMERIC", Mode: "REPEATED"}},
+	}
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		NewMemoryJobRepository(), objects, testCatalog{table: table}, loader,
+		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "nested-parquet"}
+	if _, err := service.Submit(context.Background(), reference, testConfiguration(domain.FormatParquet)); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "notImplemented" || !strings.Contains(job.Error.Message, domain.CapabilityParquetNestedRepeatedV1) {
+		t.Fatalf("job = %+v", job)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	if opens != 0 || loader.calls != 0 {
+		t.Fatalf("nested Parquet rejection crossed a side-effect boundary: opens=%d loads=%d", opens, loader.calls)
 	}
 }
 

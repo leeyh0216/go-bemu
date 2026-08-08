@@ -91,6 +91,16 @@ type tableDataCompositionWarehouse struct {
 	request ports.TableDataReadRequest
 }
 
+func (*tableDataCompositionWarehouse) EngineCapabilities() ports.EngineCapabilities {
+	return ports.EngineCapabilities{
+		MaxDecimalPrecision: domain.SparkDecimalMaxPrecision,
+		MaxDecimalScale:     domain.SparkDecimalMaxScale,
+		SupportsStruct:      true,
+		SupportsRepeated:    true,
+	}
+}
+func (*tableDataCompositionWarehouse) ValidateSchema([]domain.Field) error { return nil }
+
 func (*tableDataCompositionWarehouse) CreateDataset(context.Context, string, string) error {
 	return nil
 }

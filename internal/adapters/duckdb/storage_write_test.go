@@ -123,6 +123,32 @@ func TestStorageWriteRejectsDecimalOverflowBeforeRowMutation(t *testing.T) {
 	}
 }
 
+func TestStorageWriteRejectsNonBigQueryDecimalGrammarBeforeRowMutation(t *testing.T) {
+	for _, value := range []string{"1/2", "0x10", "0b10"} {
+		t.Run(value, func(t *testing.T) {
+			ctx, cancel := duckDBStorageWriteTestContext(t)
+			defer cancel()
+			warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{
+				Name: "amount", Type: "NUMERIC",
+			}})
+			descriptor := storageWriteDescriptor(t,
+				protoField("amount", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+			)
+			row := storageWriteRow(t, descriptor, map[string]any{"amount": value})
+			err := coordinator.AppendDefault(ctx, writeports.AppendBatch{
+				StreamName: table.Name() + "/streams/_default", Table: table,
+				Descriptor: descriptor, Rows: [][]byte{row}, SchemaFingerprint: "decimal", PayloadDigest: value,
+			})
+			if err == nil || !strings.Contains(err.Error(), "invalid value") {
+				t.Fatalf("decimal grammar error = %v", err)
+			}
+			if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
+				t.Fatalf("invalid decimal inserted %d rows", got)
+			}
+		})
+	}
+}
+
 func TestStorageWriteRejectsUnsupportedCanonicalSchemaBeforePhysicalAccess(t *testing.T) {
 	ctx, cancel := duckDBStorageWriteTestContext(t)
 	defer cancel()

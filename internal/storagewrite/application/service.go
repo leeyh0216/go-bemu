@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 	"github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
 )
@@ -594,12 +595,7 @@ func cloneSchema(schema domain.TableSchema) domain.TableSchema {
 }
 
 func cloneFields(fields []domain.Field) []domain.Field {
-	result := make([]domain.Field, len(fields))
-	for index, field := range fields {
-		result[index] = field
-		result[index].Fields = cloneFields(field.Fields)
-	}
-	return result
+	return catalogdomain.CloneFields(fields)
 }
 
 func cloneTime(value *time.Time) *time.Time {

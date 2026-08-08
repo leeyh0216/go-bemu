@@ -114,6 +114,11 @@ func (s *CatalogService) UpdateTable(ctx context.Context, projectID, datasetID, 
 	if err := table.Validate(); err != nil {
 		return domain.Table{}, err
 	}
+	if patch.Schema.Set {
+		if err := validateEngineSchema(s.warehouse, table.Schema); err != nil {
+			return domain.Table{}, err
+		}
+	}
 	if len(additions) != 0 {
 		if err := s.warehouse.ApplySchemaAdditions(ctx, table, additions); err != nil {
 			return domain.Table{}, err
@@ -154,10 +159,5 @@ func copyTimePointer(value *time.Time) *time.Time {
 }
 
 func copyFields(fields []domain.Field) []domain.Field {
-	clone := make([]domain.Field, len(fields))
-	for index, field := range fields {
-		clone[index] = field
-		clone[index].Fields = copyFields(field.Fields)
-	}
-	return clone
+	return domain.CloneFields(fields)
 }
