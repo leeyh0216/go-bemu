@@ -1,0 +1,29 @@
+{
+  "projects": [
+    {
+      "projectId": "test-project",
+      "datasets": [
+        {
+          "datasetId": "analytics",
+          "location": "US",
+          "tables": [
+            {
+              "tableId": "events",
+              "schema": [
+                {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "category", "type": "STRING", "mode": "NULLABLE"},
+                {"name": "score", "type": "INT64", "mode": "NULLABLE"}
+              ],
+              "rows": [
+                [1, "a", 10],
+                [2, "b", null],
+                [3, "a", 30],
+                [4, "c", 40]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

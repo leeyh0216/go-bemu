@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "projection-filter",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "ordered"
+}
