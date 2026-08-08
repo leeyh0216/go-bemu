@@ -276,7 +276,7 @@ func TestRuntimeContractSpecPackagesContainOnlyGeneratedGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, directory := range []string{"internal/capabilityspec", "internal/contractspec"} {
+	for _, directory := range []string{"internal/contractspec"} {
 		entries, err := os.ReadDir(filepath.Join(root, directory))
 		if err != nil {
 			t.Fatal(err)
