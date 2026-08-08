@@ -67,3 +67,32 @@ func TestCompareHandlesAffectedRowsAndStableErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCompareValidatesCatalogAndPhysicalTablePostconditions(t *testing.T) {
+	affected := int64(1)
+	field := Field{Name: "id", Type: "INT64", Mode: "REQUIRED"}
+	expectedTable := ExpectedTable{
+		ProjectID: "p", DatasetID: "d", TableID: "t", Exists: true,
+		RowOrder: RowOrderOrdered, Schema: []Field{field}, Rows: [][]any{{json.Number("1")}},
+	}
+	test := Case{ID: "postcondition", Expected: Expected{
+		Kind: ExpectedAffected, AffectedRows: &affected, Tables: []ExpectedTable{expectedTable},
+	}}
+	outcome := Outcome{
+		Result: &domain.QueryResult{AffectedRows: 1},
+		Tables: map[string]TableOutcome{
+			tableOutcomeKey("p", "d", "t"): {
+				Exists: true, Schema: fixtureFieldsToDomain(expectedTable.Schema), Rows: [][]any{{int64(1)}},
+			},
+		},
+	}
+	if err := Compare(test, outcome); err != nil {
+		t.Fatal(err)
+	}
+	outcome.Tables[tableOutcomeKey("p", "d", "t")] = TableOutcome{
+		Exists: true, Schema: fixtureFieldsToDomain(expectedTable.Schema), Rows: [][]any{{int64(2)}},
+	}
+	if err := Compare(test, outcome); err == nil || !strings.Contains(err.Error(), "table p.d.t row[0]") {
+		t.Fatalf("table row error = %v", err)
+	}
+}

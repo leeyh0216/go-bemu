@@ -24,9 +24,23 @@ type Failure struct {
 type Outcome struct {
 	Result  *domain.QueryResult
 	Failure *Failure
+	Tables  map[string]TableOutcome
+}
+
+type TableOutcome struct {
+	Exists bool
+	Schema []domain.Field
+	Rows   [][]any
 }
 
 func Compare(test Case, outcome Outcome) error {
+	if err := comparePrimaryOutcome(test, outcome); err != nil {
+		return err
+	}
+	return compareTableOutcomes(test, outcome.Tables)
+}
+
+func comparePrimaryOutcome(test Case, outcome Outcome) error {
 	expected := test.Expected
 	if expected.Kind == ExpectedError {
 		if outcome.Failure == nil {
@@ -81,6 +95,54 @@ func Compare(test Case, outcome Outcome) error {
 		}
 	}
 	return nil
+}
+
+func compareTableOutcomes(test Case, observed map[string]TableOutcome) error {
+	if len(test.Expected.Tables) == 0 {
+		return nil
+	}
+	for _, expected := range test.Expected.Tables {
+		key := tableOutcomeKey(expected.ProjectID, expected.DatasetID, expected.TableID)
+		actual, found := observed[key]
+		if !found {
+			return fmt.Errorf("case %s table %s was not observed", test.ID, key)
+		}
+		if actual.Exists != expected.Exists {
+			return fmt.Errorf("case %s table %s exists = %t, want %t", test.ID, key, actual.Exists, expected.Exists)
+		}
+		if !expected.Exists {
+			continue
+		}
+		expectedSchema := fixtureFieldsToDomain(expected.Schema)
+		if err := compareFields(expectedSchema, actual.Schema, "table "+key+" schema"); err != nil {
+			return fmt.Errorf("case %s %w", test.ID, err)
+		}
+		expectedRows, err := canonicalRows(expectedSchema, expected.Rows)
+		if err != nil {
+			return fmt.Errorf("case %s table %s expected rows: %w", test.ID, key, err)
+		}
+		actualRows, err := canonicalRows(expectedSchema, actual.Rows)
+		if err != nil {
+			return fmt.Errorf("case %s table %s actual rows: %w", test.ID, key, err)
+		}
+		if expected.RowOrder == RowOrderUnordered {
+			slices.Sort(expectedRows)
+			slices.Sort(actualRows)
+		}
+		if len(actualRows) != len(expectedRows) {
+			return fmt.Errorf("case %s table %s row count = %d, want %d", test.ID, key, len(actualRows), len(expectedRows))
+		}
+		for index := range expectedRows {
+			if actualRows[index] != expectedRows[index] {
+				return fmt.Errorf("case %s table %s row[%d] = %s, want %s", test.ID, key, index, actualRows[index], expectedRows[index])
+			}
+		}
+	}
+	return nil
+}
+
+func tableOutcomeKey(projectID, datasetID, tableID string) string {
+	return projectID + "." + datasetID + "." + tableID
 }
 
 func fixtureFieldsToDomain(fields []Field) []domain.Field {

@@ -79,12 +79,23 @@ type ExpectedFailure struct {
 	Code  string     `json:"code"`
 }
 
+type ExpectedTable struct {
+	ProjectID string   `json:"projectId"`
+	DatasetID string   `json:"datasetId"`
+	TableID   string   `json:"tableId"`
+	Exists    bool     `json:"exists"`
+	RowOrder  RowOrder `json:"rowOrder"`
+	Schema    []Field  `json:"schema,omitempty"`
+	Rows      [][]any  `json:"rows,omitempty"`
+}
+
 type Expected struct {
 	Kind         ExpectedKind     `json:"kind"`
 	Schema       []Field          `json:"schema,omitempty"`
 	Rows         [][]any          `json:"rows,omitempty"`
 	AffectedRows *int64           `json:"affectedRows,omitempty"`
 	Error        *ExpectedFailure `json:"error,omitempty"`
+	Tables       []ExpectedTable  `json:"tables,omitempty"`
 }
 
 type Case struct {
@@ -383,6 +394,38 @@ func validateExpected(order RowOrder, expected Expected) error {
 		}
 	default:
 		return fmt.Errorf("expected kind %q is invalid", expected.Kind)
+	}
+	return validateExpectedTables(expected.Tables)
+}
+
+func validateExpectedTables(tables []ExpectedTable) error {
+	seen := make(map[string]struct{}, len(tables))
+	for index, table := range tables {
+		if table.ProjectID == "" || table.DatasetID == "" || table.TableID == "" {
+			return fmt.Errorf("expected table %d requires projectId, datasetId, and tableId", index)
+		}
+		key := tableOutcomeKey(table.ProjectID, table.DatasetID, table.TableID)
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate expected table %q", key)
+		}
+		seen[key] = struct{}{}
+		if !table.Exists {
+			if table.RowOrder != RowOrderNone || len(table.Schema) != 0 || len(table.Rows) != 0 {
+				return fmt.Errorf("absent expected table %q cannot define rowOrder, schema, or rows", key)
+			}
+			continue
+		}
+		if table.RowOrder != RowOrderOrdered && table.RowOrder != RowOrderUnordered {
+			return fmt.Errorf("existing expected table %q requires explicit ordered or unordered rowOrder", key)
+		}
+		if err := validateFields(table.Schema, "expected table "+key); err != nil {
+			return err
+		}
+		for rowIndex, row := range table.Rows {
+			if len(row) != len(table.Schema) {
+				return fmt.Errorf("expected table %q row %d has %d values, want %d", key, rowIndex, len(row), len(table.Schema))
+			}
+		}
 	}
 	return nil
 }

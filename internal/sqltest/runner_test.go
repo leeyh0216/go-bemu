@@ -88,14 +88,52 @@ func runRegressionCase(ctx context.Context, t *testing.T, test Case) (Outcome, e
 		ProjectID: test.DefaultProject, DefaultProjectID: test.DefaultProject,
 		DefaultDataset: test.DefaultDataset, Location: fixtureLocation(test), SQL: test.SQL,
 	})
+	var outcome Outcome
 	if runErr != nil {
-		return failureOutcome(trackedGateway.lastError, trackedExecutor.lastError, runErr), nil
-	}
-	if job.Error != nil {
+		outcome = failureOutcome(trackedGateway.lastError, trackedExecutor.lastError, runErr)
+	} else if job.Error != nil {
 		jobErr := errors.New(job.Error.Message)
-		return failureOutcome(trackedGateway.lastError, trackedExecutor.lastError, jobErr), nil
+		outcome = failureOutcome(trackedGateway.lastError, trackedExecutor.lastError, jobErr)
+	} else {
+		outcome = Outcome{Result: job.Result}
 	}
-	return Outcome{Result: job.Result}, nil
+	tables, err := observeExpectedTables(ctx, catalog, test.Expected.Tables)
+	if err != nil {
+		return Outcome{}, err
+	}
+	outcome.Tables = tables
+	return outcome, nil
+}
+
+func observeExpectedTables(
+	ctx context.Context,
+	catalog *application.CatalogService,
+	expected []ExpectedTable,
+) (map[string]TableOutcome, error) {
+	observed := make(map[string]TableOutcome, len(expected))
+	for _, assertion := range expected {
+		key := tableOutcomeKey(assertion.ProjectID, assertion.DatasetID, assertion.TableID)
+		table, err := catalog.GetTable(ctx, assertion.ProjectID, assertion.DatasetID, assertion.TableID)
+		if errors.Is(err, domain.ErrNotFound) {
+			observed[key] = TableOutcome{}
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("observe table %s metadata: %w", key, err)
+		}
+		page, err := catalog.ListTableData(
+			ctx, assertion.ProjectID, assertion.DatasetID, assertion.TableID, 0,
+			ports.TableDataMaxResults{Value: 10_000, Present: true},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("observe table %s rows: %w", key, err)
+		}
+		if int64(len(page.Rows)) != page.TotalRows {
+			return nil, fmt.Errorf("observe table %s returned %d of %d rows", key, len(page.Rows), page.TotalRows)
+		}
+		observed[key] = TableOutcome{Exists: true, Schema: table.Schema, Rows: page.Rows}
+	}
+	return observed, nil
 }
 
 func createFixtureCatalog(ctx context.Context, catalog *application.CatalogService, fixture FixtureDataset) error {

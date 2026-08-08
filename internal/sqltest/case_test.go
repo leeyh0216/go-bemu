@@ -53,6 +53,12 @@ func TestLoadFSRejectsMalformedAmbiguousAndDuplicateCases(t *testing.T) {
 			mutate: func(files fstest.MapFS) { files["z/query.sql"] = mapFile("SELECT '" + "b" + "q'") },
 			want:   "forbidden target",
 		},
+		"ambiguous absent table postcondition": {
+			mutate: func(files fstest.MapFS) {
+				files["z/expected.json"] = mapFile(`{"kind":"rows","schema":[{"name":"id","type":"INT64","mode":"REQUIRED"}],"rows":[[1]],"tables":[{"projectId":"p","datasetId":"d","tableId":"missing","exists":false,"rowOrder":"ordered"}]}`)
+			},
+			want: "absent expected table",
+		},
 		"duplicate ID": {
 			mutate: func(files fstest.MapFS) {
 				for name, file := range validCaseFiles("z-case", "ordered") {

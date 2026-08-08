@@ -1,0 +1,23 @@
+{
+  "projects": [
+    {
+      "projectId": "test-project",
+      "datasets": [
+        {
+          "datasetId": "analytics",
+          "location": "US",
+          "tables": [
+            {
+              "tableId": "accounts",
+              "schema": [
+                {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "status", "type": "STRING", "mode": "REQUIRED"}
+              ],
+              "rows": [[1, "existing"]]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

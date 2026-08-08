@@ -1,0 +1,18 @@
+{
+  "kind": "affected",
+  "affectedRows": 1,
+  "tables": [
+    {
+      "projectId": "test-project",
+      "datasetId": "analytics",
+      "tableId": "accounts",
+      "exists": true,
+      "rowOrder": "ordered",
+      "schema": [
+        {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+        {"name": "status", "type": "STRING", "mode": "REQUIRED"}
+      ],
+      "rows": [[1, "existing"], [2, "created"]]
+    }
+  ]
+}
