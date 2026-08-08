@@ -16,7 +16,7 @@ from typing import Any, Callable, Mapping
 import uuid
 import xml.etree.ElementTree as ET
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -588,7 +588,7 @@ def run_pyspark_case(
     result = run_process(
         [
             str(settings.spark_python),
-            str(ROOT / "tests/load/pyspark_indirect.py"),
+            str(ROOT / "tests/integration/load/pyspark_indirect.py"),
             "--connector",
             str(connector),
             "--hadoop-gcs",
@@ -731,7 +731,7 @@ def run_scala_spark_case(
     ]
     for value in configuration:
         command.extend(("--conf", value))
-    command.extend(("-i", str(ROOT / "tests/load/scala_indirect.scala")))
+    command.extend(("-i", str(ROOT / "tests/integration/load/scala_indirect.scala")))
     result = run_process(
         command,
         operation="scala-spark-indirect-write",
@@ -970,7 +970,7 @@ def run_case(
             [
                 settings.go_binary,
                 "run",
-                "./tests/load/fixturegen",
+                "./tests/integration/load/fixturegen",
                 "--manifest",
                 str(settings.fixture_lock),
                 "--output-root",

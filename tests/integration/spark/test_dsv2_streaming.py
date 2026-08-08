@@ -209,7 +209,7 @@ def test_raw_dsv2_exact_streaming_finalizes_without_commit(
     _run(
         [
             os.sys.executable,
-            str(REPOSITORY_ROOT / "tests" / "spark" / "run_dsv2_streaming.py"),
+            str(REPOSITORY_ROOT / "tests" / "integration" / "spark" / "run_dsv2_streaming.py"),
             "--config",
             str(runner_config),
         ],

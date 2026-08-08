@@ -51,7 +51,7 @@ type fixture struct {
 func main() {
 	var manifestPath, outputRoot, timeoutValue string
 	var observe bool
-	flag.StringVar(&manifestPath, "manifest", "tests/load/fixtures.lock.json", "fixture lock path")
+	flag.StringVar(&manifestPath, "manifest", "tests/integration/load/fixtures.lock.json", "fixture lock path")
 	flag.StringVar(&outputRoot, "output-root", "", "seed output root")
 	flag.StringVar(&timeoutValue, "timeout", "30s", "overall generation timeout")
 	flag.BoolVar(&observe, "observe", false, "emit unlocked sizes and hashes for a lock update")

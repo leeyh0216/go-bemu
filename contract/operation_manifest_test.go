@@ -91,7 +91,7 @@ func TestOperationManifestRejectsUnknownDuplicateAndUnclassifiedInput(t *testing
 
 func TestVerificationRequiresPrimaryLevelAndAllowsSupplementalTests(t *testing.T) {
 	tests := []string{
-		"python:tests/python/test_sample.py:test_public_process",
+		"python:tests/integration/python/test_sample.py:test_public_process",
 		"go:internal/transport/rest/sample:TestTransportSupplement",
 	}
 	if err := validateVerificationTests(VerificationPublicProcess, tests); err != nil {
@@ -162,7 +162,7 @@ func TestAnnotated(t *testing.T) { contracttest.Operation(t, "example.unknown") 
 
 func TestPythonOperationMarkerCarriesOnlyOperationID(t *testing.T) {
 	root := t.TempDir()
-	directory := filepath.Join(root, "tests", "python")
+	directory := filepath.Join(root, "tests", "integration", "python")
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestPythonOperationMarkerCarriesOnlyOperationID(t *testing.T) {
 	}
 	manifest := OperationManifest{Operations: []Operation{{
 		ID: "example.python.get", Verification: VerificationPublicProcess,
-		Tests: []string{"python:tests/python/test_sample.py:test_public_process"},
+		Tests: []string{"python:tests/integration/python/test_sample.py:test_public_process"},
 	}}}
 	if err := ValidateOperationAnnotations(root, manifest); err != nil {
 		t.Fatal(err)
@@ -181,7 +181,7 @@ func TestPythonOperationMarkerCarriesOnlyOperationID(t *testing.T) {
 
 func TestBQOperationMarkerCarriesOnlyCanonicalOperationID(t *testing.T) {
 	root := t.TempDir()
-	directory := filepath.Join(root, "tests", "bqcli")
+	directory := filepath.Join(root, "tests", "integration", "bqcli")
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestBQOperationMarkerCarriesOnlyCanonicalOperationID(t *testing.T) {
 	}
 	manifest := OperationManifest{Operations: []Operation{{
 		ID: "example.bq.get", Verification: VerificationPublicProcess,
-		Tests: []string{"bq:tests/bqcli/runner.py:run_contract"},
+		Tests: []string{"bq:tests/integration/bqcli/runner.py:run_contract"},
 	}}}
 	if err := ValidateOperationAnnotations(root, manifest); err != nil {
 		t.Fatal(err)

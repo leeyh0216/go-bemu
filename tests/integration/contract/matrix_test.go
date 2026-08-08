@@ -125,8 +125,8 @@ func TestSparkEvidenceMatchesCommittedBytes(t *testing.T) {
 		for _, entry := range matrix.Entries {
 			for _, evidence := range entry.Evidence {
 				clean := filepath.ToSlash(filepath.Clean(evidence.Ref))
-				allowedLock := clean == "tests/spark/artifacts.lock.json" || clean == "tests/spark/artifacts-dsv2.lock.json"
-				if strings.HasPrefix(clean, "../") || (!strings.HasPrefix(clean, "tests/spark/evidence/") && !allowedLock) {
+				allowedLock := clean == "tests/integration/spark/artifacts.lock.json" || clean == "tests/integration/spark/artifacts-dsv2.lock.json"
+				if strings.HasPrefix(clean, "../") || (!strings.HasPrefix(clean, "tests/integration/spark/evidence/") && !allowedLock) {
 					t.Fatalf("%s evidence escapes reviewed Spark paths: %q", entry.ID, evidence.Ref)
 				}
 				contents, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(clean)))

@@ -67,7 +67,7 @@ setup: doctor
 
 python-setup:
 	uv venv --python "$(BQEMU_PYTHON_VERSION)" .venv
-	uv pip sync --python "$(PYTHON)" --require-hashes tests/python/requirements.lock
+	uv pip sync --python "$(PYTHON)" --require-hashes tests/integration/python/requirements.lock
 
 build:
 	mkdir -p $(dir $(BINARY)) $(dir $(AUTH_FIXTURE_BINARY))
@@ -82,7 +82,7 @@ auth-spark-setup:
 	else \
 		uv venv --python "$(BQEMU_SPARK_PYTHON_VERSION)" "$(BQEMU_SPARK_VENV)"; \
 	fi
-	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
+	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/integration/spark/requirements.lock
 
 auth-fixtures:
 	CGO_ENABLED=0 go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
@@ -95,10 +95,10 @@ auth-client-test:
 	BQEMU_AUTH_JUNIT="$(BQEMU_AUTH_JUNIT)" \
 	BQEMU_AUTH_DIAGNOSTICS="$(BQEMU_AUTH_DIAGNOSTICS)" \
 	BQEMU_AUTH_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
-	"$(PYTHON3)" tests/auth/run_contract.py
+	"$(PYTHON3)" tests/integration/auth/run_contract.py
 
 auth-runner-test:
-	"$(PYTHON3)" -m unittest discover -s tests/auth -p 'test_*.py'
+	"$(PYTHON3)" -m unittest discover -s tests/integration/auth -p 'test_*.py'
 
 run:
 	mkdir -p "$(BQEMU_LOCAL_DATA_DIR)" "$(BQEMU_TEMP_DIRECTORY)"
@@ -155,7 +155,7 @@ spark-prepare:
 	else \
 	  uv venv --python "$(BQEMU_SPARK_PYTHON_VERSION)" "$(BQEMU_SPARK_VENV)"; \
 	fi
-	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
+	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/integration/spark/requirements.lock
 
 spark-contract: spark-prepare
 	BQEMU_SPARK_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
@@ -171,8 +171,8 @@ spark-scala-contract: spark-prepare
 	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
 	PYTHONPYCACHEPREFIX="$(CURDIR)/.artifacts/spark/pycache" \
-	"$(BQEMU_SPARK_PYTHON)" -m pytest -c tests/spark/pytest.ini \
-	  tests/spark/test_scala_decimal_edge.py \
+	"$(BQEMU_SPARK_PYTHON)" -m pytest -c tests/integration/spark/pytest.ini \
+	  tests/integration/spark/test_scala_decimal_edge.py \
 	  --basetemp="$(CURDIR)/.artifacts/spark/pytest-scala" \
 	  --junitxml="$(CURDIR)/.artifacts/spark/diagnostics/junit-scala.xml"
 

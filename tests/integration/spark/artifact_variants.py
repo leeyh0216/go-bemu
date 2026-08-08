@@ -175,9 +175,9 @@ def _digest(path: Path) -> tuple[str, int]:
 
 def load_artifact_specs(repository_root: Path) -> dict[str, ArtifactSpec]:
     locks = (
-        (repository_root / "tests" / "spark" / "artifacts.lock.json", DSV1_VARIANT),
+        (repository_root / "tests" / "integration" / "spark" / "artifacts.lock.json", DSV1_VARIANT),
         (
-            repository_root / "tests" / "spark" / "artifacts-dsv2.lock.json",
+            repository_root / "tests" / "integration" / "spark" / "artifacts-dsv2.lock.json",
             DSV2_RAW_VARIANT,
         ),
     )

@@ -121,7 +121,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install hash-locked dependencies
-        run: uv pip sync --system --require-hashes tests/python/requirements.lock
+        run: uv pip sync --system --require-hashes tests/integration/python/requirements.lock
       - name: Run real-process client contract
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
@@ -210,7 +210,7 @@ jobs:
           install_components: bq
       - name: Install Python client dependencies
         if: ${{ matrix.family == 'python' }}
-        run: uv pip sync --system --require-hashes tests/python/requirements.lock
+        run: uv pip sync --system --require-hashes tests/integration/python/requirements.lock
       - name: Install Spark runtime dependencies
         if: ${{ matrix.family == 'spark' }}
         env:

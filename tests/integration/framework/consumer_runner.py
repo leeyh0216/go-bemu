@@ -307,7 +307,7 @@ class PythonPytestAdapter(RunnerAdapter):
                 "-m",
                 "pytest",
                 "-c",
-                "tests/python/pytest.ini",
+                "tests/integration/python/pytest.ini",
                 *_scenario_selectors(self.context, "pytest"),
                 f"--basetemp={self.context.artifact_root / 'pytest'}",
                 f"--junitxml={self.context.artifact_root / 'junit.xml'}",
@@ -368,12 +368,12 @@ class BQCLIAdapter(RunnerAdapter):
 
     def execute_scenario(self) -> subprocess.CompletedProcess[str]:
         selectors = _scenario_selectors(self.context, "bq")
-        if selectors != ["tests/bqcli/run_contract.py:main"]:
+        if selectors != ["tests/integration/bqcli/run_contract.py:main"]:
             raise ContractError(f"bq-cli-v1 does not implement selectors {selectors!r}")
         environment = os.environ.copy()
         environment["BQEMU_BQCLI_VERSION"] = self.context.versions["bq"]
         environment["BQEMU_BQCLI_ARTIFACT_DIR"] = str(self.context.artifact_root / "bqcli")
-        result = self._run([sys.executable, "tests/bqcli/run_contract.py"], environment=environment)
+        result = self._run([sys.executable, "tests/integration/bqcli/run_contract.py"], environment=environment)
         _write_junit(self.context.artifact_root / "junit.xml", self.context.case_id, result)
         return result
 
@@ -544,7 +544,7 @@ class IndirectLoadAdapter:
         environment["BQEMU_LOAD_SPARK_PYTHON"] = environment["BQEMU_SPARK_PYTHON"]
         environment["BQEMU_LOAD_BQCLI_BIN"] = os.getenv("BQEMU_BQCLI_BIN", "bq")
         return self._run(  # type: ignore[attr-defined]
-            [sys.executable, "tests/load/run_contract.py", "--case", self.load_case],
+            [sys.executable, "tests/integration/load/run_contract.py", "--case", self.load_case],
             environment=environment,
         )
 
@@ -591,7 +591,7 @@ class IndirectLoadAdapter:
                 "phase": phase,
                 "operationId": operation,
                 "protocol": "REST",
-                "requestShape": "captured by tests/load",
+                "requestShape": "captured by tests/integration/load",
                 "responseStatus": 200,
                 "correlationGroup": correlation_group,
             })
@@ -726,7 +726,7 @@ def _spark_pytest_command(context: CaseContext, paths: list[str]) -> list[str]:
         "-m",
         "pytest",
         "-c",
-        "tests/spark/pytest.ini",
+        "tests/integration/spark/pytest.ini",
         *paths,
         f"--basetemp={context.artifact_root / 'pytest'}",
         f"--junitxml={context.artifact_root / 'junit.xml'}",

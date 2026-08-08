@@ -24,8 +24,8 @@ import urllib.request
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_LOCKS = (
-    REPOSITORY_ROOT / "tests" / "spark" / "artifacts.lock.json",
-    REPOSITORY_ROOT / "tests" / "spark" / "artifacts-dsv2.lock.json",
+    REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts.lock.json",
+    REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts-dsv2.lock.json",
 )
 DEFAULT_OUTPUT = REPOSITORY_ROOT / ".artifacts" / "spark"
 

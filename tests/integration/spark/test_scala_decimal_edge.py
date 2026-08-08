@@ -25,7 +25,7 @@ from conftest import (
 )
 
 
-SCALA_SOURCE = REPOSITORY_ROOT / "tests" / "spark" / "scala" / "DecimalPublicEdge.scala"
+SCALA_SOURCE = REPOSITORY_ROOT / "tests" / "integration" / "spark" / "scala" / "DecimalPublicEdge.scala"
 SAFE_STAGE_PATTERN = re.compile(
     r"^BQEMU_SCALA_DECIMAL_STAGE=([a-z-]+)(?: failure=([A-Za-z0-9_.$]+))?$"
 )

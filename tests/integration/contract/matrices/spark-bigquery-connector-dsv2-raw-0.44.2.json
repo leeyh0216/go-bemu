@@ -71,12 +71,12 @@
       "evidence": [
         {
           "kind": "real-process-trace",
-          "ref": "tests/spark/evidence/dsv2-raw-streaming-noop-0.44.2.json",
+          "ref": "tests/integration/spark/evidence/dsv2-raw-streaming-noop-0.44.2.json",
           "fingerprint": "sha256:3dfa054b17b259897b31768f892ec19fe724b33db83ccec5cc30533eea1aaaf7"
         },
         {
           "kind": "artifact-lock",
-          "ref": "tests/spark/artifacts-dsv2.lock.json",
+          "ref": "tests/integration/spark/artifacts-dsv2.lock.json",
           "fingerprint": "sha256:84cf9a053974af6f25a566255b5ebc1b9b1dbca629854bd6d21dc3645cf2fc1d"
         }
       ]
@@ -104,12 +104,12 @@
       "evidence": [
         {
           "kind": "positive-failure-trace",
-          "ref": "tests/spark/evidence/dsv2-raw-streaming-noop-0.44.2.json",
+          "ref": "tests/integration/spark/evidence/dsv2-raw-streaming-noop-0.44.2.json",
           "fingerprint": "sha256:3dfa054b17b259897b31768f892ec19fe724b33db83ccec5cc30533eea1aaaf7"
         },
         {
           "kind": "artifact-lock",
-          "ref": "tests/spark/artifacts-dsv2.lock.json",
+          "ref": "tests/integration/spark/artifacts-dsv2.lock.json",
           "fingerprint": "sha256:84cf9a053974af6f25a566255b5ebc1b9b1dbca629854bd6d21dc3645cf2fc1d"
         }
       ]

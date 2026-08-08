@@ -137,7 +137,7 @@
                   "bqemu.discovery.get"
                 ],
                 "selectors": [
-                  "bq:tests/bqcli/run_contract.py:main"
+                  "bq:tests/integration/bqcli/run_contract.py:main"
                 ],
                 "operationExpectations": [
                   {
@@ -217,7 +217,7 @@
                   "bigquery.jobs.list"
                 ],
                 "selectors": [
-                  "bq:tests/bqcli/run_contract.py:main"
+                  "bq:tests/integration/bqcli/run_contract.py:main"
                 ],
                 "operationExpectations": [
                   {
@@ -387,7 +387,7 @@
                   "bigquery.tables.delete"
                 ],
                 "selectors": [
-                  "pytest:tests/python/test_admin_contract.py"
+                  "pytest:tests/integration/python/test_admin_contract.py"
                 ],
                 "operationExpectations": [
                   {
@@ -462,9 +462,9 @@
                   "bigquery.jobs.getQueryResults"
                 ],
                 "selectors": [
-                  "pytest:tests/python/test_query_contract.py",
-                  "pytest:tests/python/test_query_lifecycle_contract.py",
-                  "pytest:tests/python/test_explicit_gaps.py"
+                  "pytest:tests/integration/python/test_query_contract.py",
+                  "pytest:tests/integration/python/test_query_lifecycle_contract.py",
+                  "pytest:tests/integration/python/test_explicit_gaps.py"
                 ],
                 "operationExpectations": [
                   {
@@ -505,7 +505,7 @@
                   "bigquery.tabledata.list"
                 ],
                 "selectors": [
-                  "pytest:tests/python/test_tabledata_contract.py"
+                  "pytest:tests/integration/python/test_tabledata_contract.py"
                 ],
                 "operationExpectations": [
                   {
@@ -725,8 +725,8 @@
                   "grpc.bigquery-write.get-write-stream"
                 ],
                 "selectors": [
-                  "pytest:tests/spark/test_public_edge.py",
-                  "pytest:tests/spark/test_dsv2_streaming.py"
+                  "pytest:tests/integration/spark/test_public_edge.py",
+                  "pytest:tests/integration/spark/test_dsv2_streaming.py"
                 ],
                 "operationExpectations": [
                   {
@@ -1028,8 +1028,8 @@
                   "grpc.bigquery-write.batch-commit-write-streams"
                 ],
                 "selectors": [
-                  "pytest:tests/spark/test_scala_public_edge.py",
-                  "pytest:tests/spark/test_scala_decimal_edge.py"
+                  "pytest:tests/integration/spark/test_scala_public_edge.py",
+                  "pytest:tests/integration/spark/test_scala_decimal_edge.py"
                 ],
                 "operationExpectations": [
                   {

@@ -56,7 +56,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install hash-locked dependencies
-        run: uv pip sync --system --require-hashes tests/python/requirements.lock
+        run: uv pip sync --system --require-hashes tests/integration/python/requirements.lock
       - name: Run typed consumer contract
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}

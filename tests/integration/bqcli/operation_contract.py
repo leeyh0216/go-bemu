@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 OPERATION_MANIFEST_PATH = (
     REPOSITORY_ROOT / "contract" / "operations.normalized.json"
 )

@@ -32,7 +32,7 @@ from artifact_variants import (
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 STATIC_ACCESS_TOKEN = "bqemu-spark-e2e-static-token"
 DIRECT_WRITER_CONTEXT = (
     "com.google.cloud.spark.bigquery.write.context."

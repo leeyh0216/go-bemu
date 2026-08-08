@@ -74,8 +74,8 @@ func readSparkArtifactLock(t *testing.T, path string) sparkArtifactLock {
 }
 
 func TestSparkArtifactsAreExactAndHashLocked(t *testing.T) {
-	dsv1 := readSparkArtifactLock(t, "../../spark/artifacts.lock.json")
-	dsv2 := readSparkArtifactLock(t, "../../spark/artifacts-dsv2.lock.json")
+	dsv1 := readSparkArtifactLock(t, "../spark/artifacts.lock.json")
+	dsv2 := readSparkArtifactLock(t, "../spark/artifacts-dsv2.lock.json")
 	if err := validateDSv1ArtifactLock(dsv1); err != nil {
 		t.Fatal(err)
 	}
@@ -229,8 +229,8 @@ func validateDSv2ArtifactLock(lock sparkArtifactLock) error {
 }
 
 func TestSparkArtifactLocksRejectCrossSchemaMutations(t *testing.T) {
-	dsv1 := readSparkArtifactLock(t, "../../spark/artifacts.lock.json")
-	dsv2 := readSparkArtifactLock(t, "../../spark/artifacts-dsv2.lock.json")
+	dsv1 := readSparkArtifactLock(t, "../spark/artifacts.lock.json")
+	dsv2 := readSparkArtifactLock(t, "../spark/artifacts-dsv2.lock.json")
 	tests := []struct {
 		name     string
 		lock     sparkArtifactLock

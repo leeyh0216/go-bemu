@@ -60,8 +60,8 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/run_contract.py:main",
-        "python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "bq:tests/integration/bqcli/run_contract.py:main",
+        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
       ]
     },
     {
@@ -99,9 +99,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/run_contract.py:main",
+        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
-        "python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
       ]
     },
     {
@@ -138,9 +138,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/run_contract.py:main",
+        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
-        "python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
       ]
     },
     {
@@ -176,7 +176,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
       ]
     },
     {
@@ -213,8 +213,8 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/extended_contract.py:run_extended_contract",
-        "python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
+        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
+        "python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
       ]
     },
     {
@@ -288,9 +288,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/extended_contract.py:run_extended_contract",
+        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
         "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
-        "python:tests/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
+        "python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
       ]
     },
     {
@@ -327,10 +327,10 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/extended_contract.py:run_extended_contract",
-        "bq:tests/bqcli/run_contract.py:main",
+        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
+        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
-        "python:tests/python/test_query_contract.py:test_synchronous_and_polled_query_jobs"
+        "python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs"
       ]
     },
     {
@@ -379,11 +379,11 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/extended_contract.py:run_extended_contract",
-        "bq:tests/bqcli/run_contract.py:main",
+        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
+        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs",
-        "python:tests/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
+        "python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
       ]
     },
     {
@@ -419,9 +419,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/extended_contract.py:run_extended_contract",
-        "bq:tests/bqcli/run_contract.py:main",
-        "python:tests/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
+        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
+        "bq:tests/integration/bqcli/run_contract.py:main",
+        "python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
       ]
     },
     {
@@ -458,7 +458,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "python:tests/python/test_query_contract.py:test_synchronous_and_polled_query_jobs"
+        "python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs"
       ]
     },
     {
@@ -495,7 +495,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/run_contract.py:main",
+        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
@@ -532,9 +532,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "python:tests/python/test_tabledata_contract.py:test_list_rows_decodes_nested_repeated_values_and_pages",
-        "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "python:tests/integration/python/test_tabledata_contract.py:test_list_rows_decodes_nested_repeated_values_and_pages",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
     },
     {
@@ -570,8 +570,8 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/run_contract.py:main",
-        "python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
+        "bq:tests/integration/bqcli/run_contract.py:main",
+        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
       ]
     },
     {
@@ -610,9 +610,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/run_contract.py:main",
+        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
-        "python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
+        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
       ]
     },
     {
@@ -649,12 +649,12 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/run_contract.py:main",
+        "bq:tests/integration/bqcli/run_contract.py:main",
         "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
-        "python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema",
-        "spark:tests/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
-        "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema",
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
     },
     {
@@ -692,8 +692,8 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/run_contract.py:main",
-        "python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
+        "bq:tests/integration/bqcli/run_contract.py:main",
+        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
       ]
     },
     {
@@ -729,9 +729,9 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "bq:tests/bqcli/extended_contract.py:run_extended_contract",
-        "bq:tests/bqcli/run_contract.py:main",
-        "python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
+        "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
+        "bq:tests/integration/bqcli/run_contract.py:main",
+        "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
       ]
     },
     {
@@ -1394,8 +1394,8 @@
       "tests": [
         "go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume",
-        "spark:tests/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
-        "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
     },
     {
@@ -1444,8 +1444,8 @@
       "tests": [
         "go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume",
-        "spark:tests/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
-        "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
     },
     {
@@ -1529,8 +1529,8 @@
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
-        "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
     },
     {
@@ -1579,8 +1579,8 @@
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
-        "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
     },
     {
@@ -1630,8 +1630,8 @@
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
-        "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
     },
     {
@@ -1680,8 +1680,8 @@
       "tests": [
         "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance",
-        "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
-        "spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
       ]
     },
     {

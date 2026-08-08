@@ -31,7 +31,7 @@ from extended_contract import run_extended_contract
 from operation_contract import operation, validate_declared_operations
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 EXPECTED_VERSION = os.getenv("BQEMU_BQCLI_VERSION", "")
 if not EXPECTED_VERSION:
     raise RuntimeError("BQEMU_BQCLI_VERSION must come from a normalized consumer case")

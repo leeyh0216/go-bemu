@@ -99,7 +99,7 @@ class ConsumerRunnerTest(unittest.TestCase):
                 {
                     "id": "query",
                     "operationIds": ["bigquery.jobs.query", "bigquery.jobs.getQueryResults"],
-                    "selectors": ["pytest:tests/python/test_query_contract.py"],
+                    "selectors": ["pytest:tests/integration/python/test_query_contract.py"],
                     "operationExpectations": [
                         {"operationId": "bigquery.jobs.query", "min": 1, "max": 0, "after": []},
                         {
@@ -365,12 +365,12 @@ class ConsumerRunnerTest(unittest.TestCase):
         case = _with_public_execution(
             replace(_python_case(), case_id="case"),
             scenarios=(
-                {"id": "one", "selectors": ["pytest:tests/python/test_one.py"]},
+                {"id": "one", "selectors": ["pytest:tests/integration/python/test_one.py"]},
                 {
                     "id": "two",
                     "selectors": [
-                        "pytest:tests/python/test_one.py",
-                        "pytest:tests/python/test_two.py",
+                        "pytest:tests/integration/python/test_one.py",
+                        "pytest:tests/integration/python/test_two.py",
                     ],
                 },
             ),
@@ -378,7 +378,7 @@ class ConsumerRunnerTest(unittest.TestCase):
         context = CaseContext(case, Path("."), Path(".artifacts/test"))
         self.assertEqual(
             _scenario_selectors(context, "pytest"),
-            ["tests/python/test_one.py", "tests/python/test_two.py"],
+            ["tests/integration/python/test_one.py", "tests/integration/python/test_two.py"],
         )
         with self.assertRaises(ContractError):
             _scenario_selectors(context, "bq")
@@ -543,7 +543,7 @@ def _scenario(expectations: list[dict[str, object]]) -> dict[str, object]:
     return {
         "id": "query",
         "operationIds": [expectation["operationId"] for expectation in expectations],
-        "selectors": ["pytest:tests/python/test_query_contract.py"],
+        "selectors": ["pytest:tests/integration/python/test_query_contract.py"],
         "operationExpectations": expectations,
     }
 

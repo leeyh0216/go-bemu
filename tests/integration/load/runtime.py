@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 MAX_LOCK_BYTES = 1 << 20
 MAX_HTTP_RESPONSE_BYTES = 4 << 20
 MAX_DIAGNOSTIC_FILE_BYTES = 256 << 10
@@ -239,18 +239,18 @@ class Settings:
             infrastructure_lock=Path(
                 os.getenv(
                     "BQEMU_LOAD_INFRASTRUCTURE_LOCK",
-                    str(ROOT / "tests/load/infrastructure.lock.json"),
+                    str(ROOT / "tests/integration/load/infrastructure.lock.json"),
                 )
             ).resolve(),
             fixture_lock=Path(
                 os.getenv(
                     "BQEMU_LOAD_FIXTURE_LOCK",
-                    str(ROOT / "tests/load/fixtures.lock.json"),
+                    str(ROOT / "tests/integration/load/fixtures.lock.json"),
                 )
             ).resolve(),
             config=Path(
                 os.getenv(
-                    "BQEMU_LOAD_CONFIG", str(ROOT / "tests/load/bqemu.yaml")
+                    "BQEMU_LOAD_CONFIG", str(ROOT / "tests/integration/load/bqemu.yaml")
                 )
             ).resolve(),
             artifact_root=Path(

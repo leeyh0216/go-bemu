@@ -1,7 +1,7 @@
 # Exact adapter and test-runner dependencies. The Spark runtime and its Python
 # bridge are installed from digest-pinned artifacts in the normalized case.
 # Install with
-# `uv pip install --require-hashes -r tests/spark/requirements.lock`.
+# `uv pip install --require-hashes -r tests/integration/spark/requirements.lock`.
 iniconfig==2.3.0 \
     --hash=sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730 \
     --hash=sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12

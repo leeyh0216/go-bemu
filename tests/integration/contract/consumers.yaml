@@ -84,7 +84,7 @@ compatibilityProfiles:
     scenarioIds: [spark-pyspark-indirect-load, spark-scala-indirect-load]
 scenarios:
   - id: python-metadata
-    selectors: [pytest:tests/python/test_admin_contract.py]
+    selectors: [pytest:tests/integration/python/test_admin_contract.py]
     operationIds:
       - bigquery.datasets.insert
       - bigquery.datasets.list
@@ -98,9 +98,9 @@ scenarios:
       - bigquery.tables.delete
   - id: python-query
     selectors:
-      - pytest:tests/python/test_query_contract.py
-      - pytest:tests/python/test_query_lifecycle_contract.py
-      - pytest:tests/python/test_explicit_gaps.py
+      - pytest:tests/integration/python/test_query_contract.py
+      - pytest:tests/integration/python/test_query_lifecycle_contract.py
+      - pytest:tests/integration/python/test_explicit_gaps.py
     operationIds:
       - bigquery.jobs.insert
       - bigquery.jobs.list
@@ -108,10 +108,10 @@ scenarios:
       - bigquery.jobs.query
       - bigquery.jobs.getQueryResults
   - id: python-tabledata
-    selectors: [pytest:tests/python/test_tabledata_contract.py]
+    selectors: [pytest:tests/integration/python/test_tabledata_contract.py]
     operationIds: [bigquery.tabledata.list]
   - id: bq-metadata
-    selectors: [bq:tests/bqcli/run_contract.py:main]
+    selectors: [bq:tests/integration/bqcli/run_contract.py:main]
     operationIds:
       - bigquery.projects.list
       - bigquery.datasets.insert
@@ -125,7 +125,7 @@ scenarios:
       - bigquery.tables.delete
       - bqemu.discovery.get
   - id: bq-query
-    selectors: [bq:tests/bqcli/run_contract.py:main]
+    selectors: [bq:tests/integration/bqcli/run_contract.py:main]
     operationIds:
       - bigquery.jobs.insert
       - bigquery.jobs.get
@@ -133,8 +133,8 @@ scenarios:
       - bigquery.jobs.list
   - id: spark-pyspark-public-edge
     selectors:
-      - pytest:tests/spark/test_public_edge.py
-      - pytest:tests/spark/test_dsv2_streaming.py
+      - pytest:tests/integration/spark/test_public_edge.py
+      - pytest:tests/integration/spark/test_dsv2_streaming.py
     operationIds:
       - bigquery.tables.insert
       - bigquery.tables.get
@@ -167,8 +167,8 @@ scenarios:
         after: [grpc.bigquery-write.finalize-write-stream]
   - id: spark-scala-public-edge
     selectors:
-      - pytest:tests/spark/test_scala_public_edge.py
-      - pytest:tests/spark/test_scala_decimal_edge.py
+      - pytest:tests/integration/spark/test_scala_public_edge.py
+      - pytest:tests/integration/spark/test_scala_decimal_edge.py
     operationIds:
       - bigquery.tables.insert
       - bigquery.tables.get

@@ -35,17 +35,19 @@ from artifact_variants import (
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 MATRIX_PATHS = tuple(
     sorted(
-        (REPOSITORY_ROOT / "contract" / "matrices").glob(
+        (REPOSITORY_ROOT / "tests" / "integration" / "contract" / "matrices").glob(
             "spark-bigquery-connector*.json"
         )
     )
 )
-ARTIFACT_LOCK_PATH = REPOSITORY_ROOT / "tests" / "spark" / "artifacts.lock.json"
+ARTIFACT_LOCK_PATH = (
+    REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts.lock.json"
+)
 DSV2_ARTIFACT_LOCK_PATH = (
-    REPOSITORY_ROOT / "tests" / "spark" / "artifacts-dsv2.lock.json"
+    REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts-dsv2.lock.json"
 )
 OPERATION_MANIFEST_PATH = REPOSITORY_ROOT / "contract" / "operations.normalized.json"
 STATIC_ACCESS_TOKEN = "bqemu-spark-e2e-static-token"

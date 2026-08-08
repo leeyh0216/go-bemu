@@ -7,7 +7,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[4]
-sys.path.insert(0, str(ROOT / "tests" / "spark"))
+sys.path.insert(0, str(ROOT / "tests" / "integration" / "spark"))
 
 from artifact_variants import (  # noqa: E402
     ArtifactClasspathError,

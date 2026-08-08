@@ -92,7 +92,7 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 			manifest.Scenarios = append(manifest.Scenarios, manifest.Scenarios[0])
 		},
 		"duplicate operation across scenario set": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
-			manifest.Scenarios = append(manifest.Scenarios, ConsumerScenario{ID: "query-two", OperationIDs: []string{"bigquery.jobs.query"}, Selectors: []string{"pytest:tests/python/test_query_two.py"}})
+			manifest.Scenarios = append(manifest.Scenarios, ConsumerScenario{ID: "query-two", OperationIDs: []string{"bigquery.jobs.query"}, Selectors: []string{"pytest:tests/integration/python/test_query_two.py"}})
 			manifest.ScenarioSets[0].ScenarioIDs = append(manifest.ScenarioSets[0].ScenarioIDs, "query-two")
 			manifest.CompatibilityProfiles[0].ScenarioIDs = append(manifest.CompatibilityProfiles[0].ScenarioIDs, "query-two")
 		},
@@ -108,7 +108,7 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 			}
 		},
 		"selector adapter mismatch": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
-			manifest.Scenarios[0].Selectors = []string{"bq:tests/bqcli/run_contract.py:main"}
+			manifest.Scenarios[0].Selectors = []string{"bq:tests/integration/bqcli/run_contract.py:main"}
 		},
 		"mutable source provenance": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
 			(*cases)[0].SourceProvenance[0].URI = "https://github.com/googleapis/google-cloud-python/tree/main/packages/google-cloud-bigquery"
@@ -427,7 +427,7 @@ func validConsumerFixture() (ConsumerManifest, []ConsumerCase, map[string]bool) 
 			SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bqemu.projects.delete"},
 		}},
 		CompatibilityProfiles: []CompatibilityProfile{{ID: "python-v1", ScenarioIDs: []string{"query"}}},
-		Scenarios:             []ConsumerScenario{{ID: "query", OperationIDs: []string{"bigquery.jobs.query"}, Selectors: []string{"pytest:tests/python/test_query_contract.py"}}},
+		Scenarios:             []ConsumerScenario{{ID: "query", OperationIDs: []string{"bigquery.jobs.query"}, Selectors: []string{"pytest:tests/integration/python/test_query_contract.py"}}},
 		ScenarioSets:          []ScenarioSet{{ID: "query-set", ScenarioIDs: []string{"query"}}},
 	}
 	cases := []ConsumerCase{{

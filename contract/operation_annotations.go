@@ -139,7 +139,7 @@ func collectOperationAnnotations(repositoryRoot string) (map[string]map[string]b
 		switch {
 		case strings.HasSuffix(path, "_test.go"):
 			return collectGoAnnotations(path, relative, annotations)
-		case strings.HasSuffix(path, ".py") && (strings.HasPrefix(relative, "tests/python/") || strings.HasPrefix(relative, "tests/spark/") || strings.HasPrefix(relative, "tests/bqcli/")):
+		case strings.HasSuffix(path, ".py") && (strings.HasPrefix(relative, "tests/integration/python/") || strings.HasPrefix(relative, "tests/integration/spark/") || strings.HasPrefix(relative, "tests/integration/bqcli/")):
 			return collectPythonAnnotations(path, relative, annotations)
 		default:
 			return nil
@@ -229,9 +229,9 @@ func collectPythonAnnotations(path, relative string, annotations map[string]map[
 	defer file.Close()
 	kind := "python"
 	marker := pythonOperationMarker
-	if strings.HasPrefix(relative, "tests/spark/") {
+	if strings.HasPrefix(relative, "tests/integration/spark/") {
 		kind = "spark"
-	} else if strings.HasPrefix(relative, "tests/bqcli/") {
+	} else if strings.HasPrefix(relative, "tests/integration/bqcli/") {
 		kind = "bq"
 		marker = bqOperationMarker
 	}

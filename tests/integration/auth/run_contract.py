@@ -24,7 +24,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -869,7 +869,7 @@ def run_python_consumer(
     output = run_process(
         [
             str(python_client),
-            str(ROOT / "tests" / "auth" / "python_client.py"),
+            str(ROOT / "tests" / "integration" / "auth" / "python_client.py"),
             "--endpoint",
             endpoint,
             "--project",
@@ -969,7 +969,7 @@ def run_pyspark_consumer(
     output = run_process(
         [
             str(spark_python),
-            str(ROOT / "tests" / "auth" / "pyspark_connector.py"),
+            str(ROOT / "tests" / "integration" / "auth" / "pyspark_connector.py"),
             "--connector-jar",
             str(connector_jar),
             "--http-endpoint",
@@ -1042,7 +1042,7 @@ def run_scala_consumer(
             "--jars",
             str(connector_jar),
             "-i",
-            str(ROOT / "tests" / "auth" / "scala_connector.scala"),
+            str(ROOT / "tests" / "integration" / "auth" / "scala_connector.scala"),
         ],
         "scala-spark-connector-auth",
         environment=environment,
