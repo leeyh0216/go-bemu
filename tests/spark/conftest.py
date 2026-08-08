@@ -379,7 +379,7 @@ def observe_direct_overwrite_flow(
         encoded_lines = stream.read().splitlines()
 
     sequence: list[str] = []
-    static_adapter_matches = 0
+    merge_statement_executions = 0
     pending_stream_fingerprints: set[str] = set()
     appended_stream_fingerprints: set[str] = set()
     finalized_stream_fingerprints: set[str] = set()
@@ -532,21 +532,22 @@ def observe_direct_overwrite_flow(
         if (
             event.get("event") == "side_effect.pre"
             and event.get("component") == "duckdb"
-            and event.get("operation") == "static_overwrite"
+            and event.get("operation") == "execute_statement"
+            and event.get("statement_kind") == "MERGE"
         ):
-            binding = event.get("semantic_binding_fingerprint")
-            if not isinstance(binding, str) or re.fullmatch(
-                r"sha256:[0-9a-f]{64}", binding
+            fingerprint = event.get("analysis_fingerprint")
+            if not isinstance(fingerprint, str) or re.fullmatch(
+                r"(?:sha256:)?[0-9a-f]{64}", fingerprint
             ) is None:
                 raise AssertionError(
-                    "static overwrite observation omitted its semantic binding"
+                    "MERGE execution observation omitted its analysis fingerprint"
                 )
-            static_adapter_matches += 1
+            merge_statement_executions += 1
 
     return {
         "sequence": tuple(sequence),
         "counts": {operation: sequence.count(operation) for operation in set(sequence)},
-        "static_adapter_matches": static_adapter_matches,
+        "merge_statement_executions": merge_statement_executions,
         "pending_stream_count": len(pending_stream_fingerprints),
         "pending_stream_types_valid": bool(pending_stream_types)
         and set(pending_stream_types) == {"PENDING"},
@@ -718,7 +719,7 @@ def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object
         encoded_lines = stream.read().splitlines()
 
     sequence: list[str] = []
-    anonymous_destinations = 0
+    statement_destinations_created = 0
     read_session_shapes: list[dict[str, object]] = []
     for encoded in encoded_lines:
         try:
@@ -750,7 +751,11 @@ def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object
                 method == "PATCH"
                 or (
                     method == "POST"
-                    and "x-http-method-override" in event.get("header_keys", [])
+                    and any(
+                        isinstance(header, str)
+                        and header.lower() == "x-http-method-override=patch"
+                        for header in event.get("headers", [])
+                    )
                 )
             ) and re.fullmatch(
                 r"/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/]+", path
@@ -791,15 +796,20 @@ def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object
 
         if (
             event.get("event") == "side_effect.post"
-            and event.get("operation") == "materialize_query_destination"
+            and event.get("component") == "duckdb"
+            and event.get("operation") == "materialize_statement"
             and event.get("success") is True
-            and isinstance(event.get("dataset_id"), str)
-            and event["dataset_id"].startswith("_bqemu_anonymous_")
-            and isinstance(event.get("table_id"), str)
-            and event["table_id"].startswith("_bqemu_query_")
+            and event.get("statement_kind") == "SELECT"
+            and event.get("destination_created") is True
         ):
-            anonymous_destinations += 1
-            sequence.append("anonymous.destination")
+            fingerprint = event.get("destination_fingerprint")
+            if not isinstance(fingerprint, str) or re.fullmatch(
+                r"sha256:[0-9a-f]{64}", fingerprint
+            ) is None:
+                raise AssertionError(
+                    "statement destination observation omitted its fingerprint"
+                )
+            statement_destinations_created += 1
             continue
 
         if event.get("event") == "boundary.enter" and event.get("boundary") in {
@@ -813,10 +823,17 @@ def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object
                 sequence.append("ReadRows")
 
     counts = {operation: sequence.count(operation) for operation in set(sequence)}
+    explicit_destinations = counts.get("tables.patch", 0)
+    if explicit_destinations > statement_destinations_created:
+        raise AssertionError(
+            "explicit destination patch has no matching statement materialization"
+        )
+    anonymous_destinations = statement_destinations_created - explicit_destinations
     return {
         "sequence": tuple(sequence),
         "counts": counts,
         "anonymous_destinations": anonymous_destinations,
+        "statement_destinations_created": statement_destinations_created,
         "read_session_shapes": tuple(read_session_shapes),
     }
 

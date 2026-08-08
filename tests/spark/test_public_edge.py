@@ -988,8 +988,8 @@ def test_direct_pending_exact_static_overwrite(
         },
         minimum={"jobs.getQueryResults": 1},
     )
-    if observation["static_adapter_matches"] != 1:
-        pytest.fail("static overwrite adapter match mismatch shape=expected:1")
+    if observation["merge_statement_executions"] != 1:
+        pytest.fail("overwrite MERGE execution mismatch shape=expected:1")
     expected_observation = {
         "pending_stream_count": 4,
         "pending_stream_types_valid": True,
