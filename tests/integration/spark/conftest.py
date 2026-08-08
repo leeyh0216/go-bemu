@@ -382,6 +382,7 @@ def observe_direct_overwrite_flow(
 
     sequence: list[str] = []
     merge_statement_executions = 0
+    script_statement_executions = 0
     pending_stream_fingerprints: set[str] = set()
     appended_stream_fingerprints: set[str] = set()
     finalized_stream_fingerprints: set[str] = set()
@@ -534,8 +535,8 @@ def observe_direct_overwrite_flow(
         if (
             event.get("event") == "side_effect.pre"
             and event.get("component") == "duckdb"
-            and event.get("operation") == "execute_statement"
-            and event.get("statement_kind") == "MERGE"
+            and event.get("operation") in {"execute_statement", "execute_script"}
+            and event.get("statement_kind") in {"MERGE", "SCRIPT"}
         ):
             fingerprint = event.get("analysis_fingerprint")
             if not isinstance(fingerprint, str) or re.fullmatch(
@@ -544,12 +545,16 @@ def observe_direct_overwrite_flow(
                 raise AssertionError(
                     "MERGE execution observation omitted its analysis fingerprint"
                 )
-            merge_statement_executions += 1
+            if event.get("statement_kind") == "MERGE":
+                merge_statement_executions += 1
+            else:
+                script_statement_executions += 1
 
     return {
         "sequence": tuple(sequence),
         "counts": {operation: sequence.count(operation) for operation in set(sequence)},
         "merge_statement_executions": merge_statement_executions,
+        "script_statement_executions": script_statement_executions,
         "pending_stream_count": len(pending_stream_fingerprints),
         "pending_stream_types_valid": bool(pending_stream_types)
         and set(pending_stream_types) == {"PENDING"},
@@ -1350,7 +1355,15 @@ def create_table(
     timeout: float,
     table_id: str,
     fields: list[dict[str, str]],
+    *,
+    time_partitioning: dict[str, object] | None = None,
 ) -> None:
+    resource: dict[str, object] = {
+        "tableReference": {"tableId": table_id},
+        "schema": {"fields": fields},
+    }
+    if time_partitioning is not None:
+        resource["timePartitioning"] = time_partitioning
     _json_request(
         edge,
         (
@@ -1359,7 +1372,7 @@ def create_table(
         ),
         "POST",
         timeout,
-        {"tableReference": {"tableId": table_id}, "schema": {"fields": fields}},
+        resource,
     )
 
 

@@ -1180,13 +1180,13 @@
         "parallelism": "spark-partition-negotiated",
         "tablePartitioning": "dynamic-overwrite"
       },
-      "state": "gap",
+      "state": "partial",
       "officialSourceRefs": [
         "connector-readme",
         "direct-writer"
       ],
       "issueRef": "overwrite",
-      "limitation": "Dynamic partition overwrite MERGE shape is not implemented."
+      "limitation": "DATE-partition direct exact overwrite is exercised; range partitions and indirect execution still require public-process evidence."
     },
     {
       "id": "SBQ-WRITE-DIRECT-ALO-OVERWRITE-V1",

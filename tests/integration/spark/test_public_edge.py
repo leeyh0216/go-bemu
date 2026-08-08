@@ -1035,6 +1035,141 @@ def test_direct_pending_exact_static_overwrite(
     )
 
 
+@pytest.mark.capability("SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1")
+def test_direct_pending_exact_dynamic_partition_overwrite(
+    spark_session,
+    public_edge: PublicEdge,
+    test_timeout: float,
+) -> None:
+    """Replace only DATE partitions present in one exact-write batch."""
+
+    table_id = f"dynamic_overwrite_{uuid.uuid4().hex[:8]}"
+    destination = f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}"
+    create_table(
+        public_edge,
+        test_timeout,
+        table_id,
+        [
+            {"name": "id", "type": "INTEGER", "mode": "REQUIRED"},
+            {"name": "partition_date", "type": "DATE", "mode": "REQUIRED"},
+            {"name": "payload", "type": "STRING", "mode": "NULLABLE"},
+        ],
+        time_partitioning={"type": "DAY", "field": "partition_date"},
+    )
+    query(
+        public_edge,
+        test_timeout,
+        (
+            f"INSERT INTO `{destination}` VALUES "
+            "(1, DATE '2026-01-01', 'old-one'), "
+            "(2, DATE '2026-01-01', 'old-two'), "
+            "(3, DATE '2026-01-02', 'keep')"
+        ),
+    )
+
+    replacement = spark_session.sql(
+        """
+        SELECT CAST(10 AS BIGINT) AS id, DATE '2026-01-01' AS partition_date,
+               'new-ten' AS payload
+        UNION ALL
+        SELECT CAST(11 AS BIGINT), DATE '2026-01-01', 'new-eleven'
+        """
+    ).coalesce(1)
+    writer = replacement.write.format("bigquery")
+    for key, value in connector_options(public_edge).items():
+        writer = writer.option(key, value)
+
+    log_position = public_edge_log_position(public_edge)
+    (
+        writer.option("writeMethod", "direct")
+        .option("writeAtLeastOnce", "false")
+        .option("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
+        .mode("overwrite")
+        .save(destination)
+    )
+
+    observation = observe_direct_overwrite_flow(public_edge, since=log_position)
+    assert_ordered_operations(
+        observation,
+        (
+            "tables.insert",
+            "CreateWriteStream",
+            "AppendRows",
+            "FinalizeWriteStream",
+            "BatchCommitWriteStreams",
+            "jobs.insert",
+            "jobs.getQueryResults",
+            "jobs.get",
+            "tables.delete",
+        ),
+    )
+    _assert_direct_overwrite_phase_order(observation)
+    _assert_operation_counts(
+        observation,
+        exact={
+            "tables.insert": 1,
+            "CreateWriteStream": 1,
+            "AppendRows": 1,
+            "FinalizeWriteStream": 1,
+            "BatchCommitWriteStreams": 1,
+            "GetWriteStream": 0,
+            "jobs.insert": 1,
+            "jobs.get": 1,
+            "tables.delete": 1,
+        },
+        minimum={"jobs.getQueryResults": 1},
+    )
+    if observation["script_statement_executions"] != 1:
+        pytest.fail("dynamic overwrite SCRIPT execution mismatch shape=expected:1")
+    expected_observation = {
+        "pending_stream_count": 1,
+        "pending_stream_types_valid": True,
+        "append_batch_count": 1,
+        "append_row_count": 2,
+        "commit_stream_count": 1,
+        "commit_row_count": 2,
+        "commit_succeeded": True,
+        "stream_lifecycle_correlated": True,
+        "temporary_table_correlated": True,
+    }
+    for field, expected_value in expected_observation.items():
+        if observation.get(field) != expected_value:
+            pytest.fail(
+                "dynamic overwrite observation mismatch "
+                f"shape={field}:expected:{expected_value}"
+            )
+
+    result = query(
+        public_edge,
+        test_timeout,
+        f"SELECT id, partition_date, payload FROM `{destination}` ORDER BY id",
+    )
+    rows = result.get("rows", [])
+    actual = [
+        (
+            int(row["f"][0]["v"]),
+            str(row["f"][1]["v"]),
+            str(row["f"][2]["v"]),
+        )
+        for row in rows
+    ]
+    expected = [
+        (3, "2026-01-02", "keep"),
+        (10, "2026-01-01", "new-ten"),
+        (11, "2026-01-01", "new-eleven"),
+    ]
+    _assert_rows(actual, expected)
+    record_capability(
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        (
+            "partition-type:date touched-partitions:1 untouched-partitions:1 "
+            "pending-streams:1 committed-rows:2 script-jobs:1 "
+            "temporary-table-create-delete:1 resulting-rows:3 "
+            f"row-fingerprint:sha256:{_row_fingerprint(actual)}"
+        ),
+    )
+
+
 @pytest.mark.parametrize(
     "logical_partitions",
     [
