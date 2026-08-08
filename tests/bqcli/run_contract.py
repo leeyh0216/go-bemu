@@ -6,9 +6,8 @@ Protocol and CLI sources:
   https://cloud.google.com/bigquery/docs/reference/bq-cli-reference
   https://cloud.google.com/bigquery/docs/reference/rest/v2
 
-The runner logs operation, duration, byte length, and digest. It deliberately
-does not log the access token, raw request payloads, query text, or command
-output. Every subprocess and readiness request has an explicit timeout.
+The runner logs complete command output alongside operation, duration, length,
+and digest. Every subprocess and readiness request has an explicit timeout.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ if not EXPECTED_VERSION:
 
 
 class ContractError(RuntimeError):
-    """A payload-safe failure with a stable operation and fix hint."""
+    """A failure with a stable operation, fix hint, and raw context."""
 
 
 def positive_seconds(name: str, default: str) -> float:
@@ -109,14 +108,16 @@ def run_process(
         return_code=result.returncode,
         stderr_bytes=len(result.stderr.encode()),
         stderr_digest=digest(result.stderr),
+        stderr=result.stderr,
         stdout_bytes=len(result.stdout.encode()),
         stdout_digest=digest(result.stdout),
+        stdout=result.stdout,
     )
     if result.returncode not in expected_codes:
         raise ContractError(
             f"stage=process operation={operation} shape=exit-{result.returncode} "
-            f"consumer_version={EXPECTED_VERSION} stdout_fingerprint={digest(result.stdout)} "
-            f"stderr_fingerprint={digest(result.stderr)} fix_hint=inspect-payload-safe-server-log"
+            f"consumer_version={EXPECTED_VERSION} stdout={result.stdout!r} "
+            f"stderr={result.stderr!r} fix_hint=inspect-server-log"
         )
     return result
 
@@ -127,7 +128,7 @@ def decode_json(result: subprocess.CompletedProcess[str], operation: str) -> Any
     except json.JSONDecodeError as error:
         raise ContractError(
             f"stage=decode operation={operation} shape=invalid-json "
-            f"consumer_version={EXPECTED_VERSION} stdout_fingerprint={digest(result.stdout)} "
+            f"consumer_version={EXPECTED_VERSION} stdout={result.stdout!r} "
             "fix_hint=compare-bq-wire-profile"
         ) from error
 
@@ -196,7 +197,7 @@ class Runtime(AbstractContextManager[str]):
         self._stop()
         raise ContractError(
             "stage=readiness operation=start_emulator shape=http-readyz "
-            "fix_hint=inspect-payload-safe-server-log"
+            "fix_hint=inspect-server-log"
         )
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:

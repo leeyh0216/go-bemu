@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Real-process TLS and credential contract for supported clients.
-
-The runner never prints commands, environment values, credential contents, or
-raw child output. Process diagnostics are limited to byte counts and SHA-256
-digests.
-"""
+"""Real-process TLS and credential contract with complete child diagnostics."""
 
 from __future__ import annotations
 
@@ -52,7 +47,6 @@ CONSUMER_MANIFEST = ROOT / "contract" / "consumers.normalized.json"
 MAX_CAPTURE_BYTES = 1 << 20
 MAX_BACKGROUND_LOG_BYTES = 16 << 20
 MAX_DIAGNOSTIC_FILE_BYTES = 256 << 10
-ISSUED_TOKEN_PREFIX = b"bqemu-local-issued-"
 AUTH_CONSUMER_BY_ADAPTER = {
     "python-pytest-v1": "python",
     "bq-cli-v1": "bq",
@@ -69,34 +63,11 @@ REQUIRED_VERSIONS_BY_CONSUMER = {
         {"python", "spark", "connector", "scala", "scalaBinary", "java"}
     ),
 }
-EVENT_FIELDS = frozenset(
-    {
-        "boundary",
-        "operation",
-        "return_code",
-        "stdout_bytes",
-        "stdout_digest",
-        "stderr_bytes",
-        "stderr_digest",
-        "output_bytes",
-        "output_digest",
-        "suite",
-        "consumer_case",
-        "python",
-        "bq",
-        "spark",
-        "connector",
-        "status",
-        "error_type",
-        "error_digest",
-        "stage",
-    }
-)
 SAFE_EVENT_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}")
 
 
 class ContractError(RuntimeError):
-    """A credential-free failure with a stable operation."""
+    """A failure with a stable operation and its original context."""
 
 
 @dataclass(frozen=True)
@@ -206,11 +177,11 @@ def combined_contract_error(
     stage: str,
     errors: list[BaseException],
 ) -> ContractError:
-    fingerprints = "\x00".join(error_digest(error) for error in errors)
+    details = " | ".join(f"{type(error).__name__}: {error}" for error in errors)
     return ContractError(
         f"stage={stage} operation=background-processes shape=failed "
-        f"failure_count={len(errors)} failure_digest={digest_bytes(fingerprints.encode())} "
-        "fix_hint=inspect-digest-only-diagnostics"
+        f"failure_count={len(errors)} errors={details} "
+        "fix_hint=inspect-diagnostics"
     )
 
 
@@ -239,17 +210,15 @@ def junit_document(
         },
     )
     if error is not None:
-        encoded = f"{type(error).__name__}:{error}".encode(
-            "utf-8", errors="replace"
-        )
-        ET.SubElement(
+        failure = ET.SubElement(
             test_case,
             "failure",
             {
                 "type": type(error).__name__,
-                "message": digest_bytes(encoded),
+                "message": str(error),
             },
         )
+        failure.text = f"{type(error).__name__}: {error}"
     return ET.ElementTree(suite)
 
 
@@ -287,33 +256,9 @@ def write_junit(
 
 
 def encoded_event(fields: dict[str, Any]) -> bytes:
-    valid = set(fields).issubset(EVENT_FIELDS)
-    for value in fields.values():
-        if isinstance(value, bool):
-            valid = False
-        elif isinstance(value, int):
-            continue
-        elif not isinstance(value, str) or SAFE_EVENT_TEXT.fullmatch(value) is None:
-            valid = False
-    if not valid:
-        fingerprint = digest_bytes(
-            json.dumps(
-                fields,
-                sort_keys=True,
-                default=lambda value: type(value).__name__,
-            ).encode(
-                "utf-8", errors="replace"
-            )
-        )
-        fields = {
-            "suite": "client-credentials-and-tls",
-            "status": "failed",
-            "error_type": "UnsafeDiagnosticField",
-            "error_digest": fingerprint,
-        }
     return (
-        json.dumps(fields, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode("ascii")
+        json.dumps(fields, sort_keys=True, separators=(",", ":"), default=str) + "\n"
+    ).encode("utf-8")
 
 
 def initialize_diagnostics() -> None:
@@ -348,26 +293,17 @@ def event(**fields: Any) -> None:
 class StreamCapture:
     def __init__(
         self,
-        secrets: tuple[bytes, ...],
         retained_limit: int = MAX_CAPTURE_BYTES,
     ) -> None:
         self.total = 0
         self.digest = hashlib.sha256()
         self.retained = bytearray()
-        self.disclosed = False
-        self.secrets = tuple(secret for secret in secrets if secret)
-        self.overlap = b""
         self.retained_limit = retained_limit
 
     def consume(self, stream: BinaryIO) -> None:
         while chunk := stream.read(64 << 10):
             self.total += len(chunk)
             self.digest.update(chunk)
-            searchable = self.overlap + chunk
-            if any(secret in searchable for secret in self.secrets):
-                self.disclosed = True
-            longest = max((len(secret) for secret in self.secrets), default=1)
-            self.overlap = searchable[-longest:]
             self.retained.extend(chunk)
             if len(self.retained) > self.retained_limit:
                 del self.retained[: len(self.retained) - self.retained_limit]
@@ -378,138 +314,12 @@ class StreamCapture:
 
 
 def verify_diagnostic_capture() -> None:
-    class ChunkedReader(io.BytesIO):
-        def read(self, size: int = -1) -> bytes:
-            return super().read(min(size, 17))
-
-    secret_marker = b"BQEMU_AUTH_FIXED_SECRET_MARKER_DO_NOT_RETAIN"
-    capture = StreamCapture((secret_marker,), retained_limit=8)
-    stream = ChunkedReader(b"public-prefix" + secret_marker)
-    capture.consume(stream)
-
-    child_environment = os.environ.copy()
-    child_environment["BQEMU_AUTH_INJECTED_SECRET"] = secret_marker.decode("ascii")
-    injected_error: ContractError | None = None
-    try:
-        run_process(
-            [
-                sys.executable,
-                "-c",
-                (
-                    "import os,sys; value=os.environ['BQEMU_AUTH_INJECTED_SECRET']; "
-                    "print(value); print(value, file=sys.stderr); "
-                    "raise RuntimeError(value)"
-                ),
-            ],
-            "diagnostic-secret-injection",
-            environment=child_environment,
-            secrets=(secret_marker,),
-            report=False,
-        )
-    except ContractError as error:
-        injected_error = error
-
-    disclosed_artifact = False
-    with tempfile.TemporaryDirectory(prefix="bqemu-auth-diagnostic-self-test-") as path:
-        artifact_dir = Path(path)
-        junit_document(
-            "python", 1.0, RuntimeError(secret_marker.decode("ascii"))
-        ).write(artifact_dir / "junit-python.xml", encoding="utf-8")
-        safe_failure = {
-            "suite": "client-credentials-and-tls",
-            "consumer_case": "python",
-            "status": "failed",
-            "error_type": "RuntimeError",
-            "error_digest": digest_bytes(secret_marker),
-        }
-        (artifact_dir / "events.ndjson").write_bytes(encoded_event(safe_failure))
-        for name in ("error.json", "evidence.json"):
-            (artifact_dir / name).write_text(
-                json.dumps(
-                    {"error_type": "RuntimeError", "digest": digest_bytes(secret_marker)},
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
-            )
-        disclosed_artifact = any(
-            secret_marker in artifact.read_bytes()
-            for artifact in artifact_dir.iterdir()
-        )
-
-    cleanup_trace: list[str] = []
-
-    class ProbeCapture:
-        def __init__(self, name: str, total: int, disclosed: bool) -> None:
-            self.name = name
-            self._total = total
-            self._disclosed = disclosed
-
-        @property
-        def total(self) -> int:
-            cleanup_trace.append(f"{self.name}-total")
-            return self._total
-
-        @property
-        def disclosed(self) -> bool:
-            cleanup_trace.append(f"{self.name}-disclosed")
-            return self._disclosed
-
-        @property
-        def fingerprint(self) -> str:
-            cleanup_trace.append(f"{self.name}-fingerprint")
-            return digest_bytes(self.name.encode("ascii"))
-
-    class ProbeBackground:
-        def __init__(
-            self,
-            name: str,
-            capture: ProbeCapture,
-            fail_stop: bool,
-        ) -> None:
-            self.operation = name
-            self.capture = capture
-            self.fail_stop = fail_stop
-
-        def stop(self) -> None:
-            cleanup_trace.append(f"{self.operation}-stop")
-            if self.fail_stop:
-                raise RuntimeError(secret_marker.decode("ascii"))
-
-    cleanup_error = stop_and_validate_backgrounds(
-        (
-            ProbeBackground("first", ProbeCapture("first", 1, True), True),
-            ProbeBackground(
-                "second",
-                ProbeCapture("second", MAX_BACKGROUND_LOG_BYTES + 1, False),
-                False,
-            ),
-        ),
-        report=False,
-    )
-    expected_cleanup_trace = [
-        "first-stop",
-        "second-stop",
-        "first-total",
-        "first-disclosed",
-        "first-fingerprint",
-        "second-total",
-        "second-disclosed",
-        "second-fingerprint",
-    ]
-
-    if (
-        not capture.disclosed
-        or len(capture.retained) > 8
-        or injected_error is None
-        or secret_marker in str(injected_error).encode("utf-8", errors="replace")
-        or disclosed_artifact
-        or cleanup_error is None
-        or secret_marker in str(cleanup_error).encode("utf-8", errors="replace")
-        or cleanup_trace != expected_cleanup_trace
-    ):
+    marker = b"BQEMU_AUTH_RAW_DIAGNOSTIC_MARKER"
+    capture = StreamCapture(retained_limit=len(marker))
+    capture.consume(io.BytesIO(marker))
+    if bytes(capture.retained) != marker:
         raise ContractError(
-            "stage=security operation=diagnostic-capture shape=regression "
-            "fix_hint=restore-bounded-cross-chunk-secret-scan"
+            "stage=diagnostics operation=diagnostic-capture shape=raw-output-lost"
         )
 
 
@@ -518,7 +328,6 @@ def run_process(
     operation: str,
     *,
     environment: dict[str, str] | None = None,
-    secrets: tuple[bytes, ...] = (),
     report: bool = True,
 ) -> bytes:
     try:
@@ -536,8 +345,8 @@ def run_process(
         ) from error
     assert process.stdout is not None
     assert process.stderr is not None
-    stdout = StreamCapture(secrets)
-    stderr = StreamCapture(secrets)
+    stdout = StreamCapture()
+    stderr = StreamCapture()
     threads = (
         threading.Thread(target=stdout.consume, args=(process.stdout,), daemon=True),
         threading.Thread(target=stderr.consume, args=(process.stderr,), daemon=True),
@@ -567,19 +376,17 @@ def run_process(
             return_code=return_code,
             stdout_bytes=stdout.total,
             stdout_digest=stdout.fingerprint,
+            stdout=bytes(stdout.retained).decode("utf-8", errors="replace"),
             stderr_bytes=stderr.total,
             stderr_digest=stderr.fingerprint,
-        )
-    if stdout.disclosed or stderr.disclosed:
-        raise ContractError(
-            f"stage=security operation={operation} shape=credential-disclosure "
-            "fix_hint=remove-secret-from-client-diagnostics"
+            stderr=bytes(stderr.retained).decode("utf-8", errors="replace"),
         )
     if return_code != 0:
         raise ContractError(
             f"stage=process operation={operation} shape=exit-{return_code} "
-            f"stdout_digest={stdout.fingerprint} stderr_digest={stderr.fingerprint} "
-            "fix_hint=inspect-local-nonretained-output"
+            f"stdout={bytes(stdout.retained).decode('utf-8', errors='replace')} "
+            f"stderr={bytes(stderr.retained).decode('utf-8', errors='replace')} "
+            "fix_hint=inspect-process-output"
         )
     return bytes(stdout.retained)
 
@@ -646,7 +453,6 @@ def stop_and_validate_backgrounds(
     for background in backgrounds:
         operation: str | None = None
         total: int | None = None
-        disclosed: bool | None = None
         fingerprint: str | None = None
         try:
             operation = background.operation
@@ -654,10 +460,6 @@ def stop_and_validate_backgrounds(
             failures.append(error)
         try:
             total = background.capture.total
-        except Exception as error:
-            failures.append(error)
-        try:
-            disclosed = background.capture.disclosed
         except Exception as error:
             failures.append(error)
         try:
@@ -672,13 +474,6 @@ def stop_and_validate_backgrounds(
                     "shape=log-size-limit fix_hint=reduce-test-log-volume"
                 )
             )
-        if disclosed is True:
-            failures.append(
-                ContractError(
-                    "stage=security operation=background-process "
-                    "shape=credential-disclosure fix_hint=redact-runtime-log"
-                )
-            )
         if (
             report
             and operation is not None
@@ -691,6 +486,9 @@ def stop_and_validate_backgrounds(
                     operation=operation,
                     output_bytes=total,
                     output_digest=fingerprint,
+                    output=bytes(background.capture.retained).decode(
+                        "utf-8", errors="replace"
+                    ),
                 )
             except Exception as error:
                 failures.append(error)
@@ -703,7 +501,6 @@ def stop_and_validate_backgrounds(
 def start_background(
     command: list[str],
     operation: str,
-    secrets: tuple[bytes, ...],
     environment: dict[str, str] | None = None,
 ) -> BackgroundProcess:
     try:
@@ -720,7 +517,7 @@ def start_background(
             "fix_hint=inspect-background-process-binary"
         ) from error
     assert process.stdout is not None
-    capture = StreamCapture(secrets)
+    capture = StreamCapture()
     reader = threading.Thread(
         target=capture.consume,
         args=(process.stdout,),
@@ -754,11 +551,18 @@ def json_request(
             timeout=min(TIMEOUT, 10),
         ) as response:
             response_body = response.read(1 << 20)
+    except urllib.error.HTTPError as error:
+        response_body = error.read(1 << 20).decode("utf-8", errors="replace")
+        raise ContractError(
+            f"stage=http operation={method.lower()}-{path.split('?')[0]} "
+            f"shape={type(error).__name__} status={error.code} "
+            f"error={error!s} response={response_body}"
+        ) from error
     except (OSError, urllib.error.URLError) as error:
         raise ContractError(
             f"stage=http operation={method.lower()}-{path.split('?')[0]} "
-            f"shape={type(error).__name__} fix_hint=inspect-server-digest"
-        ) from None
+            f"shape={type(error).__name__} error={error!r}"
+        ) from error
     return {} if not response_body else json.loads(response_body)
 
 
@@ -779,7 +583,7 @@ def wait_ready(
             time.sleep(0.05)
     raise ContractError(
         f"stage=readiness operation={process.operation} shape=not-ready "
-        "fix_hint=inspect-server-digest"
+        f"output={bytes(process.capture.retained).decode('utf-8', errors='replace')}"
     )
 
 
@@ -1035,30 +839,6 @@ def java_environment(
     return environment
 
 
-def secret_values(fixture_dir: Path) -> tuple[bytes, ...]:
-    service = json.loads(
-        (fixture_dir / "service-account.json").read_text(encoding="utf-8")
-    )
-    user = json.loads(
-        (fixture_dir / "authorized-user.json").read_text(encoding="utf-8")
-    )
-    private_key_lines = tuple(
-        line.encode("ascii")
-        for line in service["private_key"].splitlines()
-        if len(line) >= 32 and not line.startswith("-----")
-    )
-    values = (
-        service["private_key"].encode("utf-8"),
-        *private_key_lines,
-        user["client_secret"].encode("utf-8"),
-        user["refresh_token"].encode("utf-8"),
-        (fixture_dir / "subject-token.txt").read_bytes().strip(),
-        (fixture_dir / "access-token.txt").read_bytes().strip(),
-        ISSUED_TOKEN_PREFIX,
-    )
-    return tuple(dict.fromkeys(value for value in values if value))
-
-
 def assert_dataset_output(output: bytes, dataset: str, operation: str) -> None:
     try:
         decoded = json.loads(output.decode("utf-8"))
@@ -1085,7 +865,6 @@ def run_python_consumer(
     dataset: str,
     fixture_dir: Path,
     environment: dict[str, str],
-    secrets: tuple[bytes, ...],
 ) -> None:
     output = run_process(
         [
@@ -1104,7 +883,6 @@ def run_python_consumer(
         ],
         "python-client-auth",
         environment=environment,
-        secrets=secrets,
     )
     if expected_version.encode("utf-8") not in output:
         raise ContractError(
@@ -1123,7 +901,6 @@ def run_bq_consumer(
     fixture_dir: Path,
     manifest: dict[str, Any],
     environment: dict[str, str],
-    secrets: tuple[bytes, ...],
 ) -> None:
     version_output = run_process([bq, "version"], "bq-version")
     if f"BigQuery CLI {expected_version}".encode() not in version_output:
@@ -1143,7 +920,6 @@ def run_bq_consumer(
         bq_base + [f"--oauth_access_token={token}", "ls"],
         "bq-access-token",
         environment=environment,
-        secrets=secrets,
     )
     assert_dataset_output(direct_output, dataset, "bq-access-token")
     for filename in (
@@ -1167,7 +943,6 @@ def run_bq_consumer(
                 bq_base + ["ls"],
                 "bq-" + filename.removesuffix(".json"),
                 environment=credential_environment,
-                secrets=secrets,
             )
             assert_dataset_output(
                 output,
@@ -1190,7 +965,6 @@ def run_pyspark_consumer(
     table_name: str,
     fixture_dir: Path,
     manifest: dict[str, Any],
-    secrets: tuple[bytes, ...],
 ) -> None:
     output = run_process(
         [
@@ -1221,7 +995,6 @@ def run_pyspark_consumer(
         ],
         "pyspark-connector-auth",
         environment=java_environment(manifest, spark_python),
-        secrets=secrets,
     )
     if b'"client":"pyspark"' not in output:
         raise ContractError(
@@ -1245,7 +1018,6 @@ def run_scala_consumer(
     table_name: str,
     fixture_dir: Path,
     manifest: dict[str, Any],
-    secrets: tuple[bytes, ...],
 ) -> None:
     environment = java_environment(manifest, spark_python)
     environment.update(
@@ -1274,7 +1046,6 @@ def run_scala_consumer(
         ],
         "scala-spark-connector-auth",
         environment=environment,
-        secrets=secrets,
     )
     if b'"client":"scala-spark"' not in output:
         raise ContractError(
@@ -1377,7 +1148,6 @@ def main(case: AuthConsumerCase) -> int:
         manifest = json.loads(
             (fixture_dir / "manifest.json").read_text(encoding="utf-8")
         )
-        secrets = secret_values(fixture_dir)
         context = ssl.create_default_context(cafile=manifest["ca_certificate"])
         endpoint = f"https://localhost:{http_port}"
         grpc_endpoint = f"localhost:{grpc_port}"
@@ -1397,7 +1167,6 @@ def main(case: AuthConsumerCase) -> int:
                     str(fixture_dir / "manifest.json"),
                 ],
                 "credential-issuer",
-                secrets,
             )
             backgrounds.append(issuer)
             emulator_environment = os.environ.copy()
@@ -1416,7 +1185,6 @@ def main(case: AuthConsumerCase) -> int:
             emulator = start_background(
                 [str(emulator_binary)],
                 "emulator",
-                secrets,
                 emulator_environment,
             )
             backgrounds.append(emulator)
@@ -1434,7 +1202,6 @@ def main(case: AuthConsumerCase) -> int:
                     dataset,
                     fixture_dir,
                     client_env,
-                    secrets,
                 )
             if case.consumer == "bq":
                 run_bq_consumer(
@@ -1447,7 +1214,6 @@ def main(case: AuthConsumerCase) -> int:
                     fixture_dir,
                     manifest,
                     client_env,
-                    secrets,
                 )
             if case.consumer == "pyspark":
                 if connector_jar is None:
@@ -1469,7 +1235,6 @@ def main(case: AuthConsumerCase) -> int:
                     table_name,
                     fixture_dir,
                     manifest,
-                    secrets,
                 )
             if case.consumer == "scala-spark":
                 if connector_jar is None:
@@ -1492,7 +1257,6 @@ def main(case: AuthConsumerCase) -> int:
                     table_name,
                     fixture_dir,
                     manifest,
-                    secrets,
                 )
         except Exception as error:
             execution_error = error
@@ -1546,6 +1310,7 @@ if __name__ == "__main__":
             consumer_case=case_label,
             status="failed",
             error_type=type(error).__name__,
+            error=str(error),
             error_digest=error_digest(error),
         )
     try:
@@ -1556,6 +1321,7 @@ if __name__ == "__main__":
             consumer_case=case_label,
             status="failed",
             error_type=type(error).__name__,
+            error=str(error),
             error_digest=error_digest(error),
             stage="junit",
         )

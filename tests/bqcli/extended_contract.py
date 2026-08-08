@@ -10,8 +10,9 @@ Official pinned CLI and REST sources:
   https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults
   https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list
 
-The parent runner owns bounded subprocess execution and output fingerprinting.
-This module never emits the access token, SQL text, raw output, or page tokens.
+The parent runner owns bounded subprocess execution, raw output retention, and
+correlation fingerprints. Intercepted request and response context can be
+included in diagnostics.
 """
 
 from __future__ import annotations

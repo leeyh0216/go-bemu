@@ -621,13 +621,14 @@ def run_pyspark_case(
     if isinstance(marker, dict) and marker.get("status") == "failed":
         event(
             boundary="child",
-            failure_classes=marker.get("failureClasses"),
-            failure_frames=marker.get("failureFrames"),
+            error=marker.get("error"),
+            java_failures=marker.get("javaFailures"),
             model_version=f"spark-{versions['spark']}+connector-{versions['connector']}",
             operation="pyspark-indirect-write",
             service="spark-bigquery-connector",
             stage=marker.get("stage"),
             status="failed",
+            traceback=marker.get("traceback"),
         )
     require(
         result.returncode == 0
@@ -1300,7 +1301,7 @@ def configured_artifact(
             model_version=MODEL_VERSION,
             operation="validate-configured-artifact",
             shape=usage,
-            observed=type(error).__name__,
+            observed={"type": type(error).__name__, "error": repr(error)},
             fix_hint="use-the-case-declared-artifact-materialized-by-the-runner",
         ) from error
     require(
@@ -1342,7 +1343,7 @@ def case_provenance(
             model_version=MODEL_VERSION,
             operation="load-normalized-consumer-execution",
             shape=type(error).__name__,
-            observed=type(error).__name__,
+            observed={"type": type(error).__name__, "error": repr(error)},
             fix_hint="run-the-case-through-the-normalized-consumer-runner",
         ) from error
     expected_cases = {
@@ -1436,8 +1437,8 @@ def main() -> int:
             model_version=MODEL_VERSION,
             operation="unhandled-error",
             shape=type(error).__name__,
-            observed=type(error).__name__,
-            fix_hint="add-a-payload-safe-classification",
+            observed={"type": type(error).__name__, "error": repr(error)},
+            fix_hint="add-a-diagnostic-classification",
         )
     write_junit(arguments.junit, results, captured, time.monotonic() - started)
     if captured is not None:

@@ -353,7 +353,7 @@ def main() -> int:
             stage="runner",
             shape=shape,
             status="failed",
-            fix_hint="inspect-redacted-ci-diagnostics",
+            fix_hint="inspect-ci-diagnostics",
         )
         raise RuntimeError(f"DSv2 streaming runner failed shape={shape}") from None
     return 0

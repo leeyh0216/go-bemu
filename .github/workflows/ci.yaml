@@ -126,7 +126,7 @@ jobs:
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
         run: python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
-      - name: Upload redacted contract evidence
+      - name: Upload contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -162,7 +162,7 @@ jobs:
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
         run: python3 scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
-      - name: Upload payload-safe contract evidence
+      - name: Upload contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -227,7 +227,7 @@ jobs:
             python=python3
           fi
           "$python" scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "$BQEMU_CONSUMER_EXECUTION"
-      - name: Upload payload-safe load evidence
+      - name: Upload load evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -269,7 +269,7 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"query":"SELECT 1 AS answer","useLegacySql":false}' \
             | grep -q '"answer"'
-      - name: Capture payload-safe container logs
+      - name: Capture container logs
         if: failure()
         run: |
           mkdir -p .artifacts/docker

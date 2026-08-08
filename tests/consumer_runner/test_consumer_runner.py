@@ -15,7 +15,7 @@ from scripts.consumer_runner import (
     DEFAULT_MANIFEST,
     CaseContext,
     ContractError,
-    _sanitize_junit,
+    _normalize_junit,
     _scenario_selectors,
     build_adapter,
     collect_actual_events,
@@ -320,7 +320,7 @@ class ConsumerRunnerTest(unittest.TestCase):
                 ["runner-setup", "bq-indirect-load", "bq-indirect-load"],
             )
 
-    def test_indirect_load_preserves_safe_child_failure_without_raw_output(self) -> None:
+    def test_indirect_load_preserves_complete_child_failure_and_output(self) -> None:
         case = load_case(DEFAULT_MANIFEST, "bq-cli-2.1.31")
         execution = next(
             execution
@@ -332,7 +332,7 @@ class ConsumerRunnerTest(unittest.TestCase):
             adapter = build_adapter(
                 CaseContext(case, Path("."), artifact_root, execution=execution)
             )
-            safe = {
+            first_failure = {
                 "status": "failed",
                 "stage": "contract",
                 "service": "load-e2e",
@@ -340,14 +340,14 @@ class ConsumerRunnerTest(unittest.TestCase):
                 "operation": "cross-protocol-trace",
                 "shape": "load-order",
                 "fix_hint": "compare-the-pinned-load-contract",
-                "observed": "raw-payload-must-not-survive",
+                "observed": "raw-payload-is-retained",
             }
-            unsafe = {
-                **safe,
-                "shape": "SECRET_MARKER_MUST_NOT_SURVIVE",
+            last_failure = {
+                **first_failure,
+                "shape": "SECRET_MARKER_IS_RETAINED",
             }
             adapter.result = subprocess.CompletedProcess(
-                [], 1, "\n".join((json.dumps(safe), json.dumps(unsafe))), ""
+                [], 1, "\n".join((json.dumps(first_failure), json.dumps(last_failure))), ""
             )
 
             adapter.collect_evidence()
@@ -356,10 +356,10 @@ class ConsumerRunnerTest(unittest.TestCase):
                 (artifact_root / "evidence.json").read_text(encoding="utf-8")
             )
             self.assertEqual(evidence["exitCode"], 1)
-            self.assertEqual(evidence["childFailure"]["shape"], "load-order")
+            self.assertEqual(evidence["childFailure"]["shape"], "SECRET_MARKER_IS_RETAINED")
             encoded = json.dumps(evidence, sort_keys=True)
-            self.assertNotIn("raw-payload", encoded)
-            self.assertNotIn("SECRET_MARKER", encoded)
+            self.assertIn("raw-payload", encoded)
+            self.assertIn("SECRET_MARKER", encoded)
 
     def test_scenario_selectors_are_deduplicated_and_adapter_typed(self) -> None:
         case = _with_public_execution(
@@ -425,7 +425,7 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(adapter.dsv2_connector_path.read_bytes(), contents)
             self.assertEqual(adapter.artifact_evidence[3]["sha256"], digest)
 
-    def test_junit_redaction_never_persists_consumer_output(self) -> None:
+    def test_junit_normalization_retains_consumer_output(self) -> None:
         secret = "authorization: Bearer future-credential"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "junit.xml"
@@ -434,25 +434,23 @@ class ConsumerRunnerTest(unittest.TestCase):
                 f"<system-out>{secret}</system-out></testcase></testsuite>",
                 encoding="utf-8",
             )
-            valid = _sanitize_junit(
+            valid = _normalize_junit(
                 path, "case", subprocess.CompletedProcess([], 1, secret, "")
             )
             self.assertTrue(valid)
-            redacted = path.read_text(encoding="utf-8")
-            self.assertNotIn(secret, redacted)
-            self.assertIn("output_digest=sha256:", redacted)
+            normalized = path.read_text(encoding="utf-8")
+            self.assertIn(secret, normalized)
 
-    def test_missing_junit_is_synthesized_without_raw_output(self) -> None:
+    def test_missing_junit_is_synthesized_with_raw_output(self) -> None:
         secret = "access_token=future-credential"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "junit.xml"
-            valid = _sanitize_junit(
+            valid = _normalize_junit(
                 path, "case", subprocess.CompletedProcess([], 1, secret, "")
             )
             self.assertFalse(valid)
             contents = path.read_text(encoding="utf-8")
-            self.assertNotIn(secret, contents)
-            self.assertIn("output_digest=sha256:", contents)
+            self.assertIn(secret, contents)
 
     def test_cleanup_runs_when_evidence_collection_fails(self) -> None:
         case = replace(_python_case(), case_id="case")
@@ -486,7 +484,11 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(difference["field"], "evidence.collection")
             self.assertIn('failures="1"', (Path(directory) / "junit.xml").read_text())
             error = (Path(directory) / "runner-error.txt").read_text(encoding="utf-8")
-            self.assertNotIn("evidence secret", error)
+            self.assertIn("evidence secret", error)
+            self.assertIn(
+                "evidence secret",
+                (Path(directory) / "junit.xml").read_text(encoding="utf-8"),
+            )
 
     def test_cleanup_failure_is_reflected_in_evidence_diff_and_junit(self) -> None:
         scenario = _scenario(
@@ -534,7 +536,7 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(evidence["exitCode"], 1)
             self.assertEqual(difference["field"], "process.exitCode")
             self.assertIn('failures="1"', junit)
-            self.assertNotIn("cleanup secret", junit)
+            self.assertIn("cleanup secret", junit)
 
 
 def _scenario(expectations: list[dict[str, object]]) -> dict[str, object]:

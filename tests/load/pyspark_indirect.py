@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
+import traceback
 
 from pyspark.sql import SparkSession
 
@@ -100,37 +100,34 @@ def main() -> int:
             )
         )
         return 0
-    except Exception as error:  # noqa: BLE001 - subprocess boundary sanitizes diagnostics
-        classes = [type(error).__name__]
-        frames = []
+    except Exception as error:  # noqa: BLE001 - report the complete child failure
+        java_failures = []
         java_error = getattr(error, "java_exception", None)
         for _ in range(8):
             if java_error is None:
                 break
             try:
-                name = str(java_error.getClass().getName())
                 stack = java_error.getStackTrace()
                 next_error = java_error.getCause()
-            except Exception:  # noqa: BLE001 - never expose a secondary bridge failure
+                java_failures.append(
+                    {
+                        "error": str(java_error),
+                        "stack": [str(frame) for frame in stack],
+                    }
+                )
+            except Exception as bridge_error:  # noqa: BLE001 - diagnostics stay best-effort
+                java_failures.append({"bridgeError": repr(bridge_error)})
                 break
-            if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_.$]*", name):
-                classes.append(name)
-            try:
-                if stack:
-                    frame = f"{stack[0].getClassName()}.{stack[0].getMethodName()}"
-                    if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_.$]*", frame):
-                        frames.append(frame)
-            except Exception:  # noqa: BLE001 - diagnostics stay best-effort
-                pass
             java_error = next_error
         print(
             json.dumps(
                 {
                     "entrypoint": "pyspark",
-                    "failureClasses": classes,
-                    "failureFrames": frames,
+                    "error": repr(error),
+                    "javaFailures": java_failures,
                     "stage": stage,
                     "status": "failed",
+                    "traceback": traceback.format_exc(),
                 },
                 sort_keys=True,
                 separators=(",", ":"),

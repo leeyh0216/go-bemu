@@ -56,7 +56,6 @@ load:
 logging:
   level: info
   format: json
-  unsafePayloads: false
 
 admin:
   enabled: false

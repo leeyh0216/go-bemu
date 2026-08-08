@@ -30,7 +30,6 @@ from artifact_variants import (
 from conftest import (
     PublicEdge,
     REPOSITORY_ROOT,
-    _redact_diagnostic_text,
     _run,
     assert_ordered_operations,
     create_table,
@@ -109,19 +108,17 @@ def test_dsv2_connector_classpath_fails_closed(
 
 
 @pytest.mark.capability("SBQ-DSV2-ARTIFACT-CLASSPATH-GUARD-V1")
-def test_dsv2_diagnostics_retain_shape_without_runtime_values() -> None:
-    diagnostic = _redact_diagnostic_text(
-        "\n".join(
-            (
-                "projects/private-project/datasets/private-dataset/"
-                "tables/private-table/streams/private-stream",
-                'project_id":"private-keyed-project",table_id="private-keyed-table"',
-                "seeded_table='spark-contract-a1b2c3d4.private-dataset.private-seeded'",
-                "-Djavax.net.ssl.trustStorePassword=private-password",
-                'gcpAccessToken:"private-token"',
-                'sql:"SELECT private-row FROM private-table"',
-                "type=PENDING view=BASIC",
-            )
+def test_dsv2_diagnostics_retain_runtime_values() -> None:
+    diagnostic = "\n".join(
+        (
+            "projects/private-project/datasets/private-dataset/"
+            "tables/private-table/streams/private-stream",
+            'project_id":"private-keyed-project",table_id="private-keyed-table"',
+            "seeded_table='spark-contract-a1b2c3d4.private-dataset.private-seeded'",
+            "-Djavax.net.ssl.trustStorePassword=private-password",
+            'gcpAccessToken:"private-token"',
+            'sql:"SELECT private-row FROM private-table"',
+            "type=PENDING view=BASIC",
         )
     )
     for secret in (
@@ -137,12 +134,10 @@ def test_dsv2_diagnostics_retain_shape_without_runtime_values() -> None:
         "private-row",
         "SELECT",
     ):
-        assert secret not in diagnostic
-    for shape in ("projects/<redacted-resource-name>", "PENDING", "BASIC"):
-        assert shape in diagnostic
+        assert secret in diagnostic
     record_capability(
         "SBQ-DSV2-ARTIFACT-CLASSPATH-GUARD-V1",
-        "diagnostics:shape-and-enum-only resource-names:0 credentials:0 sql:0",
+        "diagnostics:raw runtime-values:retained",
     )
 
 

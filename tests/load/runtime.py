@@ -1,4 +1,4 @@
-"""Bounded runtimes and payload-safe diagnostics for the load E2E.
+"""Bounded runtimes and complete diagnostics for the load E2E.
 
 Protocol references:
   https://cloud.google.com/storage/docs/json_api/v1/objects/get
@@ -37,7 +37,7 @@ LOAD_MODEL_VERSION = "bqemu-load-public-process/v1"
 
 
 class ContractError(RuntimeError):
-    """A stable failure signature that never contains a raw payload."""
+    """A stable failure signature with the original observed value."""
 
     def __init__(
         self,
@@ -48,6 +48,7 @@ class ContractError(RuntimeError):
         operation: str,
         shape: str,
         fingerprint: str,
+        observed: str,
         fix_hint: str,
     ) -> None:
         self.fields = {
@@ -57,6 +58,7 @@ class ContractError(RuntimeError):
             "operation": operation,
             "shape": shape,
             "fingerprint": fingerprint,
+            "observed": observed,
             "fix_hint": fix_hint,
         }
         super().__init__(" ".join(f"{key}={value}" for key, value in self.fields.items()))
@@ -93,20 +95,24 @@ def file_metadata(path: Path) -> dict[str, Any]:
 
 
 def payload_metadata(payload: bytes) -> dict[str, Any]:
-    return {"bytes": len(payload), "sha256": digest(payload)}
+    return {
+        "bytes": len(payload),
+        "sha256": digest(payload),
+        "text": payload.decode("utf-8", errors="replace"),
+    }
 
 
 def write_diagnostic_summary(path: Path, streams: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     encoded = (
         json.dumps(
-            {"schemaVersion": "bqemu-safe-diagnostic/v1", "streams": streams},
+            {"schemaVersion": "bqemu-diagnostic/v1", "streams": streams},
             sort_keys=True,
             separators=(",", ":"),
-            ensure_ascii=True,
+            ensure_ascii=False,
         )
         + "\n"
-    ).encode("ascii")
-    temporary = path.with_name(path.name + ".safe")
+    ).encode("utf-8")
+    temporary = path.with_name(path.name + ".diagnostic")
     temporary.write_bytes(encoded)
     os.chmod(temporary, 0o600)
     temporary.replace(path)
@@ -130,6 +136,12 @@ def failure(
     observed: bytes | str | Any,
     fix_hint: str,
 ) -> ContractError:
+    if isinstance(observed, bytes):
+        observed_text = observed.decode("utf-8", errors="replace")
+    elif isinstance(observed, str):
+        observed_text = observed
+    else:
+        observed_text = json.dumps(observed, sort_keys=True, default=str, ensure_ascii=False)
     return ContractError(
         stage=stage,
         service=service,
@@ -137,6 +149,7 @@ def failure(
         operation=operation,
         shape=shape,
         fingerprint=digest(observed),
+        observed=observed_text,
         fix_hint=fix_hint,
     )
 
@@ -314,7 +327,7 @@ def read_locked_json(path: Path, expected_schema: str) -> dict[str, Any]:
             model_version=expected_schema,
             operation="read-lock",
             shape="unreadable-lock",
-            observed=type(error).__name__,
+            observed={"type": type(error).__name__, "error": repr(error)},
             fix_hint="restore-the-versioned-lock-file",
         ) from error
     if len(payload) > MAX_LOCK_BYTES:
@@ -336,7 +349,7 @@ def read_locked_json(path: Path, expected_schema: str) -> dict[str, Any]:
             model_version=expected_schema,
             operation="decode-lock",
             shape="invalid-json",
-            observed=type(error).__name__,
+            observed={"type": type(error).__name__, "error": repr(error)},
             fix_hint="repair-the-versioned-lock-file",
         ) from error
     if not isinstance(decoded, dict) or decoded.get("schemaVersion") != expected_schema:
@@ -405,7 +418,7 @@ def run_process(
             model_version=model_version,
             operation=operation,
             shape="unavailable",
-            observed=type(error).__name__,
+            observed={"type": type(error).__name__, "error": repr(error)},
             fix_hint="install-the-pinned-runtime-or-fix-its-path",
         ) from error
     event(
@@ -417,8 +430,10 @@ def run_process(
         service=service,
         stderr_bytes=len(result.stderr),
         stderr_sha256=digest(result.stderr),
+        stderr=result.stderr.decode("utf-8", errors="replace"),
         stdout_bytes=len(result.stdout),
         stdout_sha256=digest(result.stdout),
+        stdout=result.stdout.decode("utf-8", errors="replace"),
     )
     if result.returncode not in expected_codes:
         raise failure(
@@ -428,7 +443,7 @@ def run_process(
             operation=operation,
             shape=f"exit-{result.returncode}",
             observed=result.stdout + b"\x00" + result.stderr,
-            fix_hint="inspect-payload-safe-runtime-logs-and-locked-provenance",
+            fix_hint="inspect-runtime-logs-and-locked-provenance",
         )
     return result
 
@@ -1022,8 +1037,8 @@ class FakeGCSRuntime:
             model_version=str(self.image["version"]),
             operation="storage-buckets-list",
             shape=last_shape,
-            observed=self._safe_log_fingerprint(),
-            fix_hint="inspect-payload-safe-fake-gcs-log",
+            observed=self._log_diagnostics(),
+            fix_hint="inspect-fake-gcs-log",
         )
 
     def stop(self) -> None:
@@ -1058,7 +1073,7 @@ class FakeGCSRuntime:
             **summary,
         )
 
-    def _safe_log_fingerprint(self) -> dict[str, Any]:
+    def _log_diagnostics(self) -> dict[str, Any]:
         if self.container_id is None:
             return {"container": "absent"}
         result = run_process(
@@ -1072,8 +1087,10 @@ class FakeGCSRuntime:
         return {
             "stdoutBytes": len(result.stdout),
             "stdoutSha256": digest(result.stdout),
+            "stdout": result.stdout.decode("utf-8", errors="replace"),
             "stderrBytes": len(result.stderr),
             "stderrSha256": digest(result.stderr),
+            "stderr": result.stderr.decode("utf-8", errors="replace"),
         }
 
 
@@ -1180,7 +1197,7 @@ class EmulatorRuntime:
                 model_version="current-source",
                 operation="start-emulator",
                 shape="process-unavailable",
-                observed=type(error).__name__,
+                observed={"type": type(error).__name__, "error": repr(error)},
                 fix_hint="inspect-current-source-build-and-runtime-libraries",
             ) from error
         deadline = time.monotonic() + self.settings.emulator_start_timeout
@@ -1210,8 +1227,13 @@ class EmulatorRuntime:
             model_version="current-source",
             operation="http-readyz",
             shape=last_shape,
-            observed=file_metadata(self.log_path),
-            fix_hint="inspect-payload-safe-emulator-log",
+            observed={
+                **file_metadata(self.log_path),
+                "log": self.log_path.read_text(encoding="utf-8", errors="replace")
+                if self.log_path.exists()
+                else "",
+            },
+            fix_hint="inspect-emulator-log",
         )
 
     def log_position(self) -> int:
@@ -1236,7 +1258,7 @@ class EmulatorRuntime:
                 model_version="current-source",
                 operation="read-runtime-events",
                 shape="unreadable-log",
-                observed=type(error).__name__,
+                observed={"type": type(error).__name__, "error": repr(error)},
                 fix_hint="inspect-emulator-runtime-ownership",
             ) from error
         if len(payload) > maximum:
@@ -1350,7 +1372,10 @@ class EmulatorRuntime:
             self.log.close()
             self.log = None
         if self.log_path.exists():
-            captured = file_metadata(self.log_path)
+            payload = self.log_path.read_bytes()
+            captured = payload_metadata(payload[-MAX_DIAGNOSTIC_FILE_BYTES:])
+            captured["originalBytes"] = len(payload)
+            captured["truncated"] = len(payload) > MAX_DIAGNOSTIC_FILE_BYTES
             summary = write_diagnostic_summary(
                 self.diagnostic_path, {"combined": captured}
             )
@@ -1421,7 +1446,7 @@ def request_json(
             model_version=model_version,
             operation=operation,
             shape="transport-error",
-            observed=type(error).__name__,
+            observed={"type": type(error).__name__, "error": repr(error)},
             fix_hint="inspect-runtime-readiness-and-timeout",
         ) from error
     event(
@@ -1480,7 +1505,7 @@ def _public_operation_routes() -> tuple[
             model_version=LOAD_MODEL_VERSION,
             operation="load-operation-manifest",
             shape="invalid-normalized-operation-manifest",
-            observed=type(error).__name__,
+            observed={"type": type(error).__name__, "error": repr(error)},
             fix_hint="regenerate-the-public-operation-contract",
         ) from error
     rest: list[tuple[str, str, re.Pattern[str]]] = []

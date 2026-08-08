@@ -174,20 +174,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
 
 
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
-    """Redact connector exception text before console and JUnit serialization."""
-
-    outcome = yield
-    report = outcome.get_result()
-    if report.failed and report.longrepr:
-        report.longrepr = _redact_diagnostic_text(str(report.longrepr))
-    report.sections = [
-        (name, _redact_diagnostic_text(contents))
-        for name, contents in report.sections
-    ]
-
-
 def _emit(*, operation: str, stage: str, shape: str, status: str, fix_hint: str) -> None:
     fingerprint = hashlib.sha256(
         f"{operation}\0{stage}\0{shape}\0{status}".encode("utf-8")
@@ -249,9 +235,8 @@ def raise_known_gap(
 ) -> None:
     """Convert only the reviewed failure signature into a strict matrix xfail.
 
-    The upstream exception text is inspected in memory but never retained. An
-    unrelated exception remains a hard failure instead of being mislabeled as
-    the known gap.
+    The upstream exception text remains attached to unrelated hard failures so
+    the retained test output contains the complete diagnostic context.
     """
 
     error_text = str(error)
@@ -285,92 +270,31 @@ def _run(command: list[str], *, cwd: Path, timeout: float, stage: str) -> None:
             stage=stage,
             shape=Path(command[0]).name,
             status="failed",
-            fix_hint="inspect-redacted-ci-artifact",
+            fix_hint="inspect-ci-artifact",
         )
-        # Command output can contain JVM configuration. Do not echo it here;
-        # the structured stage is enough to find the separately retained log.
         output = getattr(error, "stdout", None) or getattr(error, "output", None) or b""
-        _write_safe_bytes(
-            bytes(output)[-131072:],
+        output_bytes = output if isinstance(output, bytes) else str(output).encode("utf-8", errors="replace")
+        _write_diagnostic_bytes(
+            output_bytes[-131072:],
             REPOSITORY_ROOT
             / ".artifacts"
             / "spark"
             / "diagnostics"
             / f"{stage}-tail.log",
         )
-        raise RuntimeError(f"bounded setup command failed at {stage}") from None
+        raise RuntimeError(
+            f"bounded setup command failed at {stage}: "
+            f"{output_bytes.decode('utf-8', errors='replace')}"
+        ) from error
 
 
-def _redact_diagnostic_text(text: str) -> str:
-    text = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1<redacted>", text)
-    text = text.replace(STATIC_ACCESS_TOKEN, "<redacted-token>")
-    text = re.sub(
-        r"(?is)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----",
-        "<redacted-private-key>",
-        text,
-    )
-    text = re.sub(
-        r"(?i)((?:password|token|credential|secret|private[_-]?key|api[_-]?key)"
-        r"[\"']?\s*(?:=|:)\s*[\"']?)[^\"'\s,;}]+",
-        r"\1<redacted>",
-        text,
-    )
-    text = re.sub(
-        r"(/streams/)[A-Za-z0-9._~-]+",
-        r"\1<redacted-resource-name>",
-        text,
-    )
-    for segment in (
-        "projects",
-        "jobs",
-        "queries",
-        "datasets",
-        "tables",
-        "sessions",
-        "streams",
-    ):
-        text = re.sub(
-            rf"(?i)(?<![A-Za-z0-9._~-])({segment}/)[^/\s?&\]}}\",]+",
-            rf"\1<redacted-resource-name>",
-            text,
-        )
-    resource_key = (
-        r"(?:project|dataset|table|job|query|session|stream)(?:_?id)?"
-        r"|seeded_table|destination|parent|resource"
-    )
-    text = re.sub(
-        rf"(?i)((?<![A-Za-z0-9_])[\"']?(?:{resource_key})[\"']?\s*"
-        rf"(?:=|:|->)\s*[\"']?)[^\"'\s,;}})]+",
-        r"\1<redacted-resource-name>",
-        text,
-    )
-    text = re.sub(
-        r"spark-contract-[a-f0-9]{8}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
-        "<redacted-resource-name>",
-        text,
-    )
-    sql_statement = r"(?:SELECT|WITH|MERGE|DECLARE|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)"
-    text = re.sub(
-        rf'(?im)((?:"(?:query|sql)"|(?:query|sql))\s*(?::|=|->)\s*"?)'
-        rf'{sql_statement}\b[^\r\n]*',
-        r"\1<redacted-sql>",
-        text,
-    )
-    # Connector INFO messages embed the complete query after free-form text
-    # such as `running query [` or `created from "`. Keep retained diagnostics
-    # useful without depending on every upstream log prefix.
-    text = re.sub(rf"(?im)\b{sql_statement}\b[^\r\n]*", "<redacted-sql>", text)
-    text = re.sub(r"(?i)(VALUES\s*)\([^\n]+", r"\1<redacted-row-values>", text)
-    return text
-
-
-def _write_safe_bytes(payload: bytes, target: Path) -> None:
-    text = _redact_diagnostic_text(payload.decode("utf-8", errors="replace"))
+def _write_diagnostic_bytes(payload: bytes, target: Path) -> None:
+    text = payload.decode("utf-8", errors="replace")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text[-131072:], encoding="utf-8")
 
 
-def _retain_safe_tail(source: Path, name: str) -> None:
+def _retain_diagnostic_tail(source: Path, name: str) -> None:
     if not source.is_file():
         return
     with source.open("rb") as stream:
@@ -381,7 +305,7 @@ def _retain_safe_tail(source: Path, name: str) -> None:
     target = (
         REPOSITORY_ROOT / ".artifacts" / "spark" / "diagnostics" / name
     )
-    _write_safe_bytes(payload, target)
+    _write_diagnostic_bytes(payload, target)
 
 
 def public_edge_log_position(edge: PublicEdge) -> int:
@@ -537,7 +461,7 @@ def observe_direct_overwrite_flow(
                 or not isinstance(fingerprint, str)
                 or not isinstance(table, str)
             ):
-                raise AssertionError("write-stream observation omitted its safe shape")
+                raise AssertionError("write-stream observation omitted its required shape")
             pending_stream_types.append(stream_type)
             pending_stream_fingerprints.add(fingerprint)
             storage_write_tables.add(table)
@@ -558,7 +482,7 @@ def observe_direct_overwrite_flow(
                 or row_count <= 0
                 or not isinstance(table, str)
             ):
-                raise AssertionError("append observation omitted its safe shape")
+                raise AssertionError("append observation omitted its required shape")
             append_batch_count += 1
             append_row_count += row_count
             appended_stream_fingerprints.add(fingerprint)
@@ -580,7 +504,7 @@ def observe_direct_overwrite_flow(
                 or not isinstance(row_count, int)
                 or not isinstance(table, str)
             ):
-                raise AssertionError("batch-commit observation omitted its safe shape")
+                raise AssertionError("batch-commit observation omitted its required shape")
             commit_stream_count = stream_count
             commit_row_count = row_count
             commit_succeeded = True
@@ -646,13 +570,11 @@ def observe_direct_overwrite_flow(
 def observe_dsv2_exact_streaming_flow(
     edge: PublicEdge, *, since: int
 ) -> dict[str, object]:
-    """Return only the shape of one raw DSv2 exact-streaming micro-batch.
+    """Return a contract projection of one raw DSv2 exact-streaming micro-batch.
 
-    Resource names, row values, SQL, and credentials are discarded. Stream
-    correlation uses SHA-256 fingerprints emitted at the transport and domain
-    boundaries. Known protobuf enum symbols prove PENDING creation without
-    retaining the request message; the returned empty GetWriteStream shape
-    proves the released writer does not perform an optional lookup.
+    The complete runtime log remains available as a diagnostic artifact. This
+    projection uses SHA-256 stream fingerprints and known protobuf enum symbols
+    to assert lifecycle correlation and optional lookup behavior.
 
     Pinned producers:
     https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-dsv2/spark-3.1-bigquery-lib/src/main/java/com/google/cloud/spark/bigquery/v2/BigQueryStreamingWrite.java#L23-L30
@@ -744,7 +666,7 @@ def observe_dsv2_exact_streaming_flow(
                 or not isinstance(row_count, int)
                 or not isinstance(offset, int)
             ):
-                raise AssertionError("DSv2 append observation omitted its safe shape")
+                raise AssertionError("DSv2 append observation omitted its required shape")
             appended.add(fingerprint)
             append_batches += 1
             append_rows += row_count
@@ -858,7 +780,7 @@ def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object
                 or not isinstance(selected_field_count, int)
                 or not isinstance(row_restriction_bytes, int)
             ):
-                raise AssertionError("read session observation omitted its safe shape")
+                raise AssertionError("read session observation omitted its required shape")
             read_session_shapes.append(
                 {
                     "format": wire_format,
@@ -925,8 +847,8 @@ def _stop_public_edge(edge: PublicEdge, timeout: float) -> None:
         except subprocess.TimeoutExpired:
             edge.process.kill()
             edge.process.wait(timeout=min(5.0, timeout))
-    _retain_safe_tail(edge.log_path, "emulator-tail.log")
-    _retain_safe_tail(edge.jvm_log_path, "jvm-tail.log")
+    _retain_diagnostic_tail(edge.log_path, "emulator-tail.log")
+    _retain_diagnostic_tail(edge.jvm_log_path, "jvm-tail.log")
 
 
 def _free_port() -> int:
@@ -1134,7 +1056,7 @@ def public_edge(
             "read": {"enabled": True, "defaultStreamCount": 4, "maxStreams": 64},
             "write": {"enabled": True},
         },
-        "logging": {"level": "info", "format": "json", "unsafePayloads": False},
+        "logging": {"level": "info", "format": "json"},
         "admin": {"enabled": False},
         "ui": {"enabled": False},
     }
@@ -1197,10 +1119,10 @@ def public_edge(
             stage="emulator-readiness",
             shape=f"process-exit:{process.returncode}",
             status="failed",
-            fix_hint="inspect-redacted-ci-artifact",
+            fix_hint="inspect-ci-artifact",
         )
         pytest.fail(
-            "emulator readiness failed; inspect payload-safe emulator-tail.log "
+            "emulator readiness failed; inspect emulator-tail.log "
             f"shape=process-exit:{process.returncode}"
         )
 
@@ -1229,7 +1151,7 @@ def public_edge(
             stage="seed-control-plane",
             shape="project+dataset",
             status="failed",
-            fix_hint="inspect-redacted-ci-artifact",
+            fix_hint="inspect-ci-artifact",
         )
         _stop_public_edge(edge, test_timeout)
         raise

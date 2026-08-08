@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from typing import Any, Sequence
 import xml.etree.ElementTree as ET
 
@@ -161,17 +162,17 @@ class RunnerAdapter(ABC):
             self.verify_identity()
             self.result = self.execute_scenario()
         except Exception as error:
-            self.result = subprocess.CompletedProcess([], 1, "", str(error))
+            self._append_runner_failure("execution", error)
             self._record_runner_error(error)
         try:
             self.cleanup()
         except Exception as error:
-            self.result = subprocess.CompletedProcess([], 1, "", "runner cleanup failed")
+            self._append_runner_failure("cleanup", error)
             self._record_runner_error(error)
         try:
             self.collect_evidence()
         except Exception as error:
-            self.result = subprocess.CompletedProcess([], 1, "", "evidence collection failed")
+            self._append_runner_failure("evidence collection", error)
             self._record_runner_error(error)
             self._write_minimal_evidence("evidence.collection")
         if self.result is None:
@@ -185,6 +186,24 @@ class RunnerAdapter(ABC):
         if self.result.returncode == 0:
             (self.context.artifact_root / "runner-error.txt").unlink(missing_ok=True)
         return self.result.returncode if self.result is not None else 1
+
+    def _append_runner_failure(self, stage: str, error: Exception) -> None:
+        previous = self.result
+        output: list[str] = []
+        if previous is not None:
+            if previous.stdout:
+                output.append(previous.stdout)
+            if previous.stderr:
+                output.append(previous.stderr)
+        output.append(
+            f"{stage}: {type(error).__name__}: {error}\n{traceback.format_exc()}"
+        )
+        self.result = subprocess.CompletedProcess(
+            previous.args if previous is not None else [],
+            1,
+            "\n".join(output),
+            "",
+        )
 
     def _write_minimal_evidence(self, field: str) -> None:
         scenarios = list(self.context.execution.scenarios)
@@ -227,14 +246,11 @@ class RunnerAdapter(ABC):
 
     def _record_runner_error(self, error: Exception) -> None:
         self.context.artifact_root.mkdir(parents=True, exist_ok=True)
-        error_text = str(error).encode("utf-8", errors="replace")
         with (self.context.artifact_root / "runner-error.txt").open(
             "a", encoding="utf-8"
         ) as stream:
-            stream.write(
-                f"error_type={type(error).__name__} error_bytes={len(error_text)} "
-                f"error_digest=sha256:{hashlib.sha256(error_text).hexdigest()}\n"
-            )
+            stream.write(f"error_type={type(error).__name__} error={error!s}\n")
+            stream.write(traceback.format_exc())
 
     def _run(self, command: Sequence[str], *, environment: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         process_environment = (environment or os.environ).copy()
@@ -260,7 +276,8 @@ class RunnerAdapter(ABC):
         )
         output = result.stdout.encode("utf-8", errors="replace")
         (self.context.artifact_root / "runner.log").write_text(
-            f"return_code={result.returncode} output_bytes={len(output)} output_digest=sha256:{hashlib.sha256(output).hexdigest()}\n",
+            f"return_code={result.returncode} output_bytes={len(output)} "
+            f"output_digest=sha256:{hashlib.sha256(output).hexdigest()}\n{result.stdout}",
             encoding="utf-8",
         )
         return result
@@ -296,7 +313,7 @@ class PythonPytestAdapter(RunnerAdapter):
                 f"--junitxml={self.context.artifact_root / 'junit.xml'}",
             ]
         )
-        junit_valid = _sanitize_junit(
+        junit_valid = _normalize_junit(
             self.context.artifact_root / "junit.xml", self.context.case_id, result
         )
         if result.returncode == 0 and not junit_valid:
@@ -462,7 +479,7 @@ class SparkPytestAdapter(SparkAdapter):
             _spark_pytest_command(self.context, _scenario_selectors(self.context, "pytest")),
             environment=self.spark_environment(),
         )
-        junit_valid = _sanitize_junit(
+        junit_valid = _normalize_junit(
             self.context.artifact_root / "junit.xml", self.context.case_id, result
         )
         if result.returncode == 0 and not junit_valid:
@@ -484,7 +501,7 @@ class SparkScalaShellAdapter(SparkAdapter):
             _spark_pytest_command(self.context, _scenario_selectors(self.context, "pytest")),
             environment=self.spark_environment(),
         )
-        junit_valid = _sanitize_junit(
+        junit_valid = _normalize_junit(
             self.context.artifact_root / "junit.xml", self.context.case_id, result
         )
         if result.returncode == 0 and not junit_valid:
@@ -492,18 +509,7 @@ class SparkScalaShellAdapter(SparkAdapter):
         return result
 
 
-_SAFE_CHILD_FAILURE_FIELDS = (
-    "stage",
-    "service",
-    "model_version",
-    "operation",
-    "shape",
-    "fix_hint",
-)
-_SAFE_CHILD_FAILURE_TOKEN = re.compile(r"[a-z0-9_.:+/-]{1,160}")
-
-
-def _safe_child_failure(output: str) -> dict[str, str] | None:
+def _child_failure(output: str) -> dict[str, Any] | None:
     for encoded in reversed(output.splitlines()):
         try:
             decoded = json.loads(encoded)
@@ -511,13 +517,7 @@ def _safe_child_failure(output: str) -> dict[str, str] | None:
             continue
         if not isinstance(decoded, dict) or decoded.get("status") != "failed":
             continue
-        safe: dict[str, str] = {}
-        for field in _SAFE_CHILD_FAILURE_FIELDS:
-            value = decoded.get(field)
-            if isinstance(value, str) and _SAFE_CHILD_FAILURE_TOKEN.fullmatch(value):
-                safe[field] = value
-        if {"stage", "service", "operation", "shape"} <= safe.keys():
-            return safe
+        return decoded
     return None
 
 
@@ -630,7 +630,7 @@ class IndirectLoadAdapter:
     ) -> None:
         context = self.context  # type: ignore[attr-defined]
         scenarios = list(context.execution.scenarios)
-        child_failure = _safe_child_failure(result.stdout)
+        child_failure = _child_failure(result.stdout)
         evidence: dict[str, Any] = {
             "schemaVersion": "1",
             "caseId": context.case_id,
@@ -649,6 +649,7 @@ class IndirectLoadAdapter:
                 "observedEventCount": 0,
             },
             "events": [],
+            "childOutput": result.stdout,
         }
         if child_failure is not None:
             evidence["childFailure"] = child_failure
@@ -1016,13 +1017,12 @@ def _write_junit(path: Path, case_id: str, result: subprocess.CompletedProcess[s
     test = ET.SubElement(suite, "testcase", classname="consumer.runner", name=case_id)
     if result.returncode:
         failure = ET.SubElement(test, "failure", message="consumer contract failed")
-        output = result.stdout.encode("utf-8", errors="replace")
-        failure.text = f"output_bytes={len(output)} output_digest=sha256:{hashlib.sha256(output).hexdigest()}"
+        failure.text = result.stdout
     path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(suite).write(path, encoding="unicode", xml_declaration=True)
 
 
-def _sanitize_junit(
+def _normalize_junit(
     path: Path, case_id: str, result: subprocess.CompletedProcess[str]
 ) -> bool:
     raw = path.read_bytes() if path.is_file() else b""
@@ -1035,17 +1035,9 @@ def _sanitize_junit(
         valid = False
         suite = ET.Element("testsuite", name=case_id, tests="1", failures="1")
         test = ET.SubElement(suite, "testcase", classname="consumer.runner", name=case_id)
-        failure = ET.SubElement(test, "failure", message="missing or invalid JUnit was redacted")
-        output = result.stdout.encode("utf-8", errors="replace") if not raw else raw
-        failure.text = f"output_bytes={len(output)} output_digest=sha256:{hashlib.sha256(output).hexdigest()}"
+        failure = ET.SubElement(test, "failure", message="missing or invalid JUnit")
+        failure.text = result.stdout if not raw else raw.decode("utf-8", errors="replace")
         tree = ET.ElementTree(suite)
-    for element in tree.iter():
-        if element.tag not in {"failure", "error", "system-out", "system-err"}:
-            continue
-        output = (element.text or "").encode("utf-8", errors="replace")
-        element.text = f"output_bytes={len(output)} output_digest=sha256:{hashlib.sha256(output).hexdigest()}"
-        if element.tag in {"failure", "error"}:
-            element.set("message", "redacted consumer failure")
     tree.write(path, encoding="unicode", xml_declaration=True)
     return valid
 

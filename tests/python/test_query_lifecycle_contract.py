@@ -8,8 +8,8 @@ https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults
 https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list
 https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 
-Tests intentionally retain only operation/shape metadata from intercepted calls.
-They never retain credentials, query payloads, or response rows.
+Tests retain operation metadata and the raw intercepted request/response context
+needed to diagnose a contract failure.
 """
 
 from __future__ import annotations
@@ -310,7 +310,7 @@ def test_query_and_wait_retries_same_request_id_without_duplicate_execution(
                 _diagnostic(
                     REQUEST_RETRY_CONTRACT,
                     f"query-and-wait-http-{status}",
-                    "inspect-payload-safe-server-log",
+                    "inspect-server-log",
                 )
             ) from None
     finally:

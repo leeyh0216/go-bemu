@@ -38,9 +38,8 @@ try {
   System.exit(0)
 } catch {
   case failure: Throwable =>
-    System.err.println(
-      s"BQEMU_LOAD_SCALA_STAGE=$stage failure=${failure.getClass.getName}"
-    )
+    System.err.println(s"BQEMU_LOAD_SCALA_STAGE=$stage failure=$failure")
+    failure.printStackTrace(System.err)
     try spark.stop() catch { case _: Throwable => () }
     System.exit(1)
 }
