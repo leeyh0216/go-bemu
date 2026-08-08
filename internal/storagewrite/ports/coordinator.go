@@ -89,8 +89,10 @@ type AppendBatch struct {
 }
 
 type CommitRequest struct {
-	Parent      domain.TableReference
-	StreamNames []string
+	Parent            domain.TableReference
+	StreamNames       []string
+	GroupID           string
+	ExpectedRowCounts map[string]int64
 }
 
 // Coordinator is deliberately serializable. Implementations may execute every

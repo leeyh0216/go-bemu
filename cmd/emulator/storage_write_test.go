@@ -4,11 +4,13 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
+	"github.com/leeyh0216/go-bemu/internal/adapters/sqlite"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/config"
@@ -40,7 +42,14 @@ func TestComposeStorageWriteSupportsExplicitDisableAndCleanClose(t *testing.T) {
 	}
 
 	cfg.Storage.Write.Enabled = true
-	runtime, err := composeStorageWrite(ctx, cfg, warehouse, catalog, system.Clock{}, system.IDGenerator{}, logger)
+	state, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = state.Close() })
+	runtime, err := composeStorageWrite(
+		ctx, cfg, warehouse, catalog, system.Clock{}, system.IDGenerator{}, logger, state.WriteState(),
+	)
 	if err != nil || runtime.Service == nil {
 		t.Fatalf("enabled Storage Write = %#v, %v", runtime, err)
 	}

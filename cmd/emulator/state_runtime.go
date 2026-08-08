@@ -8,6 +8,7 @@ import (
 	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
+	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
 )
 
 // stateRuntime is composition-owned. Application services receive only the
@@ -17,6 +18,7 @@ type stateRuntime struct {
 	queryJobs    ports.JobRepository
 	loadJobs     loadports.JobRepository
 	readSessions readports.SessionStateRepository
+	writeState   writeports.StateRepository
 	close        func() error
 }
 
@@ -28,7 +30,8 @@ func composeStateRuntime(ctx context.Context, dsn string) (*stateRuntime, error)
 	return &stateRuntime{
 		catalog: repositories.Catalog(), queryJobs: repositories.QueryJobs(),
 		loadJobs: repositories.LoadJobs(), readSessions: repositories.ReadSessions(),
-		close: repositories.Close,
+		writeState: repositories.WriteState(),
+		close:      repositories.Close,
 	}, nil
 }
 

@@ -309,6 +309,34 @@ func TestStorageWriteCommitFaultRollsBackAllStreams(t *testing.T) {
 	}
 }
 
+func TestStorageWriteCommitRejectsExpectedRowCountMismatch(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "id", Type: "INT64"}})
+	descriptor := storageWriteDescriptor(t, protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL))
+	stream := table.Name() + "/streams/row-proof"
+	if err := coordinator.StagePending(ctx, writeports.AppendBatch{
+		StreamName: stream, Table: table, Descriptor: descriptor,
+		Rows:              [][]byte{storageWriteRow(t, descriptor, map[string]any{"id": int64(1)})},
+		SchemaFingerprint: "schema", PayloadDigest: "payload",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := coordinator.CommitPending(ctx, writeports.CommitRequest{
+		Parent: table, StreamNames: []string{stream}, GroupID: "group-row-proof",
+		ExpectedRowCounts: map[string]int64{stream: 2},
+	})
+	if err == nil || !strings.Contains(err.Error(), "row-count proof mismatch") {
+		t.Fatalf("commit row-count mismatch = %v", err)
+	}
+	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
+		t.Fatalf("mismatched commit exposed %d rows", got)
+	}
+	if got := storageWriteReceiptCount(t, ctx, warehouse, stream); got != 1 {
+		t.Fatalf("mismatched commit retained %d receipts, want 1", got)
+	}
+}
+
 func TestStorageWriteStagePendingReceiptIsIdempotentAndRejectsConflicts(t *testing.T) {
 	ctx, cancel := duckDBStorageWriteTestContext(t)
 	defer cancel()

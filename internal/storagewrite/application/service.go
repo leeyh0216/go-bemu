@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,11 +36,14 @@ type Service struct {
 	clock       ports.Clock
 	ids         ports.IDGenerator
 	logger      *slog.Logger
+	state       ports.StateRepository
 
-	mu      sync.RWMutex
-	streams map[string]*streamState
-	closed  bool
-	pending atomic.Int64
+	mu              sync.RWMutex
+	streams         map[string]*streamState
+	commitGroups    map[string]domain.CommitGroup
+	closed          bool
+	stateReconciled bool
+	pending         atomic.Int64
 
 	// cleanupGate serializes orphan disposal without making a caller wait past
 	// its context deadline. This keeps DiscardPending exactly-once per sweep even
@@ -54,6 +58,10 @@ type streamState struct {
 	unacknowledged  *appendReceipt
 	cleanupPhase    cleanupPhase
 	cleanupAttempts uint64
+	operation       domain.OperationKind
+	operationPhase  domain.OperationPhase
+	operationToken  string
+	revision        int64
 }
 
 // appendReceipt identifies a PENDING append whose backend outcome may have
@@ -66,6 +74,9 @@ type appendReceipt struct {
 	rowCount          int64
 	schemaFingerprint string
 	payloadDigest     string
+	phase             domain.ReceiptPhase
+	createdAt         time.Time
+	updatedAt         time.Time
 }
 
 type cleanupPhase string
@@ -76,7 +87,7 @@ const (
 	cleanupPhaseDiscarded cleanupPhase = "discarded"
 )
 
-func New(config Config, coordinator ports.Coordinator, clock ports.Clock, ids ports.IDGenerator, logger *slog.Logger) (*Service, error) {
+func New(config Config, coordinator ports.Coordinator, clock ports.Clock, ids ports.IDGenerator, logger *slog.Logger, options ...Option) (*Service, error) {
 	if coordinator == nil || clock == nil || ids == nil || logger == nil {
 		return nil, fmt.Errorf("storage write dependencies must not be nil")
 	}
@@ -85,7 +96,17 @@ func New(config Config, coordinator ports.Coordinator, clock ports.Clock, ids po
 	}
 	service := &Service{
 		config: config, coordinator: coordinator, clock: clock, ids: ids,
-		logger: logger, streams: make(map[string]*streamState), cleanupGate: make(chan struct{}, 1),
+		logger: logger, state: transientStateRepository{}, stateReconciled: true,
+		streams: make(map[string]*streamState), commitGroups: make(map[string]domain.CommitGroup),
+		cleanupGate: make(chan struct{}, 1),
+	}
+	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("Storage Write option must not be nil")
+		}
+		if err := option(service); err != nil {
+			return nil, err
+		}
 	}
 	service.cleanupGate <- struct{}{}
 	return service, nil
@@ -103,6 +124,9 @@ func (s *Service) MaxConcurrentAppendRequests() int {
 
 func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamRequest) (domain.WriteStream, error) {
 	const operation = "storage_write.create_stream"
+	if err := s.ensureStateReconciled(operation); err != nil {
+		return domain.WriteStream{}, err
+	}
 	if request.Type != domain.StreamTypePending {
 		return domain.WriteStream{}, domain.NewError(domain.ErrorUnimplemented, operation, errors.New("only PENDING streams can be created"))
 	}
@@ -127,26 +151,37 @@ func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamR
 		return domain.WriteStream{}, domain.NewError(domain.ErrorResourceExhausted, operation, errors.New("logical stream capacity reached"))
 	}
 	var name string
+	var state *streamState
 	for attempts := 0; attempts < 4; attempts++ {
 		id := s.ids.NewID()
 		candidate := request.Parent.Name() + "/streams/" + id
 		if _, _, isDefault, parseErr := domain.ParseStreamName(candidate); parseErr != nil || isDefault {
 			continue
 		}
-		if _, exists := s.streams[candidate]; !exists {
-			name = candidate
-			break
+		if _, exists := s.streams[candidate]; exists {
+			continue
 		}
+		candidateState := &streamState{stream: domain.WriteStream{
+			Name: candidate, Parent: request.Parent, Type: domain.StreamTypePending,
+			State: domain.StreamStateOpen, CreateTime: now, LastActivity: now,
+			Location: s.config.Location, Schema: cloneSchema(schema),
+		}, cleanupPhase: cleanupPhaseActive, operation: domain.OperationNone,
+			operationPhase: domain.OperationPhaseNone, revision: 1}
+		if err := s.state.CreateStream(ctx, streamRecord(candidateState)); err != nil {
+			if errors.Is(err, ports.ErrStateConflict) {
+				continue
+			}
+			return domain.WriteStream{}, s.classifyStateError(operation, err)
+		}
+		name = candidate
+		state = candidateState
+		break
 	}
 	if name == "" {
 		return domain.WriteStream{}, domain.NewError(domain.ErrorInternal, operation, errors.New("ID generator did not produce a unique valid stream ID"))
 	}
-	stream := domain.WriteStream{
-		Name: name, Parent: request.Parent, Type: domain.StreamTypePending,
-		State: domain.StreamStateOpen, CreateTime: now, LastActivity: now,
-		Location: s.config.Location, Schema: cloneSchema(schema),
-	}
-	s.streams[name] = &streamState{stream: stream, cleanupPhase: cleanupPhaseActive}
+	stream := state.stream
+	s.streams[name] = state
 	s.pending.Add(1)
 	s.logger.InfoContext(ctx, "pending write stream created",
 		"event", "domain.transition", "operation", operation,
@@ -158,6 +193,9 @@ func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamR
 
 func (s *Service) GetStream(ctx context.Context, name string) (domain.WriteStream, error) {
 	const operation = "storage_write.get_stream"
+	if err := s.ensureStateReconciled(operation); err != nil {
+		return domain.WriteStream{}, err
+	}
 	table, canonical, isDefault, err := domain.ParseStreamName(name)
 	if err != nil {
 		return domain.WriteStream{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
@@ -179,6 +217,9 @@ func (s *Service) GetStream(ctx context.Context, name string) (domain.WriteStrea
 // either case the ledger and staged backend rows remain unchanged.
 func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (domain.AppendResult, error) {
 	const operation = "storage_write.append"
+	if err := s.ensureStateReconciled(operation); err != nil {
+		return domain.AppendResult{}, err
+	}
 	table, canonical, isDefault, err := domain.ParseStreamName(request.StreamName)
 	if err != nil {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
@@ -238,15 +279,21 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("payload digest does not match ProtoRows"))
 	}
 	startOffset := state.stream.NextOffset
+	now := s.clock.Now()
 	receipt := appendReceipt{
 		startOffset: startOffset, rowCount: int64(len(request.Rows)),
 		schemaFingerprint: fingerprint, payloadDigest: computedPayloadDigest,
+		phase: domain.ReceiptPrepared, createdAt: now, updatedAt: now,
 	}
-	if state.unacknowledged != nil && *state.unacknowledged != receipt {
+	if state.unacknowledged != nil && !appendReceiptsMatch(*state.unacknowledged, receipt) {
 		return domain.AppendResult{}, domain.NewError(
 			domain.ErrorFailedPrecondition, operation,
 			errors.New("an unacknowledged append must be retried with the same offset, schema, and payload before the stream can advance"),
 		)
+	}
+	wasUnacknowledged := state.unacknowledged != nil
+	if wasUnacknowledged {
+		receipt = *state.unacknowledged
 	}
 	if request.Offset != nil {
 		switch {
@@ -255,6 +302,23 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 		case *request.Offset > startOffset:
 			return domain.AppendResult{}, domain.NewError(domain.ErrorOutOfRange, operation, errors.New("append offset is beyond stream end"))
 		}
+	}
+	if !wasUnacknowledged {
+		expectedRevision := state.revision
+		prepared := streamRecord(state)
+		prepared.Operation = domain.OperationAppend
+		prepared.OperationPhase = domain.OperationPhasePrepared
+		prepared.OperationToken = strconv.FormatInt(startOffset, 10)
+		prepared.Revision++
+		persistedReceipt := appendReceiptRecord(canonical, receipt, domain.ReceiptPrepared, receipt.createdAt, receipt.updatedAt)
+		if err := s.state.PrepareAppend(ctx, expectedRevision, prepared, persistedReceipt); err != nil {
+			return domain.AppendResult{}, s.classifyStateError(operation, err)
+		}
+		state.operation = prepared.Operation
+		state.operationPhase = prepared.OperationPhase
+		state.operationToken = prepared.OperationToken
+		state.revision = prepared.Revision
+		state.unacknowledged = &receipt
 	}
 	batch := ports.AppendBatch{
 		StreamName: canonical, Table: table, StartOffset: startOffset,
@@ -280,27 +344,74 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	err = call(ctx, batch)
 	s.logSideEffectEnd(ctx, operation, sideEffect, canonical, table.Name(), startOffset, len(request.Rows), fingerprint, batch.PayloadDigest, err)
 	if err != nil {
-		if !isDefault && appendOutcomeIsAmbiguous(err) {
-			state.unacknowledged = &receipt
+		if appendOutcomeIsAmbiguous(err) {
+			if state.operationPhase == domain.OperationPhasePrepared {
+				updatedAt := s.clock.Now()
+				unresolved := streamRecord(state)
+				unresolved.OperationPhase = domain.OperationPhaseUnresolved
+				unresolved.Revision++
+				receipt.phase = domain.ReceiptUnresolved
+				receipt.updatedAt = updatedAt
+				persistedReceipt := appendReceiptRecord(canonical, receipt, domain.ReceiptUnresolved, receipt.createdAt, updatedAt)
+				if stateErr := s.state.MarkAppendUnresolved(ctx, state.revision, unresolved, persistedReceipt); stateErr != nil {
+					return domain.AppendResult{}, s.classifyStateError(operation, errors.Join(err, stateErr))
+				}
+				state.operationPhase = unresolved.OperationPhase
+				state.revision = unresolved.Revision
+				state.unacknowledged = &receipt
+			}
 			s.logger.WarnContext(ctx, "pending append acknowledgement is unresolved",
 				"event", "domain.transition", "operation", operation,
 				"model_version", s.config.ProtocolModelVersion,
 				"stream_fingerprint", digest([]byte(canonical)), "start_offset", startOffset,
 				"row_count", len(request.Rows), "schema_fingerprint", fingerprint,
 				"payload_digest", batch.PayloadDigest, "state_after", "append_unacknowledged")
+		} else {
+			aborted := streamRecord(state)
+			aborted.Operation = domain.OperationNone
+			aborted.OperationPhase = domain.OperationPhaseNone
+			aborted.OperationToken = ""
+			aborted.Revision++
+			persistedReceipt := appendReceiptRecord(canonical, receipt, receipt.phase, receipt.createdAt, s.clock.Now())
+			if stateErr := s.state.AbortAppend(ctx, state.revision, aborted, persistedReceipt); stateErr != nil {
+				return domain.AppendResult{}, s.classifyStateError(operation, errors.Join(err, stateErr))
+			}
+			state.operation = domain.OperationNone
+			state.operationPhase = domain.OperationPhaseNone
+			state.operationToken = ""
+			state.revision = aborted.Revision
+			state.unacknowledged = nil
 		}
 		code := coordinatorErrorCode(err, domain.ErrorInternal)
 		return domain.AppendResult{}, domain.NewError(code, operation, err)
 	}
-	wasUnacknowledged := state.unacknowledged != nil
+	completedAt := s.clock.Now()
+	completed := streamRecord(state)
+	completed.Operation = domain.OperationNone
+	completed.OperationPhase = domain.OperationPhaseNone
+	completed.OperationToken = ""
+	completed.Stream.RowCount += int64(len(request.Rows))
+	completed.Stream.NextOffset += int64(len(request.Rows))
+	completed.Stream.LastActivity = completedAt
+	if completed.Stream.SchemaFingerprint == "" {
+		completed.Stream.SchemaFingerprint = fingerprint
+	}
+	completed.Revision++
+	receipt.phase = domain.ReceiptApplied
+	receipt.updatedAt = completedAt
+	persistedReceipt := appendReceiptRecord(canonical, receipt, domain.ReceiptApplied, receipt.createdAt, completedAt)
+	if stateErr := s.state.CompleteAppend(ctx, state.revision, completed, persistedReceipt); stateErr != nil {
+		return domain.AppendResult{}, s.classifyStateError(operation, stateErr)
+	}
 	state.unacknowledged = nil
+	state.operation = domain.OperationNone
+	state.operationPhase = domain.OperationPhaseNone
+	state.operationToken = ""
+	state.revision = completed.Revision
+	state.stream = cloneStream(completed.Stream)
 	if len(state.descriptor) == 0 {
 		state.descriptor = slices.Clone(descriptor)
-		state.stream.SchemaFingerprint = fingerprint
 	}
-	state.stream.RowCount += int64(len(request.Rows))
-	state.stream.NextOffset += int64(len(request.Rows))
-	state.stream.LastActivity = s.clock.Now()
 	if wasUnacknowledged {
 		s.logger.InfoContext(ctx, "pending append acknowledgement reconciled",
 			"event", "domain.transition", "operation", operation,
@@ -317,8 +428,11 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 
 // Finalize is idempotent for an already-finalized PENDING stream and returns
 // the total accepted row count. DEFAULT streams cannot be finalized.
-func (s *Service) Finalize(_ context.Context, name string) (int64, error) {
+func (s *Service) Finalize(ctx context.Context, name string) (int64, error) {
 	const operation = "storage_write.finalize_stream"
+	if err := s.ensureStateReconciled(operation); err != nil {
+		return 0, err
+	}
 	_, canonical, isDefault, err := domain.ParseStreamName(name)
 	if err != nil {
 		return 0, domain.NewError(domain.ErrorInvalidArgument, operation, err)
@@ -341,8 +455,15 @@ func (s *Service) Finalize(_ context.Context, name string) (int64, error) {
 	if state.unacknowledged != nil {
 		return 0, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("an unacknowledged append must be reconciled before finalizing the stream"))
 	}
-	state.stream.State = domain.StreamStateFinalized
-	state.stream.LastActivity = s.clock.Now()
+	updated := streamRecord(state)
+	updated.Stream.State = domain.StreamStateFinalized
+	updated.Stream.LastActivity = s.clock.Now()
+	updated.Revision++
+	if err := s.state.UpdateStream(ctx, state.revision, updated); err != nil {
+		return 0, s.classifyStateError(operation, err)
+	}
+	state.stream = cloneStream(updated.Stream)
+	state.revision = updated.Revision
 	return state.stream.RowCount, nil
 }
 
@@ -351,6 +472,9 @@ func (s *Service) Finalize(_ context.Context, name string) (int64, error) {
 // after that single all-or-none backend transaction succeeds.
 func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference, names []string) (domain.BatchCommitResult, error) {
 	const operation = "storage_write.batch_commit"
+	if err := s.ensureStateReconciled(operation); err != nil {
+		return domain.BatchCommitResult{}, err
+	}
 	if _, err := domain.ParseTableName(parent.Name()); err != nil {
 		return domain.BatchCommitResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
 	}
@@ -402,6 +526,7 @@ func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference,
 			states[index].state.mu.Unlock()
 		}
 	}()
+	var existingGroupID string
 	for _, item := range states {
 		switch {
 		case item.state.cleanupPhase != cleanupPhaseActive:
@@ -412,16 +537,79 @@ func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference,
 			streamErrors = append(streamErrors, domain.StreamError{Code: domain.StreamAlreadyCommitted, Stream: item.name, Message: "stream is already committed"})
 		case item.state.stream.State != domain.StreamStateFinalized:
 			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamState, Stream: item.name, Message: "stream must be finalized before commit"})
+		case item.state.operation == domain.OperationAppend:
+			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamState, Stream: item.name, Message: "stream has an unresolved append"})
+		case item.state.operation == domain.OperationCommit:
+			if existingGroupID == "" {
+				existingGroupID = item.state.operationToken
+			} else if existingGroupID != item.state.operationToken {
+				streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamState, Stream: item.name, Message: "stream belongs to another unresolved commit"})
+			}
+		case item.state.operation != domain.OperationNone:
+			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamState, Stream: item.name, Message: "stream has an invalid durable operation"})
 		}
 	}
 	if len(streamErrors) > 0 {
 		return domain.BatchCommitResult{StreamErrors: streamErrors}, nil
 	}
 	canonicalNames := make([]string, len(states))
+	expectedRows := make(map[string]int64, len(states))
 	var rowCount int64
 	for index, item := range states {
 		canonicalNames[index] = item.name
+		expectedRows[item.name] = item.state.stream.RowCount
 		rowCount += item.state.stream.RowCount
+	}
+	var group domain.CommitGroup
+	if existingGroupID != "" {
+		for _, item := range states {
+			if item.state.operation != domain.OperationCommit || item.state.operationToken != existingGroupID {
+				return domain.BatchCommitResult{StreamErrors: []domain.StreamError{{
+					Code: domain.InvalidStreamState, Stream: item.name,
+					Message: "commit retry must contain the exact unresolved stream set",
+				}}}, nil
+			}
+		}
+		s.mu.RLock()
+		group = cloneCommitGroup(s.commitGroups[existingGroupID])
+		s.mu.RUnlock()
+		if !commitGroupMatches(group, parent, canonicalNames, expectedRows) ||
+			(group.Phase != domain.CommitPrepared && group.Phase != domain.CommitUnresolved) {
+			return domain.BatchCommitResult{StreamErrors: []domain.StreamError{{
+				Code: domain.InvalidStreamState, Stream: canonicalNames[0],
+				Message: "commit retry does not match the unresolved commit group",
+			}}}, nil
+		}
+	} else {
+		now := s.clock.Now()
+		group = domain.CommitGroup{
+			ID:     digest([]byte(s.ids.NewID() + "\n" + strings.Join(canonicalNames, "\n"))),
+			Parent: parent, ExpectedRowCount: rowCount, Phase: domain.CommitPrepared,
+			CreatedAt: now, UpdatedAt: now, Members: make([]domain.CommitMember, len(states)),
+		}
+		expected := make(map[string]int64, len(states))
+		prepared := make([]domain.StreamRecord, len(states))
+		for index, item := range states {
+			expected[item.name] = item.state.revision
+			prepared[index] = streamRecord(item.state)
+			prepared[index].Operation = domain.OperationCommit
+			prepared[index].OperationPhase = domain.OperationPhasePrepared
+			prepared[index].OperationToken = group.ID
+			prepared[index].Revision++
+			group.Members[index] = domain.CommitMember{StreamName: item.name, ExpectedRowCount: item.state.stream.RowCount}
+		}
+		if err := s.state.PrepareCommit(ctx, expected, prepared, group); err != nil {
+			return domain.BatchCommitResult{}, s.classifyStateError(operation, err)
+		}
+		for index, item := range states {
+			item.state.operation = domain.OperationCommit
+			item.state.operationPhase = domain.OperationPhasePrepared
+			item.state.operationToken = group.ID
+			item.state.revision = prepared[index].Revision
+		}
+		s.mu.Lock()
+		s.commitGroups[group.ID] = cloneCommitGroup(group)
+		s.mu.Unlock()
 	}
 	s.logger.InfoContext(ctx, "committing pending write streams",
 		"event", "side_effect.before", "side_effect", "coordinator.commit_pending",
@@ -429,20 +617,92 @@ func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference,
 		"table", parent.Name(), "stream_count", len(states), "row_count", rowCount,
 		"stream_set_fingerprint", digest([]byte(strings.Join(canonicalNames, "\n"))),
 		"tx_state", "begin")
-	err := s.coordinator.CommitPending(ctx, ports.CommitRequest{Parent: parent, StreamNames: canonicalNames})
+	err := s.coordinator.CommitPending(ctx, ports.CommitRequest{
+		Parent: parent, StreamNames: canonicalNames, GroupID: group.ID, ExpectedRowCounts: expectedRows,
+	})
 	s.logCommitEnd(ctx, operation, parent.Name(), canonicalNames, rowCount, err)
 	if err != nil {
+		expected := make(map[string]int64, len(states))
+		updated := make([]domain.StreamRecord, len(states))
+		for index, item := range states {
+			expected[item.name] = item.state.revision
+			updated[index] = streamRecord(item.state)
+			updated[index].Revision++
+		}
+		if appendOutcomeIsAmbiguous(err) {
+			if group.Phase == domain.CommitPrepared {
+				group.Phase = domain.CommitUnresolved
+				group.UpdatedAt = s.clock.Now()
+				for index := range updated {
+					updated[index].OperationPhase = domain.OperationPhaseUnresolved
+				}
+				if stateErr := s.state.MarkCommitUnresolved(ctx, expected, updated, group); stateErr != nil {
+					return domain.BatchCommitResult{}, s.classifyStateError(operation, errors.Join(err, stateErr))
+				}
+				for index, item := range states {
+					item.state.operationPhase = domain.OperationPhaseUnresolved
+					item.state.revision = updated[index].Revision
+				}
+				s.mu.Lock()
+				s.commitGroups[group.ID] = cloneCommitGroup(group)
+				s.mu.Unlock()
+			}
+		} else {
+			group.Phase = domain.CommitAborted
+			group.UpdatedAt = s.clock.Now()
+			for index := range updated {
+				updated[index].Operation = domain.OperationNone
+				updated[index].OperationPhase = domain.OperationPhaseNone
+				updated[index].OperationToken = ""
+			}
+			if stateErr := s.state.AbortCommit(ctx, expected, updated, group); stateErr != nil {
+				return domain.BatchCommitResult{}, s.classifyStateError(operation, errors.Join(err, stateErr))
+			}
+			for index, item := range states {
+				item.state.operation = domain.OperationNone
+				item.state.operationPhase = domain.OperationPhaseNone
+				item.state.operationToken = ""
+				item.state.revision = updated[index].Revision
+			}
+			s.mu.Lock()
+			s.commitGroups[group.ID] = cloneCommitGroup(group)
+			s.mu.Unlock()
+		}
 		return domain.BatchCommitResult{}, domain.NewError(coordinatorErrorCode(err, domain.ErrorInternal), operation, err)
 	}
 	// The response time represents successful atomic visibility, so capture it
 	// only after the coordinator transaction acknowledges its commit.
 	// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#batchcommitwritestreamsresponse
 	commitTime := s.clock.Now()
-	for _, item := range states {
-		item.state.stream.State = domain.StreamStateCommitted
-		item.state.stream.CommitTime = cloneTime(&commitTime)
-		item.state.stream.LastActivity = commitTime
+	expected := make(map[string]int64, len(states))
+	completed := make([]domain.StreamRecord, len(states))
+	for index, item := range states {
+		expected[item.name] = item.state.revision
+		completed[index] = streamRecord(item.state)
+		completed[index].Stream.State = domain.StreamStateCommitted
+		completed[index].Stream.CommitTime = cloneTime(&commitTime)
+		completed[index].Stream.LastActivity = commitTime
+		completed[index].Operation = domain.OperationNone
+		completed[index].OperationPhase = domain.OperationPhaseNone
+		completed[index].OperationToken = ""
+		completed[index].Revision++
 	}
+	group.Phase = domain.CommitApplied
+	group.UpdatedAt = commitTime
+	group.CommitTime = cloneTime(&commitTime)
+	if err := s.state.CompleteCommit(ctx, expected, completed, group); err != nil {
+		return domain.BatchCommitResult{}, s.classifyStateError(operation, err)
+	}
+	for index, item := range states {
+		item.state.stream = cloneStream(completed[index].Stream)
+		item.state.operation = domain.OperationNone
+		item.state.operationPhase = domain.OperationPhaseNone
+		item.state.operationToken = ""
+		item.state.revision = completed[index].Revision
+	}
+	s.mu.Lock()
+	s.commitGroups[group.ID] = cloneCommitGroup(group)
+	s.mu.Unlock()
 	s.pending.Add(-int64(len(states)))
 	return domain.BatchCommitResult{CommitTime: cloneTime(&commitTime)}, nil
 }
@@ -485,7 +745,8 @@ func (s *Service) lookupOrCreateDefault(ctx context.Context, operation string, t
 		Name: canonical, Parent: table, Type: domain.StreamTypeDefault,
 		State: domain.StreamStateCommitted, CreateTime: now, CommitTime: &commitTime,
 		LastActivity: now, Location: s.config.Location, Schema: cloneSchema(schema),
-	}, cleanupPhase: cleanupPhaseActive}
+	}, cleanupPhase: cleanupPhaseActive, operation: domain.OperationNone,
+		operationPhase: domain.OperationPhaseNone, revision: 1}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -493,6 +754,22 @@ func (s *Service) lookupOrCreateDefault(ctx context.Context, operation string, t
 	}
 	if existing := s.streams[canonical]; existing != nil {
 		return existing, nil
+	}
+	if err := s.state.CreateStream(ctx, streamRecord(candidate)); err != nil {
+		if errors.Is(err, ports.ErrStateConflict) {
+			record, getErr := s.state.GetStream(ctx, canonical)
+			if getErr != nil {
+				return nil, s.classifyStateError(operation, errors.Join(err, getErr))
+			}
+			candidate = &streamState{
+				stream: cloneStream(record.Stream), cleanupPhase: cleanupPhaseFromRecord(record.CleanupPhase),
+				cleanupAttempts: record.CleanupAttempts, operation: record.Operation,
+				operationPhase: record.OperationPhase, operationToken: record.OperationToken,
+				revision: record.Revision,
+			}
+		} else {
+			return nil, s.classifyStateError(operation, err)
+		}
 	}
 	s.streams[canonical] = candidate
 	return candidate, nil

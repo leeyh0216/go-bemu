@@ -48,6 +48,8 @@ type fakeCoordinator struct {
 	failCommit  bool
 	commitHook  func()
 	stageErr    error
+	defaultErr  error
+	commitErr   error
 	describeErr error
 }
 
@@ -65,6 +67,9 @@ func (c *fakeCoordinator) DescribeTable(_ context.Context, _ domain.TableReferen
 func (c *fakeCoordinator) AppendDefault(_ context.Context, batch ports.AppendBatch) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.defaultErr != nil {
+		return c.defaultErr
+	}
 	c.visibleRows += len(batch.Rows)
 	return nil
 }
@@ -83,6 +88,9 @@ func (c *fakeCoordinator) CommitPending(_ context.Context, request ports.CommitR
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.commits++
+	if c.commitErr != nil {
+		return c.commitErr
+	}
 	if c.failCommit {
 		return errors.New("injected commit fault")
 	}

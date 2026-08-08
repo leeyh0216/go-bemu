@@ -34,6 +34,7 @@ func composeStorageWrite(
 	clock writeports.Clock,
 	ids writeports.IDGenerator,
 	logger *slog.Logger,
+	stateRepositories ...writeports.StateRepository,
 ) (*storageWriteRuntime, error) {
 	if !cfg.Storage.Write.Enabled {
 		return &storageWriteRuntime{}, nil
@@ -50,14 +51,28 @@ func composeStorageWrite(
 	if err != nil {
 		return nil, err
 	}
+	if len(stateRepositories) > 1 {
+		_ = coordinator.Close(context.Background())
+		return nil, errors.New("at most one Storage Write state repository may be configured")
+	}
+	options := make([]writeapplication.Option, 0, len(stateRepositories))
+	if len(stateRepositories) == 1 {
+		options = append(options, writeapplication.WithStateRepository(stateRepositories[0]))
+	}
 	service, err := writeapplication.New(writeapplication.Config{
 		Location: cfg.Defaults.Location, ProtocolModelVersion: cfg.Storage.Write.ProtocolModelVersion,
 		MaxStreams: cfg.Storage.Write.MaxStreams, MaxAppendBytes: cfg.Storage.Write.MaxAppendRequestBytes,
 		MaxAppendEnvelopeBytes:      cfg.Storage.Write.MaxAppendEnvelopeBytes,
 		MaxConcurrentAppendRequests: cfg.Storage.Write.MaxConcurrentAppendRequests,
 		OrphanTTL:                   cfg.Storage.Write.OrphanTTL.Value(), CleanupInterval: cfg.Storage.Write.CleanupInterval.Value(),
-	}, coordinator, clock, ids, logger)
+	}, coordinator, clock, ids, logger, options...)
 	if err != nil {
+		closeContext, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())
+		defer cancel()
+		_ = coordinator.Close(closeContext)
+		return nil, err
+	}
+	if err := service.ReconcilePersistedState(ctx); err != nil {
 		closeContext, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())
 		defer cancel()
 		_ = coordinator.Close(closeContext)

@@ -22,6 +22,9 @@ import (
 )
 
 func (s *Service) SweepOrphans(ctx context.Context) error {
+	if err := s.ensureStateReconciled("storage_write.sweep_orphans"); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -45,18 +48,10 @@ func (s *Service) SweepOrphans(ctx context.Context) error {
 	for name, state := range s.streams {
 		state.mu.Lock()
 		eligible := state.stream.Type == domain.StreamTypePending && state.stream.State != domain.StreamStateCommitted &&
+			state.operation == domain.OperationNone &&
 			(state.cleanupPhase == cleanupPhasePending ||
 				(state.cleanupPhase == cleanupPhaseActive && !state.stream.LastActivity.After(cutoff)))
 		if eligible {
-			if state.cleanupPhase == cleanupPhaseActive {
-				state.cleanupPhase = cleanupPhasePending
-				s.logger.InfoContext(ctx, "pending write stream entered cleanup",
-					"event", "domain.transition", "operation", "storage_write.sweep_orphans",
-					"model_version", s.config.ProtocolModelVersion,
-					"stream_fingerprint", digest([]byte(name)),
-					"state_before", cleanupPhaseActive, "state_after", cleanupPhasePending,
-					"retry_count", uint64(0))
-			}
 			orphans = append(orphans, orphan{name: name, state: state})
 		}
 		state.mu.Unlock()
@@ -71,9 +66,29 @@ func (s *Service) SweepOrphans(ctx context.Context) error {
 			break
 		}
 		item.state.mu.Lock()
+		stateBefore := item.state.cleanupPhase
 		retryCount := item.state.cleanupAttempts
-		item.state.cleanupAttempts++
+		prepared := streamRecord(item.state)
+		prepared.CleanupPhase = domain.CleanupPending
+		prepared.CleanupAttempts++
+		prepared.Revision++
+		if err := s.state.UpdateStream(ctx, item.state.revision, prepared); err != nil {
+			item.state.mu.Unlock()
+			result = errors.Join(result, fmt.Errorf("prepare orphan cleanup: %w", err))
+			continue
+		}
+		item.state.cleanupPhase = cleanupPhasePending
+		item.state.cleanupAttempts = prepared.CleanupAttempts
+		item.state.revision = prepared.Revision
 		item.state.mu.Unlock()
+		if stateBefore == cleanupPhaseActive {
+			s.logger.InfoContext(ctx, "pending write stream entered cleanup",
+				"event", "domain.transition", "operation", "storage_write.sweep_orphans",
+				"model_version", s.config.ProtocolModelVersion,
+				"stream_fingerprint", digest([]byte(item.name)),
+				"state_before", cleanupPhaseActive, "state_after", cleanupPhasePending,
+				"retry_count", retryCount)
+		}
 		s.logger.InfoContext(ctx, "discarding orphaned write stream",
 			"event", "side_effect.before", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
@@ -86,10 +101,14 @@ func (s *Service) SweepOrphans(ctx context.Context) error {
 			s.mu.Lock()
 			item.state.mu.Lock()
 			if s.streams[item.name] == item.state && item.state.cleanupPhase == cleanupPhasePending {
-				item.state.cleanupPhase = cleanupPhaseDiscarded
-				delete(s.streams, item.name)
-				s.pending.Add(-1)
-				stateAfter = cleanupPhaseDiscarded
+				if deleteErr := s.state.DeleteStream(ctx, item.name, item.state.revision); deleteErr != nil {
+					err = deleteErr
+				} else {
+					item.state.cleanupPhase = cleanupPhaseDiscarded
+					delete(s.streams, item.name)
+					s.pending.Add(-1)
+					stateAfter = cleanupPhaseDiscarded
+				}
 			}
 			item.state.mu.Unlock()
 			s.mu.Unlock()
@@ -129,15 +148,28 @@ func (s *Service) RunCleanup(ctx context.Context) error {
 }
 
 func (s *Service) Close(ctx context.Context) error {
+	if err := s.ensureStateReconciled("storage_write.close"); err != nil {
+		return err
+	}
+	var persistErr error
 	s.mu.Lock()
 	s.closed = true
 	for _, state := range s.streams {
 		state.mu.Lock()
-		if state.stream.Type == domain.StreamTypePending && state.stream.State != domain.StreamStateCommitted {
-			state.stream.LastActivity = time.Time{}
+		if state.stream.Type == domain.StreamTypePending && state.stream.State != domain.StreamStateCommitted &&
+			state.operation == domain.OperationNone {
+			updated := streamRecord(state)
+			updated.Stream.LastActivity = time.Unix(0, 1).UTC()
+			updated.Revision++
+			if err := s.state.UpdateStream(ctx, state.revision, updated); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			} else {
+				state.stream.LastActivity = updated.Stream.LastActivity
+				state.revision = updated.Revision
+			}
 		}
 		state.mu.Unlock()
 	}
 	s.mu.Unlock()
-	return s.SweepOrphans(ctx)
+	return errors.Join(persistErr, s.SweepOrphans(ctx))
 }

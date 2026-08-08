@@ -304,12 +304,19 @@ func (c *StorageWriteCoordinator) commitPending(ctx context.Context, request wri
 	}()
 	released := make(map[string]int64, len(request.StreamNames))
 	for _, stream := range request.StreamNames {
-		count, bytes, err := pendingStreamReceiptSummary(ctx, tx, stream, request.Parent)
+		count, rows, bytes, err := pendingStreamReceiptSummary(ctx, tx, stream, request.Parent)
 		if err != nil {
 			return err
 		}
 		if count == 0 {
 			continue
+		}
+		if len(request.ExpectedRowCounts) != 0 {
+			expected, exists := request.ExpectedRowCounts[stream]
+			if !exists || expected != rows {
+				return fmt.Errorf("pending stream row-count proof mismatch for stream fingerprint %s: got %d, expected %d",
+					storageWriteStreamFingerprint(stream), rows, expected)
+			}
 		}
 		stagingTable := storageWriteStagingTable(stream)
 		columns, err := storageWriteStagingColumns(ctx, tx, stagingTable)
@@ -351,23 +358,23 @@ func (c *StorageWriteCoordinator) commitPending(ctx context.Context, request wri
 	return nil
 }
 
-func pendingStreamReceiptSummary(ctx context.Context, tx *sql.Tx, stream string, parent writedomain.TableReference) (count, bytes int64, err error) {
+func pendingStreamReceiptSummary(ctx context.Context, tx *sql.Tx, stream string, parent writedomain.TableReference) (count, rows, bytes int64, err error) {
 	wrongTableStatement := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s WHERE stream_name = ?
 		AND (project_id <> ? OR dataset_id <> ? OR table_id <> ?)`,
 		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
 	var wrongTable int64
 	if err := tx.QueryRowContext(ctx, wrongTableStatement, stream, parent.ProjectID, parent.DatasetID, parent.TableID).Scan(&wrongTable); err != nil {
-		return 0, 0, fmt.Errorf("validate pending stream destination: %w", err)
+		return 0, 0, 0, fmt.Errorf("validate pending stream destination: %w", err)
 	}
 	if wrongTable != 0 {
-		return 0, 0, fmt.Errorf("stream fingerprint %s belongs to another table", storageWriteStreamFingerprint(stream))
+		return 0, 0, 0, fmt.Errorf("stream fingerprint %s belongs to another table", storageWriteStreamFingerprint(stream))
 	}
-	statement := fmt.Sprintf("SELECT COUNT(*), COALESCE(SUM(staged_bytes), 0) FROM %s.%s WHERE stream_name = ?",
+	statement := fmt.Sprintf("SELECT COUNT(*), COALESCE(SUM(row_count), 0), COALESCE(SUM(staged_bytes), 0) FROM %s.%s WHERE stream_name = ?",
 		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-	if err := tx.QueryRowContext(ctx, statement, stream).Scan(&count, &bytes); err != nil {
-		return 0, 0, fmt.Errorf("read pending stream commit summary: %w", err)
+	if err := tx.QueryRowContext(ctx, statement, stream).Scan(&count, &rows, &bytes); err != nil {
+		return 0, 0, 0, fmt.Errorf("read pending stream commit summary: %w", err)
 	}
-	return count, bytes, nil
+	return count, rows, bytes, nil
 }
 
 func storageWriteStagingColumns(ctx context.Context, tx *sql.Tx, table string) ([]string, error) {

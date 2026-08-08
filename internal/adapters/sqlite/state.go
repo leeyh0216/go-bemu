@@ -13,6 +13,7 @@ import (
 	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
+	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
 	_ "modernc.org/sqlite"
 )
 
@@ -25,6 +26,7 @@ const (
 	baselineChecksum    = "ca3040ec8a716e9acafc71179d924902c9d4cac608a779143864fe3de2d9fce3"
 	jobMetadataChecksum = "4e0c30c547b0b23ca5a6e134e89e2679fa2cac71d0913dd6b061091c6b3c3dce"
 	readSessionChecksum = "b1be01ae19ebfc1b9337e696107ad9106f371b93776886b342bd33feddb8c54d"
+	writeLedgerChecksum = "1f7532d5cc322f88d0901e0d25e80b5342a9dddf978fd7a5d66158fd4e7f33bd"
 )
 
 const migrationLedgerDDL = `CREATE TABLE IF NOT EXISTS bqemu_schema_migrations (
@@ -326,6 +328,158 @@ BEGIN
 END`,
 		},
 	},
+	{
+		version:  4,
+		name:     "storage_write_ledger",
+		checksum: writeLedgerChecksum,
+		statements: []string{
+			`CREATE TABLE bqemu_write_streams (
+    stream_name TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    dataset_id TEXT NOT NULL,
+    table_id TEXT NOT NULL,
+    stream_type TEXT NOT NULL CHECK (stream_type IN ('DEFAULT', 'PENDING')),
+    stream_state TEXT NOT NULL CHECK (stream_state IN ('OPEN', 'FINALIZED', 'COMMITTED')),
+    create_time_ns INTEGER NOT NULL,
+    commit_time_ns INTEGER,
+    location TEXT NOT NULL,
+    schema_json TEXT NOT NULL CHECK (json_valid(schema_json)),
+    row_count INTEGER NOT NULL CHECK (row_count >= 0),
+    next_offset INTEGER NOT NULL CHECK (next_offset = row_count),
+    writer_schema_fingerprint TEXT NOT NULL,
+    last_activity_ns INTEGER NOT NULL,
+    operation_kind TEXT NOT NULL CHECK (operation_kind IN ('NONE', 'APPEND', 'COMMIT')),
+    operation_phase TEXT NOT NULL CHECK (operation_phase IN ('NONE', 'PREPARED', 'UNRESOLVED')),
+    operation_token TEXT NOT NULL,
+    cleanup_phase TEXT NOT NULL CHECK (cleanup_phase IN ('ACTIVE', 'PENDING')),
+    cleanup_attempts INTEGER NOT NULL CHECK (cleanup_attempts >= 0),
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    CHECK (length(stream_name) BETWEEN 1 AND 2304),
+    CHECK (length(project_id) > 0 AND length(dataset_id) > 0 AND length(table_id) > 0),
+    CHECK (length(location) > 0),
+    CHECK (writer_schema_fingerprint = '' OR
+        (length(writer_schema_fingerprint) = 71 AND substr(writer_schema_fingerprint, 1, 7) = 'sha256:'
+         AND substr(writer_schema_fingerprint, 8) NOT GLOB '*[^0-9a-f]*')),
+    CHECK ((operation_kind = 'NONE' AND operation_phase = 'NONE' AND operation_token = '')
+        OR (operation_kind <> 'NONE' AND operation_phase IN ('PREPARED', 'UNRESOLVED')
+            AND length(operation_token) > 0)),
+    CHECK ((stream_type = 'DEFAULT' AND stream_state = 'COMMITTED' AND commit_time_ns IS NOT NULL)
+        OR stream_type = 'PENDING'),
+    CHECK ((stream_state = 'COMMITTED') = (commit_time_ns IS NOT NULL))
+) STRICT`,
+			`CREATE TABLE bqemu_write_append_receipts (
+    stream_name TEXT NOT NULL,
+    start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
+    row_count INTEGER NOT NULL CHECK (row_count > 0),
+    schema_fingerprint TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    receipt_phase TEXT NOT NULL CHECK (receipt_phase IN ('PREPARED', 'UNRESOLVED', 'APPLIED')),
+    created_at_ns INTEGER NOT NULL,
+    updated_at_ns INTEGER NOT NULL CHECK (updated_at_ns >= created_at_ns),
+    PRIMARY KEY (stream_name, start_offset),
+    FOREIGN KEY (stream_name) REFERENCES bqemu_write_streams(stream_name) ON DELETE CASCADE,
+    CHECK (length(schema_fingerprint) = 71 AND substr(schema_fingerprint, 1, 7) = 'sha256:'
+        AND substr(schema_fingerprint, 8) NOT GLOB '*[^0-9a-f]*'),
+    CHECK (length(payload_digest) = 71 AND substr(payload_digest, 1, 7) = 'sha256:'
+        AND substr(payload_digest, 8) NOT GLOB '*[^0-9a-f]*')
+) STRICT`,
+			`CREATE INDEX bqemu_write_receipts_stream
+ON bqemu_write_append_receipts (stream_name, start_offset)`,
+			`CREATE TABLE bqemu_write_commit_groups (
+    group_id TEXT PRIMARY KEY,
+    parent_reference TEXT NOT NULL,
+    member_count INTEGER NOT NULL CHECK (member_count > 0),
+    expected_row_count INTEGER NOT NULL CHECK (expected_row_count >= 0),
+    commit_phase TEXT NOT NULL CHECK (commit_phase IN ('PREPARED', 'UNRESOLVED', 'APPLIED', 'ABORTED')),
+    created_at_ns INTEGER NOT NULL,
+    updated_at_ns INTEGER NOT NULL CHECK (updated_at_ns >= created_at_ns),
+    commit_time_ns INTEGER,
+    CHECK (length(group_id) BETWEEN 1 AND 256),
+    CHECK (length(parent_reference) BETWEEN 1 AND 2048),
+    CHECK ((commit_phase = 'APPLIED') = (commit_time_ns IS NOT NULL))
+) STRICT`,
+			`CREATE TABLE bqemu_write_commit_members (
+    group_id TEXT NOT NULL,
+    member_index INTEGER NOT NULL CHECK (member_index >= 0),
+    stream_name TEXT NOT NULL,
+    expected_row_count INTEGER NOT NULL CHECK (expected_row_count >= 0),
+    PRIMARY KEY (group_id, member_index),
+    UNIQUE (group_id, stream_name),
+    FOREIGN KEY (group_id) REFERENCES bqemu_write_commit_groups(group_id) ON DELETE CASCADE,
+    FOREIGN KEY (stream_name) REFERENCES bqemu_write_streams(stream_name)
+) STRICT`,
+			`CREATE INDEX bqemu_write_commit_members_stream
+ON bqemu_write_commit_members (stream_name, group_id)`,
+			`CREATE INDEX bqemu_write_streams_cleanup
+ON bqemu_write_streams (operation_phase, cleanup_phase, last_activity_ns, stream_name)`,
+			`CREATE TRIGGER bqemu_write_stream_identity_immutable
+BEFORE UPDATE ON bqemu_write_streams
+WHEN OLD.stream_name <> NEW.stream_name
+    OR OLD.project_id <> NEW.project_id
+    OR OLD.dataset_id <> NEW.dataset_id
+    OR OLD.table_id <> NEW.table_id
+    OR OLD.stream_type <> NEW.stream_type
+    OR OLD.create_time_ns <> NEW.create_time_ns
+    OR OLD.location <> NEW.location
+    OR OLD.schema_json <> NEW.schema_json
+BEGIN
+    SELECT RAISE(ABORT, 'Storage Write stream identity is immutable');
+END`,
+			`CREATE TRIGGER bqemu_write_stream_transition
+BEFORE UPDATE ON bqemu_write_streams
+WHEN NEW.revision <> OLD.revision + 1
+    OR (OLD.stream_state <> NEW.stream_state
+        AND NOT (OLD.stream_state = 'OPEN' AND NEW.stream_state = 'FINALIZED')
+        AND NOT (OLD.stream_state = 'FINALIZED' AND NEW.stream_state = 'COMMITTED'))
+    OR (OLD.writer_schema_fingerprint <> NEW.writer_schema_fingerprint
+        AND NOT (OLD.writer_schema_fingerprint = '' AND NEW.writer_schema_fingerprint <> ''))
+BEGIN
+    SELECT RAISE(ABORT, 'Storage Write stream transition is invalid');
+END`,
+			`CREATE TRIGGER bqemu_write_receipt_identity_immutable
+BEFORE UPDATE ON bqemu_write_append_receipts
+WHEN OLD.stream_name <> NEW.stream_name
+    OR OLD.start_offset <> NEW.start_offset
+    OR OLD.row_count <> NEW.row_count
+    OR OLD.schema_fingerprint <> NEW.schema_fingerprint
+    OR OLD.payload_digest <> NEW.payload_digest
+    OR OLD.created_at_ns <> NEW.created_at_ns
+BEGIN
+    SELECT RAISE(ABORT, 'Storage Write receipt identity is immutable');
+END`,
+			`CREATE TRIGGER bqemu_write_receipt_transition
+BEFORE UPDATE OF receipt_phase ON bqemu_write_append_receipts
+WHEN OLD.receipt_phase <> NEW.receipt_phase
+    AND NOT (OLD.receipt_phase = 'PREPARED' AND NEW.receipt_phase IN ('UNRESOLVED', 'APPLIED'))
+    AND NOT (OLD.receipt_phase = 'UNRESOLVED' AND NEW.receipt_phase = 'APPLIED')
+BEGIN
+    SELECT RAISE(ABORT, 'Storage Write receipt transition is invalid');
+END`,
+			`CREATE TRIGGER bqemu_write_commit_identity_immutable
+BEFORE UPDATE ON bqemu_write_commit_groups
+WHEN OLD.group_id <> NEW.group_id
+    OR OLD.parent_reference <> NEW.parent_reference
+    OR OLD.member_count <> NEW.member_count
+    OR OLD.expected_row_count <> NEW.expected_row_count
+    OR OLD.created_at_ns <> NEW.created_at_ns
+BEGIN
+    SELECT RAISE(ABORT, 'Storage Write commit group identity is immutable');
+END`,
+			`CREATE TRIGGER bqemu_write_commit_transition
+BEFORE UPDATE OF commit_phase ON bqemu_write_commit_groups
+WHEN OLD.commit_phase <> NEW.commit_phase
+    AND NOT (OLD.commit_phase = 'PREPARED' AND NEW.commit_phase IN ('UNRESOLVED', 'APPLIED', 'ABORTED'))
+    AND NOT (OLD.commit_phase = 'UNRESOLVED' AND NEW.commit_phase IN ('APPLIED', 'ABORTED'))
+BEGIN
+    SELECT RAISE(ABORT, 'Storage Write commit group transition is invalid');
+END`,
+			`CREATE TRIGGER bqemu_write_commit_member_immutable
+BEFORE UPDATE ON bqemu_write_commit_members
+BEGIN
+    SELECT RAISE(ABORT, 'Storage Write commit membership is immutable');
+END`,
+		},
+	},
 }
 
 var requiredSchemaObjects = map[string]string{
@@ -350,6 +504,20 @@ var requiredSchemaObjects = map[string]string{
 	"bqemu_read_session_identity_immutable":   "trigger",
 	"bqemu_read_session_lifecycle_transition": "trigger",
 	"bqemu_read_stream_immutable":             "trigger",
+	"bqemu_write_streams":                     "table",
+	"bqemu_write_append_receipts":             "table",
+	"bqemu_write_receipts_stream":             "index",
+	"bqemu_write_commit_groups":               "table",
+	"bqemu_write_commit_members":              "table",
+	"bqemu_write_commit_members_stream":       "index",
+	"bqemu_write_streams_cleanup":             "index",
+	"bqemu_write_stream_identity_immutable":   "trigger",
+	"bqemu_write_stream_transition":           "trigger",
+	"bqemu_write_receipt_identity_immutable":  "trigger",
+	"bqemu_write_receipt_transition":          "trigger",
+	"bqemu_write_commit_identity_immutable":   "trigger",
+	"bqemu_write_commit_transition":           "trigger",
+	"bqemu_write_commit_member_immutable":     "trigger",
 }
 
 // Repositories owns the SQLite connection but exposes only context-specific
@@ -361,6 +529,7 @@ type Repositories struct {
 	queryJobs    ports.JobRepository
 	loadJobs     loadports.JobRepository
 	readSessions readports.SessionStateRepository
+	writeState   writeports.StateRepository
 }
 
 // Open creates or verifies BQEMU state at path. The returned facades are safe
@@ -402,6 +571,7 @@ func Open(ctx context.Context, path string) (*Repositories, error) {
 		db: db, catalog: &catalogRepository{db: db},
 		queryJobs: newQueryJobRepository(db), loadJobs: &loadJobRepository{db: db},
 		readSessions: &readSessionRepository{db: db},
+		writeState:   &writeStateRepository{db: db},
 	}, nil
 }
 
@@ -409,6 +579,7 @@ func (r *Repositories) Catalog() ports.CatalogRepository               { return 
 func (r *Repositories) QueryJobs() ports.JobRepository                 { return r.queryJobs }
 func (r *Repositories) LoadJobs() loadports.JobRepository              { return r.loadJobs }
 func (r *Repositories) ReadSessions() readports.SessionStateRepository { return r.readSessions }
+func (r *Repositories) WriteState() writeports.StateRepository         { return r.writeState }
 
 func reconcileInterruptedJobs(ctx context.Context, db *sql.DB, now time.Time) error {
 	tx, err := db.BeginTx(ctx, nil)
