@@ -1,0 +1,16 @@
+schemaVersion: "1"
+id: google-cloud-bigquery-python-3.43.0
+displayName: google-cloud-bigquery Python 3.43.0
+family: python
+lane: required
+runtimeProfile: python-3.13
+runnerAdapter: python-pytest-v1
+compatibilityProfile: google-cloud-bigquery-python-public-v1
+scenarioSet: python-public-contract
+versions:
+  python: "3.13"
+  client: "3.43.0"
+artifacts:
+  - id: google-cloud-bigquery-python-3.43.0-wheel
+    uri: https://files.pythonhosted.org/packages/67/c0/f491506bdff4d73750f74cf18fea7d6ca409ada2f81c4c4d10a32edf5688/google_cloud_bigquery-3.43.0-py3-none-any.whl
+    sha256: a39217f14f215472ce9da816f20ebaf77fdb1db7ccdc8360772d8bf6bafb55c2

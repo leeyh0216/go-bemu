@@ -1,0 +1,321 @@
+{
+  "schemaVersion": "1",
+  "cases": [
+    {
+      "id": "bq-cli-2.1.31",
+      "displayName": "bq CLI 2.1.31",
+      "family": "bq",
+      "lane": "required",
+      "runtimeProfile": {
+        "id": "google-cloud-sdk-566.0.0",
+        "family": "bq",
+        "kind": "bq-cli",
+        "versions": {
+          "bq": "2.1.31",
+          "cloudSdk": "566.0.0"
+        }
+      },
+      "runnerAdapter": {
+        "id": "bq-cli-v1",
+        "family": "bq",
+        "runtimeKind": "bq-cli",
+        "requiredVersions": [
+          "cloudSdk",
+          "bq"
+        ]
+      },
+      "compatibilityProfile": {
+        "id": "bq-cli-public-v1",
+        "scenarioIds": [
+          "bq-metadata",
+          "bq-query"
+        ],
+        "sourceProvenance": [
+          {
+            "name": "google-cloud-sdk",
+            "version": "566.0.0",
+            "uri": "https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28"
+          }
+        ]
+      },
+      "scenarioSet": {
+        "id": "bq-public-contract",
+        "scenarios": [
+          {
+            "id": "bq-metadata",
+            "operationIds": [
+              "bigquery.projects.list",
+              "bigquery.datasets.insert",
+              "bigquery.datasets.get",
+              "bigquery.datasets.patch",
+              "bigquery.datasets.delete",
+              "bigquery.tables.insert",
+              "bigquery.tables.get",
+              "bigquery.tables.patch",
+              "bigquery.tables.list",
+              "bigquery.tables.delete"
+            ]
+          },
+          {
+            "id": "bq-query",
+            "operationIds": [
+              "bigquery.jobs.insert",
+              "bigquery.jobs.get",
+              "bigquery.jobs.getQueryResults",
+              "bigquery.jobs.list"
+            ]
+          }
+        ]
+      },
+      "artifacts": [
+        {
+          "id": "google-cloud-cli-566.0.0-image",
+          "uri": "oci://gcr.io/google.com/cloudsdktool/google-cloud-cli@sha256:80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5",
+          "sha256": "80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5"
+        }
+      ]
+    },
+    {
+      "id": "google-cloud-bigquery-python-3.43.0",
+      "displayName": "google-cloud-bigquery Python 3.43.0",
+      "family": "python",
+      "lane": "required",
+      "runtimeProfile": {
+        "id": "python-3.13",
+        "family": "python",
+        "kind": "python-pytest",
+        "versions": {
+          "client": "3.43.0",
+          "python": "3.13"
+        }
+      },
+      "runnerAdapter": {
+        "id": "python-pytest-v1",
+        "family": "python",
+        "runtimeKind": "python-pytest",
+        "requiredVersions": [
+          "python",
+          "client"
+        ]
+      },
+      "compatibilityProfile": {
+        "id": "google-cloud-bigquery-python-public-v1",
+        "scenarioIds": [
+          "python-metadata",
+          "python-query",
+          "python-tabledata"
+        ],
+        "sourceProvenance": [
+          {
+            "name": "google-cloud-bigquery-python",
+            "version": "3.43.0",
+            "uri": "https://github.com/googleapis/python-bigquery/tree/v3.43.0"
+          }
+        ]
+      },
+      "scenarioSet": {
+        "id": "python-public-contract",
+        "scenarios": [
+          {
+            "id": "python-metadata",
+            "operationIds": [
+              "bigquery.datasets.insert",
+              "bigquery.datasets.list",
+              "bigquery.datasets.get",
+              "bigquery.datasets.patch",
+              "bigquery.datasets.delete",
+              "bigquery.tables.insert",
+              "bigquery.tables.list",
+              "bigquery.tables.get",
+              "bigquery.tables.patch",
+              "bigquery.tables.delete"
+            ]
+          },
+          {
+            "id": "python-query",
+            "operationIds": [
+              "bigquery.jobs.insert",
+              "bigquery.jobs.list",
+              "bigquery.jobs.get",
+              "bigquery.jobs.query",
+              "bigquery.jobs.getQueryResults"
+            ]
+          },
+          {
+            "id": "python-tabledata",
+            "operationIds": [
+              "bigquery.tabledata.list"
+            ]
+          }
+        ]
+      },
+      "artifacts": [
+        {
+          "id": "google-cloud-bigquery-python-3.43.0-wheel",
+          "uri": "https://files.pythonhosted.org/packages/67/c0/f491506bdff4d73750f74cf18fea7d6ca409ada2f81c4c4d10a32edf5688/google_cloud_bigquery-3.43.0-py3-none-any.whl",
+          "sha256": "a39217f14f215472ce9da816f20ebaf77fdb1db7ccdc8360772d8bf6bafb55c2"
+        }
+      ]
+    },
+    {
+      "id": "spark-pyspark-3.5.8-connector-0.44.2",
+      "displayName": "PySpark 3.5.8 / Connector 0.44.2",
+      "family": "spark",
+      "lane": "required",
+      "runtimeProfile": {
+        "id": "spark-3.5.8-pyspark",
+        "family": "spark",
+        "kind": "spark-pyspark",
+        "versions": {
+          "connector": "0.44.2",
+          "java": "17",
+          "python": "3.11",
+          "scalaBinary": "2.12",
+          "spark": "3.5.8"
+        }
+      },
+      "runnerAdapter": {
+        "id": "spark-pyspark-pytest-v1",
+        "family": "spark",
+        "runtimeKind": "spark-pyspark",
+        "requiredVersions": [
+          "spark",
+          "connector",
+          "scalaBinary",
+          "java",
+          "python"
+        ]
+      },
+      "compatibilityProfile": {
+        "id": "spark-bigquery-connector-public-v1",
+        "scenarioIds": [
+          "spark-pyspark-public-edge",
+          "spark-scala-public-edge"
+        ],
+        "sourceProvenance": [
+          {
+            "name": "spark-bigquery-connector",
+            "version": "0.44.2",
+            "uri": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92"
+          },
+          {
+            "name": "google-cloud-bigquery-java",
+            "version": "2.60.0",
+            "uri": "https://github.com/googleapis/java-bigquery/tree/v2.60.0"
+          }
+        ]
+      },
+      "scenarioSet": {
+        "id": "spark-pyspark-public-contract",
+        "scenarios": [
+          {
+            "id": "spark-pyspark-public-edge",
+            "operationIds": [
+              "bigquery.tables.insert",
+              "bigquery.tables.get",
+              "bigquery.tables.delete",
+              "bigquery.jobs.insert",
+              "bigquery.jobs.get",
+              "bigquery.jobs.getQueryResults",
+              "grpc.bigquery-read.create-read-session",
+              "grpc.bigquery-read.read-rows",
+              "grpc.bigquery-write.create-write-stream",
+              "grpc.bigquery-write.append-rows",
+              "grpc.bigquery-write.finalize-write-stream",
+              "grpc.bigquery-write.batch-commit-write-streams",
+              "grpc.bigquery-write.get-write-stream"
+            ]
+          }
+        ]
+      },
+      "artifacts": [
+        {
+          "id": "spark-bigquery-connector-0.44.2-jar",
+          "uri": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar",
+          "sha256": "516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+        },
+        {
+          "id": "pyspark-3.5.8-sdist",
+          "uri": "https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz",
+          "sha256": "54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c"
+        }
+      ]
+    },
+    {
+      "id": "spark-scala-3.5.8-connector-0.44.2",
+      "displayName": "Scala Spark 3.5.8 / Connector 0.44.2",
+      "family": "spark",
+      "lane": "required",
+      "runtimeProfile": {
+        "id": "spark-3.5.8-scala",
+        "family": "spark",
+        "kind": "spark-scala",
+        "versions": {
+          "connector": "0.44.2",
+          "java": "17",
+          "scala": "2.12.18",
+          "scalaBinary": "2.12",
+          "spark": "3.5.8"
+        }
+      },
+      "runnerAdapter": {
+        "id": "spark-scala-shell-v1",
+        "family": "spark",
+        "runtimeKind": "spark-scala",
+        "requiredVersions": [
+          "spark",
+          "connector",
+          "scala",
+          "scalaBinary",
+          "java"
+        ]
+      },
+      "compatibilityProfile": {
+        "id": "spark-bigquery-connector-public-v1",
+        "scenarioIds": [
+          "spark-pyspark-public-edge",
+          "spark-scala-public-edge"
+        ],
+        "sourceProvenance": [
+          {
+            "name": "spark-bigquery-connector",
+            "version": "0.44.2",
+            "uri": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92"
+          },
+          {
+            "name": "google-cloud-bigquery-java",
+            "version": "2.60.0",
+            "uri": "https://github.com/googleapis/java-bigquery/tree/v2.60.0"
+          }
+        ]
+      },
+      "scenarioSet": {
+        "id": "spark-scala-public-contract",
+        "scenarios": [
+          {
+            "id": "spark-scala-public-edge",
+            "operationIds": [
+              "bigquery.tables.insert",
+              "bigquery.tables.get",
+              "bigquery.jobs.query",
+              "grpc.bigquery-read.create-read-session",
+              "grpc.bigquery-read.read-rows"
+            ]
+          }
+        ]
+      },
+      "artifacts": [
+        {
+          "id": "spark-bigquery-connector-0.44.2-jar",
+          "uri": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar",
+          "sha256": "516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
+        },
+        {
+          "id": "pyspark-3.5.8-sdist",
+          "uri": "https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz",
+          "sha256": "54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c"
+        }
+      ]
+    }
+  ]
+}

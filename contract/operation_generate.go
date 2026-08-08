@@ -49,9 +49,24 @@ func CompileOperationArtifacts(repositoryRoot string) ([]GeneratedArtifact, erro
 	if err != nil {
 		return nil, err
 	}
+	operationIDs := make(map[string]bool, len(canonical.Operations))
+	for _, operation := range canonical.Operations {
+		operationIDs[operation.ID] = true
+	}
+	consumerManifest, err := compileConsumerManifest(repositoryRoot, operationIDs)
+	if err != nil {
+		return nil, err
+	}
+	consumerNormalized, err := MarshalNormalizedConsumerManifest(consumerManifest)
+	if err != nil {
+		return nil, fmt.Errorf("encode normalized consumer manifest: %w", err)
+	}
 	artifacts := []GeneratedArtifact{
+		{Path: consumerNormalizedPath, Contents: consumerNormalized},
 		{Path: "contract/operations.normalized.json", Contents: normalized},
+		{Path: "docs/en/consumer-compatibility.md", Contents: renderConsumerCompatibility(consumerManifest, "en")},
 		{Path: "docs/en/api-rpc-compatibility.md", Contents: renderOperationTable(canonical, "en")},
+		{Path: "docs/ko/consumer-compatibility.md", Contents: renderConsumerCompatibility(consumerManifest, "ko")},
 		{Path: "docs/ko/api-rpc-compatibility.md", Contents: renderOperationTable(canonical, "ko")},
 		{Path: "internal/capabilityspec/profiles_gen.go", Contents: capabilityProfiles},
 		{Path: "internal/contractspec/operations_gen.go", Contents: routes},

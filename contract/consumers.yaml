@@ -1,0 +1,124 @@
+schemaVersion: "1"
+runtimeProfiles:
+  - id: python-3.13
+    family: python
+    kind: python-pytest
+  - id: google-cloud-sdk-566.0.0
+    family: bq
+    kind: bq-cli
+  - id: spark-3.5.8-pyspark
+    family: spark
+    kind: spark-pyspark
+  - id: spark-3.5.8-scala
+    family: spark
+    kind: spark-scala
+runnerAdapters:
+  - id: python-pytest-v1
+    family: python
+    runtimeKind: python-pytest
+    requiredVersions: [python, client]
+  - id: bq-cli-v1
+    family: bq
+    runtimeKind: bq-cli
+    requiredVersions: [cloudSdk, bq]
+  - id: spark-pyspark-pytest-v1
+    family: spark
+    runtimeKind: spark-pyspark
+    requiredVersions: [spark, connector, scalaBinary, java, python]
+  - id: spark-scala-shell-v1
+    family: spark
+    runtimeKind: spark-scala
+    requiredVersions: [spark, connector, scala, scalaBinary, java]
+compatibilityProfiles:
+  - id: google-cloud-bigquery-python-public-v1
+    scenarioIds: [python-metadata, python-query, python-tabledata]
+    sourceProvenance:
+      - name: google-cloud-bigquery-python
+        version: "3.43.0"
+        uri: https://github.com/googleapis/python-bigquery/tree/v3.43.0
+  - id: bq-cli-public-v1
+    scenarioIds: [bq-metadata, bq-query]
+    sourceProvenance:
+      - name: google-cloud-sdk
+        version: "566.0.0"
+        uri: https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28
+  - id: spark-bigquery-connector-public-v1
+    scenarioIds: [spark-pyspark-public-edge, spark-scala-public-edge]
+    sourceProvenance:
+      - name: spark-bigquery-connector
+        version: "0.44.2"
+        uri: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92
+      - name: google-cloud-bigquery-java
+        version: "2.60.0"
+        uri: https://github.com/googleapis/java-bigquery/tree/v2.60.0
+scenarios:
+  - id: python-metadata
+    operationIds:
+      - bigquery.datasets.insert
+      - bigquery.datasets.list
+      - bigquery.datasets.get
+      - bigquery.datasets.patch
+      - bigquery.datasets.delete
+      - bigquery.tables.insert
+      - bigquery.tables.list
+      - bigquery.tables.get
+      - bigquery.tables.patch
+      - bigquery.tables.delete
+  - id: python-query
+    operationIds:
+      - bigquery.jobs.insert
+      - bigquery.jobs.list
+      - bigquery.jobs.get
+      - bigquery.jobs.query
+      - bigquery.jobs.getQueryResults
+  - id: python-tabledata
+    operationIds: [bigquery.tabledata.list]
+  - id: bq-metadata
+    operationIds:
+      - bigquery.projects.list
+      - bigquery.datasets.insert
+      - bigquery.datasets.get
+      - bigquery.datasets.patch
+      - bigquery.datasets.delete
+      - bigquery.tables.insert
+      - bigquery.tables.get
+      - bigquery.tables.patch
+      - bigquery.tables.list
+      - bigquery.tables.delete
+  - id: bq-query
+    operationIds:
+      - bigquery.jobs.insert
+      - bigquery.jobs.get
+      - bigquery.jobs.getQueryResults
+      - bigquery.jobs.list
+  - id: spark-pyspark-public-edge
+    operationIds:
+      - bigquery.tables.insert
+      - bigquery.tables.get
+      - bigquery.tables.delete
+      - bigquery.jobs.insert
+      - bigquery.jobs.get
+      - bigquery.jobs.getQueryResults
+      - grpc.bigquery-read.create-read-session
+      - grpc.bigquery-read.read-rows
+      - grpc.bigquery-write.create-write-stream
+      - grpc.bigquery-write.append-rows
+      - grpc.bigquery-write.finalize-write-stream
+      - grpc.bigquery-write.batch-commit-write-streams
+      - grpc.bigquery-write.get-write-stream
+  - id: spark-scala-public-edge
+    operationIds:
+      - bigquery.tables.insert
+      - bigquery.tables.get
+      - bigquery.jobs.query
+      - grpc.bigquery-read.create-read-session
+      - grpc.bigquery-read.read-rows
+scenarioSets:
+  - id: python-public-contract
+    scenarioIds: [python-metadata, python-query, python-tabledata]
+  - id: bq-public-contract
+    scenarioIds: [bq-metadata, bq-query]
+  - id: spark-pyspark-public-contract
+    scenarioIds: [spark-pyspark-public-edge]
+  - id: spark-scala-public-contract
+    scenarioIds: [spark-scala-public-edge]

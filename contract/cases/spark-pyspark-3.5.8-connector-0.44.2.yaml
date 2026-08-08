@@ -1,0 +1,22 @@
+schemaVersion: "1"
+id: spark-pyspark-3.5.8-connector-0.44.2
+displayName: PySpark 3.5.8 / Connector 0.44.2
+family: spark
+lane: required
+runtimeProfile: spark-3.5.8-pyspark
+runnerAdapter: spark-pyspark-pytest-v1
+compatibilityProfile: spark-bigquery-connector-public-v1
+scenarioSet: spark-pyspark-public-contract
+versions:
+  spark: "3.5.8"
+  connector: "0.44.2"
+  scalaBinary: "2.12"
+  java: "17"
+  python: "3.11"
+artifacts:
+  - id: spark-bigquery-connector-0.44.2-jar
+    uri: https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar
+    sha256: 516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e
+  - id: pyspark-3.5.8-sdist
+    uri: https://files.pythonhosted.org/packages/80/5a/3806f44eb47387e8af803508cdd6bbc0df784febf4dc010700be04a1ff89/pyspark-3.5.8.tar.gz
+    sha256: 54cca0767b21b40e3953ad1d30f8601c53abf9cbda763653289cdcfcac52313c
