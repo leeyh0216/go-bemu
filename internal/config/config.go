@@ -399,8 +399,9 @@ func (s *stringList) Set(value string) error {
 }
 
 // Load parses command-line arguments and process environment. The only
-// required CLI surface is --config; repeated --set path=value makes every leaf
-// setting overridable without growing a flag for each field.
+// required CLI surface is --config; repeated --set path=value makes scalar
+// settings overridable without growing a flag for each field. Structured
+// bootstrap declarations remain file-owned.
 func Load(args []string) (Result, error) {
 	return load(args, os.LookupEnv)
 }

@@ -15,7 +15,13 @@ bootstrap:
     - id: local-project
       friendlyName: BQEMU default project
       description: ""
-      datasets: []
+      datasets:
+        - id: analytics
+          friendlyName: Local analytics
+          description: Pre-created dataset for local development
+          location: US
+          labels:
+            environment: local
 
 server:
   http:

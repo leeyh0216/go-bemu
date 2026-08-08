@@ -17,15 +17,14 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/contracttest"
+	"github.com/leeyh0216/go-bemu/internal/domain"
 )
 
 func TestRuntimeCatalogMetadataSurvivesRestart(t *testing.T) {
 	previousLogger := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
-	contracttest.Operation(t, "bqemu.projects.create")
 	contracttest.Operation(t, "bqemu.projects.get")
-	contracttest.Operation(t, "bigquery.datasets.insert")
 	contracttest.Operation(t, "bigquery.datasets.get")
 	contracttest.Operation(t, "bigquery.tables.insert")
 	contracttest.Operation(t, "bigquery.tables.get")
@@ -38,6 +37,24 @@ func TestRuntimeCatalogMetadataSurvivesRestart(t *testing.T) {
 	configBody := fmt.Sprintf(`
 apiVersion: config.bqemu.dev/v1alpha1
 kind: BQEMUConfig
+defaults:
+  projectId: default-project
+  location: US
+bootstrap:
+  projects:
+    - id: persisted-project
+      friendlyName: Persisted project
+      description: restart fixture
+      datasets:
+        - id: analytics
+          location: EU
+          labels:
+            owner: restart-test
+    - id: secondary-project
+      datasets:
+        - id: staging
+          labels:
+            tier: temporary
 server:
   http:
     address: %q
@@ -70,12 +87,17 @@ logging:
 	}
 
 	stop := startRuntimeForRestartTest(t, configPath, baseURL)
-	runtimeRequest(t, baseURL, http.MethodPost, "/bqemu/v1/projects", `{
-  "projectId":"persisted-project","friendlyName":"Persisted project","description":"restart fixture"
-}`, http.StatusOK)
-	runtimeRequest(t, baseURL, http.MethodPost, "/bigquery/v2/projects/persisted-project/datasets", `{
-  "datasetReference":{"datasetId":"analytics"},"location":"EU","labels":{"owner":"restart-test"}
-}`, http.StatusOK)
+	projectBeforeRestart := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bqemu/v1/projects/persisted-project", "", http.StatusOK)
+	datasetBeforeRestart := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/persisted-project/datasets/analytics", "", http.StatusOK)
+	secondaryBeforeRestart := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/secondary-project/datasets/staging", "", http.StatusOK)
+	if projectBeforeRestart["description"] != "restart fixture" || datasetBeforeRestart["location"] != "EU" ||
+		secondaryBeforeRestart["location"] != "US" {
+		t.Fatalf("bootstrapped resources project=%#v dataset=%#v secondary=%#v",
+			projectBeforeRestart, datasetBeforeRestart, secondaryBeforeRestart)
+	}
 	runtimeRequest(t, baseURL, http.MethodPost, "/bigquery/v2/projects/persisted-project/datasets/analytics/tables", `{
   "tableReference":{"tableId":"events"},"description":"durable table",
   "schema":{"fields":[
@@ -97,8 +119,16 @@ logging:
 	dataset := runtimeRequest(t, baseURL, http.MethodGet,
 		"/bigquery/v2/projects/persisted-project/datasets/analytics", "", http.StatusOK)
 	labels, _ := dataset["labels"].(map[string]any)
-	if dataset["location"] != "EU" || labels["owner"] != "restart-test" {
+	if dataset["location"] != "EU" || labels["owner"] != "restart-test" ||
+		dataset["etag"] != datasetBeforeRestart["etag"] {
 		t.Fatalf("restarted dataset = %#v", dataset)
+	}
+	secondary := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/secondary-project/datasets/staging", "", http.StatusOK)
+	secondaryLabels, _ := secondary["labels"].(map[string]any)
+	if secondary["location"] != "US" || secondaryLabels["tier"] != "temporary" ||
+		secondary["etag"] != secondaryBeforeRestart["etag"] {
+		t.Fatalf("restarted secondary dataset = %#v", secondary)
 	}
 	table := runtimeRequest(t, baseURL, http.MethodGet,
 		"/bigquery/v2/projects/persisted-project/datasets/analytics/tables/events", "", http.StatusOK)
@@ -109,6 +139,22 @@ logging:
 		amount["scale"] != "18" || amount["roundingMode"] != "ROUND_HALF_EVEN" {
 		t.Fatalf("restarted table = %#v", table)
 	}
+
+	stop()
+	driftedConfig := strings.Replace(configBody, "          location: EU", "          location: asia-northeast3", 1)
+	if err := os.WriteFile(configPath, []byte(strings.TrimSpace(driftedConfig)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := run(t.Context(), []string{"--config", configPath}, io.Discard)
+	if !errors.Is(err, domain.ErrPrecondition) ||
+		!strings.Contains(err.Error(), "configured dataset metadata differs") {
+		t.Fatalf("drifted bootstrap error = %v", err)
+	}
+	listener, listenErr := net.Listen("tcp", httpAddress)
+	if listenErr != nil {
+		t.Fatalf("bootstrap drift retained public listener: %v", listenErr)
+	}
+	listener.Close()
 }
 
 func TestRuntimeJobMetadataSurvivesRestart(t *testing.T) {

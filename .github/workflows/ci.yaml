@@ -282,6 +282,17 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"query":"SELECT 1 AS answer","useLegacySql":false}' \
             | grep -q '"answer"'
+      - name: Verify configured catalog bootstrap across restart
+        run: |
+          project_url=http://127.0.0.1:19050/bqemu/v1/projects/local-project
+          dataset_url=http://127.0.0.1:19050/bigquery/v2/projects/local-project/datasets/analytics
+          curl --fail --silent --show-error --max-time 5 "$project_url" | grep -q '"local-project"'
+          before_etag="$(curl --fail --silent --show-error --max-time 5 "$dataset_url" | jq -er .etag)"
+          docker compose restart bqemu
+          timeout 120s sh -c \
+            'until curl --fail --silent --output /dev/null --max-time 2 http://127.0.0.1:19050/readyz; do sleep 1; done'
+          after_etag="$(curl --fail --silent --show-error --max-time 5 "$dataset_url" | jq -er .etag)"
+          test "$before_etag" = "$after_etag"
       - name: Capture container logs
         if: failure()
         run: |
