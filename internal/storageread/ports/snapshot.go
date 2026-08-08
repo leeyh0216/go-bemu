@@ -5,6 +5,7 @@ import (
 	"time"
 
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
 )
 
@@ -14,6 +15,14 @@ type Clock interface {
 
 type IDGenerator interface {
 	NewID() string
+}
+
+// RowRestrictionParser is the Storage Read admission boundary for the
+// GoogleSQL expression carried by ReadSession.TableReadOptions. Implementations
+// return only the owned engine-neutral AST; submitted text and parser handles
+// must not cross this port.
+type RowRestrictionParser interface {
+	ParseExpression(context.Context, string) (queryast.Expression, error)
 }
 
 // TableSchemaResolver supplies canonical BQEMU metadata to a physical snapshot
@@ -36,6 +45,17 @@ type SnapshotMaterializerConfig struct {
 	ProtocolModelVersion string
 }
 
+// MaterializeRequest is the engine-neutral snapshot command. RowRestriction
+// has already crossed the GoogleSQL syntax boundary and therefore cannot carry
+// client SQL into a storage engine adapter.
+type MaterializeRequest struct {
+	Table          string
+	Format         domain.Format
+	SelectedFields []string
+	RowRestriction queryast.Expression
+	SnapshotTime   *time.Time
+}
+
 // SnapshotMaterializerFactory lets the composition root construct a Storage
 // Read adapter without passing a concrete engine into another module boundary.
 type SnapshotMaterializerFactory interface {
@@ -45,7 +65,7 @@ type SnapshotMaterializerFactory interface {
 // SnapshotMaterializer applies projection/filter/snapshot-time once and fixes
 // stable row ordinals before streams are partitioned.
 type SnapshotMaterializer interface {
-	Materialize(context.Context, domain.MaterializeRequest) (ReadSnapshot, error)
+	Materialize(context.Context, MaterializeRequest) (ReadSnapshot, error)
 }
 
 // ReadSnapshot is an immutable, concurrently readable materialized result.

@@ -35,16 +35,6 @@ type ReferenceSchema struct {
 	Fingerprint string
 }
 
-// MaterializeRequest describes the projection and filter that must be applied
-// before row ordinals and stream ranges are fixed.
-type MaterializeRequest struct {
-	Table          string
-	Format         Format
-	SelectedFields []string
-	RowRestriction string
-	SnapshotTime   *time.Time
-}
-
 // SnapshotMetadata describes one immutable materialized result. All streams in
 // a session share this result; adapters must not rerun the source query per
 // stream. RetainedBytes is the adapter-defined storage charge held for the

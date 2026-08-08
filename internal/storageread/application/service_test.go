@@ -3,6 +3,7 @@ package application
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
 	"github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
@@ -51,6 +53,55 @@ func TestCreateSessionMaterializesOnceAndPartitionsConfiguredStreamMatrix(t *tes
 				t.Fatalf("stream union ends at %d, want 32", cursor)
 			}
 		})
+	}
+}
+
+func TestCreateSessionParsesRowRestrictionBeforeMaterializer(t *testing.T) {
+	ctx, cancel := testContext(t)
+	defer cancel()
+	expression := testRowRestrictionExpression()
+	parser := &recordingRowRestrictionParser{expression: expression}
+	materializer := &fakeMaterializer{snapshot: newFakeSnapshot(domain.FormatArrow, 1)}
+	service := newTestServiceWithParser(t, materializer, parser, newFakeClock())
+	request := createRequest(domain.FormatArrow, 1)
+	request.RowRestriction = "credential_value = 'restriction-secret'"
+
+	session, err := service.CreateSession(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parser.calls != 1 || parser.input != request.RowRestriction {
+		t.Fatalf("predicate parser calls=%d input=%q", parser.calls, parser.input)
+	}
+	if materializer.request.RowRestriction == nil ||
+		materializer.request.RowRestriction.NodeKey() != expression.NodeKey() {
+		t.Fatalf("materializer received predicate %#v", materializer.request.RowRestriction)
+	}
+	if session.RowRestriction != request.RowRestriction {
+		t.Fatalf("public session row restriction = %q", session.RowRestriction)
+	}
+}
+
+func TestCreateSessionRedactsParserFailureBeforeMaterializer(t *testing.T) {
+	ctx, cancel := testContext(t)
+	defer cancel()
+	parser := &recordingRowRestrictionParser{err: errors.New("credential_value restriction-secret")}
+	materializer := &fakeMaterializer{snapshot: newFakeSnapshot(domain.FormatArrow, 1)}
+	service := newTestServiceWithParser(t, materializer, parser, newFakeClock())
+	request := createRequest(domain.FormatArrow, 1)
+	request.RowRestriction = "credential_value = 'restriction-secret'"
+
+	_, err := service.CreateSession(ctx, request)
+	if domain.CodeOf(err) != domain.ErrorInvalidArgument {
+		t.Fatalf("parser failure code = %s: %v", domain.CodeOf(err), err)
+	}
+	if materializer.callCount() != 0 {
+		t.Fatalf("materializer calls = %d, want 0", materializer.callCount())
+	}
+	for _, secret := range []string{"credential_value", "restriction-secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("public parser error leaked %q: %v", secret, err)
+		}
 	}
 }
 
@@ -296,7 +347,30 @@ func newTestService(t *testing.T, materializer ports.SnapshotMaterializer, clock
 	return newTestServiceWithLogger(t, materializer, clock, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
+func newTestServiceWithParser(
+	t *testing.T,
+	materializer ports.SnapshotMaterializer,
+	predicateParser ports.RowRestrictionParser,
+	clock ports.Clock,
+) *Service {
+	t.Helper()
+	return newTestServiceWithParserAndLogger(
+		t, materializer, predicateParser, clock, slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+}
+
 func newTestServiceWithLogger(t *testing.T, materializer ports.SnapshotMaterializer, clock ports.Clock, logger *slog.Logger) *Service {
+	t.Helper()
+	return newTestServiceWithParserAndLogger(t, materializer, acceptingRowRestrictionParser{}, clock, logger)
+}
+
+func newTestServiceWithParserAndLogger(
+	t *testing.T,
+	materializer ports.SnapshotMaterializer,
+	predicateParser ports.RowRestrictionParser,
+	clock ports.Clock,
+	logger *slog.Logger,
+) *Service {
 	t.Helper()
 	service, err := New(Config{
 		Location:              "test-location",
@@ -309,7 +383,7 @@ func newTestServiceWithLogger(t *testing.T, materializer ports.SnapshotMateriali
 		MaxSessions:           32,
 		MaxSnapshotBytes:      1 << 20,
 		MaxTotalSnapshotBytes: 32 << 20,
-	}, materializer, clock, &fakeIDs{}, logger)
+	}, materializer, predicateParser, clock, &fakeIDs{}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,15 +439,43 @@ func (g *fakeIDs) NewID() string {
 type fakeMaterializer struct {
 	mu       sync.Mutex
 	calls    int
+	request  ports.MaterializeRequest
 	snapshot *fakeSnapshot
 	err      error
 }
 
-func (m *fakeMaterializer) Materialize(context.Context, domain.MaterializeRequest) (ports.ReadSnapshot, error) {
+func (m *fakeMaterializer) Materialize(_ context.Context, request ports.MaterializeRequest) (ports.ReadSnapshot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls++
+	m.request = request
 	return m.snapshot, m.err
+}
+
+type acceptingRowRestrictionParser struct{}
+
+func (acceptingRowRestrictionParser) ParseExpression(context.Context, string) (queryast.Expression, error) {
+	return testRowRestrictionExpression(), nil
+}
+
+func testRowRestrictionExpression() queryast.Expression {
+	span, _ := queryast.NewSpan(0, 1)
+	key, _ := queryast.NewNodeKey(strings.Repeat("0", 64), span, "test-row-restriction", 0)
+	expression, _ := queryast.NewBooleanLiteral(key, true)
+	return expression
+}
+
+type recordingRowRestrictionParser struct {
+	calls      int
+	input      string
+	expression queryast.Expression
+	err        error
+}
+
+func (parser *recordingRowRestrictionParser) ParseExpression(_ context.Context, input string) (queryast.Expression, error) {
+	parser.calls++
+	parser.input = input
+	return parser.expression, parser.err
 }
 
 func (m *fakeMaterializer) callCount() int {

@@ -27,6 +27,7 @@ type storageReadRuntime struct {
 func composeStorageRead(
 	cfg config.Config,
 	factory readports.SnapshotMaterializerFactory,
+	predicateParser readports.RowRestrictionParser,
 	resolver readports.TableSchemaResolver,
 	clock readports.Clock,
 	ids readports.IDGenerator,
@@ -61,7 +62,7 @@ func composeStorageRead(
 		SessionTTL: cfg.Runtime.ReadSessionTTL.Value(), CleanupInterval: cfg.Runtime.CleanupInterval.Value(),
 		MaxRowsPerResponse: int64(cfg.Storage.Read.RowsPerResponse), MaxSessions: cfg.Storage.Read.MaxSessions,
 		MaxSnapshotBytes: cfg.Storage.Read.MaxSnapshotBytes, MaxTotalSnapshotBytes: cfg.Storage.Read.MaxTotalSnapshotBytes,
-	}, materializer, clock, ids, logger, options...)
+	}, materializer, predicateParser, clock, ids, logger, options...)
 	if err != nil {
 		return nil, err
 	}

@@ -86,7 +86,7 @@ func NewReadSnapshotMaterializer(
 	return &DuckDBReadSnapshotMaterializer{warehouse: warehouse, resolver: resolver, config: config}, nil
 }
 
-func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, request readdomain.MaterializeRequest) (_ readports.ReadSnapshot, resultErr error) {
+func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, request readports.MaterializeRequest) (_ readports.ReadSnapshot, resultErr error) {
 	const operation = storageReadMaterializeOperation
 	projectID, datasetID, tableID, err := parseStorageReadTable(request.Table)
 	if err != nil {
@@ -95,6 +95,9 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 	if request.SnapshotTime != nil {
 		return nil, classifiedReadSnapshotError(readdomain.ErrorUnimplemented,
 			fmt.Errorf("historical snapshot_time is not supported by the DuckDB adapter"))
+	}
+	if err := validateRowRestrictionExpression(request.RowRestriction); err != nil {
+		return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument, err)
 	}
 
 	resolveStarted := observability.LogSideEffectStart(ctx, "duckdb", "resolve_read_schema",
@@ -146,13 +149,17 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 			fmt.Errorf("Storage Read reference schema is %d bytes, exceeds configured max %d", len(referenceSchema.Serialized), m.config.MaxSchemaBytes))
 	}
 	statement := materializeReadStatement(projectID, datasetID, tableID, fields, filterSQL)
+	restrictionDigest := ""
+	if request.RowRestriction != nil {
+		restrictionDigest = "sha256:" + request.RowRestriction.NodeKey().SourceDigest()
+	}
 	queryStarted := observability.LogSideEffectStart(ctx, "duckdb", "materialize_read_snapshot",
 		"operation_name", operation, "model_version", m.config.ProtocolModelVersion,
 		"project_id", projectID, "dataset_id", datasetID, "table_id", tableID,
 		"format", request.Format.String(), "selected_field_count", len(fields),
 		"statement", statement, "restriction", request.RowRestriction,
 		"statement_bytes", len(statement), "statement_digest", observability.Digest([]byte(statement)),
-		"restriction_bytes", len(request.RowRestriction), "restriction_digest", observability.Digest([]byte(request.RowRestriction)),
+		"restriction_digest", restrictionDigest,
 		"spill_threshold_bytes", m.config.SpillThresholdBytes,
 		"max_snapshot_bytes", m.config.MaxSnapshotBytes)
 	defer func() {
@@ -259,7 +266,7 @@ func projectReadFields(schema []catalogdomain.Field, selected []string) ([]catal
 		if _, duplicate := wanted[key]; duplicate {
 			continue
 		}
-		if _, found := findFieldPath(schema, []string{name}); !found {
+		if _, found := findCatalogFieldPath(schema, []string{name}); !found {
 			return nil, fmt.Errorf("selected_field %q does not exist", name)
 		}
 		wanted[key] = struct{}{}
@@ -271,6 +278,28 @@ func projectReadFields(schema []catalogdomain.Field, selected []string) ([]catal
 		}
 	}
 	return projected, nil
+}
+
+func findCatalogFieldPath(schema []catalogdomain.Field, path []string) (catalogdomain.Field, bool) {
+	fields := schema
+	for pathIndex, component := range path {
+		found := false
+		for _, field := range fields {
+			if !strings.EqualFold(field.Name, component) {
+				continue
+			}
+			if pathIndex == len(path)-1 {
+				return field, true
+			}
+			fields = field.Fields
+			found = true
+			break
+		}
+		if !found {
+			return catalogdomain.Field{}, false
+		}
+	}
+	return catalogdomain.Field{}, false
 }
 
 func materializeReadStatement(projectID, datasetID, tableID string, fields []catalogdomain.Field, filter string) string {

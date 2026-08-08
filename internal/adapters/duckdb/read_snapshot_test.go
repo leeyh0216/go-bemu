@@ -50,11 +50,11 @@ func TestDuckDBReadSnapshotAppliesProjectionRestrictionAndStableResume(t *testin
 	resolver := &readTestSchemaResolver{table: table}
 	materializer := newReadTestMaterializer(t, warehouse, resolver, readSnapshotTestConfig(t.TempDir(), 1<<20))
 
-	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table:          readTestTableResource(table),
 		Format:         readdomain.FormatArrow,
 		SelectedFields: []string{"name", "id"},
-		RowRestriction: "id >= 2 AND name != 'skip'",
+		RowRestriction: mustParseReadRestriction(t, "id >= 2 AND name != 'skip'"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestDuckDBReadSnapshotEmptySelectedFieldsMeansFullSchema(t *testing.T) {
 
 	// The official contract treats an absent/empty selected_fields list as all
 	// fields. It is not a zero-column projection.
-	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 		SelectedFields: []string{},
 	})
@@ -186,9 +186,9 @@ func TestDuckDBReadSnapshotReadsNestedAndRepeatedDriverValues(t *testing.T) {
 	insertReadTestRows(t, ctx, warehouse, table, "(1, {'name':'alice', 'rank':7}, ['red', 'blue'])")
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
 
-	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
-		RowRestriction: "profile.rank >= 7",
+		RowRestriction: mustParseReadRestriction(t, "profile.rank >= 7"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -524,7 +524,7 @@ func TestDuckDBReadSnapshotBoundsReferenceSchema(t *testing.T) {
 	config := readSnapshotTestConfig(t.TempDir(), 1<<20)
 	config.MaxSchemaBytes = 1
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, config)
-	_, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	_, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 	})
 	if readdomain.CodeOf(err) != readdomain.ErrorResourceExhausted {
@@ -545,7 +545,7 @@ func TestDuckDBReadSnapshotBoundsEncodedResponsePayloads(t *testing.T) {
 	config := readSnapshotTestConfig(t.TempDir(), 1<<20)
 	config.MaxBatchBytes = 45
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, config)
-	snapshot, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshot, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatAvro,
 	})
 	if err != nil {
@@ -582,7 +582,7 @@ func TestDuckDBReadSnapshotBoundsEncodedResponsePayloads(t *testing.T) {
 	tooSmall := readSnapshotTestConfig(t.TempDir(), 1<<20)
 	tooSmall.MaxBatchBytes = 8
 	materializer = newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, tooSmall)
-	snapshot, err = materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshot, err = materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatAvro,
 	})
 	if err != nil {
@@ -618,30 +618,30 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
 	tests := []struct {
 		name    string
-		request readdomain.MaterializeRequest
+		request readports.MaterializeRequest
 		want    readdomain.ErrorCode
 	}{
 		{
-			name: "SQL injection grammar",
-			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
-				RowRestriction: "id = 1; DROP TABLE restricted"},
+			name: "unsupported predicate AST",
+			request: readports.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+				RowRestriction: mustParseReadRestriction(t, "id IN (1)")},
 			want: readdomain.ErrorInvalidArgument,
 		},
 		{
 			name: "repeated filter",
-			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
-				RowRestriction: "tags = 'safe'"},
+			request: readports.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+				RowRestriction: mustParseReadRestriction(t, "tags = 'safe'")},
 			want: readdomain.ErrorInvalidArgument,
 		},
 		{
 			name: "nested projection",
-			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+			request: readports.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 				SelectedFields: []string{"tags.value"}},
 			want: readdomain.ErrorUnimplemented,
 		},
 		{
 			name: "missing projection",
-			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+			request: readports.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 				SelectedFields: []string{"missing"}},
 			want: readdomain.ErrorInvalidArgument,
 		},
@@ -656,7 +656,7 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 		})
 	}
 	historical := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
-	if _, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	if _, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow, SnapshotTime: &historical,
 	}); readdomain.CodeOf(err) != readdomain.ErrorUnimplemented {
 		t.Fatalf("historical snapshot error code = %s, want UNIMPLEMENTED: %v", readdomain.CodeOf(err), err)
@@ -680,7 +680,7 @@ func TestDuckDBReadSnapshotClassifiesCatalogLookupFailures(t *testing.T) {
 		Schema: []catalogdomain.Field{{Name: "id", Type: "INT64"}},
 	}
 	warehouse := newReadTestWarehouse(t, ctx, table)
-	request := readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow}
+	request := readports.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow}
 
 	notFound := fmt.Errorf("%w: private catalog key", catalogdomain.ErrNotFound)
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table, err: notFound}, readSnapshotTestConfig(t.TempDir(), 1<<20))

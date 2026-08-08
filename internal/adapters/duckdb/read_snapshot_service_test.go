@@ -28,6 +28,7 @@ import (
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
 	readdomain "github.com/leeyh0216/go-bemu/internal/storageread/domain"
+	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
 
 func TestDuckDBReadSnapshotSupportsConfiguredStreamMatrixForArrowAndAvro(t *testing.T) {
@@ -197,7 +198,7 @@ func TestDuckDBReadSnapshotSpillsOnlyInsideConfiguredDirectoryAndRemovesOnClose(
 	tempDir := t.TempDir()
 	config := readSnapshotTestConfig(tempDir, 0)
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, config)
-	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatAvro,
 	})
 	if err != nil {
@@ -308,7 +309,7 @@ func TestDuckDBReadSnapshotMaterializationFailureRemovesPartialSpill(t *testing.
 	config := readSnapshotTestConfig(tempDir, 0)
 	config.MaxSnapshotRows = 1
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, config)
-	if _, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	if _, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 	}); err == nil || !strings.Contains(err.Error(), "max rows") {
 		t.Fatalf("snapshot limit error = %v", err)
@@ -339,7 +340,7 @@ func TestDuckDBReadSnapshotByteLimitIsResourceExhaustedAndRemovesPartialSpill(t 
 	config := readSnapshotTestConfig(tempDir, 0)
 	config.MaxSnapshotBytes = int64(max(len(first), len(second)) + 8)
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, config)
-	_, err = materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	_, err = materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 	})
 	if readdomain.CodeOf(err) != readdomain.ErrorResourceExhausted {
@@ -368,9 +369,9 @@ func TestDuckDBReadSnapshotLogsOpaquePayloadShapesAndSideEffects(t *testing.T) {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(previous)
-	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
 		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
-		RowRestriction: "payload = 'restriction-secret'",
+		RowRestriction: mustParseReadRestriction(t, "payload = 'restriction-secret'"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -420,7 +421,7 @@ func newReadAdapterService(t *testing.T, materializer *DuckDBReadSnapshotMateria
 		MaxSessions:           32,
 		MaxSnapshotBytes:      32 << 20,
 		MaxTotalSnapshotBytes: 128 << 20,
-	}, materializer, clock, &readAdapterIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, materializer, newReadRestrictionParser(t), clock, &readAdapterIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

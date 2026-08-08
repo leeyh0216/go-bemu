@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	queryast "github.com/leeyh0216/go-bemu/internal/querylang/ast"
 	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
 	"github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
@@ -23,6 +24,7 @@ import (
 type Service struct {
 	config          Config
 	materializer    ports.SnapshotMaterializer
+	predicateParser ports.RowRestrictionParser
 	clock           ports.Clock
 	ids             ports.IDGenerator
 	logger          *slog.Logger
@@ -51,8 +53,16 @@ type streamState struct {
 	stream  domain.Stream
 }
 
-func New(config Config, materializer ports.SnapshotMaterializer, clock ports.Clock, ids ports.IDGenerator, logger *slog.Logger, options ...Option) (*Service, error) {
-	if materializer == nil || clock == nil || ids == nil || logger == nil {
+func New(
+	config Config,
+	materializer ports.SnapshotMaterializer,
+	predicateParser ports.RowRestrictionParser,
+	clock ports.Clock,
+	ids ports.IDGenerator,
+	logger *slog.Logger,
+	options ...Option,
+) (*Service, error) {
+	if materializer == nil || predicateParser == nil || clock == nil || ids == nil || logger == nil {
 		return nil, fmt.Errorf("storage read dependencies must not be nil")
 	}
 	if err := validateConfig(&config); err != nil {
@@ -61,6 +71,7 @@ func New(config Config, materializer ports.SnapshotMaterializer, clock ports.Clo
 	service := &Service{
 		config:          config,
 		materializer:    materializer,
+		predicateParser: predicateParser,
 		clock:           clock,
 		ids:             ids,
 		logger:          logger,
@@ -86,6 +97,14 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 	if err := validateCreateRequest(request); err != nil {
 		return domain.Session{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
 	}
+	rowRestriction, err := s.parseRowRestriction(ctx, request.RowRestriction)
+	if err != nil {
+		code := domain.ErrorInvalidArgument
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			code = contextErrorCode(err)
+		}
+		return domain.Session{}, domain.NewError(code, operation, err)
+	}
 	streamCount, err := s.negotiateStreamCount(request.MaxStreamCount, request.PreferredMinStreamCount)
 	if err != nil {
 		return domain.Session{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
@@ -106,11 +125,11 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		}
 	}()
 
-	materializeRequest := domain.MaterializeRequest{
+	materializeRequest := ports.MaterializeRequest{
 		Table:          request.Table,
 		Format:         request.Format,
 		SelectedFields: slices.Clone(request.SelectedFields),
-		RowRestriction: request.RowRestriction,
+		RowRestriction: rowRestriction,
 		SnapshotTime:   cloneTime(request.SnapshotTime),
 	}
 	s.logger.InfoContext(ctx, "materializing read snapshot",
@@ -221,6 +240,23 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		"expires_at", session.ExpireTime,
 	)
 	return cloneSession(session), nil
+}
+
+func (s *Service) parseRowRestriction(ctx context.Context, input string) (queryast.Expression, error) {
+	if strings.TrimSpace(input) == "" {
+		return nil, nil
+	}
+	expression, err := s.predicateParser.ParseExpression(ctx, input)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, errors.New("row restriction is invalid")
+	}
+	if expression == nil {
+		return nil, errors.New("row restriction parser returned no expression")
+	}
+	return expression, nil
 }
 
 // classifyMaterializationFailure separates caller cancellation from the
