@@ -21,16 +21,33 @@ const (
 // for every TableRelation NodeKey, so the renderer never interprets an
 // unresolved GoogleSQL path or applies default-dataset rules.
 type duckDBTableBinding struct {
-	kind      duckDBTableBindingKind
-	reference domain.TableReference
-	localName string
+	kind             duckDBTableBindingKind
+	reference        domain.TableReference
+	localName        string
+	schema           []domain.Field
+	timePartitioning *domain.TimePartitioning
 }
 
 func newDuckDBPhysicalTableBinding(reference domain.TableReference) (duckDBTableBinding, error) {
+	return newDuckDBPhysicalTableBindingWithMetadata(reference, nil, nil)
+}
+
+func newDuckDBPhysicalTableBindingWithMetadata(
+	reference domain.TableReference,
+	schema []domain.Field,
+	timePartitioning *domain.TimePartitioning,
+) (duckDBTableBinding, error) {
 	if _, err := renderPhysicalTable(reference); err != nil {
 		return duckDBTableBinding{}, err
 	}
-	return duckDBTableBinding{kind: duckDBTableBindingPhysical, reference: reference}, nil
+	binding := duckDBTableBinding{
+		kind: duckDBTableBindingPhysical, reference: reference, schema: domain.CloneFields(schema),
+	}
+	if timePartitioning != nil {
+		clone := *timePartitioning
+		binding.timePartitioning = &clone
+	}
+	return binding, nil
 }
 
 func newDuckDBLocalTableBinding(name string) (duckDBTableBinding, error) {
@@ -43,10 +60,11 @@ func newDuckDBLocalTableBinding(name string) (duckDBTableBinding, error) {
 type duckDBTableBindingResolver func(queryast.NodeKey) (duckDBTableBinding, bool, error)
 
 type duckDBStatementRenderer struct {
-	analysis        semantic.Statement
-	bindings        map[queryast.NodeKey]duckDBTableBinding
-	scriptVariables map[queryast.NodeKey]string
-	arguments       []any
+	analysis          semantic.Statement
+	bindings          map[queryast.NodeKey]duckDBTableBinding
+	scriptVariables   map[queryast.NodeKey]string
+	arguments         []any
+	mergeInsertSchema []domain.Field
 }
 
 func lowerDuckDBStatement(
@@ -99,7 +117,9 @@ func newDuckDBStatementRenderer(
 			if !ok {
 				return duckDBTableBinding{}, false, fmt.Errorf("%w: physical relation binding has no reference", domain.ErrPrecondition)
 			}
-			converted, err := newDuckDBPhysicalTableBinding(reference)
+			converted, err := newDuckDBPhysicalTableBindingWithMetadata(
+				reference, binding.Schema(), binding.TimePartitioning(),
+			)
 			return converted, err == nil, err
 		case semantic.RelationLocal:
 			name, ok := binding.LocalName()
@@ -243,7 +263,14 @@ func (visitor *duckDBTopLevelVisitor) VisitInsert(statement *queryast.InsertStat
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(target)
-	if columns := statement.Columns(); len(columns) != 0 {
+	columns := statement.Columns()
+	if len(columns) == 0 {
+		columns, err = visitor.renderer.ingestionMutationColumns(statement.Target())
+		if err != nil {
+			return err
+		}
+	}
+	if len(columns) != 0 {
 		builder.WriteString(" (")
 		builder.WriteString(renderIdentifierList(columns))
 		builder.WriteByte(')')
@@ -255,7 +282,7 @@ func (visitor *duckDBTopLevelVisitor) VisitInsert(statement *queryast.InsertStat
 			return fmt.Errorf("%w: INSERT VALUES has no rows", domain.ErrInvalidQuery)
 		}
 		columnCount := len(rows[0])
-		if len(statement.Columns()) != 0 && len(statement.Columns()) != columnCount {
+		if len(columns) != 0 && len(columns) != columnCount {
 			return fmt.Errorf("%w: INSERT column and value counts differ", domain.ErrInvalidQuery)
 		}
 		builder.WriteString(" VALUES ")
@@ -349,6 +376,7 @@ func (visitor *duckDBTopLevelVisitor) VisitMerge(statement *queryast.MergeStatem
 	if err != nil {
 		return err
 	}
+	visitor.renderer.mergeInsertSchema = visitor.renderer.ingestionMutationFields(statement.Target())
 	source, err := visitor.renderer.renderRelation(statement.MergeSource())
 	if err != nil {
 		return err
@@ -520,7 +548,13 @@ func (visitor *duckDBQueryBodyVisitor) VisitSelectQuery(query *queryast.SelectQu
 		if index != 0 {
 			builder.WriteString(", ")
 		}
-		rendered, err := visitor.renderer.renderExpression(item.Expression())
+		var rendered string
+		var err error
+		if star, ok := item.Expression().(*queryast.StarExpression); ok {
+			rendered, err = visitor.renderer.renderSelectStar(star, query.From())
+		} else {
+			rendered, err = visitor.renderer.renderExpression(item.Expression())
+		}
 		if err != nil {
 			return err
 		}
@@ -768,7 +802,15 @@ func (renderer *duckDBStatementRenderer) renderMergeWhen(when queryast.MergeWhen
 		if len(values) == 0 {
 			return "", fmt.Errorf("%w: MERGE INSERT values are empty", domain.ErrInvalidQuery)
 		}
-		if columns := action.Columns(); len(columns) != 0 {
+		columns := action.Columns()
+		if len(columns) == 0 && len(renderer.mergeInsertSchema) != 0 {
+			var err error
+			columns, err = fieldsAsIdentifiers(renderer.mergeInsertSchema)
+			if err != nil {
+				return "", err
+			}
+		}
+		if len(columns) != 0 {
 			if len(columns) != len(values) {
 				return "", fmt.Errorf("%w: MERGE INSERT column and value counts differ", domain.ErrInvalidQuery)
 			}
@@ -798,6 +840,105 @@ func (renderer *duckDBStatementRenderer) renderMergeWhen(when queryast.MergeWhen
 		return "", unsupportedDuckDBLowering("MERGE action", action.Kind())
 	}
 	return builder.String(), nil
+}
+
+func (renderer *duckDBStatementRenderer) ingestionMutationFields(
+	relation *queryast.TableRelation,
+) []domain.Field {
+	if relation == nil {
+		return nil
+	}
+	binding, found := renderer.bindings[relation.NodeKey()]
+	if !found || !binding.isIngestionTimePartitioned() {
+		return nil
+	}
+	return domain.CloneFields(binding.schema)
+}
+
+func (renderer *duckDBStatementRenderer) ingestionMutationColumns(
+	relation *queryast.TableRelation,
+) ([]queryast.Identifier, error) {
+	return fieldsAsIdentifiers(renderer.ingestionMutationFields(relation))
+}
+
+func fieldsAsIdentifiers(fields []domain.Field) ([]queryast.Identifier, error) {
+	identifiers := make([]queryast.Identifier, len(fields))
+	for index, field := range fields {
+		identifier, err := queryast.NewIdentifier(field.Name)
+		if err != nil {
+			return nil, fmt.Errorf("%w: canonical mutation field is invalid", domain.ErrPrecondition)
+		}
+		identifiers[index] = identifier
+	}
+	return identifiers, nil
+}
+
+func (binding duckDBTableBinding) isIngestionTimePartitioned() bool {
+	if binding.kind != duckDBTableBindingPhysical || binding.timePartitioning == nil ||
+		strings.TrimSpace(binding.timePartitioning.Field) != "" {
+		return false
+	}
+	switch strings.ToUpper(binding.timePartitioning.Type) {
+	case "DAY", "HOUR", "MONTH", "YEAR":
+		return true
+	default:
+		return false
+	}
+}
+
+func (renderer *duckDBStatementRenderer) renderSelectStar(
+	star *queryast.StarExpression,
+	from queryast.Relation,
+) (string, error) {
+	rendered, err := renderer.renderExpression(star)
+	if err != nil {
+		return "", err
+	}
+	if !renderer.relationContainsIngestionPartition(from, star.Qualifier()) {
+		return rendered, nil
+	}
+	return rendered + " EXCLUDE (" + quoteIdentifier(domain.PartitionTimePseudoColumn) + ", " +
+		quoteIdentifier(domain.PartitionDatePseudoColumn) + ")", nil
+}
+
+func (renderer *duckDBStatementRenderer) relationContainsIngestionPartition(
+	relation queryast.Relation,
+	qualifier *queryast.IdentifierPath,
+) bool {
+	switch value := relation.(type) {
+	case *queryast.TableRelation:
+		binding, found := renderer.bindings[value.NodeKey()]
+		return found && binding.isIngestionTimePartitioned() && relationMatchesQualifier(value, qualifier)
+	case *queryast.JoinRelation:
+		return renderer.relationContainsIngestionPartition(value.Left(), qualifier) ||
+			renderer.relationContainsIngestionPartition(value.Right(), qualifier)
+	default:
+		return false
+	}
+}
+
+func relationMatchesQualifier(relation *queryast.TableRelation, qualifier *queryast.IdentifierPath) bool {
+	if qualifier == nil {
+		return true
+	}
+	segments := qualifier.Segments()
+	if len(segments) == 0 {
+		return false
+	}
+	if alias := relation.Alias(); alias != nil {
+		return len(segments) == 1 && strings.EqualFold(segments[0], alias.Value())
+	}
+	path := relation.Path().Segments()
+	if len(path) == 0 || len(segments) > len(path) {
+		return false
+	}
+	offset := len(path) - len(segments)
+	for index := range segments {
+		if !strings.EqualFold(segments[index], path[offset+index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func appendRelationAlias(relation string, alias *queryast.Identifier) string {

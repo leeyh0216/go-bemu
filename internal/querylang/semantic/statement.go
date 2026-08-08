@@ -6,6 +6,7 @@ package semantic
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -247,18 +248,22 @@ const (
 // relation occurrence. Key, rather than a path, is the public lookup key so
 // callers cannot accidentally lower an unresolved table name.
 type RelationBindingDescriptor struct {
-	Key       queryast.NodeKey
-	Kind      RelationBindingKind
-	Reference domain.TableReference
-	LocalName string
+	Key              queryast.NodeKey
+	Kind             RelationBindingKind
+	Reference        domain.TableReference
+	LocalName        string
+	Schema           []domain.Field
+	TimePartitioning *domain.TimePartitioning
 }
 
 // RelationBinding is an immutable resolution of one AST relation occurrence.
 type RelationBinding struct {
-	key       queryast.NodeKey
-	kind      RelationBindingKind
-	reference domain.TableReference
-	localName string
+	key              queryast.NodeKey
+	kind             RelationBindingKind
+	reference        domain.TableReference
+	localName        string
+	schema           []domain.Field
+	timePartitioning *domain.TimePartitioning
 }
 
 func (binding RelationBinding) Key() queryast.NodeKey { return binding.key }
@@ -277,6 +282,18 @@ func (binding RelationBinding) LocalName() (string, bool) {
 		return "", false
 	}
 	return binding.localName, true
+}
+
+func (binding RelationBinding) Schema() []domain.Field {
+	return domain.CloneFields(binding.schema)
+}
+
+func (binding RelationBinding) TimePartitioning() *domain.TimePartitioning {
+	if binding.timePartitioning == nil {
+		return nil
+	}
+	clone := *binding.timePartitioning
+	return &clone
 }
 
 // ExpressionTypeDescriptor binds the resolved logical type of one syntax
@@ -485,8 +502,26 @@ func validateRelationBindings(
 				return nil, nil, relationBindingFailure()
 			}
 			binding.reference = descriptor.Reference
+			if len(descriptor.Schema) != 0 {
+				metadata := domain.Table{
+					ProjectID: descriptor.Reference.ProjectID, DatasetID: descriptor.Reference.DatasetID,
+					ID: descriptor.Reference.TableID, Schema: descriptor.Schema,
+					TimePartitioning: descriptor.TimePartitioning,
+				}
+				if err := metadata.Validate(); err != nil {
+					return nil, nil, relationBindingFailure()
+				}
+				binding.schema = domain.CloneFields(descriptor.Schema)
+				if descriptor.TimePartitioning != nil {
+					clone := *descriptor.TimePartitioning
+					binding.timePartitioning = &clone
+				}
+			} else if descriptor.TimePartitioning != nil {
+				return nil, nil, relationBindingFailure()
+			}
 		case RelationLocal:
-			if completeReference(descriptor.Reference) || descriptor.Reference != (domain.TableReference{}) {
+			if completeReference(descriptor.Reference) || descriptor.Reference != (domain.TableReference{}) ||
+				len(descriptor.Schema) != 0 || descriptor.TimePartitioning != nil {
 				return nil, nil, relationBindingFailure()
 			}
 			binding.localName = strings.TrimSpace(descriptor.LocalName)
@@ -713,6 +748,12 @@ func fingerprintStatement(statement Statement) string {
 			document.WriteString(binding.reference.DatasetID)
 			document.WriteByte(0)
 			document.WriteString(binding.reference.TableID)
+			document.WriteByte(0)
+			schema, _ := json.Marshal(binding.schema)
+			document.Write(schema)
+			document.WriteByte(0)
+			partitioning, _ := json.Marshal(binding.timePartitioning)
+			document.Write(partitioning)
 		} else {
 			document.WriteByte(0)
 			document.WriteString(binding.localName)

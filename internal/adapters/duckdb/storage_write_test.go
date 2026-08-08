@@ -101,6 +101,52 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 	}
 }
 
+func TestStorageWritePopulatesIngestionTimePartitionsForDefaultAndPendingStreams(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	table := domain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "items",
+		Schema:           []domain.Field{{Name: "id", Type: "INT64"}},
+		TimePartitioning: &domain.TimePartitioning{Type: "DAY"},
+	}
+	warehouse, coordinator, reference := newStorageWriteTableFixtureWithConfig(
+		t, table, storageWriteCoordinatorTestConfig(),
+	)
+	descriptor := storageWriteDescriptor(t,
+		protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+	)
+	appendBatch := func(stream string, id int64) writeports.AppendBatch {
+		return writeports.AppendBatch{
+			StreamName: stream, Table: reference, Descriptor: descriptor,
+			Rows:              [][]byte{storageWriteRow(t, descriptor, map[string]any{"id": id})},
+			SchemaFingerprint: "ingestion-schema", PayloadDigest: fmt.Sprintf("row-%d", id),
+		}
+	}
+	if err := coordinator.AppendDefault(ctx, appendBatch(reference.Name()+"/streams/_default", 1)); err != nil {
+		t.Fatal(err)
+	}
+	pending := reference.Name() + "/streams/pending-ingestion"
+	if err := coordinator.StagePending(ctx, appendBatch(pending, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.CommitPending(ctx, writeports.CommitRequest{
+		Parent: reference, StreamNames: []string{pending}, ExpectedRowCounts: map[string]int64{pending: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	physical := quoteIdentifier(physicalSchema(reference.ProjectID, reference.DatasetID)) + "." + quoteIdentifier(reference.TableID)
+	var count int
+	if err := warehouse.db.QueryRowContext(ctx,
+		"SELECT count(*) FROM "+physical+" WHERE \"_PARTITIONTIME\" IS NOT NULL AND "+
+			"\"_PARTITIONDATE\" = CAST(\"_PARTITIONTIME\" AT TIME ZONE 'UTC' AS DATE)",
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rows with canonical ingestion partition values = %d, want 2", count)
+	}
+}
+
 func TestStorageWriteRejectsDecimalOverflowBeforeRowMutation(t *testing.T) {
 	ctx, cancel := duckDBStorageWriteTestContext(t)
 	defer cancel()
@@ -1248,6 +1294,15 @@ func newStorageWriteFixtureWithConfig(
 	fields []domain.Field,
 	config writeports.CoordinatorConfig,
 ) (*Warehouse, *StorageWriteCoordinator, writedomain.TableReference) {
+	table := domain.Table{ProjectID: "test-project", DatasetID: "dataset", ID: "items", Schema: fields}
+	return newStorageWriteTableFixtureWithConfig(t, table, config)
+}
+
+func newStorageWriteTableFixtureWithConfig(
+	t *testing.T,
+	table domain.Table,
+	config writeports.CoordinatorConfig,
+) (*Warehouse, *StorageWriteCoordinator, writedomain.TableReference) {
 	t.Helper()
 	warehouse, err := New("")
 	if err != nil {
@@ -1258,7 +1313,6 @@ func newStorageWriteFixtureWithConfig(
 	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
 		t.Fatal(err)
 	}
-	table := domain.Table{ProjectID: "test-project", DatasetID: "dataset", ID: "items", Schema: fields}
 	if err := warehouse.CreateTable(ctx, table); err != nil {
 		t.Fatal(err)
 	}
@@ -1272,7 +1326,9 @@ func newStorageWriteFixtureWithConfig(
 		_ = coordinator.Close(closeContext)
 		_ = warehouse.Close()
 	})
-	return warehouse, coordinator, writedomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}
+	return warehouse, coordinator, writedomain.TableReference{
+		ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID,
+	}
 }
 
 type staticStorageWriteResolver struct {

@@ -1332,8 +1332,8 @@
         "method": "CreateReadSession"
       },
       "supportedInput": {
-        "en": "Arrow or Avro, recursive selected fields in catalog order, bounded streams, and row filters with boolean logic, comparisons, IN, BETWEEN, NULL checks, LIKE, and scalar casts are supported.",
-        "ko": "Arrow 또는 Avro, 카탈로그 순서를 유지하는 재귀 필드 선택, 제한된 스트림, 논리식·비교·IN·BETWEEN·NULL 검사·LIKE·스칼라 캐스트 행 필터를 지원합니다."
+        "en": "Arrow or Avro, recursive selected fields in catalog order, bounded streams, and row filters with boolean logic, comparisons, IN, BETWEEN, NULL checks, LIKE, scalar casts, and ingestion-time partition pseudo columns are supported.",
+        "ko": "Arrow 또는 Avro, 카탈로그 순서를 유지하는 재귀 필드 선택, 제한된 스트림, 논리식·비교·IN·BETWEEN·NULL 검사·LIKE·스칼라 캐스트와 ingestion-time partition pseudo column 행 필터를 지원합니다."
       },
       "conditions": [
         {

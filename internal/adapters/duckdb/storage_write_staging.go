@@ -216,8 +216,13 @@ func (c *StorageWriteCoordinator) stagePending(ctx context.Context, batch writep
 	}
 	stagingTable := storageWriteStagingTable(batch.StreamName)
 	destination := quoteIdentifier(physicalSchema(batch.Table.ProjectID, batch.Table.DatasetID)) + "." + quoteIdentifier(batch.Table.TableID)
-	createStatement := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s AS SELECT * FROM %s WHERE FALSE",
-		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(stagingTable), destination)
+	destinationColumns := make([]string, len(prepared.destinationColumns))
+	for index, column := range prepared.destinationColumns {
+		destinationColumns[index] = quoteIdentifier(column)
+	}
+	createStatement := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s AS SELECT %s FROM %s WHERE FALSE",
+		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(stagingTable),
+		strings.Join(destinationColumns, ", "), destination)
 	if _, err := tx.ExecContext(ctx, createStatement); err != nil {
 		return false, fmt.Errorf("create pending stream staging table: %w", err)
 	}

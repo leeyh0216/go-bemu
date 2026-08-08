@@ -54,9 +54,10 @@ type rowRestrictionLiteralValue struct {
 }
 
 type rowRestrictionCompiler struct {
-	schema    []catalogdomain.Field
-	args      []any
-	preflight bool
+	schema                 []catalogdomain.Field
+	ingestionPartitionType string
+	args                   []any
+	preflight              bool
 }
 
 func validateRowRestrictionExpression(expression queryast.Expression) error {
@@ -75,10 +76,23 @@ func validateRowRestrictionExpression(expression queryast.Expression) error {
 }
 
 func compileRowRestriction(expression queryast.Expression, schema []catalogdomain.Field) (string, []any, error) {
+	return compileRowRestrictionWithPartitioning(expression, schema, "")
+}
+
+func compileTableRowRestriction(expression queryast.Expression, table catalogdomain.Table) (string, []any, error) {
+	partitionType, _ := table.IngestionTimePartitioning()
+	return compileRowRestrictionWithPartitioning(expression, table.Schema, partitionType)
+}
+
+func compileRowRestrictionWithPartitioning(
+	expression queryast.Expression,
+	schema []catalogdomain.Field,
+	ingestionPartitionType string,
+) (string, []any, error) {
 	if expression == nil {
 		return "", nil, nil
 	}
-	compiler := &rowRestrictionCompiler{schema: schema}
+	compiler := &rowRestrictionCompiler{schema: schema, ingestionPartitionType: ingestionPartitionType}
 	result, err := compiler.render(expression)
 	if err != nil {
 		return "", nil, err
@@ -111,6 +125,24 @@ func (compiler *rowRestrictionCompiler) bindIdentifier(path queryast.IdentifierP
 	if compiler.preflight {
 		return compiledRowRestrictionValue{
 			kind: rowRestrictionColumn, sql: quoteIdentifier("preflight"),
+		}, nil
+	}
+	if len(segments) == 1 && catalogdomain.IsPartitionPseudoColumn(segments[0]) {
+		if compiler.ingestionPartitionType == "" {
+			return compiledRowRestrictionValue{}, invalidRowRestriction()
+		}
+		if strings.EqualFold(segments[0], catalogdomain.PartitionDatePseudoColumn) {
+			if !strings.EqualFold(compiler.ingestionPartitionType, "DAY") {
+				return compiledRowRestrictionValue{}, invalidRowRestriction()
+			}
+			return compiledRowRestrictionValue{
+				kind: rowRestrictionColumn, sql: quoteIdentifier(catalogdomain.PartitionDatePseudoColumn),
+				logicalType: queryast.TypeDate,
+			}, nil
+		}
+		return compiledRowRestrictionValue{
+			kind: rowRestrictionColumn, sql: quoteIdentifier(catalogdomain.PartitionTimePseudoColumn),
+			logicalType: queryast.TypeTimestamp,
 		}, nil
 	}
 	fields := compiler.schema

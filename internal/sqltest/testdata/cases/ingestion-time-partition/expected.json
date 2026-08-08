@@ -1,0 +1,29 @@
+{
+  "kind": "rows",
+  "schema": [
+    {"name": "id", "type": "INT64", "mode": "NULLABLE"},
+    {"name": "name", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "partition_time", "type": "TIMESTAMP", "mode": "NULLABLE"},
+    {"name": "partition_date", "type": "DATE", "mode": "NULLABLE"}
+  ],
+  "rows": [
+    [1, "alpha", "2026-08-03T00:00:00Z", "2026-08-03"]
+  ],
+  "tables": [
+    {
+      "projectId": "test-project",
+      "datasetId": "analytics",
+      "tableId": "ingested_events",
+      "exists": true,
+      "rowOrder": "unordered",
+      "schema": [
+        {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+        {"name": "name", "type": "STRING", "mode": "NULLABLE"}
+      ],
+      "rows": [
+        [1, "alpha"],
+        [2, "default-partition"]
+      ]
+    }
+  ]
+}

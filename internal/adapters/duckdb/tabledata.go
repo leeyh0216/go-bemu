@@ -63,7 +63,12 @@ func (w *Warehouse) ListTableData(ctx context.Context, request ports.TableDataRe
 	// f/v encoder below the port remain the only authoritative byte gates.
 	// https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow
 	// https://cloud.google.com/bigquery/docs/paging-results#api-limits
-	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+tableName+" ORDER BY rowid LIMIT ? OFFSET ?", limit, offset)
+	columns := make([]string, len(request.Schema))
+	for index, field := range request.Schema {
+		columns[index] = quoteIdentifier(field.Name)
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT "+strings.Join(columns, ", ")+" FROM "+tableName+
+		" ORDER BY rowid LIMIT ? OFFSET ?", limit, offset)
 	if err != nil {
 		return ports.TableDataPage{}, fmt.Errorf("read table data page: %w", err)
 	}

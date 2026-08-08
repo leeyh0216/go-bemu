@@ -357,14 +357,16 @@ func validateTablePartitioning(table Table) error {
 		default:
 			return fmt.Errorf("timePartitioning type %q is invalid", partitioning.Type)
 		}
-		field, found := fixtureTopLevelField(table.Schema, partitioning.Field)
-		if !found {
-			return fmt.Errorf("timePartitioning field %q does not exist", partitioning.Field)
-		}
-		switch canonicalType(field.Type) {
-		case "DATE", "DATETIME", "TIMESTAMP":
-		default:
-			return fmt.Errorf("timePartitioning field %q has type %q", partitioning.Field, field.Type)
+		if partitioning.Field != "" {
+			field, found := fixtureTopLevelField(table.Schema, partitioning.Field)
+			if !found {
+				return fmt.Errorf("timePartitioning field %q does not exist", partitioning.Field)
+			}
+			switch canonicalType(field.Type) {
+			case "DATE", "DATETIME", "TIMESTAMP":
+			default:
+				return fmt.Errorf("timePartitioning field %q has type %q", partitioning.Field, field.Type)
+			}
 		}
 		if partitioning.ExpirationMs < 0 {
 			return errors.New("timePartitioning expirationMs must be non-negative")

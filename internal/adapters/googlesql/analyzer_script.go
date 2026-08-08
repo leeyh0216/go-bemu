@@ -400,6 +400,8 @@ func mergeScriptAnalysis(
 			descriptor := semantic.RelationBindingDescriptor{Key: binding.Key(), Kind: binding.Kind()}
 			if reference, physical := binding.Reference(); physical {
 				descriptor.Reference = reference
+				descriptor.Schema = binding.Schema()
+				descriptor.TimePartitioning = binding.TimePartitioning()
 			} else if name, local := binding.LocalName(); local {
 				descriptor.LocalName = name
 			}

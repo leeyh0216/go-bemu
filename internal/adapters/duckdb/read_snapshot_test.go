@@ -331,6 +331,48 @@ func TestDuckDBReadSnapshotExecutesAdvancedRowRestriction(t *testing.T) {
 	}
 }
 
+func TestDuckDBReadSnapshotFiltersIngestionTimePseudoColumns(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "ingested_events", Type: "TABLE",
+		Schema:           []catalogdomain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}},
+		TimePartitioning: &catalogdomain.TimePartitioning{Type: "DAY"},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	tableName := quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + "." + quoteIdentifier(table.ID)
+	if _, err := warehouse.db.ExecContext(ctx,
+		"INSERT INTO "+tableName+" (\"id\", \"_PARTITIONTIME\") VALUES "+
+			"(0, TIMESTAMPTZ '2026-08-03T12:00:00Z')",
+	); err == nil {
+		t.Fatal("non-boundary _PARTITIONTIME was accepted")
+	}
+	if _, err := warehouse.db.ExecContext(ctx,
+		"INSERT INTO "+tableName+" (\"id\", \"_PARTITIONTIME\") VALUES "+
+			"(1, TIMESTAMPTZ '2026-08-03T00:00:00Z'), (2, TIMESTAMPTZ '2026-08-04T00:00:00Z')",
+	); err != nil {
+		t.Fatal(err)
+	}
+	materializer := newReadTestMaterializer(
+		t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20),
+	)
+	snapshotPort, err := materializer.Materialize(ctx, readports.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+		SelectedFields: []string{"id"},
+		RowRestriction: mustParseReadRestriction(t,
+			"_PARTITIONDATE = DATE '2026-08-03' AND "+
+				"_PARTITIONTIME < TIMESTAMP '2026-08-04T00:00:00Z'"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := snapshotPort.(*duckDBReadSnapshot)
+	defer closeReadSnapshot(t, snapshot)
+	if snapshot.Metadata().RowCount != 1 {
+		t.Fatalf("ingestion partition row_count = %d, want 1", snapshot.Metadata().RowCount)
+	}
+}
+
 func newReadTestWarehouse(t *testing.T, ctx context.Context, table catalogdomain.Table) *Warehouse {
 	t.Helper()
 	warehouse, err := New("")

@@ -123,7 +123,7 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 	if err != nil {
 		return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument, err)
 	}
-	filterSQL, filterArgs, err := compileRowRestriction(request.RowRestriction, table.Schema)
+	filterSQL, filterArgs, err := compileTableRowRestriction(request.RowRestriction, table)
 	if err != nil {
 		return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument,
 			fmt.Errorf("compile row restriction: %w", err))

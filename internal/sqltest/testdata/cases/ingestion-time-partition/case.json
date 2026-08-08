@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "ingestion-time-partition",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "ordered"
+}

@@ -189,9 +189,10 @@ type catalogSnapshot struct {
 }
 
 type registeredTable struct {
-	reference domain.TableReference
-	schema    []domain.Field
-	logical   []semantic.Type
+	reference        domain.TableReference
+	schema           []domain.Field
+	timePartitioning *domain.TimePartitioning
+	logical          []semantic.Type
 }
 
 func buildCatalogSnapshot(
@@ -386,8 +387,9 @@ func registerTable(
 	if err := tableNode.SetFullName(fullName); err != nil {
 		return registeredTable{}, nil, analyzerBoundaryFailure()
 	}
-	logical := make([]semantic.Type, len(table.Schema))
-	for index, field := range table.Schema {
+	pseudoFields := ingestionTimePseudoFields(table)
+	logical := make([]semantic.Type, 0, len(table.Schema)+len(pseudoFields))
+	for _, field := range table.Schema {
 		columnType, semanticType, err := catalogFieldType(typeFactory, field)
 		if err != nil {
 			return registeredTable{}, nil, err
@@ -399,11 +401,44 @@ func registerTable(
 		if err := tableNode.AddColumn2(column, false); err != nil {
 			return registeredTable{}, nil, catalogShapeFailure()
 		}
-		logical[index] = semanticType
+		logical = append(logical, semanticType)
+	}
+	for _, field := range pseudoFields {
+		columnType, semanticType, err := catalogFieldType(typeFactory, field)
+		if err != nil {
+			return registeredTable{}, nil, err
+		}
+		writable := strings.EqualFold(field.Name, domain.PartitionTimePseudoColumn)
+		column, err := gsql.NewSimpleColumn(fullName, field.Name, columnType, true, writable)
+		if err != nil {
+			return registeredTable{}, nil, analyzerBoundaryFailure()
+		}
+		if err := tableNode.AddColumn2(column, false); err != nil {
+			return registeredTable{}, nil, catalogShapeFailure()
+		}
+		logical = append(logical, semanticType)
+	}
+	var timePartitioning *domain.TimePartitioning
+	if table.TimePartitioning != nil {
+		clone := *table.TimePartitioning
+		timePartitioning = &clone
 	}
 	return registeredTable{
-		reference: reference, schema: domain.CloneFields(table.Schema), logical: logical,
+		reference: reference, schema: domain.CloneFields(table.Schema),
+		timePartitioning: timePartitioning, logical: logical,
 	}, tableNode, nil
+}
+
+func ingestionTimePseudoFields(table domain.Table) []domain.Field {
+	typ, ok := table.IngestionTimePartitioning()
+	if !ok {
+		return nil
+	}
+	fields := []domain.Field{{Name: domain.PartitionTimePseudoColumn, Type: "TIMESTAMP"}}
+	if typ == "DAY" {
+		fields = append(fields, domain.Field{Name: domain.PartitionDatePseudoColumn, Type: "DATE"})
+	}
+	return fields
 }
 
 func catalogFieldType(typeFactory *gsql.TypeFactory, field domain.Field) (gsql.Googlesql_TypeNode, semantic.Type, error) {

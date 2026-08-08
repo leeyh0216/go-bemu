@@ -83,12 +83,13 @@ type coordinatorResult struct {
 }
 
 type preparedBatch struct {
-	streamName  string
-	table       writedomain.TableReference
-	startOffset int64
-	columns     []string
-	columnTypes []string
-	rows        [][]any
+	streamName         string
+	table              writedomain.TableReference
+	startOffset        int64
+	columns            []string
+	destinationColumns []string
+	columnTypes        []string
+	rows               [][]any
 }
 
 type tableLayout struct {
@@ -495,9 +496,13 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer stor
 		}
 		decodedRows[rowIndex] = values
 	}
+	destinationColumns := make([]string, len(layout.columns))
+	for index, column := range layout.columns {
+		destinationColumns[index] = column.field.Name
+	}
 	return preparedBatch{
 		streamName: batch.StreamName, table: batch.Table, startOffset: batch.StartOffset,
-		columns: columns, columnTypes: columnTypes, rows: decodedRows,
+		columns: columns, destinationColumns: destinationColumns, columnTypes: columnTypes, rows: decodedRows,
 	}, nil
 }
 
@@ -543,6 +548,9 @@ func (c *StorageWriteCoordinator) describeTable(ctx context.Context, queryer sto
 		if err := rows.Scan(&name, &dataType, &nullable); err != nil {
 			_ = rows.Close()
 			return tableLayout{}, fmt.Errorf("scan Storage Write destination schema: %w", err)
+		}
+		if catalogdomain.IsPartitionPseudoColumn(name) {
+			continue
 		}
 		physicalColumns = append(physicalColumns, physicalColumn{name: name, dataType: dataType, nullable: nullable})
 	}

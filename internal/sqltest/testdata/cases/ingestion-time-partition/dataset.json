@@ -1,0 +1,24 @@
+{
+  "projects": [
+    {
+      "projectId": "test-project",
+      "datasets": [
+        {
+          "datasetId": "analytics",
+          "location": "US",
+          "tables": [
+            {
+              "tableId": "ingested_events",
+              "timePartitioning": {"type": "DAY", "field": ""},
+              "schema": [
+                {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+                {"name": "name", "type": "STRING", "mode": "NULLABLE"}
+              ],
+              "rows": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

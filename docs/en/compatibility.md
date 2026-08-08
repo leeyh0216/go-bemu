@@ -249,7 +249,7 @@ metadata.
 | public `CreateReadSession` / `ReadRows` | Partial; one bounded DuckDB materialization per session |
 | public `SplitReadStream` | Unsupported; returns `UNIMPLEMENTED` |
 | Arrow/Avro schema and row payloads | Partial; encoded from bounded DuckDB rows and response bytes |
-| projection and row restriction | Partial; recursive STRUCT/REPEATED projection preserves catalog order; filters support boolean logic, comparisons, `IN`, `BETWEEN`, NULL checks, `LIKE`, and scalar casts, but not functions or subqueries |
+| projection and row restriction | Partial; recursive STRUCT/REPEATED projection preserves catalog order; filters support boolean logic, comparisons, `IN`, `BETWEEN`, NULL checks, `LIKE`, scalar casts, and `_PARTITIONTIME`/daily `_PARTITIONDATE`, but not functions or subqueries |
 | logical streams and offset resume | Partial; stable ranges and stream-relative offsets within a live session, with SQLite-durable lifecycle metadata |
 | historical snapshot and compression | Unsupported |
 
@@ -258,6 +258,11 @@ DuckDB materialization and exposes configurable logical streams. Split RPC,
 wire compression, and historical `snapshot_time` remain gaps. After restart,
 an unexpired stream returns `UNAVAILABLE` and an expired
 stream returns `NOT_FOUND`; snapshot row bytes are not reconstructed.
+
+Ingestion-time partitioned tables store a UTC partition timestamp for each new
+row. GoogleSQL and Storage Read use the same `_PARTITIONTIME` value, with the
+daily `_PARTITIONDATE` derived from it. Both names are reserved and remain
+excluded from `SELECT *`; callers must reference them explicitly.
 
 The target contract is the official
 [`BigQueryRead`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryRead)

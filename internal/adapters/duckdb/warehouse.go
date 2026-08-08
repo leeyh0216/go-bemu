@@ -165,6 +165,17 @@ func (w *Warehouse) createTable(ctx context.Context, table domain.Table) error {
 		}
 		columns = append(columns, column)
 	}
+	if partitionType, ok := table.IngestionTimePartitioning(); ok {
+		partitionTime := ingestionTimePartitionDefault(partitionType)
+		partitionColumn := quoteIdentifier(domain.PartitionTimePseudoColumn)
+		partitionBoundary := ingestionTimePartitionBoundary(partitionType, partitionColumn)
+		columns = append(columns,
+			partitionColumn+" TIMESTAMPTZ DEFAULT ("+partitionTime+") CHECK ("+
+				partitionColumn+" = "+partitionBoundary+")",
+			quoteIdentifier(domain.PartitionDatePseudoColumn)+" DATE GENERATED ALWAYS AS (CAST("+
+				partitionColumn+" AT TIME ZONE 'UTC' AS DATE)) VIRTUAL",
+		)
+	}
 	statement := fmt.Sprintf("CREATE TABLE %s.%s (%s)",
 		quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)),
 		quoteIdentifier(table.ID),
@@ -179,6 +190,15 @@ func (w *Warehouse) createTable(ctx context.Context, table domain.Table) error {
 		"schema_fingerprint", observability.Digest([]byte(schemaSummary)), "field_count", len(table.Schema),
 		"transaction_mode", "autocommit")
 	return err
+}
+
+func ingestionTimePartitionDefault(partitionType string) string {
+	return ingestionTimePartitionBoundary(partitionType, "current_timestamp")
+}
+
+func ingestionTimePartitionBoundary(partitionType, expression string) string {
+	unit := strings.ToLower(partitionType)
+	return "date_trunc('" + unit + "', " + expression + " AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'"
 }
 
 func (w *Warehouse) DropTable(ctx context.Context, projectID, datasetID, tableID string) error {

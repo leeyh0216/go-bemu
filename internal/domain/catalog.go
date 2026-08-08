@@ -85,6 +85,9 @@ func (f Field) Validate() error {
 	if len(f.Name) > 1024 || !resourceIDPattern.MatchString(f.Name) {
 		return fmt.Errorf("%w: invalid field name %q", ErrInvalid, f.Name)
 	}
+	if IsPartitionPseudoColumn(f.Name) {
+		return fmt.Errorf("%w: field name %q is reserved for ingestion-time partitioning", ErrInvalid, f.Name)
+	}
 	t := strings.ToUpper(f.Type)
 	switch t {
 	case "GEOGRAPHY":
@@ -127,6 +130,11 @@ type TimePartitioning struct {
 	ExpirationMs int64
 }
 
+const (
+	PartitionTimePseudoColumn = "_PARTITIONTIME"
+	PartitionDatePseudoColumn = "_PARTITIONDATE"
+)
+
 type Range struct {
 	Start    int64
 	End      int64
@@ -166,7 +174,74 @@ func (t Table) Validate() error {
 	if err := validateFieldList(t.Schema, nil); err != nil {
 		return err
 	}
+	if err := validateTablePartitioning(t); err != nil {
+		return err
+	}
 	return nil
+}
+
+func IsPartitionPseudoColumn(name string) bool {
+	return strings.EqualFold(name, PartitionTimePseudoColumn) || strings.EqualFold(name, PartitionDatePseudoColumn)
+}
+
+func (t Table) IngestionTimePartitioning() (string, bool) {
+	if t.TimePartitioning == nil || strings.TrimSpace(t.TimePartitioning.Field) != "" {
+		return "", false
+	}
+	typ := strings.ToUpper(strings.TrimSpace(t.TimePartitioning.Type))
+	switch typ {
+	case "DAY", "HOUR", "MONTH", "YEAR":
+		return typ, true
+	default:
+		return "", false
+	}
+}
+
+func validateTablePartitioning(table Table) error {
+	if table.TimePartitioning != nil && table.RangePartitioning != nil {
+		return fmt.Errorf("%w: time and range partitioning are mutually exclusive", ErrInvalid)
+	}
+	if partitioning := table.TimePartitioning; partitioning != nil {
+		typ := strings.ToUpper(strings.TrimSpace(partitioning.Type))
+		switch typ {
+		case "DAY", "HOUR", "MONTH", "YEAR":
+		default:
+			return fmt.Errorf("%w: invalid time partitioning type %q", ErrInvalid, partitioning.Type)
+		}
+		if partitioning.ExpirationMs < 0 {
+			return fmt.Errorf("%w: time partition expiration must be non-negative", ErrInvalid)
+		}
+		if strings.TrimSpace(partitioning.Field) != "" {
+			field, found := topLevelField(table.Schema, partitioning.Field)
+			if !found {
+				return fmt.Errorf("%w: time partition field %q does not exist", ErrInvalid, partitioning.Field)
+			}
+			switch strings.ToUpper(field.Type) {
+			case "DATE", "DATETIME", "TIMESTAMP":
+			default:
+				return fmt.Errorf("%w: time partition field %q has type %q", ErrInvalid, partitioning.Field, field.Type)
+			}
+		}
+	}
+	if partitioning := table.RangePartitioning; partitioning != nil {
+		field, found := topLevelField(table.Schema, partitioning.Field)
+		if !found || !strings.EqualFold(field.Type, "INT64") && !strings.EqualFold(field.Type, "INTEGER") {
+			return fmt.Errorf("%w: range partition field %q must be INT64", ErrInvalid, partitioning.Field)
+		}
+		if partitioning.Range.End <= partitioning.Range.Start || partitioning.Range.Interval <= 0 {
+			return fmt.Errorf("%w: range partitioning requires end > start and interval > 0", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+func topLevelField(fields []Field, name string) (Field, bool) {
+	for _, field := range fields {
+		if strings.EqualFold(field.Name, name) {
+			return field, true
+		}
+	}
+	return Field{}, false
 }
 
 func validateFieldList(fields []Field, parent []string) error {

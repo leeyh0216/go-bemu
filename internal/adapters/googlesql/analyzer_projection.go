@@ -233,10 +233,18 @@ func (projection *resolvedProjection) relationBindings(
 		reference, resolveErr := resolveAnalyzedPath(request, segments)
 		_, target := targets[table.NodeKey()]
 		if resolveErr == nil {
-			if _, registered := projection.snapshot.tables[tableKey(reference)]; registered || target {
-				bindings = append(bindings, semantic.RelationBindingDescriptor{
+			if registered, found := projection.snapshot.tables[tableKey(reference)]; found || target {
+				descriptor := semantic.RelationBindingDescriptor{
 					Key: table.NodeKey(), Kind: semantic.RelationPhysical, Reference: reference,
-				})
+				}
+				if found {
+					descriptor.Schema = domain.CloneFields(registered.schema)
+					if registered.timePartitioning != nil {
+						clone := *registered.timePartitioning
+						descriptor.TimePartitioning = &clone
+					}
+				}
+				bindings = append(bindings, descriptor)
 				physicalReferences[tableKey(reference)] = struct{}{}
 				continue
 			}

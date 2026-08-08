@@ -314,6 +314,9 @@ func inspectDDLTable(
 			return false, "", err
 		}
 		column.nullable = nullable == "YES"
+		if domain.IsPartitionPseudoColumn(column.name) {
+			continue
+		}
 		columns = append(columns, column)
 	}
 	if err := rows.Close(); err != nil {
