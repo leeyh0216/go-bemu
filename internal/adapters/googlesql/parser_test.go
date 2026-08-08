@@ -161,13 +161,19 @@ func TestParserRejectsScriptsAndUnsupportedDDLWithoutCommand(t *testing.T) {
 
 func TestParserDelegatesNonDDLAndRedactsSyntaxErrors(t *testing.T) {
 	parser := newParser(t)
-	command, matched, err := parser.ParseDDL(context.Background(), ports.QueryRequest{SQL: "SELECT 1"})
-	if err != nil || matched || command.Validate() == nil {
-		t.Fatalf("non-DDL = (%#v, %t, %v)", command, matched, err)
+	for _, sql := range []string{
+		"SELECT 1",
+		"/* execution-engine syntax */ INSERT INTO target VALUES (TIMESTAMPTZ '2026-08-08 01:02:03+00')",
+		"-- execution-engine syntax\nUPDATE target SET payload = {'name': 'value'}",
+	} {
+		command, matched, err := parser.ParseDDL(context.Background(), ports.QueryRequest{SQL: sql})
+		if err != nil || matched || command.Validate() == nil {
+			t.Fatalf("non-DDL = (%#v, %t, %v)", command, matched, err)
+		}
 	}
 
 	const secretSQL = "CREATE TABLE analytics.customer_secret (id ARRAY<"
-	_, _, err = parser.ParseDDL(context.Background(), ports.QueryRequest{ProjectID: "test-project", SQL: secretSQL})
+	_, _, err := parser.ParseDDL(context.Background(), ports.QueryRequest{ProjectID: "test-project", SQL: secretSQL})
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("syntax error = %v", err)
 	}
