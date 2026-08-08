@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "create-table-postcondition",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "none"
+}

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "caseId": "unsupported-analytic",
+  "defaultProject": "test-project",
+  "defaultDataset": "analytics",
+  "rowOrder": "none"
+}

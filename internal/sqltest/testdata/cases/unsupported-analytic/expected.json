@@ -1,0 +1,21 @@
+{
+  "kind": "error",
+  "error": {
+    "phase": "analyze",
+    "code": "domain.unsupported"
+  },
+  "tables": [
+    {
+      "projectId": "test-project",
+      "datasetId": "analytics",
+      "tableId": "accounts",
+      "exists": true,
+      "rowOrder": "ordered",
+      "schema": [
+        {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+        {"name": "balance", "type": "INT64", "mode": "REQUIRED"}
+      ],
+      "rows": [[1, 5], [2, 25]]
+    }
+  ]
+}

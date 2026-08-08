@@ -1,0 +1,18 @@
+{
+  "kind": "affected",
+  "affectedRows": 0,
+  "tables": [
+    {
+      "projectId": "test-project",
+      "datasetId": "analytics",
+      "tableId": "ledger",
+      "exists": true,
+      "rowOrder": "ordered",
+      "schema": [
+        {"name": "id", "type": "INT64", "mode": "NULLABLE"},
+        {"name": "amount", "type": "NUMERIC", "mode": "NULLABLE", "precision": 20, "scale": 4}
+      ],
+      "rows": []
+    }
+  ]
+}
