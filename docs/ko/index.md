@@ -38,7 +38,7 @@ BigQuery 리소스는 공개 [BigQuery REST API
   문서입니다.
 - [API 및 RPC 호환성](api-rpc-compatibility.md): 메서드, 접속 경로, 적용 조건,
   테스트, 이슈를 자동으로 정리한 표입니다.
-- [소비자 호환성](consumer-compatibility.md): 클라이언트 버전, 실행 아티팩트,
+- [소비자 호환성](../../tests/integration/docs/ko/consumer-compatibility.md): 통합 테스트 클라이언트 버전, 실행 아티팩트,
   scenario selector를 자동으로 정리한 문서입니다.
 
 <!-- section: maintainers -->

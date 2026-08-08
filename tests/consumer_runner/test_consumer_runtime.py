@@ -22,7 +22,7 @@ from scripts.consumer_runtime import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "contract" / "consumers.normalized.json"
+MANIFEST = ROOT / "tests" / "integration" / "contract" / "consumers.normalized.json"
 
 
 class ConsumerRuntimeTest(unittest.TestCase):

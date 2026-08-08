@@ -1,4 +1,4 @@
-package contract
+package integrationcontract
 
 import (
 	"bytes"
@@ -15,13 +15,14 @@ import (
 	"sort"
 	"strings"
 
+	productcontract "github.com/leeyh0216/go-bemu/contract"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	consumerManifestPath   = "contract/consumers.yaml"
-	consumerCasesDirectory = "contract/cases"
-	consumerNormalizedPath = "contract/consumers.normalized.json"
+	consumerManifestPath   = "tests/integration/contract/consumers.yaml"
+	consumerCasesDirectory = "tests/integration/contract/cases"
+	consumerNormalizedPath = "tests/integration/contract/consumers.normalized.json"
 	consumerSchemaVersion  = "2"
 )
 
@@ -250,7 +251,7 @@ func loadNormalizedOperationIDs(repositoryRoot string) (map[string]bool, error) 
 	if err != nil {
 		return nil, err
 	}
-	manifest, err := decodeNormalizedOperationManifest(contents)
+	manifest, err := productcontract.DecodeNormalizedOperationManifest(contents)
 	if err != nil {
 		return nil, err
 	}
@@ -859,6 +860,17 @@ func DecodeNormalizedConsumerManifest(contents []byte) (NormalizedConsumerManife
 	return manifest, nil
 }
 
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("decode normalized consumer manifest: multiple JSON documents are not allowed")
+		}
+		return fmt.Errorf("decode normalized consumer manifest: %w", err)
+	}
+	return nil
+}
+
 func rejectDuplicateJSONKeys(contents []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	var visit func() error
@@ -1094,9 +1106,9 @@ func FileSHA256(path string) (string, error) {
 func renderConsumerCompatibility(manifest NormalizedConsumerManifest, language string) []byte {
 	var output strings.Builder
 	if language == "ko" {
-		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: ko -->\n\n[English](../en/consumer-compatibility.md) | [한국어](consumer-compatibility.md)\n\n# 소비자 호환성\n\n<!-- section: generated-cases -->\n이 문서는 `contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. 각 소비자의 정확한 버전과 변경되지 않는 출처는 아래 표에 표시합니다. `execution` 산출물은 해시를 확인한 뒤 실행에 사용합니다. `tool-provenance` 산출물은 별도로 설치하고 버전을 확인한 도구의 릴리스 출처만 나타냅니다.\n\n| 사례 | 실행 | 실행 계열 | 상태 | 런타임 | 시나리오 | 출처 | 산출물 역할/용도 |\n|---|---|---|---|---|---|---|---|\n")
+		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: ko -->\n\n[English](../en/consumer-compatibility.md) | [한국어](consumer-compatibility.md)\n\n# 소비자 호환성\n\n<!-- section: generated-cases -->\n이 문서는 `tests/integration/contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. 각 소비자의 정확한 버전과 변경되지 않는 출처는 아래 표에 표시합니다. `execution` 산출물은 해시를 확인한 뒤 실행에 사용합니다. `tool-provenance` 산출물은 별도로 설치하고 버전을 확인한 도구의 릴리스 출처만 나타냅니다.\n\n| 사례 | 실행 | 실행 계열 | 상태 | 런타임 | 시나리오 | 출처 | 산출물 역할/용도 |\n|---|---|---|---|---|---|---|---|\n")
 	} else {
-		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: en -->\n\n[English](consumer-compatibility.md) | [한국어](../ko/consumer-compatibility.md)\n\n# Consumer Compatibility\n\n<!-- section: generated-cases -->\nThis page is generated from `contract/consumers.normalized.json`. Public behavior is verified against the [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest). The table records every consumer's exact version and immutable source. An `execution` artifact is digest-verified and used by the runner. A `tool-provenance` artifact records only the release provenance of a separately installed, version-verified tool.\n\n| Case | Execution | Family | Lane | Runtime | Scenarios | Sources | Artifact role/usage |\n|---|---|---|---|---|---|---|---|\n")
+		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: en -->\n\n[English](consumer-compatibility.md) | [한국어](../ko/consumer-compatibility.md)\n\n# Consumer Compatibility\n\n<!-- section: generated-cases -->\nThis page is generated from `tests/integration/contract/consumers.normalized.json`. Public behavior is verified against the [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest). The table records every consumer's exact version and immutable source. An `execution` artifact is digest-verified and used by the runner. A `tool-provenance` artifact records only the release provenance of a separately installed, version-verified tool.\n\n| Case | Execution | Family | Lane | Runtime | Scenarios | Sources | Artifact role/usage |\n|---|---|---|---|---|---|---|---|\n")
 	}
 	for _, consumerCase := range manifest.Cases {
 		versionKeys := make([]string, 0, len(consumerCase.RuntimeProfile.Versions))

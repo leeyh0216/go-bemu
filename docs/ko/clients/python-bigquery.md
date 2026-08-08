@@ -96,7 +96,7 @@ scenario ID를 실행합니다.
 | `bigquery.tabledata.list` | 테이블 경로와 페이지 매개변수 | BigQuery `f`/`v` 행 인코딩과 다음 페이지 token |
 
 필드별 처리 범위와 지원 수준은 [호환성](../compatibility.md)에 정리되어 있습니다.
-클라이언트 버전과 scenario selector는 [소비자 호환성](../consumer-compatibility.md)에서
+클라이언트 버전과 scenario selector는 [소비자 호환성](../../../tests/integration/docs/ko/consumer-compatibility.md)에서
 자동으로 생성합니다.
 
 <!-- section: related -->

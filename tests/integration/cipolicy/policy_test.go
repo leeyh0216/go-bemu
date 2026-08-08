@@ -1,4 +1,4 @@
-package cipolicy
+package integrationcipolicy
 
 import (
 	"fmt"
@@ -208,17 +208,17 @@ func TestConsumerWorkflowsUseNormalizedDynamicMatrices(t *testing.T) {
 	root := repositoryRoot(t)
 	tests := map[string][]string{
 		"ci.yaml": {
-			"contractctl matrix --root . --family python --lane required --execution public --output-key python",
-			"contractctl matrix --root . --family bq --lane required --execution public --output-key bq",
-			"contractctl matrix --root . --lane required --execution public --output-key auth",
-			"contractctl matrix --root . --lane required --execution indirect-load --output-key load",
+			"integrationctl matrix --root . --family python --lane required --execution public --output-key python",
+			"integrationctl matrix --root . --family bq --lane required --execution public --output-key bq",
+			"integrationctl matrix --root . --lane required --execution public --output-key auth",
+			"integrationctl matrix --root . --lane required --execution indirect-load --output-key load",
 			"fromJSON(needs.consumer-matrix.outputs.python)",
 			"fromJSON(needs.consumer-matrix.outputs.bq)",
 			"fromJSON(needs.consumer-matrix.outputs.auth)",
 			"fromJSON(needs.consumer-matrix.outputs.load)",
 		},
 		"spark-contract.yaml": {
-			"contractctl matrix --root . --family spark --lane \"$BQEMU_CONSUMER_LANES\" --execution public --output-key spark",
+			"integrationctl matrix --root . --family spark --lane \"$BQEMU_CONSUMER_LANES\" --execution public --output-key spark",
 			"default: required",
 			"default: preview,nightly",
 			"fromJSON(needs.consumer-matrix.outputs.spark)",
@@ -297,7 +297,7 @@ func repositoryRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("resolve policy test path")
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	return filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
 }
 
 func loadWorkflow(t *testing.T, path string) *yaml.Node {

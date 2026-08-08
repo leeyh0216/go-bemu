@@ -68,13 +68,13 @@ actionable fix.
 <!-- section: new-version -->
 ## Add a Protocol or Client Version
 
-Consumer releases are declared in `contract/cases/*.yaml`. A case selects a
+Consumer releases are declared in `tests/integration/contract/cases/*.yaml`. A case selects a
 `runtimeProfile`, `runnerAdapter`, `compatibilityProfile`, and `scenarioSet`, and
 contains its exact versions and immutable artifact URI and SHA-256. Add one case
 file when a release uses an existing runtime, invocation, and wire contract. Do
 not infer an adapter from a semantic-version range.
 
-Change `contract/consumers.yaml` only when the runtime shape, invocation method,
+Change `tests/integration/contract/consumers.yaml` only when the runtime shape, invocation method,
 wire contract, or scenario set is new. Operation IDs and scenario IDs are
 different namespaces. Test annotations contain only an operation ID; case YAML
 selects scenarios. Run the following checks before committing:
@@ -82,7 +82,7 @@ selects scenarios. Run the following checks before committing:
 ```bash
 make contract-generate
 make ci-static
-go run ./cmd/contractctl matrix --root . --family spark --lane required
+go run ./tests/integration/cmd/integrationctl matrix --root . --family spark --lane required
 ```
 
 CI isolates every matrix row. For a local client executable, select the matching
@@ -96,7 +96,7 @@ incompatible runtime/adapter combinations. Each scenario selector names the
 tests executed by its typed adapter. Calls outside the scenario and declared
 runner setup operations fail the case.
 
-CI and typed runners read only `contract/consumers.normalized.json`. Wire-call
+CI and typed runners read only `tests/integration/contract/consumers.normalized.json`. Wire-call
 cardinality is aggregated across the case. Partial ordering is checked within
 each individual server run, identified in evidence by a digest of its relative
 log path. An `execution` artifact is used by the runtime after digest or hash-lock

@@ -1,4 +1,4 @@
-package contract
+package integrationcontract
 
 import (
 	"crypto/sha256"
@@ -129,7 +129,7 @@ func TestSparkEvidenceMatchesCommittedBytes(t *testing.T) {
 				if strings.HasPrefix(clean, "../") || (!strings.HasPrefix(clean, "tests/spark/evidence/") && !allowedLock) {
 					t.Fatalf("%s evidence escapes reviewed Spark paths: %q", entry.ID, evidence.Ref)
 				}
-				contents, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(clean)))
+				contents, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(clean)))
 				if err != nil {
 					t.Fatalf("%s evidence %s: %v", entry.ID, evidence.Ref, err)
 				}

@@ -1,4 +1,4 @@
-package contract
+package integrationcontract
 
 import (
 	"encoding/json"
@@ -263,7 +263,7 @@ func TestNormalizedConsumerManifestDecodeFailsClosed(t *testing.T) {
 }
 
 func TestAddingOneConnectorPatchCaseYAMLAutoAddsContractAndAuthMatrixRows(t *testing.T) {
-	repositoryRoot := filepath.Clean("..")
+	repositoryRoot := filepath.Clean("../../..")
 	temporaryRoot := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(temporaryRoot, consumerCasesDirectory), 0o755); err != nil {
 		t.Fatal(err)

@@ -358,7 +358,7 @@ make auth-client-test
 ```
 
 The default target runs every required case in
-`contract/consumers.normalized.json`. CI uses the same entrypoint with
+`tests/integration/contract/consumers.normalized.json`. CI uses the same entrypoint with
 `BQEMU_AUTH_CASE` set to the normalized case ID, so a failure identifies one
 runtime and adapter without changing the contract runner. Set
 `BQEMU_AUTH_JUNIT` to write a case-specific JUnit XML file containing the case
@@ -368,7 +368,7 @@ the retained child and background-process output.
 
 The `bq` executable must already be the version declared by the selected case
 on `PATH`. The exact required client, CLI, Spark, connector, and runtime
-versions are generated in [Consumer Compatibility](consumer-compatibility.md).
+versions are generated in [Consumer Compatibility](../../tests/integration/docs/en/consumer-compatibility.md).
 
 Diagnostics contain operation names, exit status, byte counts, SHA-256
 correlation digests, and raw client/server output. Credential and token values

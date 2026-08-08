@@ -1,4 +1,4 @@
-package contract
+package integrationcontract
 
 // Public client lifecycle contract sources:
 //   - Python 3.43.0 query helper:

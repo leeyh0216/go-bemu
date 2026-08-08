@@ -30,8 +30,8 @@ jobs:
           cache: true
       - name: Emit normalized non-required matrices
         run: |
-          go run ./cmd/contractctl matrix --root . --family python --lane preview,nightly --execution public --output-key python --presence-key has_python >> "$GITHUB_OUTPUT"
-          go run ./cmd/contractctl matrix --root . --family bq --lane preview,nightly --execution public --output-key bq --presence-key has_bq >> "$GITHUB_OUTPUT"
+          go run ./tests/integration/cmd/integrationctl matrix --root . --family python --lane preview,nightly --execution public --output-key python --presence-key has_python >> "$GITHUB_OUTPUT"
+          go run ./tests/integration/cmd/integrationctl matrix --root . --family bq --lane preview,nightly --execution public --output-key bq --presence-key has_bq >> "$GITHUB_OUTPUT"
         id: matrix
 
   python-client:

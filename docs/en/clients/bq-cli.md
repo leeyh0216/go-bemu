@@ -102,7 +102,7 @@ The CLI renders BigQuery JSON resources into command-specific output. Use
 
 The exact accepted fields and support level are maintained in
 [Compatibility](../compatibility.md). The selected CLI and Cloud SDK versions
-are generated in [Consumer compatibility](../consumer-compatibility.md).
+are generated in [Consumer compatibility](../../../tests/integration/docs/en/consumer-compatibility.md).
 
 <!-- section: related -->
 ## Related Work

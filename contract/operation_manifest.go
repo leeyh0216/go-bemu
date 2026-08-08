@@ -133,6 +133,14 @@ var (
 	grpcNamePattern    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.]*$`)
 )
 
+func stringSet(values ...string) map[string]bool {
+	result := make(map[string]bool, len(values))
+	for _, value := range values {
+		result[value] = true
+	}
+	return result
+}
+
 func DecodeOperationManifest(contents []byte) (OperationManifest, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(contents))
 	decoder.KnownFields(true)

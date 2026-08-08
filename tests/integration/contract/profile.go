@@ -1,4 +1,4 @@
-package contract
+package integrationcontract
 
 // Official sources:
 //   - https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2

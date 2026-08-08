@@ -73,21 +73,21 @@ go vet ./...
 <!-- section: new-version -->
 ## 프로토콜 또는 클라이언트 버전 추가
 
-소비자 릴리스는 `contract/cases/*.yaml`에 선언합니다. 사례에는 사용할
+소비자 릴리스는 `tests/integration/contract/cases/*.yaml`에 선언합니다. 사례에는 사용할
 `runtimeProfile`, `runnerAdapter`, `compatibilityProfile`, `scenarioSet`을 지정합니다.
 정확한 버전과 변경되지 않는 산출물 URI 및 SHA-256도 함께 기록합니다. 기존 실행
 환경, 호출 방법, 통신 계약을 그대로 사용하는 릴리스라면 사례 YAML 파일 하나만
 추가합니다. 버전 범위로 어댑터를 추측하지 않습니다.
 
 실행 환경의 형태, 호출 방법, 통신 계약, 시나리오 묶음이 새로 생긴 경우에만
-`contract/consumers.yaml`을 변경합니다. operation ID와 scenario ID는 서로 다른
+`tests/integration/contract/consumers.yaml`을 변경합니다. operation ID와 scenario ID는 서로 다른
 식별자입니다. 테스트 annotation에는 operation ID만 기록하고, 사례 YAML에서 실행할
 시나리오를 선택합니다. 커밋하기 전에 다음 명령을 실행합니다.
 
 ```bash
 make contract-generate
 make ci-static
-go run ./cmd/contractctl matrix --root . --family spark --lane required
+go run ./tests/integration/cmd/integrationctl matrix --root . --family spark --lane required
 ```
 
 CI는 행마다 실행 환경을 분리합니다. 로컬에 설치된 클라이언트를 사용할 때는
@@ -99,7 +99,7 @@ CI는 행마다 실행 환경을 분리합니다. 로컬에 설치된 클라이�
 거부합니다. 각 시나리오의 선택자에는 실행 어댑터가 수행할 테스트를 기록합니다.
 시나리오와 실행 준비 동작에 선언하지 않은 호출이 발생하면 검증에 실패합니다.
 
-CI와 실행 어댑터는 `contract/consumers.normalized.json`만 읽습니다. 호출 횟수는 사례
+CI와 실행 어댑터는 `tests/integration/contract/consumers.normalized.json`만 읽습니다. 호출 횟수는 사례
 전체를 기준으로 합산합니다. 호출 순서는 개별 서버 실행 안에서만 비교합니다. 증거의
 실행 식별자는 로그 상대 경로의 해시이므로 로컬 경로를 노출하지 않습니다. `execution`
 산출물은 해시 또는 해시 잠금 파일을 확인한 뒤 실행에 사용합니다. `tool-provenance`

@@ -1,14 +1,14 @@
 <!-- doc-id: consumer-compatibility -->
-<!-- lang: ko -->
+<!-- lang: en -->
 
-[English](../en/consumer-compatibility.md) | [한국어](consumer-compatibility.md)
+[English](consumer-compatibility.md) | [한국어](../ko/consumer-compatibility.md)
 
-# 소비자 호환성
+# Consumer Compatibility
 
 <!-- section: generated-cases -->
-이 문서는 `contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. 각 소비자의 정확한 버전과 변경되지 않는 출처는 아래 표에 표시합니다. `execution` 산출물은 해시를 확인한 뒤 실행에 사용합니다. `tool-provenance` 산출물은 별도로 설치하고 버전을 확인한 도구의 릴리스 출처만 나타냅니다.
+This page is generated from `tests/integration/contract/consumers.normalized.json`. Public behavior is verified against the [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest). The table records every consumer's exact version and immutable source. An `execution` artifact is digest-verified and used by the runner. A `tool-provenance` artifact records only the release provenance of a separately installed, version-verified tool.
 
-| 사례 | 실행 | 실행 계열 | 상태 | 런타임 | 시나리오 | 출처 | 산출물 역할/용도 |
+| Case | Execution | Family | Lane | Runtime | Scenarios | Sources | Artifact role/usage |
 |---|---|---|---|---|---|---|---|
 | `bq-cli-2.1.31` | `indirect-load` | bq | required | bq 2.1.31, cloudSdk 566.0.0 | `bq-indirect-load` | [google-cloud-sdk 566.0.0](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28) | `google-cloud-cli-566.0.0-image-provenance` (`tool-provenance` / `cloud-sdk-release-provenance`) |
 | `bq-cli-2.1.31` | `public` | bq | required | bq 2.1.31, cloudSdk 566.0.0 | `bq-metadata`<br>`bq-query` | [google-cloud-sdk 566.0.0](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28) | `google-cloud-cli-566.0.0-image-provenance` (`tool-provenance` / `cloud-sdk-release-provenance`) |

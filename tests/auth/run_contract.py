@@ -43,7 +43,7 @@ from scripts.consumer_runtime import (  # noqa: E402
 )
 
 
-CONSUMER_MANIFEST = ROOT / "contract" / "consumers.normalized.json"
+CONSUMER_MANIFEST = ROOT / "tests" / "integration" / "contract" / "consumers.normalized.json"
 MAX_CAPTURE_BYTES = 1 << 20
 MAX_BACKGROUND_LOG_BYTES = 16 << 20
 MAX_DIAGNOSTIC_FILE_BYTES = 256 << 10

@@ -1,4 +1,4 @@
-package contract
+package integrationcontract
 
 // The Spark compatibility matrix is derived from the exact connector source
 // commit rather than a moving branch. Every row is a concrete test contract,

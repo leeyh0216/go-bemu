@@ -1327,7 +1327,7 @@ def case_provenance(
     manifest_path = Path(
         os.getenv(
             "BQEMU_CONSUMER_MANIFEST",
-            str(ROOT / "contract/consumers.normalized.json"),
+            str(ROOT / "tests/integration/contract/consumers.normalized.json"),
         )
     ).resolve()
     case_id = os.getenv("BQEMU_CONSUMER_CASE_ID", "")

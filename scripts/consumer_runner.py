@@ -42,7 +42,7 @@ from scripts.consumer_runtime import (  # noqa: E402
 )
 
 
-DEFAULT_MANIFEST = REPOSITORY_ROOT / "contract" / "consumers.normalized.json"
+DEFAULT_MANIFEST = REPOSITORY_ROOT / "tests" / "integration" / "contract" / "consumers.normalized.json"
 ContractError = ConsumerRuntimeError
 
 

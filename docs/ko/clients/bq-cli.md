@@ -103,7 +103,7 @@ CLI는 BigQuery JSON 리소스를 명령별 출력으로 변환합니다. 테스
 있는 결과가 필요하다면 `--format=json`을 사용합니다.
 
 필드별 처리 범위와 지원 수준은 [호환성](../compatibility.md)에 정리되어 있습니다.
-CLI와 Cloud SDK 버전은 [소비자 호환성](../consumer-compatibility.md)에서 자동으로
+CLI와 Cloud SDK 버전은 [소비자 호환성](../../../tests/integration/docs/ko/consumer-compatibility.md)에서 자동으로
 생성합니다.
 
 <!-- section: related -->

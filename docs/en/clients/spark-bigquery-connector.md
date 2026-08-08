@@ -190,7 +190,7 @@ flow. It is not embedded in BQEMU.
 
 The exact accepted fields and support level are maintained in
 [Compatibility](../compatibility.md). Runtime versions, artifacts, and scenario
-selectors are generated in [Consumer compatibility](../consumer-compatibility.md).
+selectors are generated in [Consumer compatibility](../../../tests/integration/docs/en/consumer-compatibility.md).
 
 <!-- section: related -->
 ## Related Work

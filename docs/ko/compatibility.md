@@ -391,9 +391,9 @@ UI를 비활성화한 별도 CI 단계에서 실행합니다. 프로젝트 목�
 [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults)까지의
 흐름도 검증합니다.
 
-요청과 응답 구조는 [`python-query-sync`](../../contract/golden/python-query-sync-3.43.0.json)와
-[`python-query-async`](../../contract/golden/python-query-async-3.43.0.json),
-[`python-tabledata-list`](../../contract/golden/python-tabledata-list-3.43.0.json)
+요청과 응답 구조는 [`python-query-sync`](../../tests/integration/contract/golden/python-query-sync-3.43.0.json)와
+[`python-query-async`](../../tests/integration/contract/golden/python-query-async-3.43.0.json),
+[`python-tabledata-list`](../../tests/integration/contract/golden/python-tabledata-list-3.43.0.json)
 기준 파일에 고정합니다. 로드, 복사, 추출, `insertAll`은 반드시 실패해야 하는 미지원
 테스트 네 개로 남겨 둡니다. 응답을 잃은 `requestId` 재실행은 부분 계약을 나타내는
 별도 실패 예상 테스트 하나로 유지합니다.
@@ -406,10 +406,10 @@ Arrow와 Avro를 이용한 여러 스트림의 테이블 및 쿼리 읽기, 열 
 이 결과가 Spark 전체와의 호환성을 뜻하지는 않습니다. 지원 상태를 높이려면 공개 API
 경계에서 얻은 실행 근거와 실패 또는 경계값 테스트가 필요합니다.
 
-[`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
-[`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),
-[`bq-query-job`](../../contract/golden/bq-query-job-2.1.31.json),
-[`bq-not-found-error`](../../contract/golden/bq-not-found-error-2.1.31.json) 기준 파일은
+[`bq-project-dataset-admin`](../../tests/integration/contract/golden/bq-project-dataset-admin-2.1.31.json),
+[`bq-table-schema-admin`](../../tests/integration/contract/golden/bq-table-schema-admin-2.1.31.json),
+[`bq-query-job`](../../tests/integration/contract/golden/bq-query-job-2.1.31.json),
+[`bq-not-found-error`](../../tests/integration/contract/golden/bq-not-found-error-2.1.31.json) 기준 파일은
 CLI 전송 단계를 기준 파일로 고정합니다. 로드, 복사, 추출은 이 기준 버전에서 계획
 상태이므로 이슈 #13은 계속 열어 둡니다.
 

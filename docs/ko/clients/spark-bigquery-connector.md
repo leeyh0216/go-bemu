@@ -191,7 +191,7 @@ BQEMU에 GCS 서버가 내장된 것은 아닙니다.
 
 필드별 처리 범위와 지원 수준은 [호환성](../compatibility.md)에 정리되어 있습니다.
 실행 환경 버전, 아티팩트, scenario selector는 [소비자
-호환성](../consumer-compatibility.md)에서 자동으로 생성합니다.
+호환성](../../../tests/integration/docs/ko/consumer-compatibility.md)에서 자동으로 생성합니다.
 
 <!-- section: related -->
 ## 관련 작업

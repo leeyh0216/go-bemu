@@ -355,9 +355,9 @@ pagination with nested/repeated and post-/pre-epoch TIMESTAMP decoding, synchron
 [`jobs.query`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query),
 and asynchronous [`jobs.insert`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert)
 through [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults).
-The corresponding [`python-query-sync`](../../contract/golden/python-query-sync-3.43.0.json)
-[`python-query-async`](../../contract/golden/python-query-async-3.43.0.json), and
-[`python-tabledata-list`](../../contract/golden/python-tabledata-list-3.43.0.json)
+The corresponding [`python-query-sync`](../../tests/integration/contract/golden/python-query-sync-3.43.0.json)
+[`python-query-async`](../../tests/integration/contract/golden/python-query-async-3.43.0.json), and
+[`python-tabledata-list`](../../tests/integration/contract/golden/python-tabledata-list-3.43.0.json)
 goldens pin those shapes. Load/copy/extract and `insertAll` remain four strict
 unsupported xfails; lost-response `requestId` replay is one separate strict
 partial-contract xfail. The exact connector `0.44.2` matrix now records 21 of 75
@@ -367,10 +367,10 @@ PENDING append, default-stream append, and unpartitioned direct static
 overwrite. It still does not claim complete Spark compatibility. Every
 promotion requires public-edge evidence and a negative or boundary test.
 
-The [`bq-project-dataset-admin`](../../contract/golden/bq-project-dataset-admin-2.1.31.json),
-[`bq-table-schema-admin`](../../contract/golden/bq-table-schema-admin-2.1.31.json),
-[`bq-query-job`](../../contract/golden/bq-query-job-2.1.31.json), and
-[`bq-not-found-error`](../../contract/golden/bq-not-found-error-2.1.31.json)
+The [`bq-project-dataset-admin`](../../tests/integration/contract/golden/bq-project-dataset-admin-2.1.31.json),
+[`bq-table-schema-admin`](../../tests/integration/contract/golden/bq-table-schema-admin-2.1.31.json),
+[`bq-query-job`](../../tests/integration/contract/golden/bq-query-job-2.1.31.json), and
+[`bq-not-found-error`](../../tests/integration/contract/golden/bq-not-found-error-2.1.31.json)
 goldens pin the CLI wire stages. Load, copy, and extract remain Planned in that
 profile and therefore keep issue #13 open.
 

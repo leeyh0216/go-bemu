@@ -37,7 +37,7 @@ order, and request/response shapes.
   generated API/RPC table.
 - [API and RPC compatibility](api-rpc-compatibility.md): generated method,
   endpoint, condition, test, and issue rows.
-- [Consumer compatibility](consumer-compatibility.md): generated client
+- [Consumer compatibility](../../tests/integration/docs/en/consumer-compatibility.md): generated integration-test client
   versions, runtime artifacts, and scenario selectors.
 
 <!-- section: maintainers -->

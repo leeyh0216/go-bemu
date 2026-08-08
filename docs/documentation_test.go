@@ -32,23 +32,27 @@ func TestBilingualDocumentationParityAndProvenance(t *testing.T) {
 		{filepath.Join(root, "CONTRIBUTING.md"), filepath.Join(root, "CONTRIBUTING.ko.md")},
 	}
 
-	englishRoot := filepath.Join(root, "docs", "en")
-	err := filepath.WalkDir(englishRoot, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || filepath.Ext(path) != ".md" {
+	documentRoots := [][2]string{
+		{filepath.Join(root, "docs", "en"), filepath.Join(root, "docs", "ko")},
+		{filepath.Join(root, "tests", "integration", "docs", "en"), filepath.Join(root, "tests", "integration", "docs", "ko")},
+	}
+	for _, roots := range documentRoots {
+		if err := filepath.WalkDir(roots[0], func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || filepath.Ext(path) != ".md" {
+				return nil
+			}
+			relative, err := filepath.Rel(roots[0], path)
+			if err != nil {
+				return err
+			}
+			pairs = append(pairs, [2]string{path, filepath.Join(roots[1], relative)})
 			return nil
+		}); err != nil {
+			t.Fatal(err)
 		}
-		relative, err := filepath.Rel(englishRoot, path)
-		if err != nil {
-			return err
-		}
-		pairs = append(pairs, [2]string{path, filepath.Join(root, "docs", "ko", relative)})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	if len(pairs) < 6 {
 		t.Fatalf("documentation parity guard found only %d pairs", len(pairs))
@@ -74,7 +78,9 @@ func TestBilingualDocumentationParityAndProvenance(t *testing.T) {
 		})
 	}
 
-	assertNoOrphanKoreanDocuments(t, root, englishRoot)
+	for _, roots := range documentRoots {
+		assertNoOrphanKoreanDocuments(t, roots[0], roots[1])
+	}
 }
 
 func TestDocumentationRelativeLinksResolve(t *testing.T) {
@@ -84,17 +90,21 @@ func TestDocumentationRelativeLinksResolve(t *testing.T) {
 		documents = append(documents, path)
 	}
 	for _, language := range []string{"en", "ko"} {
-		languageRoot := filepath.Join(root, "docs", language)
-		if err := filepath.WalkDir(languageRoot, func(path string, entry os.DirEntry, err error) error {
-			if err != nil {
-				return err
+		for _, languageRoot := range []string{
+			filepath.Join(root, "docs", language),
+			filepath.Join(root, "tests", "integration", "docs", language),
+		} {
+			if err := filepath.WalkDir(languageRoot, func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if !entry.IsDir() && filepath.Ext(path) == ".md" {
+					documents = append(documents, path)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
 			}
-			if !entry.IsDir() && filepath.Ext(path) == ".md" {
-				documents = append(documents, path)
-			}
-			return nil
-		}); err != nil {
-			t.Fatal(err)
 		}
 	}
 
@@ -224,9 +234,8 @@ func assertLanguageDocument(t *testing.T, path, contents, language string) {
 	}
 }
 
-func assertNoOrphanKoreanDocuments(t *testing.T, root, englishRoot string) {
+func assertNoOrphanKoreanDocuments(t *testing.T, englishRoot, koreanRoot string) {
 	t.Helper()
-	koreanRoot := filepath.Join(root, "docs", "ko")
 	if err := filepath.WalkDir(koreanRoot, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err

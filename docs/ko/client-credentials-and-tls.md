@@ -359,7 +359,7 @@ make auth-client-setup
 make auth-client-test
 ```
 
-기본 명령은 `contract/consumers.normalized.json`의 모든 필수 사례를 실행합니다. CI는
+기본 명령은 `tests/integration/contract/consumers.normalized.json`의 모든 필수 사례를 실행합니다. CI는
 같은 진입점을 사용하면서 `BQEMU_AUTH_CASE`에 정규화된 사례 ID를 지정합니다. 따라서
 실행기를 바꾸지 않고 실패한 실행 환경과 어댑터를 구분할 수 있습니다.
 `BQEMU_AUTH_JUNIT`을 지정하면 case 이름, 실행 시간, 오류 자료형, 원본 오류 문구를
@@ -369,7 +369,7 @@ NDJSON으로 기록합니다.
 
 `PATH`에 있는 `bq` 실행 파일은 선택한 사례가 선언한 버전이어야 합니다. 필수 Python
 클라이언트, CLI, Spark, 커넥터, 실행 환경의 정확한 버전은 [소비자
-호환성](consumer-compatibility.md) 문서에서 자동 생성합니다.
+호환성](../../tests/integration/docs/ko/consumer-compatibility.md) 문서에서 자동 생성합니다.
 
 진단 정보에는 작업 이름, 종료 상태, 출력 크기, 상관관계 확인용 SHA-256 값과
 클라이언트 및 서버 원문 출력이 포함됩니다. 따라서 로컬 산출물에 인증 정보나 token이

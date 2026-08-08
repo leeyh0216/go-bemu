@@ -49,7 +49,7 @@ jobs:
         id: matrix
         env:
           BQEMU_CONSUMER_LANES: ${{ inputs.lanes || 'preview,nightly' }}
-        run: go run ./cmd/contractctl matrix --root . --family spark --lane "$BQEMU_CONSUMER_LANES" --execution public --output-key spark --presence-key has_spark >> "$GITHUB_OUTPUT"
+        run: go run ./tests/integration/cmd/integrationctl matrix --root . --family spark --lane "$BQEMU_CONSUMER_LANES" --execution public --output-key spark --presence-key has_spark >> "$GITHUB_OUTPUT"
 
   protocol-matrix:
     name: Connector protocol matrix guard

@@ -95,10 +95,10 @@ jobs:
       - name: Emit normalized required matrices
         id: matrix
         run: |
-          go run ./cmd/contractctl matrix --root . --family python --lane required --execution public --output-key python >> "$GITHUB_OUTPUT"
-          go run ./cmd/contractctl matrix --root . --family bq --lane required --execution public --output-key bq >> "$GITHUB_OUTPUT"
-          go run ./cmd/contractctl matrix --root . --lane required --execution public --output-key auth >> "$GITHUB_OUTPUT"
-          go run ./cmd/contractctl matrix --root . --lane required --execution indirect-load --output-key load >> "$GITHUB_OUTPUT"
+          go run ./tests/integration/cmd/integrationctl matrix --root . --family python --lane required --execution public --output-key python >> "$GITHUB_OUTPUT"
+          go run ./tests/integration/cmd/integrationctl matrix --root . --family bq --lane required --execution public --output-key bq >> "$GITHUB_OUTPUT"
+          go run ./tests/integration/cmd/integrationctl matrix --root . --lane required --execution public --output-key auth >> "$GITHUB_OUTPUT"
+          go run ./tests/integration/cmd/integrationctl matrix --root . --lane required --execution indirect-load --output-key load >> "$GITHUB_OUTPUT"
 
   python-client:
     name: Python / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
