@@ -258,6 +258,77 @@ func TestCatalogRESTPreservesDecimalParametersAndRejectsUnsupportedTypesBeforeSt
 	}
 }
 
+func TestTableDefaultRoundingModePresenceCannotBypassUnsupportedBoundary(t *testing.T) {
+	warehouse := &catalogTestWarehouse{}
+	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, catalogTestClock{now: time.Now()})
+	server := httptest.NewServer(NewCatalogServer(catalog, warehouse, "").Handler())
+	t.Cleanup(server.Close)
+	request := catalogRequestHelper(t, server.URL)
+
+	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"test-project"}`, http.StatusOK)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets", `{"datasetReference":{"datasetId":"analytics"}}`, http.StatusOK)
+	table := request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"decimals"},
+		"description":"unchanged",
+		"schema":{"fields":[{"name":"amount","type":"NUMERIC"}]}
+	}`, http.StatusOK)
+	tablePath := "/bigquery/v2/projects/test-project/datasets/analytics/tables/decimals"
+	etag := table["etag"].(string)
+	createdTables, schemaAdditions := len(warehouse.tables), len(warehouse.additions)
+
+	for index, testCase := range []struct {
+		name, key, value string
+	}{
+		{name: "mixed-case value", key: "DefaultRoundingMode", value: `"ROUND_HALF_EVEN"`},
+		{name: "upper-case null", key: "DEFAULTROUNDINGMODE", value: `null`},
+	} {
+		t.Run("insert "+testCase.name, func(t *testing.T) {
+			tableID := fmt.Sprintf("rejected_default_%d", index)
+			body := fmt.Sprintf(`{
+				"tableReference":{"tableId":%q},
+				%q:%s,
+				"schema":{"fields":[{"name":"amount","type":"NUMERIC"}]}
+			}`, tableID, testCase.key, testCase.value)
+			response := request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", body, http.StatusNotImplemented)
+			assertTableDefaultRoundingGap(t, response)
+			request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics/tables/"+tableID, "", http.StatusNotFound)
+			if len(warehouse.tables) != createdTables || len(warehouse.additions) != schemaAdditions {
+				t.Fatalf("rejected insert changed engine state: tables=%#v additions=%#v", warehouse.tables, warehouse.additions)
+			}
+		})
+	}
+
+	for _, testCase := range []struct {
+		name, method, key, value string
+	}{
+		{name: "patch mixed-case value", method: http.MethodPatch, key: "DefaultRoundingMode", value: `"ROUND_HALF_EVEN"`},
+		{name: "patch upper-case null", method: http.MethodPatch, key: "DEFAULTROUNDINGMODE", value: `null`},
+		{name: "update mixed-case value", method: http.MethodPut, key: "DefaultRoundingMode", value: `"ROUND_HALF_EVEN"`},
+		{name: "update upper-case null", method: http.MethodPut, key: "DEFAULTROUNDINGMODE", value: `null`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := catalogRequestWithETag(t, server.URL, testCase.method, tablePath,
+				fmt.Sprintf(`{%q:%s}`, testCase.key, testCase.value), etag, http.StatusNotImplemented)
+			assertTableDefaultRoundingGap(t, response)
+			after := request(http.MethodGet, tablePath, "", http.StatusOK)
+			if after["etag"] != etag || after["description"] != "unchanged" {
+				t.Fatalf("rejected mutation changed catalog metadata: %#v", after)
+			}
+			if len(warehouse.tables) != createdTables || len(warehouse.additions) != schemaAdditions {
+				t.Fatalf("rejected mutation changed engine state: tables=%#v additions=%#v", warehouse.tables, warehouse.additions)
+			}
+		})
+	}
+}
+
+func assertTableDefaultRoundingGap(t *testing.T, response map[string]any) {
+	t.Helper()
+	errorResource, ok := response["error"].(map[string]any)
+	if !ok || !strings.Contains(fmt.Sprint(errorResource["message"]), domain.GapTableDefaultRoundingV1) {
+		t.Fatalf("table default rounding response = %#v, want capability %s", response, domain.GapTableDefaultRoundingV1)
+	}
+}
+
 func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	contracttest.Operation(t, "bqemu.discovery.get")
 	contracttest.Operation(t, "bqemu.discovery.googleapis.get")

@@ -282,6 +282,8 @@ func canonicalQueryDestinationType(value string) string {
 		return "NUMERIC"
 	case "BIGNUMERIC":
 		return "BIGNUMERIC"
+	case "RECORD", "STRUCT":
+		return "RECORD"
 	case "DATE":
 		return "DATE"
 	case "DATETIME":

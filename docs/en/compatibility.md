@@ -245,11 +245,12 @@ precision 38 and scale 18.
 
 One query limitation remains. A new DuckDB result typed only as
 `DECIMAL(P,S)` cannot reveal whether a value inside NUMERIC's range originated
-as NUMERIC or BIGNUMERIC. A supported existing scalar destination restores the
-identity from its catalog schema, and a physical shape outside NUMERIC's range is
-unambiguously BIGNUMERIC. Other ambiguous query results fail before metadata
-publication with `query.results.decimal-lineage-v1` until issue #27 provides
-query lineage metadata.
+as NUMERIC or BIGNUMERIC. A supported existing destination restores scalar,
+nested STRUCT, and REPEATED identity from its catalog schema. A physical shape
+outside NUMERIC's range is unambiguously BIGNUMERIC. Other ambiguous query
+results fail before metadata publication with
+`query.results.decimal-lineage-v1` until issue #27 provides query lineage
+metadata.
 
 <!-- section: storage-read -->
 ## Storage Read

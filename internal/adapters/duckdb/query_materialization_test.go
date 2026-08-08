@@ -200,6 +200,130 @@ func TestExistingDestinationRestoresAmbiguousBigNumericIdentity(t *testing.T) {
 	}
 }
 
+func TestQueryDestinationTreatsStructAndRecordAliasesBidirectionally(t *testing.T) {
+	precision, scale := int64(12), int64(4)
+	field := func(outerType, nestedType string) domain.Field {
+		return domain.Field{Name: "payload", Type: outerType, Fields: []domain.Field{{
+			Name: "items", Type: nestedType, Mode: "REPEATED", Fields: []domain.Field{{
+				Name: "amount", Type: "BIGNUMERIC", Precision: &precision, Scale: &scale, RoundingMode: domain.RoundingModeHalfEven,
+			}},
+		}}}
+	}
+	for _, testCase := range []struct {
+		name        string
+		output      domain.Field
+		destination domain.Field
+	}{
+		{name: "STRUCT output to RECORD destination", output: field("STRUCT", "RECORD"), destination: field("RECORD", "STRUCT")},
+		{name: "RECORD output to STRUCT destination", output: field("RECORD", "STRUCT"), destination: field("STRUCT", "RECORD")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			compatible, requiresRounding := queryDestinationFieldsCompatible(testCase.output, testCase.destination)
+			if !compatible || requiresRounding {
+				t.Fatalf("alias compatibility = (%t, %t), want (true, false)", compatible, requiresRounding)
+			}
+		})
+	}
+}
+
+func TestExistingQueryDestinationPreservesNestedRepeatedBigNumericAcrossStructAliases(t *testing.T) {
+	for _, testCase := range []struct {
+		name                      string
+		disposition               domain.WriteDisposition
+		sourceOuter, sourceNested string
+		destOuter, destNested     string
+		wantLabels                []string
+		wantAmounts               []string
+	}{
+		{
+			name: "append STRUCT source to RECORD destination", disposition: domain.WriteAppend,
+			sourceOuter: "STRUCT", sourceNested: "RECORD", destOuter: "RECORD", destNested: "STRUCT",
+			wantLabels: []string{"old", "source"}, wantAmounts: []string{"1.2300", "12345678.9012"},
+		},
+		{
+			name: "truncate RECORD source to STRUCT destination", disposition: domain.WriteTruncate,
+			sourceOuter: "RECORD", sourceNested: "STRUCT", destOuter: "STRUCT", destNested: "RECORD",
+			wantLabels: []string{"source"}, wantAmounts: []string{"12345678.9012"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := duckDBQueryTestContext(t)
+			defer cancel()
+			warehouse, _ := newQueryMaterializationFixture(t, ctx)
+			precision, scale := int64(12), int64(4)
+			sourceSchema := nestedRepeatedDecimalSchema(testCase.sourceOuter, testCase.sourceNested, &precision, &scale)
+			destinationSchema := nestedRepeatedDecimalSchema(testCase.destOuter, testCase.destNested, &precision, &scale)
+			for tableID, schema := range map[string][]domain.Field{
+				"alias_source": sourceSchema, "alias_destination": destinationSchema,
+			} {
+				if err := warehouse.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: tableID, Schema: schema}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			physical := quoteIdentifier(physicalSchema("test-project", "analytics"))
+			if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO `+physical+`."alias_source" VALUES
+				({'items': [{'amount': 12345678.9012, 'label': 'source'}]})`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO `+physical+`."alias_destination" VALUES
+				({'items': [{'amount': 1.2300, 'label': 'old'}]})`); err != nil {
+				t.Fatal(err)
+			}
+
+			request := queryMaterializationRequest(
+				"SELECT payload FROM `test-project.analytics.alias_source`", testCase.disposition, true, destinationSchema,
+			)
+			request.Destination.TableID = "alias_destination"
+			result, err := warehouse.MaterializeQuery(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertNestedDecimalSchemaAndValue(t, result, testCase.destOuter, testCase.destNested, precision, scale)
+			assertStoredNestedDecimalRows(t, ctx, warehouse, testCase.wantLabels, testCase.wantAmounts)
+		})
+	}
+}
+
+func TestExistingQueryDestinationRejectsTrueNestedMismatchWithoutMutation(t *testing.T) {
+	for _, disposition := range []domain.WriteDisposition{domain.WriteAppend, domain.WriteTruncate} {
+		t.Run(string(disposition), func(t *testing.T) {
+			ctx, cancel := duckDBQueryTestContext(t)
+			defer cancel()
+			warehouse, _ := newQueryMaterializationFixture(t, ctx)
+			precision, scale := int64(12), int64(4)
+			destinationSchema := nestedRepeatedDecimalSchema("STRUCT", "RECORD", &precision, &scale)
+			sourceSchema := domain.CloneFields(destinationSchema)
+			sourceSchema[0].Fields[0].Fields[0] = domain.Field{Name: "amount", Type: "STRING"}
+			for tableID, schema := range map[string][]domain.Field{
+				"mismatch_source": sourceSchema, "mismatch_destination": destinationSchema,
+			} {
+				if err := warehouse.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: tableID, Schema: schema}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			physical := quoteIdentifier(physicalSchema("test-project", "analytics"))
+			if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO `+physical+`."mismatch_source" VALUES
+				({'items': [{'amount': 'not-a-decimal', 'label': 'source'}]})`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO `+physical+`."mismatch_destination" VALUES
+				({'items': [{'amount': 9.9900, 'label': 'old'}]})`); err != nil {
+				t.Fatal(err)
+			}
+
+			request := queryMaterializationRequest(
+				"SELECT payload FROM `test-project.analytics.mismatch_source`", disposition, true, destinationSchema,
+			)
+			request.Destination.TableID = "mismatch_destination"
+			_, err := warehouse.MaterializeQuery(ctx, request)
+			if !errors.Is(err, domain.ErrPrecondition) || !strings.Contains(err.Error(), domain.CapabilityQueryDestinationExactSchemaV1) {
+				t.Fatalf("nested mismatch error = %v", err)
+			}
+			assertStoredNestedDecimalRowsForTable(t, ctx, warehouse, "mismatch_destination", []string{"old"}, []string{"9.9900"})
+		})
+	}
+}
+
 func TestQueryDestinationRejectsDecimalRoundingBeforeMutation(t *testing.T) {
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()
@@ -324,6 +448,79 @@ func queryMaterializationRequest(sql string, disposition domain.WriteDisposition
 		},
 		DestinationExists: exists, DestinationSchema: schema,
 		WriteDisposition: disposition, CreateDisposition: domain.CreateIfNeeded,
+	}
+}
+
+func nestedRepeatedDecimalSchema(outerType, nestedType string, precision, scale *int64) []domain.Field {
+	return []domain.Field{{Name: "payload", Type: outerType, Fields: []domain.Field{{
+		Name: "items", Type: nestedType, Mode: "REPEATED", Fields: []domain.Field{
+			{Name: "amount", Type: "BIGNUMERIC", Precision: precision, Scale: scale, RoundingMode: domain.RoundingModeHalfEven},
+			{Name: "label", Type: "STRING"},
+		},
+	}}}}
+}
+
+func assertNestedDecimalSchemaAndValue(t *testing.T, result ports.QueryMaterializationResult, outerType, nestedType string, precision, scale int64) {
+	t.Helper()
+	if len(result.QueryResult.Columns) != 1 {
+		t.Fatalf("query schema = %#v", result.QueryResult.Columns)
+	}
+	outer := result.QueryResult.Columns[0]
+	if outer.Type != outerType || len(outer.Fields) != 1 {
+		t.Fatalf("outer query field = %#v", outer)
+	}
+	nested := outer.Fields[0]
+	if nested.Type != nestedType || nested.Mode != "REPEATED" || len(nested.Fields) != 2 {
+		t.Fatalf("nested query field = %#v", nested)
+	}
+	amount := nested.Fields[0]
+	if amount.Type != "BIGNUMERIC" || amount.Precision == nil || *amount.Precision != precision || amount.Scale == nil || *amount.Scale != scale || amount.RoundingMode != domain.RoundingModeHalfEven {
+		t.Fatalf("nested decimal identity = %#v", amount)
+	}
+	if len(result.QueryResult.Rows) != 1 {
+		t.Fatalf("query rows = %#v", result.QueryResult.Rows)
+	}
+	payload, ok := result.QueryResult.Rows[0][0].(map[string]any)
+	if !ok {
+		t.Fatalf("query payload = %#v", result.QueryResult.Rows[0][0])
+	}
+	items, ok := payload["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("query items = %#v", payload["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok || item["amount"] != "12345678.9012" || item["label"] != "source" {
+		t.Fatalf("canonical nested query value = %#v", items[0])
+	}
+}
+
+func assertStoredNestedDecimalRows(t *testing.T, ctx context.Context, warehouse *Warehouse, labels, amounts []string) {
+	t.Helper()
+	assertStoredNestedDecimalRowsForTable(t, ctx, warehouse, "alias_destination", labels, amounts)
+}
+
+func assertStoredNestedDecimalRowsForTable(t *testing.T, ctx context.Context, warehouse *Warehouse, tableID string, labels, amounts []string) {
+	t.Helper()
+	physical := quoteIdentifier(physicalSchema("test-project", "analytics"))
+	rows, err := warehouse.db.QueryContext(ctx, `SELECT payload.items[1].label, CAST(payload.items[1].amount AS VARCHAR) FROM `+physical+`.`+quoteIdentifier(tableID)+` ORDER BY payload.items[1].label`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var gotLabels, gotAmounts []string
+	for rows.Next() {
+		var label, amount string
+		if err := rows.Scan(&label, &amount); err != nil {
+			t.Fatal(err)
+		}
+		gotLabels = append(gotLabels, label)
+		gotAmounts = append(gotAmounts, amount)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(gotLabels, "\x00") != strings.Join(labels, "\x00") || strings.Join(gotAmounts, "\x00") != strings.Join(amounts, "\x00") {
+		t.Fatalf("stored nested rows = labels %v amounts %v, want labels %v amounts %v", gotLabels, gotAmounts, labels, amounts)
 	}
 }
 

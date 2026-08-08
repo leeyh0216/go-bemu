@@ -457,8 +457,15 @@ func parseMillis(value, field string) (time.Time, error) {
 }
 
 func hasField(fields map[string]json.RawMessage, name string) bool {
-	_, present := fields[name]
-	return present
+	if _, present := fields[name]; present {
+		return true
+	}
+	for field := range fields {
+		if strings.EqualFold(field, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func checkIfMatch(r *http.Request, current string) error {

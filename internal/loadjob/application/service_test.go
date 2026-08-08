@@ -27,6 +27,16 @@ type testIDs struct{}
 
 func (testIDs) NewID() string { return "generated" }
 
+type trackingJobRepository struct {
+	*MemoryJobRepository
+	createOrGetCalls int
+}
+
+func (r *trackingJobRepository) CreateOrGet(ctx context.Context, job *domain.Job) (*domain.Job, bool, error) {
+	r.createOrGetCalls++
+	return r.MemoryJobRepository.CreateOrGet(ctx, job)
+}
+
 type testObjectStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
@@ -379,6 +389,47 @@ func TestServiceRejectsReplaceableEngineSchemaBoundsBeforeObjectAccess(t *testin
 	loader.mu.Unlock()
 	if opens != 0 || loads != 0 || loader.plannerCalls != 0 || loader.loadPlanCalls != 0 {
 		t.Fatalf("capability rejection crossed a side-effect boundary: opens=%d loads=%d planner=%d load_plan=%d", opens, loads, loader.plannerCalls, loader.loadPlanCalls)
+	}
+}
+
+func TestServiceRejectsRecursiveSchemaDuplicatesBeforeJobPublication(t *testing.T) {
+	jobs := &trackingJobRepository{MemoryJobRepository: NewMemoryJobRepository()}
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	loader := &testLoader{}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Location: "US",
+		Schema: []domain.Field{{Name: "id", Type: "INT64"}},
+	}
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(jobs, objects, testCatalog{table: table}, loader, testClock{value: time.Unix(1, 0)}, testIDs{}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "recursive-duplicate"}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Schema = []domain.Field{{
+		Name: "payload", Type: "STRUCT", Fields: []domain.Field{{
+			Name: "items", Type: "RECORD", Mode: "REPEATED", Fields: []domain.Field{
+				{Name: "amount", Type: "NUMERIC"}, {Name: "Amount", Type: "BIGNUMERIC"},
+			},
+		}},
+	}}
+	job, err := service.Submit(context.Background(), reference, configuration)
+	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "payload.items.Amount") {
+		t.Fatalf("Submit error = %v, want synchronous recursive duplicate", err)
+	}
+	if job != nil || jobs.createOrGetCalls != 0 {
+		t.Fatalf("invalid schema reached job publication: job=%#v repository_calls=%d", job, jobs.createOrGetCalls)
+	}
+	if _, err := jobs.Get(context.Background(), reference); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("invalid schema repository lookup = %v, want not found", err)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	if opens != 0 || loader.calls != 0 || loader.plannerCalls != 0 || loader.loadPlanCalls != 0 {
+		t.Fatalf("invalid schema crossed a side-effect boundary: opens=%d loads=%d planner=%d load_plan=%d", opens, loader.calls, loader.plannerCalls, loader.loadPlanCalls)
 	}
 }
 

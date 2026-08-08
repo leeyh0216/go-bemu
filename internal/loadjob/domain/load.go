@@ -188,7 +188,6 @@ func ValidateConfiguration(configuration LoadConfiguration) error {
 }
 
 func ValidateSchema(fields []Field) error {
-	seen := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
 		if err := field.Validate(); err != nil {
 			switch {
@@ -198,11 +197,24 @@ func ValidateSchema(fields []Field) error {
 				return fmt.Errorf("%w: %v", ErrInvalid, err)
 			}
 		}
+	}
+	return validateUniqueSchemaFields(fields, nil)
+}
+
+func validateUniqueSchemaFields(fields []Field, parent []string) error {
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
 		key := strings.ToLower(field.Name)
+		path := make([]string, len(parent)+1)
+		copy(path, parent)
+		path[len(parent)] = field.Name
 		if _, exists := seen[key]; exists {
-			return fmt.Errorf("%w: duplicate schema field %q", ErrInvalid, field.Name)
+			return fmt.Errorf("%w: duplicate schema field %q", ErrInvalid, strings.Join(path, "."))
 		}
 		seen[key] = struct{}{}
+		if err := validateUniqueSchemaFields(field.Fields, path); err != nil {
+			return err
+		}
 	}
 	return nil
 }
