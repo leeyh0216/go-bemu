@@ -20,11 +20,11 @@ from typing import Any, Sequence
 import xml.etree.ElementTree as ET
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from scripts.consumer_runtime import (  # noqa: E402
+from .consumer_runtime import (  # noqa: E402
     ArtifactSpec,
     ConsumerRuntimeError,
     NormalizedConsumerCase,

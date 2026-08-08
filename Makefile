@@ -130,7 +130,7 @@ integration-contract-check:
 	go run ./tests/integration/cmd/integrationctl check --root .
 
 consumer-runner-test:
-	"$(PYTHON3)" -m unittest discover -s tests/consumer_runner -p 'test_*.py'
+	"$(PYTHON3)" -m unittest discover -s tests/integration/framework/tests -p 'test_*.py'
 
 test:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...
@@ -140,13 +140,13 @@ test-race:
 
 python-test:
 	BQEMU_PYTEST_TIMEOUT_SECONDS="$(BQEMU_PYTEST_TIMEOUT_SECONDS)" \
-	"$(PYTHON)" scripts/consumer_runner.py $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family python)
+	"$(PYTHON)" -m tests.integration.framework.consumer_runner $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family python)
 
 bq-test:
 	@command -v "$(BQEMU_BQCLI_BIN)" >/dev/null 2>&1 || \
 	  (printf '%s\n' 'stage=setup operation=find-bq shape=missing-binary fix_hint=install-case-declared-Google-Cloud-SDK' >&2; exit 1)
 	BQEMU_BQCLI_TIMEOUT_SECONDS="$(BQEMU_BQCLI_TIMEOUT_SECONDS)" \
-	"$(PYTHON3)" scripts/consumer_runner.py $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family bq)
+	"$(PYTHON3)" -m tests.integration.framework.consumer_runner $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family bq)
 
 spark-prepare:
 	mkdir -p "$(CURDIR)/.artifacts/spark/diagnostics"
@@ -162,7 +162,7 @@ spark-contract: spark-prepare
 	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
 	PYTHONPYCACHEPREFIX="$(CURDIR)/.artifacts/spark/pycache" \
-	"$(BQEMU_SPARK_PYTHON)" scripts/consumer_runner.py $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family spark --all)
+	"$(BQEMU_SPARK_PYTHON)" -m tests.integration.framework.consumer_runner $(if $(strip $(BQEMU_CONSUMER_CASE)),--case "$(BQEMU_CONSUMER_CASE)",--family spark --all)
 
 spark-contract-setup: spark-prepare
 

@@ -6,7 +6,7 @@ import sys
 import unittest
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "tests" / "spark"))
 
 from artifact_variants import (  # noqa: E402

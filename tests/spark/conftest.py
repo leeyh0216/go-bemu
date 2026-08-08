@@ -985,7 +985,8 @@ def connector_jar(test_timeout: float) -> Path:
         _run(
             [
                 os.getenv("PYTHON", os.sys.executable),
-                str(REPOSITORY_ROOT / "scripts" / "fetch_spark_artifacts.py"),
+                "-m",
+                "tests.integration.framework.fetch_spark_artifacts",
             ],
             cwd=REPOSITORY_ROOT,
             timeout=_positive_timeout("BQEMU_ARTIFACT_TIMEOUT_SECONDS", "120"),
@@ -1018,7 +1019,8 @@ def dsv2_connector_jar(test_timeout: float) -> Path:
         _run(
             [
                 os.getenv("PYTHON", os.sys.executable),
-                str(REPOSITORY_ROOT / "scripts" / "fetch_spark_artifacts.py"),
+                "-m",
+                "tests.integration.framework.fetch_spark_artifacts",
             ],
             cwd=REPOSITORY_ROOT,
             timeout=_positive_timeout("BQEMU_ARTIFACT_TIMEOUT_SECONDS", "120"),

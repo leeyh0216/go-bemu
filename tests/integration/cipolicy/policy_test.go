@@ -222,7 +222,7 @@ func TestConsumerWorkflowsUseNormalizedDynamicMatrices(t *testing.T) {
 			"default: required",
 			"default: preview,nightly",
 			"fromJSON(needs.consumer-matrix.outputs.spark)",
-			"scripts/consumer_runner.py --case",
+			"tests.integration.framework.consumer_runner --case",
 		},
 		"consumer-nonrequired.yaml": {
 			"--family python --lane preview,nightly --execution public --output-key python",

@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from scripts.consumer_runner import (
+from tests.integration.framework.consumer_runner import (
     ADAPTERS,
     DEFAULT_MANIFEST,
     CaseContext,
@@ -23,7 +23,7 @@ from scripts.consumer_runner import (
     load_case,
     load_manifest,
 )
-from scripts.consumer_runtime import ArtifactSpec
+from tests.integration.framework.consumer_runtime import ArtifactSpec
 
 
 class ConsumerRunnerTest(unittest.TestCase):
@@ -412,10 +412,10 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(type(adapter).__name__, "SparkPytestAdapter")
             with (
                 mock.patch(
-                    "scripts.consumer_runtime.urllib.request.urlopen",
+                    "tests.integration.framework.consumer_runtime.urllib.request.urlopen",
                     side_effect=[io.BytesIO(contents) for _ in artifacts],
                 ),
-                mock.patch("scripts.consumer_runner._install_case_python_artifact"),
+                mock.patch("tests.integration.framework.consumer_runner._install_case_python_artifact"),
             ):
                 adapter.prepare()
             self.assertEqual(adapter.connector_path.read_bytes(), contents)

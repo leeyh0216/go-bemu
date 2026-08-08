@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from scripts.consumer_runtime import (
+from tests.integration.framework.consumer_runtime import (
     ArtifactSpec,
     ConsumerRuntimeError,
     check_python_dependencies,
@@ -21,7 +21,7 @@ from scripts.consumer_runtime import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[4]
 MANIFEST = ROOT / "tests" / "integration" / "contract" / "consumers.normalized.json"
 
 
@@ -162,7 +162,7 @@ class ConsumerRuntimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with mock.patch(
-                "scripts.consumer_runtime.urllib.request.urlopen",
+                "tests.integration.framework.consumer_runtime.urllib.request.urlopen",
                 return_value=io.BytesIO(contents),
             ):
                 path = materialize_artifact(root, artifact)
@@ -177,7 +177,7 @@ class ConsumerRuntimeTest(unittest.TestCase):
             )
             with (
                 mock.patch(
-                    "scripts.consumer_runtime.urllib.request.urlopen",
+                    "tests.integration.framework.consumer_runtime.urllib.request.urlopen",
                     return_value=io.BytesIO(contents),
                 ),
                 self.assertRaises(ConsumerRuntimeError),
