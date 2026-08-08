@@ -22,7 +22,7 @@ IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test bq-test spark-contract vet check config-check docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -35,6 +35,8 @@ help:
 	  'make python-test  Run the official Python client real-process contract' \
 	  'make bq-test      Run the exact-version official bq CLI contract' \
 	  'make spark-contract Install exact Spark locks and run the released connector contract' \
+	  'make ci-static     Validate formatting, vet, configuration, and GitHub Actions policy' \
+	  'make ci-test-*     Run the same functional Go test groups used by CI' \
 	  'make docker-build Build the standalone non-root image' \
 	  'make docker-up    Start the read-only Compose service and wait for readiness' \
 	  'make docker-down  Stop the Compose service and remove transient resources'
@@ -112,6 +114,44 @@ spark-contract:
 
 vet:
 	CGO_ENABLED=1 go vet ./...
+
+github-actions-policy:
+	CGO_ENABLED=1 go test ./internal/cipolicy
+
+ci-static: github-actions-policy format-check vet config-check
+
+ci-test-all:
+	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...
+
+ci-test-core:
+	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) \
+		./internal/admin \
+		./internal/application \
+		./internal/auth/... \
+		./internal/domain \
+		./internal/loadjob/... \
+		./internal/observability \
+		./internal/ports \
+		./internal/tabledata
+
+ci-test-adapters:
+	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./internal/adapters/...
+
+ci-test-storage-read:
+	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./internal/storageread/...
+
+ci-test-storage-write:
+	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./internal/storagewrite/...
+
+ci-test-transport:
+	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./internal/transport/...
+
+ci-test-composition:
+	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) \
+		./cmd/emulator \
+		./contract \
+		./docs \
+		./internal/config
 
 config-check:
 	CGO_ENABLED=1 go run ./cmd/emulator --config "$(BQEMU_CONFIG)" --print-effective-config >/dev/null
