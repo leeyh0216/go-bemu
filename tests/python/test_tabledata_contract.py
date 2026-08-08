@@ -75,12 +75,12 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
         insert_job = bq_client.query(
             f"""
             INSERT INTO `{table_ref}` VALUES
-            (1, 'first', {{'score': 3, 'name': 'nested-one'}}, ['alpha', 'beta'],
-             TIMESTAMPTZ '2026-08-08 01:02:03.123456+00'),
-            (2, NULL, {{'score': NULL, 'name': 'nested-two'}}, [],
-             TIMESTAMPTZ '1969-12-31 23:59:59.000001+00'),
-            (3, 'third', {{'score': 9, 'name': 'nested-three'}}, ['omega'],
-             TIMESTAMPTZ '2000-01-01 00:00:00+00')
+            (1, 'first', STRUCT(3 AS score, 'nested-one' AS name), ['alpha', 'beta'],
+             TIMESTAMP '2026-08-08 01:02:03.123456+00'),
+            (2, NULL, STRUCT(NULL AS score, 'nested-two' AS name), [],
+             TIMESTAMP '1969-12-31 23:59:59.000001+00'),
+            (3, 'third', STRUCT(9 AS score, 'nested-three' AS name), ['omega'],
+             TIMESTAMP '2000-01-01 00:00:00+00')
             """,
             location="US",
             retry=None,
