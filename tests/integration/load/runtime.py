@@ -279,7 +279,7 @@ class Settings:
                 "BQEMU_LOAD_ARTIFACT_TIMEOUT_SECONDS", "180"
             ),
             build_timeout=positive_seconds(
-                "BQEMU_LOAD_BUILD_TIMEOUT_SECONDS", "180"
+                "BQEMU_LOAD_BUILD_TIMEOUT_SECONDS", "300"
             ),
             fixture_timeout=positive_seconds(
                 "BQEMU_LOAD_FIXTURE_TIMEOUT_SECONDS", "60"
