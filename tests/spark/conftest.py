@@ -46,6 +46,7 @@ ARTIFACT_LOCK_PATH = REPOSITORY_ROOT / "tests" / "spark" / "artifacts.lock.json"
 DSV2_ARTIFACT_LOCK_PATH = (
     REPOSITORY_ROOT / "tests" / "spark" / "artifacts-dsv2.lock.json"
 )
+OPERATION_MANIFEST_PATH = REPOSITORY_ROOT / "contract" / "operations.normalized.json"
 STATIC_ACCESS_TOKEN = "bqemu-spark-e2e-static-token"
 TRUSTSTORE_PASSWORD = "bqemu-test-only"
 
@@ -95,6 +96,11 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    with OPERATION_MANIFEST_PATH.open("r", encoding="utf-8") as stream:
+        operation_manifest = json.load(stream)
+    operation_ids = {
+        operation["id"] for operation in operation_manifest["operations"]
+    }
     entries: dict[str, tuple[dict[str, object], str]] = {}
     for matrix_path in MATRIX_PATHS:
         with matrix_path.open("r", encoding="utf-8") as stream:
@@ -113,6 +119,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
             entries[capability_id] = (entry, issue_url)
     for item in items:
+        for operation_marker in item.iter_markers("operation"):
+            if (
+                len(operation_marker.args) != 1
+                or operation_marker.kwargs
+                or not isinstance(operation_marker.args[0], str)
+            ):
+                raise pytest.UsageError(
+                    f"{item.nodeid} operation marker must contain one operation ID"
+                )
+            if operation_marker.args[0] not in operation_ids:
+                raise pytest.UsageError(
+                    f"{item.nodeid} references unknown operation {operation_marker.args[0]}"
+                )
         marker = item.get_closest_marker("capability")
         if marker is None or len(marker.args) != 1:
             raise pytest.UsageError(f"{item.nodeid} must declare one capability ID")

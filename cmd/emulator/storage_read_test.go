@@ -9,9 +9,13 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/config"
+	"github.com/leeyh0216/go-bemu/internal/contracttest"
 )
 
 func TestComposeStorageReadSupportsExplicitDisableAndCleanClose(t *testing.T) {
+	contracttest.Operation(t, "grpc.bigquery-read.create-read-session")
+	contracttest.Operation(t, "grpc.bigquery-read.read-rows")
+
 	ctx, cancel := storageReadRuntimeTestContext(t)
 	defer cancel()
 	warehouse, err := duckdb.New("")

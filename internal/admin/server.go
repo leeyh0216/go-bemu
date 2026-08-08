@@ -15,6 +15,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/leeyh0216/go-bemu/internal/contractspec"
 )
 
 const (
@@ -96,11 +98,28 @@ func New(options Options) (*Server, error) {
 		server.token = token
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", server.health)
-	mux.HandleFunc("GET /bqemu/v1/admin/diagnostics/runtime", server.runtimeSnapshot)
-	mux.HandleFunc("GET /bqemu/v1/admin/diagnostics/goroutines", server.goroutines)
+	for _, binding := range server.routeBindings() {
+		spec, ok := contractspec.RESTRoute(binding.operationID)
+		if !ok {
+			return nil, fmt.Errorf("admin route has no generated operation specification: %s", binding.operationID)
+		}
+		mux.HandleFunc(spec.Pattern(), binding.handler)
+	}
 	server.handler = server.authenticate(mux)
 	return server, nil
+}
+
+type routeBinding struct {
+	operationID string
+	handler     http.HandlerFunc
+}
+
+func (s *Server) routeBindings() []routeBinding {
+	return []routeBinding{
+		{operationID: "bqemu.admin.health", handler: s.health},
+		{operationID: "bqemu.admin.runtime.get", handler: s.runtimeSnapshot},
+		{operationID: "bqemu.admin.goroutines.get", handler: s.goroutines},
+	}
 }
 
 func (s *Server) Handler() http.Handler { return s.handler }

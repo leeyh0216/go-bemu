@@ -20,6 +20,7 @@ from typing import Any
 import uuid
 
 from google.cloud import bigquery
+import pytest
 
 
 CLIENT_VERSION = "3.43.0"
@@ -33,6 +34,7 @@ def _diagnostic(shape: str, fix_hint: str) -> str:
     )
 
 
+@pytest.mark.operation("bigquery.tabledata.list")
 def test_list_rows_decodes_nested_repeated_values_and_pages(
     bq_client: bigquery.Client, project_id: str, test_timeout: float
 ) -> None:

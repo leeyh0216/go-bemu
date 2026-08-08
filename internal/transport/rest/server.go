@@ -9,11 +9,13 @@ package rest
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/leeyh0216/go-bemu/internal/application"
+	"github.com/leeyh0216/go-bemu/internal/contractspec"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
@@ -38,23 +40,28 @@ type CatalogUseCases interface {
 
 var _ CatalogUseCases = (*application.CatalogService)(nil)
 
-type routeRegistration func(*http.ServeMux)
+type operationRouteRegistration func() []routeBinding
 type discoveryExtension func(map[string]any)
 
+type routeBinding struct {
+	operationID string
+	handler     http.Handler
+}
 type Server struct {
 	catalog             CatalogUseCases
 	readiness           ports.HealthChecker
 	baseURL             string
 	requestBodyLimits   requestBodyLimits
-	routeExtensions     []routeRegistration
+	operationRoutes     []operationRouteRegistration
 	discoveryExtensions []discoveryExtension
+	capabilityProfiles  json.RawMessage
 }
 
 type Option func(*Server)
 
-func withRoutes(registration routeRegistration) Option {
+func withOperationRoutes(registration operationRouteRegistration) Option {
 	return func(server *Server) {
-		server.routeExtensions = append(server.routeExtensions, registration)
+		server.operationRoutes = append(server.operationRoutes, registration)
 	}
 }
 
@@ -77,18 +84,40 @@ func NewCatalogServer(catalog CatalogUseCases, readiness ports.HealthChecker, ba
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /$discovery/rest", s.discovery)
-	mux.HandleFunc("GET /discovery/v1/apis/bigquery/v2/rest", s.discovery)
-	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("GET /readyz", s.ready)
-	s.registerCatalogRoutes(mux)
-	for _, register := range s.routeExtensions {
-		register(mux)
+	registerOperationRoutes(mux, s.coreRouteBindings())
+	for _, routes := range s.operationRoutes {
+		registerOperationRoutes(mux, routes())
 	}
 	handler := requestBodyMiddleware(s.requestBodyLimits, mux)
 	handler = methodOverrideMiddleware(handler)
 	handler = recoverMiddleware(handler)
 	return observability.HTTPMiddleware(handler)
+}
+
+func registerOperationRoutes(mux *http.ServeMux, bindings []routeBinding) {
+	for _, binding := range bindings {
+		spec, ok := contractspec.RESTRoute(binding.operationID)
+		if !ok {
+			panic("REST route has no generated operation specification: " + binding.operationID)
+		}
+		mux.Handle(spec.Pattern(), binding.handler)
+	}
+}
+
+func handlerBinding(operationID string, handler http.HandlerFunc) routeBinding {
+	return routeBinding{operationID: operationID, handler: handler}
+}
+
+func (s *Server) operationIDs() []string {
+	bindings := s.coreRouteBindings()
+	for _, routes := range s.operationRoutes {
+		bindings = append(bindings, routes()...)
+	}
+	ids := make([]string, len(bindings))
+	for index, binding := range bindings {
+		ids[index] = binding.operationID
+	}
+	return ids
 }
 
 // google-api-java-client may tunnel PATCH through POST with
@@ -108,27 +137,33 @@ func methodOverrideMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) registerCatalogRoutes(mux *http.ServeMux) {
+func (s *Server) coreRouteBindings() []routeBinding {
 	// Projects are normally provisioned outside BigQuery. The emulator-only
 	// create/get/delete edge provides that missing local lifecycle while project
 	// listing remains on the official BigQuery v2 path used by bq and SDKs.
-	mux.HandleFunc("POST /bqemu/v1/projects", s.createProject)
-	mux.HandleFunc("GET /bqemu/v1/projects", s.listProjects)
-	mux.HandleFunc("GET /bqemu/v1/projects/{projectId}", s.getProject)
-	mux.HandleFunc("DELETE /bqemu/v1/projects/{projectId}", s.deleteProject)
-	mux.HandleFunc("GET /bigquery/v2/projects", s.listProjects)
-	mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/datasets", s.createDataset)
-	mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets", s.listDatasets)
-	mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets/{datasetId}", s.getDataset)
-	mux.HandleFunc("PATCH /bigquery/v2/projects/{projectId}/datasets/{datasetId}", s.patchDataset)
-	mux.HandleFunc("PUT /bigquery/v2/projects/{projectId}/datasets/{datasetId}", s.updateDataset)
-	mux.HandleFunc("DELETE /bigquery/v2/projects/{projectId}/datasets/{datasetId}", s.deleteDataset)
-	mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables", s.createTable)
-	mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables", s.listTables)
-	mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}", s.getTable)
-	mux.HandleFunc("PATCH /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}", s.patchTable)
-	mux.HandleFunc("PUT /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}", s.updateTable)
-	mux.HandleFunc("DELETE /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}", s.deleteTable)
+	return []routeBinding{
+		handlerBinding("bqemu.discovery.get", s.discovery),
+		handlerBinding("bqemu.discovery.googleapis.get", s.discovery),
+		handlerBinding("bqemu.health.live", s.health),
+		handlerBinding("bqemu.health.ready", s.ready),
+		handlerBinding("bqemu.projects.create", s.createProject),
+		handlerBinding("bqemu.projects.list", s.listProjects),
+		handlerBinding("bqemu.projects.get", s.getProject),
+		handlerBinding("bqemu.projects.delete", s.deleteProject),
+		handlerBinding("bigquery.projects.list", s.listProjects),
+		handlerBinding("bigquery.datasets.insert", s.createDataset),
+		handlerBinding("bigquery.datasets.list", s.listDatasets),
+		handlerBinding("bigquery.datasets.get", s.getDataset),
+		handlerBinding("bigquery.datasets.patch", s.patchDataset),
+		handlerBinding("bigquery.datasets.update", s.updateDataset),
+		handlerBinding("bigquery.datasets.delete", s.deleteDataset),
+		handlerBinding("bigquery.tables.insert", s.createTable),
+		handlerBinding("bigquery.tables.list", s.listTables),
+		handlerBinding("bigquery.tables.get", s.getTable),
+		handlerBinding("bigquery.tables.patch", s.patchTable),
+		handlerBinding("bigquery.tables.update", s.updateTable),
+		handlerBinding("bigquery.tables.delete", s.deleteTable),
+	}
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

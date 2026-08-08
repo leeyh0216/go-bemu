@@ -292,22 +292,22 @@ func TestRESTRejectedBodyLogsMatchHTTPStatuses(t *testing.T) {
 
 func newJSONEchoServer(t *testing.T, compressedLimit, decodedLimit int64, calls *atomic.Int64) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(NewCatalogServer(nil, nil, "",
-		withRoutes(func(mux *http.ServeMux) {
-			mux.HandleFunc("POST /echo", func(w http.ResponseWriter, r *http.Request) {
-				if calls != nil {
-					calls.Add(1)
-				}
-				var value map[string]any
-				if err := decodeJSON(r, &value); err != nil {
-					writeError(w, err)
-					return
-				}
-				writeJSON(w, http.StatusOK, value)
-			})
-		}),
-		WithRequestBodyLimits(compressedLimit, decodedLimit),
-	).Handler())
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /echo", func(w http.ResponseWriter, r *http.Request) {
+		if calls != nil {
+			calls.Add(1)
+		}
+		var value map[string]any
+		if err := decodeJSON(r, &value); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	})
+	handler := requestBodyMiddleware(normalizedRequestBodyLimits(compressedLimit, decodedLimit), mux)
+	handler = methodOverrideMiddleware(handler)
+	handler = recoverMiddleware(handler)
+	server := httptest.NewServer(observability.HTTPMiddleware(handler))
 	t.Cleanup(server.Close)
 	return server
 }

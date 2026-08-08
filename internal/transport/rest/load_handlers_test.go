@@ -19,11 +19,13 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/adapters/objectstore"
 	"github.com/leeyh0216/go-bemu/internal/application"
+	"github.com/leeyh0216/go-bemu/internal/contracttest"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	loadApplication "github.com/leeyh0216/go-bemu/internal/loadjob/application"
 )
 
 func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
+	contracttest.Operation(t, "bigquery.jobs.insert")
 	ctx := context.Background()
 	warehouse, err := duckdb.New("")
 	if err != nil {

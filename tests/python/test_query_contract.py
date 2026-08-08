@@ -10,6 +10,8 @@ from google.cloud import bigquery
 import pytest
 
 
+@pytest.mark.operation("bigquery.jobs.query")
+@pytest.mark.operation("bigquery.jobs.getQueryResults")
 def test_synchronous_and_polled_query_jobs(
     bq_client: bigquery.Client, test_timeout: float
 ) -> None:

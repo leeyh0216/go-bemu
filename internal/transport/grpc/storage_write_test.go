@@ -24,12 +24,18 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/leeyh0216/go-bemu/internal/contracttest"
 	writeapp "github.com/leeyh0216/go-bemu/internal/storagewrite/application"
 	writedomain "github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
 )
 
 func TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance(t *testing.T) {
+	contracttest.Operation(t, "grpc.bigquery-write.create-write-stream")
+	contracttest.Operation(t, "grpc.bigquery-write.append-rows")
+	contracttest.Operation(t, "grpc.bigquery-write.get-write-stream")
+	contracttest.Operation(t, "grpc.bigquery-write.finalize-write-stream")
+	contracttest.Operation(t, "grpc.bigquery-write.batch-commit-write-streams")
 	ctx, cancel := grpcStorageWriteTestContext(t)
 	defer cancel()
 	coordinator := newWireWriteCoordinator()
@@ -43,6 +49,10 @@ func TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance(t *testing.
 	}
 	if created.GetType() != storagepb.WriteStream_PENDING || created.GetTableSchema() == nil || len(created.GetTableSchema().GetFields()) != 1 {
 		t.Fatalf("unexpected created stream: %#v", created)
+	}
+	loaded, err := client.GetWriteStream(ctx, &storagepb.GetWriteStreamRequest{Name: created.GetName(), View: storagepb.WriteStreamView_FULL})
+	if err != nil || loaded.GetName() != created.GetName() || loaded.GetTableSchema() == nil {
+		t.Fatalf("get write stream: %#v, %v", loaded, err)
 	}
 	descriptor, rows := wireProtoRows(t, 10, 20, 30)
 	appendClient, err := client.AppendRows(ctx)

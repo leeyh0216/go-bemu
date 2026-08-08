@@ -29,10 +29,10 @@ type TableDataUseCases interface {
 // adapter.
 func WithTableDataAPI(useCases TableDataUseCases) Option {
 	return func(server *Server) {
-		server.routeExtensions = append(server.routeExtensions, func(mux *http.ServeMux) {
-			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}/data", func(w http.ResponseWriter, r *http.Request) {
+		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
+			return []routeBinding{handlerBinding("bigquery.tabledata.list", func(w http.ResponseWriter, r *http.Request) {
 				listTableData(w, r, useCases)
-			})
+			})}
 		})
 		server.discoveryExtensions = append(server.discoveryExtensions, extendTableDataDiscovery)
 	}

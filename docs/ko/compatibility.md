@@ -5,6 +5,10 @@
 
 # 호환성 범위
 
+REST 메서드와 경로, Storage RPC의 정확한 지원 범위는 엄격한 operation
+매니페스트에서 생성합니다. 지원 상태와 검증 수준, 제한 사항, 관련 이슈, 수집 테스트는
+[API 및 RPC 호환성](api-rpc-compatibility.md)에서 확인할 수 있습니다.
+
 <!-- section: status-language -->
 ## 상태 용어
 

@@ -30,6 +30,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/admin"
 	"github.com/leeyh0216/go-bemu/internal/application"
+	"github.com/leeyh0216/go-bemu/internal/capabilityspec"
 	"github.com/leeyh0216/go-bemu/internal/config"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
@@ -144,6 +145,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}()
 
 	restOptions := make([]rest.Option, 0, 3)
+	restOptions = append(restOptions, rest.WithCapabilityProfiles(capabilityspec.Profiles()))
 	restOptions = append(restOptions, rest.WithRequestBodyLimits(
 		cfg.Server.HTTP.MaxCompressedRequestBytes, cfg.Server.HTTP.MaxUncompressedRequestBytes,
 	))

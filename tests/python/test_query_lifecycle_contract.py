@@ -80,6 +80,9 @@ def _run_destination_query(
     return job
 
 
+@pytest.mark.operation("bigquery.jobs.insert")
+@pytest.mark.operation("bigquery.jobs.list")
+@pytest.mark.operation("bigquery.jobs.get")
 def test_query_destination_job_lifecycle_pagination_and_metadata_patch(
     bq_client: bigquery.Client, project_id: str, test_timeout: float
 ) -> None:

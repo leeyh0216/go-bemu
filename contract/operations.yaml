@@ -1,0 +1,666 @@
+schemaVersion: 1
+
+sources:
+  - id: bigquery-rest-v2
+    url: https://cloud.google.com/bigquery/docs/reference/rest/v2
+  - id: bigquery-storage-v1
+    url: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1
+  - id: discovery-v1
+    url: https://developers.google.com/discovery/v1/reference/apis/getRest
+  - id: bqemu-public-api
+    url: https://github.com/leeyh0216/go-bemu
+  - id: grpc-health-v1
+    url: https://grpc.io/docs/guides/health-checking/
+  - id: grpc-reflection-v1
+    url: https://grpc.io/docs/guides/reflection/
+
+operations:
+  - id: bqemu.discovery.get
+    protocol: rest
+    component: public-core
+    summary: {en: Return the BigQuery v2 discovery document, ko: BigQuery v2 Discovery 문서를 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: '/$discovery/rest', discovery: false}
+    supportedInput: {en: The optional version query parameter is accepted., ko: 선택 사항인 version 쿼리 매개변수를 받을 수 있습니다.}
+    limitations: {policy: none, byDesign: [], en: The document describes only the emulator surface., ko: 에뮬레이터가 제공하는 범위만 문서에 포함합니다.}
+    issues: []
+    sources: [discovery-v1]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+
+  - id: bqemu.discovery.googleapis.get
+    protocol: rest
+    component: public-core
+    summary: {en: Return discovery through the Google APIs discovery path, ko: Google APIs Discovery 경로에서 문서를 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /discovery/v1/apis/bigquery/v2/rest, discovery: false}
+    supportedInput: {en: No request body is accepted., ko: 요청 본문을 받지 않습니다.}
+    limitations: {policy: none, byDesign: [], en: The response is identical to the emulator discovery endpoint., ko: 에뮬레이터 Discovery 엔드포인트와 같은 응답을 반환합니다.}
+    issues: []
+    sources: [discovery-v1]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+
+  - id: bqemu.health.live
+    protocol: rest
+    component: public-core
+    summary: {en: Report public HTTP process liveness, ko: 공개 HTTP 프로세스의 실행 상태를 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /healthz, discovery: false}
+    supportedInput: {en: No request body or query parameters are used., ko: 요청 본문과 쿼리 매개변수를 사용하지 않습니다.}
+    limitations: {policy: none, byDesign: [], en: Liveness does not check storage readiness., ko: 실행 상태 확인에서는 저장소 준비 상태를 검사하지 않습니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+
+  - id: bqemu.health.ready
+    protocol: rest
+    component: public-core
+    summary: {en: Report public HTTP storage readiness, ko: 공개 HTTP 저장소의 준비 상태를 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /readyz, discovery: false}
+    supportedInput: {en: No request body or query parameters are used., ko: 요청 본문과 쿼리 매개변수를 사용하지 않습니다.}
+    limitations: {policy: none, byDesign: [], en: Readiness checks the configured warehouse only., ko: 설정된 웨어하우스의 준비 상태만 검사합니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+
+  - id: bqemu.projects.create
+    protocol: rest
+    component: public-core
+    summary: {en: Create an emulator project, ko: 에뮬레이터 프로젝트를 생성합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: POST, path: /bqemu/v1/projects, discovery: false}
+    supportedInput: {en: Project ID and basic display metadata are accepted., ko: 프로젝트 ID와 기본 표시 메타데이터를 받습니다.}
+    limitations: {policy: none, byDesign: [], en: This is an emulator extension and is not a BigQuery REST method., ko: BigQuery REST 메서드가 아닌 에뮬레이터 확장 기능입니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+
+  - id: bqemu.projects.list
+    protocol: rest
+    component: public-core
+    summary: {en: List emulator projects, ko: 에뮬레이터 프로젝트 목록을 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /bqemu/v1/projects, discovery: false}
+    supportedInput: {en: No paging parameters are required., ko: 페이지 매김 매개변수 없이 호출할 수 있습니다.}
+    limitations: {policy: none, byDesign: [], en: The extension returns the complete in-process project list., ko: 현재 프로세스의 전체 프로젝트 목록을 반환합니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+
+  - id: bqemu.projects.get
+    protocol: rest
+    component: public-core
+    summary: {en: Get one emulator project, ko: 에뮬레이터 프로젝트 하나를 조회합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: '/bqemu/v1/projects/{projectId}', discovery: false}
+    supportedInput: {en: A project ID path parameter is required., ko: projectId 경로 매개변수가 필요합니다.}
+    limitations: {policy: none, byDesign: [], en: This is an emulator extension., ko: 에뮬레이터 확장 기능입니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+
+  - id: bqemu.projects.delete
+    protocol: rest
+    component: public-core
+    summary: {en: Delete one emulator project, ko: 에뮬레이터 프로젝트 하나를 삭제합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: DELETE, path: '/bqemu/v1/projects/{projectId}', discovery: false}
+    supportedInput: {en: A project ID path parameter is required., ko: projectId 경로 매개변수가 필요합니다.}
+    limitations: {policy: none, byDesign: [], en: The project must not retain resources that prevent deletion., ko: 삭제를 막는 하위 리소스가 없어야 합니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+
+  - id: bigquery.projects.list
+    protocol: rest
+    component: public-core
+    summary: {en: List projects visible to the emulator, ko: 에뮬레이터에서 조회할 수 있는 프로젝트 목록을 반환합니다.}
+    support: partial
+    verification: transport
+    rest: {method: GET, path: /bigquery/v2/projects, discovery: true}
+    supportedInput: {en: maxResults and pageToken are supported., ko: maxResults와 pageToken을 지원합니다.}
+    limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: IAM visibility and billing metadata are intentionally outside the emulator scope., ko: IAM 가시성과 결제 메타데이터는 에뮬레이터 범위에서 의도적으로 제외합니다.}
+    issues: []
+    sources: [bigquery-rest-v2]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, bq:tests/bqcli/run_contract.py:main]
+
+  - id: bigquery.datasets.insert
+    protocol: rest
+    component: public-core
+    summary: {en: Create a dataset, ko: 데이터 세트를 생성합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/datasets', discovery: true}
+    supportedInput: {en: "Dataset reference, location, labels, description, and expiration metadata are supported.", ko: "데이터 세트 참조와 위치, 라벨, 설명, 만료 메타데이터를 지원합니다."}
+    limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: Access policies and Cloud KMS encryption configuration are intentionally outside the emulator scope., ko: 액세스 정책과 Cloud KMS 암호화 설정은 에뮬레이터 범위에서 의도적으로 제외합니다.}
+    issues: []
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/bqcli/run_contract.py:main]
+
+  - id: bigquery.datasets.list
+    protocol: rest
+    component: public-core
+    summary: {en: List datasets in a project, ko: 프로젝트의 데이터 세트 목록을 반환합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets', discovery: true}
+    supportedInput: {en: "maxResults, pageToken, and all are supported.", ko: "maxResults와 pageToken, all을 지원합니다."}
+    limitations: {policy: tracked, byDesign: [], en: The filter query parameter is not advertised or supported., ko: filter 쿼리 매개변수는 Discovery에 표시하지 않으며 지원하지 않습니다.}
+    issues: ['#33']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors]
+
+  - id: bigquery.datasets.get
+    protocol: rest
+    component: public-core
+    summary: {en: Get dataset metadata, ko: 데이터 세트 메타데이터를 조회합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}', discovery: true}
+    supportedInput: {en: Project and dataset path parameters are supported., ko: 프로젝트와 데이터 세트 경로 매개변수를 지원합니다.}
+    limitations: {policy: mixed, byDesign: [google-iam], en: datasetView metadata selection is tracked; access-policy data remains outside the emulator scope., ko: datasetView 메타데이터 선택은 구현 예정이며 액세스 정책 데이터는 에뮬레이터 범위에서 제외합니다.}
+    issues: ['#33']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/bqcli/run_contract.py:main]
+
+  - id: bigquery.datasets.patch
+    protocol: rest
+    component: public-core
+    summary: {en: Patch dataset metadata, ko: 데이터 세트 메타데이터 일부를 변경합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: PATCH, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}', discovery: true}
+    supportedInput: {en: "Description, labels, and supported expiration fields can be patched with ETags.", ko: "설명과 라벨, 지원하는 만료 필드를 ETag와 함께 변경할 수 있습니다."}
+    limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: Access-policy mutations and their updateMode variants are intentionally outside the emulator scope., ko: 액세스 정책 변경과 관련 updateMode 동작은 에뮬레이터 범위에서 의도적으로 제외합니다.}
+    issues: []
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/bqcli/extended_contract.py:run_extended_contract]
+
+  - id: bigquery.datasets.update
+    protocol: rest
+    component: public-core
+    summary: {en: Replace supported dataset metadata, ko: 지원하는 데이터 세트 메타데이터를 전체 변경합니다.}
+    support: partial
+    verification: transport
+    rest: {method: PUT, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}', discovery: true}
+    supportedInput: {en: The same mutable fields as datasets.patch are accepted., ko: datasets.patch와 같은 변경 가능 필드를 받습니다.}
+    limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: "Google-managed access, billing, and encryption fields are not persisted.", ko: "Google에서 관리하는 액세스, 결제, 암호화 필드는 저장하지 않습니다."}
+    issues: []
+    sources: [bigquery-rest-v2]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution]
+
+  - id: bigquery.datasets.delete
+    protocol: rest
+    component: public-core
+    summary: {en: Delete a dataset, ko: 데이터 세트를 삭제합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: DELETE, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}', discovery: true}
+    supportedInput: {en: deleteContents is supported., ko: deleteContents를 지원합니다.}
+    limitations: {policy: by-design, byDesign: [google-iam], en: Deletion is local and intentionally performs no IAM checks., ko: 로컬 데이터만 삭제하며 의도적으로 IAM 검사를 수행하지 않습니다.}
+    issues: []
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/bqcli/run_contract.py:main]
+
+  - id: bigquery.tables.insert
+    protocol: rest
+    component: public-core
+    summary: {en: Create a table, ko: 테이블을 생성합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables', discovery: true}
+    supportedInput: {en: "Schema, labels, description, expiration, and basic partitioning metadata are supported.", ko: "스키마와 라벨, 설명, 만료, 기본 파티션 메타데이터를 지원합니다."}
+    limitations: {policy: tracked, byDesign: [], en: "Views, routines, external tables, and advanced partition options are not implemented.", ko: "뷰와 루틴, 외부 테이블, 고급 파티션 옵션은 지원하지 않습니다."}
+    issues: ['#21', '#27']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main]
+
+  - id: bigquery.tables.list
+    protocol: rest
+    component: public-core
+    summary: {en: List tables in a dataset, ko: 데이터 세트의 테이블 목록을 반환합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables', discovery: true}
+    supportedInput: {en: maxResults and pageToken are supported., ko: maxResults와 pageToken을 지원합니다.}
+    limitations: {policy: mixed, byDesign: [google-control-plane], en: Supported local metadata is returned; remaining list fields are tracked while Google-managed metadata stays out of scope., ko: 지원하는 로컬 메타데이터를 반환하며 나머지 목록 필드는 구현 예정이고 Google 관리 메타데이터는 범위에서 제외합니다.}
+    issues: ['#33']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main]
+
+  - id: bigquery.tables.get
+    protocol: rest
+    component: public-core
+    summary: {en: Get table metadata, ko: 테이블 메타데이터를 조회합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}', discovery: true}
+    supportedInput: {en: "Project, dataset, and table path parameters are supported.", ko: "프로젝트와 데이터 세트, 테이블 경로 매개변수를 지원합니다."}
+    limitations: {policy: mixed, byDesign: [google-control-plane, google-iam], en: selectedFields and view are tracked; Cloud statistics and IAM metadata remain outside the emulator scope., ko: selectedFields와 view는 구현 예정이며 Cloud 통계와 IAM 메타데이터는 에뮬레이터 범위에서 제외합니다.}
+    issues: ['#33']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main]
+
+  - id: bigquery.tables.patch
+    protocol: rest
+    component: public-core
+    summary: {en: Patch table metadata and additive schema fields, ko: 테이블 메타데이터와 추가 스키마 필드를 변경합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: PATCH, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}', discovery: true}
+    supportedInput: {en: Metadata and additive schema updates with ETags are supported., ko: ETag를 사용하는 메타데이터 변경과 스키마 필드 추가를 지원합니다.}
+    limitations: {policy: tracked, byDesign: [], en: Type changes and destructive schema updates remain limited., ko: 자료형 변경과 파괴적인 스키마 변경은 제한됩니다.}
+    issues: ['#21']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main, bq:tests/bqcli/extended_contract.py:run_extended_contract]
+
+  - id: bigquery.tables.update
+    protocol: rest
+    component: public-core
+    summary: {en: Replace supported table metadata, ko: 지원하는 테이블 메타데이터를 전체 변경합니다.}
+    support: partial
+    verification: transport
+    rest: {method: PUT, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}', discovery: true}
+    supportedInput: {en: The same mutable fields as tables.patch are accepted., ko: tables.patch와 같은 변경 가능 필드를 받습니다.}
+    limitations: {policy: tracked, byDesign: [], en: Unsupported schema and table metadata mutations are not persisted., ko: 지원하지 않는 스키마 및 테이블 메타데이터 변경은 저장하지 않습니다.}
+    issues: ['#21']
+    sources: [bigquery-rest-v2]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution]
+
+  - id: bigquery.tables.delete
+    protocol: rest
+    component: public-core
+    summary: {en: Delete a table, ko: 테이블을 삭제합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: DELETE, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}', discovery: true}
+    supportedInput: {en: "Project, dataset, and table path parameters are supported.", ko: "프로젝트와 데이터 세트, 테이블 경로 매개변수를 지원합니다."}
+    limitations: {policy: by-design, byDesign: [google-iam], en: Deletion is local and intentionally performs no IAM checks., ko: 로컬 데이터만 삭제하며 의도적으로 IAM 검사를 수행하지 않습니다.}
+    issues: []
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main]
+
+  - id: bigquery.jobs.query
+    protocol: rest
+    component: public-query
+    summary: {en: Run a synchronous query, ko: 동기 쿼리를 실행합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/queries', discovery: true}
+    supportedInput: {en: "GoogleSQL queries, locations, paging limits, request IDs, and supported destinations are accepted.", ko: "GoogleSQL 쿼리와 위치, 페이지 크기, 요청 ID, 지원하는 대상 테이블을 받습니다."}
+    limitations: {policy: tracked, byDesign: [], en: Legacy SQL and several cloud execution options are rejected., ko: Legacy SQL과 일부 Cloud 실행 옵션은 거부합니다.}
+    issues: ['#3', '#27']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_query_contract.py:test_synchronous_and_polled_query_jobs]
+
+  - id: bigquery.jobs.getQueryResults
+    protocol: rest
+    component: public-query
+    summary: {en: Read query job results, ko: 쿼리 작업 결과를 조회합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/queries/{jobId}', discovery: true}
+    supportedInput: {en: "location, maxResults, pageToken, and startIndex are supported.", ko: "location과 maxResults, pageToken, startIndex를 지원합니다."}
+    limitations: {policy: tracked, byDesign: [], en: Results follow the current emulator result lifecycle and limits., ko: 결과는 현재 에뮬레이터의 결과 수명 주기와 크기 제한을 따릅니다.}
+    issues: ['#3']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_query_contract.py:test_synchronous_and_polled_query_jobs, bq:tests/bqcli/run_contract.py:main, bq:tests/bqcli/extended_contract.py:run_extended_contract]
+
+  - id: bigquery.jobs.insert
+    protocol: rest
+    component: public-query
+    summary: {en: Submit a query or configured load job, ko: 쿼리 작업 또는 설정된 로드 작업을 제출합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/jobs', discovery: true}
+    supportedInput: {en: Query jobs are accepted; configured Parquet load input is described by the condition., ko: 쿼리 작업을 받으며 설정된 Parquet 로드 입력은 조건 항목에 따릅니다.}
+    conditions:
+      - {setting: load.enabled, equals: true, effect: input-branch, verification: transport, tests: [go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs], en: Configured Parquet load job input is accepted., ko: 설정된 Parquet 로드 작업 입력을 받습니다.}
+    limitations: {policy: tracked, byDesign: [], en: Media upload paths are not advertised; unsupported load formats end with notImplemented., ko: 미디어 업로드 경로는 표시하지 않으며 지원하지 않는 로드 형식은 notImplemented로 종료됩니다.}
+    issues: ['#5']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch, bq:tests/bqcli/run_contract.py:main, bq:tests/bqcli/extended_contract.py:run_extended_contract, go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs]
+
+  - id: bigquery.jobs.list
+    protocol: rest
+    component: public-query
+    summary: {en: List jobs in a project and location, ko: 프로젝트와 위치의 작업 목록을 반환합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/jobs', discovery: true}
+    supportedInput: {en: "location, maxResults, pageToken, and bq-compatible neutral parameters are accepted.", ko: "location과 maxResults, pageToken, bq 호환을 위한 중립 매개변수를 받습니다."}
+    limitations: {policy: tracked, byDesign: [], en: "allUsers, state filters, creation-time filters, and parent job semantics are not implemented.", ko: "allUsers와 상태 필터, 생성 시간 필터, 상위 작업 의미는 지원하지 않습니다."}
+    issues: ['#3']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch, bq:tests/bqcli/run_contract.py:main, bq:tests/bqcli/extended_contract.py:run_extended_contract]
+
+  - id: bigquery.jobs.get
+    protocol: rest
+    component: public-query
+    summary: {en: Get one job, ko: 작업 하나를 조회합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/jobs/{jobId}', discovery: true}
+    supportedInput: {en: "Project, job, and location identifiers are supported.", ko: "프로젝트와 작업, 위치 식별자를 지원합니다."}
+    limitations: {policy: tracked, byDesign: [], en: Only currently implemented emulator job types and metadata are returned., ko: 현재 구현된 에뮬레이터 작업 유형과 메타데이터만 반환합니다.}
+    issues: ['#3']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch, bq:tests/bqcli/extended_contract.py:run_extended_contract]
+
+  - id: bigquery.tabledata.list
+    protocol: rest
+    component: public-tabledata
+    summary: {en: List table rows in REST f/v encoding, ko: REST f/v 형식으로 테이블 행을 반환합니다.}
+    support: partial
+    verification: public-process
+    rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}/data', discovery: true}
+    supportedInput: {en: "maxResults, pageToken, startIndex, and selected wire format options are supported.", ko: "maxResults와 pageToken, startIndex, 일부 출력 형식 옵션을 지원합니다."}
+    limitations: {policy: tracked, byDesign: [], en: selectedFields projection is rejected and response sizes are bounded., ko: selectedFields 프로젝션은 거부하며 응답 크기에 제한이 있습니다.}
+    issues: ['#3']
+    sources: [bigquery-rest-v2]
+    tests: [python:tests/python/test_tabledata_contract.py:test_list_rows_decodes_nested_repeated_values_and_pages]
+
+  - id: bqemu.capabilities.get
+    protocol: rest
+    component: public-query
+    summary: {en: Return versioned consumer capability profiles, ko: 버전별 소비자 기능 프로필을 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /bqemu/v1/capabilities, discovery: false}
+    supportedInput: {en: No request body is accepted., ko: 요청 본문을 받지 않습니다.}
+    limitations: {policy: none, byDesign: [], en: This is an emulator extension., ko: 에뮬레이터 확장 기능입니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery]
+
+  - id: bqemu.console.get
+    protocol: rest
+    component: public-query
+    summary: {en: Return console navigation metadata, ko: 콘솔 탐색 메타데이터를 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /bqemu/v1/console, discovery: false}
+    supportedInput: {en: No request body is accepted., ko: 요청 본문을 받지 않습니다.}
+    limitations: {policy: tracked, byDesign: [], en: This endpoint contains links while the optional static UI remains tracked separately., ko: 이 엔드포인트는 링크를 반환하며 선택형 정적 UI는 별도 이슈에서 구현합니다.}
+    issues: ['#4']
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery]
+
+  - id: bqemu.console.assets
+    protocol: rest
+    component: public-console
+    summary: {en: Serve optional console static assets, ko: 선택형 콘솔 정적 파일을 제공합니다.}
+    support: partial
+    verification: transport
+    rest: {method: GET, path: /console/, discovery: false}
+    supportedInput: {en: Files beneath the configured console directory are served with SPA fallback., ko: 설정한 콘솔 디렉터리의 파일을 SPA 대체 경로와 함께 제공합니다.}
+    conditions:
+      - {setting: ui.enabled, equals: true, effect: operation-exposure, verification: transport, tests: [go:internal/transport/rest/server:TestOptionalConsoleSPAHandler], en: The static console route is registered., ko: 정적 콘솔 라우트를 등록합니다.}
+    limitations: {policy: tracked, byDesign: [], en: The optional console remains limited to the currently implemented static asset surface., ko: 선택형 콘솔은 현재 구현된 정적 파일 제공 범위로 제한됩니다.}
+    issues: ['#4']
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/server:TestOptionalConsoleSPAHandler]
+
+  - id: bqemu.console.redirect
+    protocol: rest
+    component: public-console
+    summary: {en: Redirect the optional root UI path to the console, ko: 선택형 루트 UI 경로를 콘솔로 이동시킵니다.}
+    support: partial
+    verification: transport
+    rest: {method: GET, path: /, discovery: false}
+    supportedInput: {en: The exact root path is redirected to /console/., ko: 정확한 루트 경로를 /console/로 이동시킵니다.}
+    conditions:
+      - {setting: ui.enabled, equals: true, effect: operation-exposure, verification: transport, tests: [go:internal/transport/rest/server:TestOptionalConsoleSPAHandler], en: The root console redirect is registered., ko: 루트 콘솔 이동 라우트를 등록합니다.}
+    limitations: {policy: tracked, byDesign: [], en: The optional console remains limited to the currently implemented static asset surface., ko: 선택형 콘솔은 현재 구현된 정적 파일 제공 범위로 제한됩니다.}
+    issues: ['#4']
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/server:TestOptionalConsoleSPAHandler]
+
+  - id: bqemu.admin.health
+    protocol: rest
+    component: admin
+    summary: {en: Report admin server liveness, ko: 관리 서버의 실행 상태를 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /healthz, discovery: false}
+    supportedInput: {en: An optional admin bearer token is checked when configured., ko: 설정한 경우 관리용 Bearer 토큰을 검사합니다.}
+    conditions:
+      - {setting: admin.enabled, equals: true, effect: operation-exposure, verification: transport, tests: [go:internal/admin/server:TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential], en: The separate admin listener is started., ko: 별도 관리용 리스너를 시작합니다.}
+    limitations: {policy: none, byDesign: [], en: The admin server listens on a separate endpoint., ko: 관리 서버는 별도 엔드포인트에서 수신합니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/admin/server:TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential]
+
+  - id: bqemu.admin.runtime.get
+    protocol: rest
+    component: admin
+    summary: {en: Return bounded runtime diagnostics, ko: 크기가 제한된 런타임 진단 정보를 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /bqemu/v1/admin/diagnostics/runtime, discovery: false}
+    supportedInput: {en: An optional admin bearer token is checked when configured., ko: 설정한 경우 관리용 Bearer 토큰을 검사합니다.}
+    conditions:
+      - {setting: admin.enabled, equals: true, effect: operation-exposure, verification: transport, tests: [go:internal/admin/server:TestDiagnosticsExposeRuntimeAndBoundedStackMetadata], en: The separate admin listener is started., ko: 별도 관리용 리스너를 시작합니다.}
+    limitations: {policy: none, byDesign: [], en: The response excludes request payloads and credentials., ko: 응답에는 요청 데이터와 자격 증명을 포함하지 않습니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/admin/server:TestDiagnosticsExposeRuntimeAndBoundedStackMetadata]
+
+  - id: bqemu.admin.goroutines.get
+    protocol: rest
+    component: admin
+    summary: {en: Return a bounded goroutine stack capture, ko: 크기가 제한된 고루틴 스택을 반환합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /bqemu/v1/admin/diagnostics/goroutines, discovery: false}
+    supportedInput: {en: An optional admin bearer token is checked when configured., ko: 설정한 경우 관리용 Bearer 토큰을 검사합니다.}
+    conditions:
+      - {setting: admin.enabled, equals: true, effect: operation-exposure, verification: transport, tests: [go:internal/admin/server:TestDiagnosticsExposeRuntimeAndBoundedStackMetadata], en: The separate admin listener is started., ko: 별도 관리용 리스너를 시작합니다.}
+    limitations: {policy: none, byDesign: [], en: The payload may be truncated at the configured byte limit., ko: 설정한 바이트 제한에 따라 데이터가 잘릴 수 있습니다.}
+    issues: []
+    sources: [bqemu-public-api]
+    tests: [go:internal/admin/server:TestDiagnosticsExposeRuntimeAndBoundedStackMetadata]
+
+  - id: grpc.bigquery-read.create-read-session
+    protocol: grpc
+    component: storage-read
+    summary: {en: Create a bounded Storage Read session, ko: 크기가 제한된 Storage Read 세션을 생성합니다.}
+    support: partial
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryRead, method: CreateReadSession}
+    supportedInput: {en: "Arrow or Avro, top-level selected fields, restricted row filters, and bounded stream counts are supported.", ko: "Arrow 또는 Avro와 최상위 필드 선택, 제한된 행 필터, 제한된 스트림 수를 지원합니다."}
+    conditions:
+      - {setting: storage.read.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose], en: The Storage Read service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Read 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+    limitations: {policy: tracked, byDesign: [], en: "Nested projection, historical snapshots, and compression are not implemented.", ko: "중첩 프로젝션과 과거 스냅샷, 압축은 지원하지 않습니다."}
+    issues: ['#6']
+    sources: [bigquery-storage-v1]
+    tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume]
+
+  - id: grpc.bigquery-read.read-rows
+    protocol: grpc
+    component: storage-read
+    summary: {en: Stream rows from a Storage Read stream, ko: Storage Read 스트림의 행을 전송합니다.}
+    support: partial
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryRead, method: ReadRows}
+    supportedInput: {en: Arrow and Avro row batches with stream-relative offsets are supported., ko: Arrow와 Avro 행 배치 및 스트림 기준 오프셋을 지원합니다.}
+    conditions:
+      - {setting: storage.read.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose], en: The Storage Read service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Read 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+    limitations: {policy: tracked, byDesign: [], en: Responses and session snapshots have configured size limits while remaining Storage Read work is tracked., ko: 응답과 세션 스냅샷에 설정된 크기 제한이 있으며 나머지 Storage Read 작업은 이슈에서 관리합니다.}
+    issues: ['#6']
+    sources: [bigquery-storage-v1]
+    tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume]
+
+  - id: grpc.bigquery-read.split-read-stream
+    protocol: grpc
+    component: storage-read
+    summary: {en: Register SplitReadStream and return UNIMPLEMENTED, ko: SplitReadStream을 등록하고 UNIMPLEMENTED를 반환합니다.}
+    support: registered
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryRead, method: SplitReadStream}
+    supportedInput: {en: The official request can reach the registered service., ko: 공식 요청이 등록된 서비스까지 도달합니다.}
+    limitations: {policy: tracked, byDesign: [], en: Read stream splitting is not implemented., ko: 읽기 스트림 분할은 지원하지 않습니다.}
+    issues: ['#6']
+    sources: [bigquery-storage-v1]
+    tests: [go:internal/transport/grpc/server:TestRegistersOfficialStorageServicesAndHealth]
+
+  - id: grpc.bigquery-write.create-write-stream
+    protocol: grpc
+    component: storage-write
+    summary: {en: Create a pending Storage Write stream, ko: PENDING Storage Write 스트림을 생성합니다.}
+    support: partial
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: CreateWriteStream}
+    supportedInput: {en: PENDING streams in INSERT mode are supported., ko: INSERT 모드의 PENDING 스트림을 지원합니다.}
+    conditions:
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+    limitations: {policy: tracked, byDesign: [], en: Explicit COMMITTED and BUFFERED streams and CDC mode are not implemented., ko: 명시적 COMMITTED 및 BUFFERED 스트림과 CDC 모드는 지원하지 않습니다.}
+    issues: ['#7', '#20']
+    sources: [bigquery-storage-v1]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance]
+
+  - id: grpc.bigquery-write.append-rows
+    protocol: grpc
+    component: storage-write
+    summary: {en: Append ProtoRows to a write stream, ko: 쓰기 스트림에 ProtoRows를 추가합니다.}
+    support: partial
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: AppendRows}
+    supportedInput: {en: "ProtoRows, exact pending-stream offsets, connection inheritance, and default-stream append are supported.", ko: "ProtoRows와 PENDING 스트림의 정확한 오프셋, 연결 상속, 기본 스트림 추가를 지원합니다."}
+    conditions:
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+    limitations: {policy: tracked, byDesign: [], en: ArrowRows and missing-value default expressions are not implemented., ko: ArrowRows와 누락 값의 기본 표현식은 지원하지 않습니다.}
+    issues: ['#7']
+    sources: [bigquery-storage-v1]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance]
+
+  - id: grpc.bigquery-write.get-write-stream
+    protocol: grpc
+    component: storage-write
+    summary: {en: Get Storage Write stream state, ko: Storage Write 스트림 상태를 조회합니다.}
+    support: partial
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: GetWriteStream}
+    supportedInput: {en: BASIC and FULL views of emulator-managed streams are supported., ko: 에뮬레이터가 관리하는 스트림의 BASIC 및 FULL 보기를 지원합니다.}
+    conditions:
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+    limitations: {policy: tracked, byDesign: [], en: Only stream metadata held by the configured coordinator is returned., ko: 설정된 조정자가 관리하는 스트림 메타데이터만 반환합니다.}
+    issues: ['#7']
+    sources: [bigquery-storage-v1]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance]
+
+  - id: grpc.bigquery-write.finalize-write-stream
+    protocol: grpc
+    component: storage-write
+    summary: {en: Finalize a pending write stream, ko: PENDING 쓰기 스트림을 종료합니다.}
+    support: partial
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: FinalizeWriteStream}
+    supportedInput: {en: Emulator-managed pending streams can be finalized and return a row count., ko: 에뮬레이터가 관리하는 PENDING 스트림을 종료하고 행 수를 반환합니다.}
+    conditions:
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+    limitations: {policy: tracked, byDesign: [], en: Finalization follows the local coordinator state machine while remaining state-machine work is tracked., ko: 로컬 조정자의 상태 전이 규칙을 따르며 나머지 상태 머신 작업은 이슈에서 관리합니다.}
+    issues: ['#7']
+    sources: [bigquery-storage-v1]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance]
+
+  - id: grpc.bigquery-write.batch-commit-write-streams
+    protocol: grpc
+    component: storage-write
+    summary: {en: Commit a group of finalized pending streams, ko: 종료된 PENDING 스트림 그룹을 커밋합니다.}
+    support: partial
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: BatchCommitWriteStreams}
+    supportedInput: {en: A validated group of streams for one parent table can be committed atomically., ko: 하나의 상위 테이블에 속한 검증된 스트림 그룹을 원자적으로 커밋할 수 있습니다.}
+    conditions:
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+    limitations: {policy: tracked, byDesign: [], en: Distributed concurrency and cloud throughput guarantees are not implemented., ko: 분산 동시성과 Cloud 처리량 보장은 지원하지 않습니다.}
+    issues: ['#7']
+    sources: [bigquery-storage-v1]
+    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteSparkProtoRowsLifecycleAndConnectionInheritance]
+
+  - id: grpc.bigquery-write.flush-rows
+    protocol: grpc
+    component: storage-write
+    summary: {en: Register FlushRows and return UNIMPLEMENTED, ko: FlushRows를 등록하고 UNIMPLEMENTED를 반환합니다.}
+    support: registered
+    verification: transport
+    grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: FlushRows}
+    supportedInput: {en: The official request can reach the registered service., ko: 공식 요청이 등록된 서비스까지 도달합니다.}
+    limitations: {policy: tracked, byDesign: [], en: BUFFERED streams and flushing are not implemented., ko: BUFFERED 스트림과 flush 동작은 지원하지 않습니다.}
+    issues: ['#7']
+    sources: [bigquery-storage-v1]
+    tests: [go:internal/transport/grpc/server:TestRegistersOfficialStorageServicesAndHealth]
+
+  - id: grpc.health.check
+    protocol: grpc
+    component: grpc-health
+    summary: {en: Return the current serving state, ko: 현재 서비스 제공 상태를 반환합니다.}
+    support: implemented
+    verification: transport
+    grpc: {service: grpc.health.v1.Health, method: Check}
+    supportedInput: {en: The overall server name and registered Storage service names are supported., ko: 전체 서버 이름과 등록된 Storage 서비스 이름을 지원합니다.}
+    limitations: {policy: none, byDesign: [], en: Health reflects configured local services rather than Google Cloud service state., ko: Google Cloud 상태가 아니라 설정된 로컬 서비스 상태를 반환합니다.}
+    issues: []
+    sources: [grpc-health-v1]
+    tests: [go:internal/transport/grpc/server:TestRegistersOfficialStorageServicesAndHealth]
+
+  - id: grpc.health.list
+    protocol: grpc
+    component: grpc-health
+    summary: {en: List serving states for registered service names, ko: 등록된 서비스 이름별 제공 상태를 반환합니다.}
+    support: implemented
+    verification: transport
+    grpc: {service: grpc.health.v1.Health, method: List}
+    supportedInput: {en: The standard empty HealthListRequest is supported., ko: 표준 빈 HealthListRequest를 지원합니다.}
+    limitations: {policy: none, byDesign: [], en: The response contains only locally registered health entries., ko: 로컬에 등록된 상태 항목만 반환합니다.}
+    issues: []
+    sources: [grpc-health-v1]
+    tests: [go:internal/transport/grpc/server:TestRegistersOfficialStorageServicesAndHealth]
+
+  - id: grpc.health.watch
+    protocol: grpc
+    component: grpc-health
+    summary: {en: Watch serving-state changes, ko: 서비스 제공 상태 변경을 스트리밍합니다.}
+    support: implemented
+    verification: transport
+    grpc: {service: grpc.health.v1.Health, method: Watch}
+    supportedInput: {en: Overall and per-service health names can be watched., ko: 전체 및 서비스별 상태 이름을 감시할 수 있습니다.}
+    limitations: {policy: none, byDesign: [], en: Changes reflect the local emulator lifecycle., ko: 로컬 에뮬레이터 수명 주기의 변경만 반영합니다.}
+    issues: []
+    sources: [grpc-health-v1]
+    tests: [go:internal/transport/grpc/server:TestRegistersOfficialStorageServicesAndHealth]
+
+  - id: grpc.reflection-v1.server-reflection-info
+    protocol: grpc
+    component: grpc-reflection
+    summary: {en: Serve the stable gRPC v1 reflection stream, ko: 정식 gRPC v1 reflection 스트림을 제공합니다.}
+    support: implemented
+    verification: transport
+    grpc: {service: grpc.reflection.v1.ServerReflection, method: ServerReflectionInfo}
+    supportedInput: {en: Standard gRPC reflection requests are accepted., ko: 표준 gRPC reflection 요청을 받습니다.}
+    limitations: {policy: by-design, byDesign: [google-iam], en: Authorization metadata is accepted but the emulator intentionally does not validate it., ko: Authorization 메타데이터를 받지만 에뮬레이터에서는 의도적으로 검증하지 않습니다.}
+    issues: []
+    sources: [grpc-reflection-v1]
+    tests: [go:internal/transport/grpc/server:TestRegistersOfficialStorageServicesAndHealth]
+
+  - id: grpc.reflection-v1alpha.server-reflection-info
+    protocol: grpc
+    component: grpc-reflection
+    summary: {en: Serve the legacy gRPC v1alpha reflection stream, ko: 기존 gRPC v1alpha reflection 스트림을 제공합니다.}
+    support: implemented
+    verification: transport
+    grpc: {service: grpc.reflection.v1alpha.ServerReflection, method: ServerReflectionInfo}
+    supportedInput: {en: Standard v1alpha reflection requests are accepted., ko: 표준 v1alpha reflection 요청을 받습니다.}
+    limitations: {policy: by-design, byDesign: [google-iam], en: Authorization metadata is accepted but the emulator intentionally does not validate it., ko: Authorization 메타데이터를 받지만 에뮬레이터에서는 의도적으로 검증하지 않습니다.}
+    issues: []
+    sources: [grpc-reflection-v1]
+    tests: [go:internal/transport/grpc/server:TestRegistersOfficialStorageServicesAndHealth]

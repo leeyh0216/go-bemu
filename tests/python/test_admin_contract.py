@@ -18,6 +18,11 @@ def _dataset_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+@pytest.mark.operation("bigquery.datasets.insert")
+@pytest.mark.operation("bigquery.datasets.list")
+@pytest.mark.operation("bigquery.datasets.get")
+@pytest.mark.operation("bigquery.datasets.patch")
+@pytest.mark.operation("bigquery.datasets.delete")
 def test_dataset_crud_update_pagination_location_and_errors(
     bq_client: bigquery.Client, project_id: str, test_timeout: float
 ) -> None:
@@ -87,6 +92,11 @@ def test_dataset_crud_update_pagination_location_and_errors(
             )
 
 
+@pytest.mark.operation("bigquery.tables.insert")
+@pytest.mark.operation("bigquery.tables.list")
+@pytest.mark.operation("bigquery.tables.get")
+@pytest.mark.operation("bigquery.tables.patch")
+@pytest.mark.operation("bigquery.tables.delete")
 def test_table_crud_metadata_etag_and_additive_schema(
     bq_client: bigquery.Client, project_id: str, test_timeout: float
 ) -> None:

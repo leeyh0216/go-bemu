@@ -70,7 +70,6 @@ func catalogDiscoveryResources() map[string]any {
 	}
 	datasetMutation := map[string]any{
 		"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
-		"accessPolicyVersion": discoveryQueryParameter("integer"), "updateMode": discoveryQueryParameter("string"),
 	}
 	tableMutation := map[string]any{
 		"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
@@ -84,18 +83,16 @@ func catalogDiscoveryResources() map[string]any {
 		}},
 		"datasets": map[string]any{"methods": map[string]any{
 			"insert": discoveryMethod("bigquery.datasets.insert", "POST", "projects/{projectId}/datasets", "Dataset", "Dataset", map[string]any{
-				"projectId": discoveryPathParameter("projectId"), "accessPolicyVersion": discoveryQueryParameter("integer"),
+				"projectId": discoveryPathParameter("projectId"),
 			}, "projectId"),
 			"get": discoveryMethod("bigquery.datasets.get", "GET", "projects/{projectId}/datasets/{datasetId}", "", "Dataset", map[string]any{
 				"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
-				"accessPolicyVersion": discoveryQueryParameter("integer"), "datasetView": discoveryQueryParameter("string"),
 			}, "projectId", "datasetId"),
 			"patch":  discoveryMethod("bigquery.datasets.patch", "PATCH", "projects/{projectId}/datasets/{datasetId}", "Dataset", "Dataset", datasetMutation, "projectId", "datasetId"),
 			"update": discoveryMethod("bigquery.datasets.update", "PUT", "projects/{projectId}/datasets/{datasetId}", "Dataset", "Dataset", datasetMutation, "projectId", "datasetId"),
 			"list": discoveryMethod("bigquery.datasets.list", "GET", "projects/{projectId}/datasets", "", "DatasetList", map[string]any{
 				"projectId": discoveryPathParameter("projectId"), "maxResults": discoveryQueryParameter("integer"),
 				"pageToken": discoveryQueryParameter("string"), "all": discoveryQueryParameter("boolean"),
-				"filter": discoveryQueryParameter("string"),
 			}, "projectId"),
 			"delete": discoveryMethod("bigquery.datasets.delete", "DELETE", "projects/{projectId}/datasets/{datasetId}", "", "Empty", map[string]any{
 				"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),

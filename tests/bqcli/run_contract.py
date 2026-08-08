@@ -29,6 +29,7 @@ import urllib.request
 import uuid
 
 from extended_contract import run_extended_contract
+from operation_contract import operation, validate_declared_operations
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -222,8 +223,21 @@ def require(condition: bool, operation: str, shape: str, fix_hint: str) -> None:
         )
 
 
+@operation("bigquery.projects.list")
+@operation("bigquery.datasets.insert")
+@operation("bigquery.datasets.get")
+@operation("bigquery.datasets.delete")
+@operation("bigquery.tables.insert")
+@operation("bigquery.tables.get")
+@operation("bigquery.tables.patch")
+@operation("bigquery.tables.list")
+@operation("bigquery.tables.delete")
+@operation("bigquery.jobs.insert")
+@operation("bigquery.jobs.getQueryResults")
+@operation("bigquery.jobs.list")
 def main() -> int:
     global TIMEOUT
+    validate_declared_operations(main, run_extended_contract)
     TIMEOUT = positive_seconds("BQEMU_BQCLI_TIMEOUT_SECONDS", "120")
     bq = os.getenv("BQEMU_BQCLI_BIN", "bq")
     version = run_process([bq, "version"], "version")

@@ -24,6 +24,7 @@ import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+OPERATION_MANIFEST_PATH = REPOSITORY_ROOT / "contract" / "operations.normalized.json"
 
 
 def _test_timeout() -> float:
@@ -47,6 +48,26 @@ def pytest_configure(config: pytest.Config) -> None:
         environment_override or config.option.timeout in (None, 0)
     ):
         config.option.timeout = _test_timeout()
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    with OPERATION_MANIFEST_PATH.open("r", encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    operation_ids = {operation["id"] for operation in manifest["operations"]}
+    for item in items:
+        for marker in item.iter_markers("operation"):
+            if (
+                len(marker.args) != 1
+                or marker.kwargs
+                or not isinstance(marker.args[0], str)
+            ):
+                raise pytest.UsageError(
+                    f"{item.nodeid} operation marker must contain one operation ID"
+                )
+            if marker.args[0] not in operation_ids:
+                raise pytest.UsageError(
+                    f"{item.nodeid} references unknown operation {marker.args[0]}"
+                )
 
 
 def _free_port() -> int:

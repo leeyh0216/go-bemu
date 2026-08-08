@@ -22,7 +22,7 @@ IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup build run format format-check contract-generate contract-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -31,6 +31,8 @@ help:
 	  'make python-setup Create a Python 3.13 venv from the hash lock' \
 	  'make build        Build bin/go-bemu with CGO enabled' \
 	  'make run          Run locally with repository data and temp directories' \
+	  'make contract-generate Regenerate canonical API/RPC contract artifacts' \
+	  'make contract-check Check API/RPC manifest, annotations, and generated files' \
 	  'make check        Run formatting, bounded race tests, and vet' \
 	  'make python-test  Run the official Python client real-process contract' \
 	  'make bq-test      Run the exact-version official bq CLI contract' \
@@ -76,6 +78,12 @@ format-check:
 	    exit 1; \
 	  fi
 
+contract-generate:
+	go run ./cmd/contractctl compile --root .
+
+contract-check:
+	go run ./cmd/contractctl check --root .
+
 test:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...
 
@@ -118,7 +126,7 @@ vet:
 github-actions-policy:
 	CGO_ENABLED=1 go test ./internal/cipolicy
 
-ci-static: github-actions-policy format-check vet config-check
+ci-static: github-actions-policy format-check contract-check vet config-check
 
 ci-test-all:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...
@@ -155,7 +163,7 @@ ci-test-composition:
 config-check:
 	CGO_ENABLED=1 go run ./cmd/emulator --config "$(BQEMU_CONFIG)" --print-effective-config >/dev/null
 
-check: format-check test-race vet config-check
+check: format-check contract-check test-race vet config-check
 
 docker-build: docker-doctor
 	docker build --tag "$(IMAGE)" .

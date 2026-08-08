@@ -14,6 +14,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/application"
+	"github.com/leeyh0216/go-bemu/internal/contracttest"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
@@ -50,6 +51,8 @@ func (*catalogTestWarehouse) Query(context.Context, ports.QueryRequest) (domain.
 }
 
 func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
+	contracttest.Operation(t, "bigquery.datasets.update")
+	contracttest.Operation(t, "bigquery.tables.update")
 	warehouse := &catalogTestWarehouse{}
 	clock := catalogTestClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
@@ -67,6 +70,13 @@ func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
 	}`, datasetETag, http.StatusOK)
 	if dataset["description"] != "after" || dataset["defaultTableExpirationMs"] != "86400000" || dataset["etag"] == datasetETag {
 		t.Fatalf("unexpected dataset patch: %#v", dataset)
+	}
+	dataset = catalogRequestWithETag(t, server.URL, http.MethodPut, "/bigquery/v2/projects/test-project/datasets/analytics", `{
+		"datasetReference":{"projectId":"test-project","datasetId":"analytics"},
+		"location":"EU","description":"replaced","labels":{"tier":"silver"}
+	}`, dataset["etag"].(string), http.StatusOK)
+	if dataset["description"] != "replaced" {
+		t.Fatalf("unexpected dataset replacement: %#v", dataset)
 	}
 	catalogRequestWithETag(t, server.URL, http.MethodPatch, "/bigquery/v2/projects/test-project/datasets/analytics", `{"description":"stale"}`, datasetETag, http.StatusPreconditionFailed)
 
@@ -92,6 +102,21 @@ func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
 	if table["description"] != "patched" || table["expirationTime"] != "1800000000000" || len(warehouse.additions) != 2 {
 		t.Fatalf("unexpected table patch: table=%#v additions=%#v", table, warehouse.additions)
 	}
+	table = catalogRequestWithETag(t, server.URL, http.MethodPut, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events", `{
+		"tableReference":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},
+		"type":"TABLE","location":"EU","description":"replaced",
+		"schema":{"fields":[
+			{"name":"id","type":"INT64","mode":"NULLABLE"},
+			{"name":"payload","type":"RECORD","mode":"NULLABLE","fields":[
+				{"name":"name","type":"STRING","mode":"NULLABLE"},
+				{"name":"score","type":"FLOAT64","mode":"NULLABLE"}
+			]},
+			{"name":"tags","type":"STRING","mode":"REPEATED"}
+		]}
+	}`, table["etag"].(string), http.StatusOK)
+	if table["description"] != "replaced" {
+		t.Fatalf("unexpected table replacement: %#v", table)
+	}
 	latestETag := table["etag"].(string)
 	catalogRequestWithETag(t, server.URL, http.MethodPatch, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events", `{
 		"schema":{"fields":[{"name":"id","type":"STRING"}]}
@@ -99,6 +124,15 @@ func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
 }
 
 func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
+	contracttest.Operation(t, "bqemu.discovery.get")
+	contracttest.Operation(t, "bqemu.discovery.googleapis.get")
+	contracttest.Operation(t, "bqemu.health.live")
+	contracttest.Operation(t, "bqemu.health.ready")
+	contracttest.Operation(t, "bqemu.projects.create")
+	contracttest.Operation(t, "bqemu.projects.list")
+	contracttest.Operation(t, "bqemu.projects.get")
+	contracttest.Operation(t, "bqemu.projects.delete")
+	contracttest.Operation(t, "bigquery.projects.list")
 	warehouse := &catalogTestWarehouse{}
 	clock := catalogTestClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
 	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
@@ -106,10 +140,17 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	t.Cleanup(server.Close)
 	request := catalogRequestHelper(t, server.URL)
 
+	if liveness := request(http.MethodGet, "/healthz", "", http.StatusOK); liveness["status"] != "ok" {
+		t.Fatalf("unexpected liveness: %#v", liveness)
+	}
 	if readiness := request(http.MethodGet, "/readyz", "", http.StatusOK); readiness["status"] != "ready" {
 		t.Fatalf("unexpected readiness: %#v", readiness)
 	}
 	discovery := request(http.MethodGet, "/$discovery/rest?version=v2", "", http.StatusOK)
+	aliasDiscovery := request(http.MethodGet, "/discovery/v1/apis/bigquery/v2/rest", "", http.StatusOK)
+	if aliasDiscovery["id"] != discovery["id"] {
+		t.Fatalf("discovery alias returned another document: %#v", aliasDiscovery)
+	}
 	resources := discovery["resources"].(map[string]any)
 	if discovery["id"] != "bigquery:v2" || resources["datasets"] == nil || resources["tables"] == nil || resources["jobs"] != nil {
 		t.Fatalf("catalog discovery advertised the wrong surface: %#v", discovery)
@@ -130,6 +171,14 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	}
 
 	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"test-project","futureProjectField":"ignored"}`, http.StatusOK)
+	project := request(http.MethodGet, "/bqemu/v1/projects/test-project", "", http.StatusOK)
+	if project["id"] != "test-project" {
+		t.Fatalf("unexpected emulator project: %#v", project)
+	}
+	emulatorProjects := request(http.MethodGet, "/bqemu/v1/projects", "", http.StatusOK)
+	if emulatorProjects["totalItems"] != float64(1) {
+		t.Fatalf("unexpected emulator project list: %#v", emulatorProjects)
+	}
 	projectList := request(http.MethodGet, "/bigquery/v2/projects?maxResults=1", "", http.StatusOK)
 	if projectList["totalItems"] != float64(1) {
 		t.Fatalf("unexpected project list: %#v", projectList)

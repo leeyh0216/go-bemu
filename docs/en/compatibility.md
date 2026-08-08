@@ -5,6 +5,11 @@
 
 # Compatibility Contract
 
+The exact REST method/path and Storage RPC surface is generated from the strict
+operation manifest. See [API and RPC compatibility](api-rpc-compatibility.md)
+for canonical `support` and `verification` values, limitations, issue links,
+and the tests that collect each operation.
+
 <!-- section: status-language -->
 ## Status Language
 

@@ -37,12 +37,14 @@ func NewServer(catalog CatalogUseCases, queries QueryUseCases, readiness ports.H
 func withQueryAPI(queries QueryUseCases) Option {
 	return func(server *Server) {
 		handlers := &queryHandlers{queries: queries}
-		server.routeExtensions = append(server.routeExtensions, func(mux *http.ServeMux) {
-			mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/queries", handlers.query)
-			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/queries/{jobId}", handlers.getQueryResults)
-			mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/jobs", handlers.insertJob)
-			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/jobs", handlers.listJobs)
-			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/jobs/{jobId}", handlers.getJob)
+		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
+			return []routeBinding{
+				handlerBinding("bigquery.jobs.query", handlers.query),
+				handlerBinding("bigquery.jobs.getQueryResults", handlers.getQueryResults),
+				handlerBinding("bigquery.jobs.insert", handlers.insertJob),
+				handlerBinding("bigquery.jobs.list", handlers.listJobs),
+				handlerBinding("bigquery.jobs.get", handlers.getJob),
+			}
 		})
 		server.discoveryExtensions = append(server.discoveryExtensions, extendQueryDiscovery)
 	}

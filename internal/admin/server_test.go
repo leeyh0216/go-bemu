@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/leeyh0216/go-bemu/internal/contractspec"
+	"github.com/leeyh0216/go-bemu/internal/contracttest"
 )
 
 type fakeClock struct{ values []time.Time }
@@ -32,6 +35,8 @@ func (f fakeRuntime) Snapshot(_, _ time.Time) RuntimeSnapshot { return f.snapsho
 func (f fakeRuntime) GoroutineStack(int) StackCapture         { return f.stack }
 
 func TestDiagnosticsExposeRuntimeAndBoundedStackMetadata(t *testing.T) {
+	contracttest.Operation(t, "bqemu.admin.runtime.get")
+	contracttest.Operation(t, "bqemu.admin.goroutines.get")
 	now := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
 	var logs bytes.Buffer
 	server, err := New(Options{
@@ -74,6 +79,7 @@ func TestDiagnosticsExposeRuntimeAndBoundedStackMetadata(t *testing.T) {
 }
 
 func TestAdminTokenProtectsEveryEndpointWithoutLoggingCredential(t *testing.T) {
+	contracttest.Operation(t, "bqemu.admin.health")
 	directory := t.TempDir()
 	path := filepath.Join(directory, "token")
 	token := "admin-secret-token-value"
@@ -118,5 +124,25 @@ func TestTokenFileAndStackLimitsFailFast(t *testing.T) {
 	}
 	if _, err := New(Options{MaxStackBytes: 64 << 10, TokenFile: path}); err == nil {
 		t.Fatal("expected token error")
+	}
+}
+
+func TestAdminRouteBindingsMatchOperationManifest(t *testing.T) {
+	server := &Server{}
+	actual := make(map[string]bool)
+	for _, binding := range server.routeBindings() {
+		if actual[binding.operationID] {
+			t.Fatalf("duplicate admin operation binding %q", binding.operationID)
+		}
+		actual[binding.operationID] = true
+	}
+	for _, route := range contractspec.RESTRoutes("admin") {
+		if !actual[route.OperationID] {
+			t.Errorf("manifest admin operation %q has no handler binding", route.OperationID)
+		}
+		delete(actual, route.OperationID)
+	}
+	for operationID := range actual {
+		t.Errorf("admin handler binding %q is absent from the operation manifest", operationID)
 	}
 }

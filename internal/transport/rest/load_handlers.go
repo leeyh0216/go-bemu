@@ -42,12 +42,14 @@ func NewServerWithLoadJobs(catalog CatalogUseCases, queries QueryUseCases, loads
 func withCombinedJobAPI(queries QueryUseCases, loads LoadJobUseCases) Option {
 	return func(server *Server) {
 		handlers := &combinedJobHandlers{query: &queryHandlers{queries: queries}, loads: loads}
-		server.routeExtensions = append(server.routeExtensions, func(mux *http.ServeMux) {
-			mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/queries", handlers.query.query)
-			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/queries/{jobId}", handlers.query.getQueryResults)
-			mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/jobs", handlers.insertJob)
-			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/jobs", handlers.listJobs)
-			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/jobs/{jobId}", handlers.getJob)
+		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
+			return []routeBinding{
+				handlerBinding("bigquery.jobs.query", handlers.query.query),
+				handlerBinding("bigquery.jobs.getQueryResults", handlers.query.getQueryResults),
+				handlerBinding("bigquery.jobs.insert", handlers.insertJob),
+				handlerBinding("bigquery.jobs.list", handlers.listJobs),
+				handlerBinding("bigquery.jobs.get", handlers.getJob),
+			}
 		})
 		server.discoveryExtensions = append(server.discoveryExtensions, extendQueryDiscovery)
 	}

@@ -1,13 +1,12 @@
 package rest
 
 import (
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
 	"strings"
-
-	"github.com/leeyh0216/go-bemu/contract"
 )
 
 type ConsoleAPI struct {
@@ -18,19 +17,34 @@ type ConsoleAPI struct {
 }
 
 func withCapabilitiesAPI() Option {
-	return withRoutes(func(mux *http.ServeMux) {
-		mux.HandleFunc("GET /bqemu/v1/capabilities", func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"kind": "bqemu#capabilityRegistry", "profiles": contract.DefaultRegistry().Profiles(),
-			})
+	return func(server *Server) {
+		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
+			return []routeBinding{handlerBinding("bqemu.capabilities.get", func(w http.ResponseWriter, _ *http.Request) {
+				profiles := server.capabilityProfiles
+				if len(profiles) == 0 {
+					profiles = json.RawMessage("[]")
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"kind": "bqemu#capabilityRegistry", "profiles": profiles,
+				})
+			})}
 		})
-	})
+	}
+}
+
+// WithCapabilityProfiles injects the immutable profile snapshot exposed by the
+// emulator-only capability endpoint. The contract compiler owns the snapshot;
+// the transport only owns its HTTP representation.
+func WithCapabilityProfiles(profiles json.RawMessage) Option {
+	return func(server *Server) {
+		server.capabilityProfiles = append(json.RawMessage(nil), profiles...)
+	}
 }
 
 func withConsoleAPI() Option {
 	return func(server *Server) {
-		server.routeExtensions = append(server.routeExtensions, func(mux *http.ServeMux) {
-			mux.HandleFunc("GET /bqemu/v1/console", func(w http.ResponseWriter, r *http.Request) {
+		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
+			return []routeBinding{handlerBinding("bqemu.console.get", func(w http.ResponseWriter, r *http.Request) {
 				baseURL := server.baseURLFor(r)
 				writeJSON(w, http.StatusOK, ConsoleAPI{
 					Kind: "bqemu#consoleAPI", Version: "v1",
@@ -40,22 +54,24 @@ func withConsoleAPI() Option {
 						"capabilities": baseURL + "/bqemu/v1/capabilities",
 					},
 				})
-			})
+			})}
 		})
 	}
 }
 
 func WithConsoleDirectory(directory string) Option {
-	return withRoutes(func(mux *http.ServeMux) {
+	return withOperationRoutes(func() []routeBinding {
 		console := newSPAHandler(directory)
-		mux.Handle("GET /console/", http.StripPrefix("/console/", console))
-		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/" {
-				http.NotFound(w, r)
-				return
-			}
-			http.Redirect(w, r, "/console/", http.StatusTemporaryRedirect)
-		})
+		return []routeBinding{
+			{operationID: "bqemu.console.assets", handler: http.StripPrefix("/console/", console)},
+			handlerBinding("bqemu.console.redirect", func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/" {
+					http.NotFound(w, r)
+					return
+				}
+				http.Redirect(w, r, "/console/", http.StatusTemporaryRedirect)
+			}),
+		}
 	})
 }
 

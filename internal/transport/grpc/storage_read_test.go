@@ -27,12 +27,15 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/leeyh0216/go-bemu/internal/contracttest"
 	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
 	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
 	"github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
 
 func TestStorageReadWireFormatsAndOffsetResume(t *testing.T) {
+	contracttest.Operation(t, "grpc.bigquery-read.create-read-session")
+	contracttest.Operation(t, "grpc.bigquery-read.read-rows")
 	for _, testCase := range []struct {
 		name   string
 		format domain.Format
