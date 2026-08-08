@@ -42,6 +42,8 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
    a Storage or connector-dependent contract.
 6. Use [Compatibility](compatibility.md) to choose an existing capability or
    declare a new one.
+7. Before changing a storage-engine port, read the planning and composition
+   contracts in the [storage engine adapter guide](engine-adapter-guide.md).
 
 The connector baseline is exact [Spark BigQuery connector
 `0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2).

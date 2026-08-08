@@ -24,6 +24,8 @@
   script semantics, atomic execution, type validation, and promotion gaps.
 - [Maintainer guide](maintainer-guide.md): clone-to-run learning path, version
   onboarding, drift diagnosis, and release runbooks.
+- [Storage engine adapter guide](engine-adapter-guide.md): engine capability
+  declaration, runtime composition, schema/load plans, and conformance tests.
 - [Configuration and operations](operations.md): precedence, container hardening,
   health/shutdown, test timeouts, and diagnostics endpoint design.
 - [Architecture decisions](adr/): decisions that constrain implementation.

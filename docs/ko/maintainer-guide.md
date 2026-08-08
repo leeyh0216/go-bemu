@@ -47,6 +47,8 @@ make run
 5. Storage 또는 커넥터에 의존하는 계약을 바꾸기 전에 [BigQuery와 커넥터 내부
    동작](bigquery-internals.md)을 읽습니다.
 6. [호환성](compatibility.md)에서 기존 지원 기능을 선택하거나 새로 선언합니다.
+7. 저장 엔진 포트를 변경한다면 [저장 엔진 어댑터 구현
+   안내서](engine-adapter-guide.md)의 계획 및 조립 계약을 확인합니다.
 
 기준 커넥터는 정확히 [Spark BigQuery 커넥터
 `0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)입니다.
