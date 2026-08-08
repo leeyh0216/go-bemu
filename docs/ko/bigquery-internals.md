@@ -3,12 +3,12 @@
 
 [English](../en/bigquery-internals.md) | [한국어](bigquery-internals.md)
 
-# BigQuery와 Spark 커넥터 내부 동작
+# BigQuery 프로토콜 내부 동작
 
 <!-- section: mental-model -->
 ## 핵심 모델
 
-Spark 커넥터는 서로 다른 공개 경계 세 곳을 사용합니다.
+BigQuery 호환 호출자는 서로 다른 공개 경계 세 곳을 사용합니다.
 
 1. BigQuery REST는 테이블 메타데이터, 쿼리·적재 작업, 상태 확인, 덮어쓰기 조정을
    담당합니다.
@@ -16,27 +16,23 @@ Spark 커넥터는 서로 다른 공개 경계 세 곳을 사용합니다.
 3. BigQuery Storage Write gRPC는 직접 추가, 스트림 확정, 대기 스트림 커밋을
    담당합니다.
 
-이 문서에서 설명하는 클라이언트 동작은 [커넥터
-`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)를
-기준으로 합니다. BigQuery 서비스의 기준 경계는 [REST
+BigQuery 서비스의 기준 경계는 [REST
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest)와 [Storage RPC
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)입니다.
 
-`go-bemu`는 REST 메타데이터와 쿼리를 공개합니다. Parquet 적재 작업은 선택적으로
-활성화할 수 있습니다. Storage Read/Write 공개 범위는 부분 지원(`Partial`)입니다.
+`go-bemu`는 REST 메타데이터와 쿼리 및 Parquet 적재 작업을 공개합니다. Storage
+Read/Write 공개 범위는 부분 지원(`Partial`)입니다.
 아래 설명은 현재 제한을 둔 실행 절차와 아직 남은 BigQuery 요구사항을 구분합니다.
 
 <!-- section: read-planning -->
 ## 읽기 계획
 
-커넥터는 먼저 REST로 테이블이나 쿼리를 확인합니다. 선택할 열, 필터, 스냅샷 시각,
-요청 병렬도를 계산한 뒤 `CreateReadSession`을 보냅니다. 정확한 요청 생성 코드는
-[`ReadSessionCreator.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java)에
-있습니다.
+Storage Read 호출자는 먼저 REST로 테이블이나 쿼리를 확인합니다. 선택할 열, 필터,
+스냅샷 시각, 요청 병렬도를 계산한 뒤 `CreateReadSession`을 보냅니다.
 
-서버는 참조 스키마 하나와 이름이 있는 스트림을 0개 이상 반환합니다. Spark는
-반환된 스트림마다 입력 파티션을 만듭니다. 요청한 최대 병렬도는 상한일 뿐, 해당
-개수만큼 스트림을 반드시 만들라는 뜻은 아닙니다.
+서버는 참조 스키마 하나와 이름이 있는 스트림을 0개 이상 반환합니다. 읽기 작업은
+반환된 스트림마다 나눌 수 있습니다. 요청한 최대 병렬도는 상한일 뿐, 해당 개수만큼
+스트림을 반드시 만들라는 뜻은 아닙니다.
 
 올바른 에뮬레이터는 모든 논리 스트림을 안정된 스냅샷 하나에 묶어야 합니다. 각
 범위마다 정렬 기준이 없는 쿼리를 따로 실행해서는 안 됩니다.
@@ -61,9 +57,6 @@ Arrow의 `serialized_schema`와 `serialized_record_batch`는 서로 다른 proto
 필드에 Arrow IPC 메시지를 담습니다. 완전한 Arrow 파일을 임의로 넣는 형식이
 아닙니다. 형식의 기준은 [Arrow IPC
 명세](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc)입니다.
-커넥터의 디코딩 절차는
-[`ArrowReaderIterator.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ArrowReaderIterator.java)에서
-시작합니다.
 
 Avro는 JSON 스키마 하나와 연속된 이진 행 데이터를 사용합니다. 논리 유형과 null
 유니온은 [Apache Avro
@@ -84,12 +77,10 @@ BigQuery 형식 변환은 [Storage API Avro 스키마
 <!-- section: direct-exact -->
 ## 직접 쓰기: 대기 스트림과 정확한 오프셋
 
-`writeMethod=direct`의 정확히 한 번 쓰기 모드에서는 Spark 데이터 파티션마다
-`PENDING` 스트림을 만듭니다. 커넥터 `0.44.2`는
-[`BigQueryDirectDataWriterHelper.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java)에서
-이를 수행합니다. `AppendRows` 연결을 열고 작성자 스키마를 제공합니다. 스트림 기준
+정확한 오프셋을 사용하는 일괄 쓰기는 생산자 작업 단위마다 `PENDING` 스트림을
+만듭니다. `AppendRows` 연결을 열고 작성자 스키마를 제공합니다. 스트림 기준
 시작 오프셋과 직렬화된 Proto 행을 전송합니다. 각 응답 오프셋을 검증한 뒤 스트림을
-확정합니다. 모든 작업이 성공하면 드라이버가 스트림 이름을 모아 커밋합니다.
+확정합니다. 모든 작업이 성공하면 조정기가 스트림 이름을 모아 커밋합니다.
 
 공식 Write API는 정확한 오프셋 처리를 요구합니다. 바로 다음 오프셋은 받습니다.
 중간 오프셋을 건너뛴 요청은 실패해야 합니다. 이미 받은 오프셋을 다시 보내면 중복
@@ -102,34 +93,35 @@ RPC 계약은
 운영 순서는 [대기 스트림 일괄
 적재](https://cloud.google.com/bigquery/docs/write-api-batch)에 있습니다.
 
-현재 부분 지원 구현은 스트림을 키로 사용하는 프로세스 내부 원장에 상태를
-보관합니다. 원장에는 스키마 지문값, 다음 오프셋, 수락한 데이터의 요약 해시, 최종 행
-수, 스트림 상태, 준비 테이블 정보가 들어갑니다.
+현재 부분 지원 구현은 스트림을 키로 사용하는 SQLite 원장에 상태를 영속화합니다.
+원장에는 스키마 지문값, 다음 오프셋, 수락한 데이터의 요약 해시, 최종 행 수, 작업
+단계, 커밋 그룹이 들어갑니다.
 
 공개 경계는 `ProtoRows` 추가, 정확한 오프셋, 스트림 확정, 검증된 `PENDING` 그룹의
 원자적 커밋을 지원합니다. DuckDB 변경은 처리량에 상한을 둔 조정기 하나로
-직렬화합니다. 원장과 준비 데이터는 재시작 후 복구되지 않습니다.
+직렬화합니다. 시작할 때 준비 중이던 의도를 미확정 상태로 먼저 조정하며, 정확히 같은
+요청을 재시도하면 한 쌍으로 관리하는 DuckDB 준비 상태에서 작업을 완료할 수 있습니다.
+상태 파일 한쪽만 복원한 경우와 완전한 물리 증거 복구는 아직 지원하지 않습니다.
 
 프로세스 전체에서 오프셋 하나를 공유하거나 스트림 맵을 임의로 조회하는 방식은 여러
-Spark 작업이 동시에 실행될 때 올바르지 않습니다.
+생산자가 동시에 실행될 때 올바르지 않습니다.
 
 <!-- section: direct-at-least-once -->
 ## 직접 쓰기: 기본 스트림과 한 번 이상 쓰기 모드
 
-`writeAtLeastOnce=true`이면 커넥터 `0.44.2`는 테이블의 `_default` 스트림을
-사용합니다. 정확한 오프셋은 보내지 않습니다. 행은 스트림 확정이나 일괄 커밋 없이
-바로 보입니다. 결과가 불명확한 실패 뒤에 재시도하면 행이 중복될 수 있습니다.
-Google은 이 차이를 [Storage Write 스트리밍
+기본 스트림 쓰기는 테이블의 `_default` 스트림을 사용하며 정확한 오프셋을 보내지
+않습니다. 행은 스트림 확정이나 일괄 커밋 없이 바로 보입니다. 결과가 불명확한 실패
+뒤에 재시도하면 행이 중복될 수 있습니다. Google은 이 차이를 [Storage Write 스트리밍
 의미](https://cloud.google.com/bigquery/docs/write-api-streaming)에 정의합니다.
 
 로컬 테스트는 두 모드를 구분해야 합니다. 기본 스트림 응답에서 오프셋을 뺐다는
 사실만으로 한 번 이상 쓰기의 재시도 동작을 증명할 수는 없습니다. 서버가 행을
 저장한 뒤 클라이언트가 응답을 받기 전에 연결을 끊는 장애 시험이 필요합니다.
 
-공개 부분 지원 구현은 공식 `/streams/_default` 이름을 받습니다. 커넥터 `0.44.2`의
-이전 별칭인 `/_default`도 받습니다. 오프셋 없이 행을 즉시 적용하므로 결과가
-불명확한 응답을 재시도하면 행이 중복될 수 있습니다. `ArrowRows`, `BUFFERED` 스트림,
-명시적 `COMMITTED` 스트림, `FlushRows`는 지원하지 않습니다.
+공개 부분 지원 구현은 공식 `/streams/_default` 이름을 받습니다. 오프셋 없이 행을
+즉시 적용하므로 결과가 불명확한 응답을 재시도하면 행이 중복될 수 있습니다.
+`ArrowRows`, `BUFFERED` 스트림, 명시적 `COMMITTED` 스트림, `FlushRows`는 지원하지
+않습니다.
 
 <!-- section: overwrite-merge -->
 ## 직접 덮어쓰기와 MERGE
@@ -154,11 +146,8 @@ expression, action, script control flow, partition/cardinality 의미는 실행 
 <!-- section: indirect-write -->
 ## 간접 쓰기와 적재 작업
 
-`writeMethod=indirect`이면 실행기가 GCS에 중간 파일을 씁니다. 드라이버는 적재 설정을
-담은 `jobs.insert`를 제출하고 상태를 확인합니다. 작업이 끝나면 준비 객체를
-정리합니다. 커넥터 조정 코드는
-[`BigQueryWriteHelper.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/BigQueryWriteHelper.java)에
-있습니다.
+간접 쓰기는 GCS에 중간 파일을 놓고 적재 설정을 담은 `jobs.insert`를 제출한 뒤 작업
+상태를 확인합니다. 작업이 끝나면 준비 객체를 정리합니다.
 
 올바른 에뮬레이터는 모든 원본 URI를 객체 저장소 포트로 해석해야 합니다. 변경되지
 않는 입력을 준비 영역에 적재하고 스키마와 잘못된 레코드 처리 옵션을 검증해야
@@ -181,7 +170,8 @@ BigQuery는 REST 요청 구조를
 사용하려면 로컬 전용 옵션을 명시해야 합니다.
 
 대상 생성, 자동 감지, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, 멀티파트·재개 가능
-다운로드는 지원하지 않습니다. 작업과 멱등성 상태는 프로세스 내부에만 보관합니다.
+다운로드는 지원하지 않습니다. 작업 메타데이터와 멱등성 식별 정보는 SQLite에
+영속화하지만 내려받은 객체와 임시 준비 작업 공간은 영속화하지 않습니다.
 
 <!-- section: rest-jobs -->
 ## REST 작업, 상태 확인, 페이지 조회
@@ -216,7 +206,7 @@ SQL NULL의 차이도 처리해야 합니다. 중첩 `STRUCT`, 반복 필드, �
 
 현재 엔진 어댑터는 NUMERIC과 지원 범위 안의 BIGNUMERIC을 모두 `DECIMAL(P,S)`로
 저장합니다. 기준 메타데이터는 두 자료형의 논리적 구분과 매개변수 생략 여부를
-유지합니다. 정밀도는 Spark가 지원하는 최대값인 38로 제한합니다.
+유지합니다. 정밀도는 현재 실행 환경이 지원하는 최대값인 38로 제한합니다.
 
 `GEOGRAPHY`는 로컬에서 의미를 보존할 수 없으므로 저장소를 변경하기 전에
 거부합니다. 쿼리 결과는 스키마에 따라 인코딩합니다. 목록이나 구조체에
@@ -248,7 +238,7 @@ gRPC는 인증 정보가 없는 요청을 허용하며 `Authorization` 값이 �
 | 스키마 필드 추가 | 스키마 검증기와 웨어하우스 트랜잭션 | 최상위·중첩·반복 레코드 필드 추가 검증 완료 |
 | 쿼리 작업 | 작업 저장소, GoogleSQL gateway, statement 포트 | 공개 동기·비동기 절차 검증 완료, 결과 payload는 프로세스 내부에 유지 |
 | `CreateReadSession`/`ReadRows` | 스냅샷·세션 원장과 Arrow/Avro 인코더 | 공개 API 부분 지원: 크기 제한이 있는 DuckDB 스냅샷, 논리 스트림, 안정된 오프셋 지원. 분할, 압축, 과거 스냅샷, 중첩 필드 선택은 미지원 |
-| `AppendRows`/확정/커밋 | 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋 지원. 고급 스트림 유형과 영속성은 미지원 |
+| `AppendRows`/확정/커밋 | 영속 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋, 시작 시 상태 조정 지원. 고급 스트림 유형과 한쪽 저장소 복원 증명은 미지원 |
 | 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 선택형 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 대상 Parquet 지원. 다른 형식, 생성, 스키마 변경, 다운로드 방식은 미지원 |
 | 덮어쓰기 `MERGE` | 공식 analyzer, 불변 semantic AST, 엔진 visitor | 항상 거짓인 교체 검증 완료. 동적 파티션과 일반 동작 일치는 #8에 남아 있음 |
 | BigQuery 호환 요청 인증 | REST/gRPC 전송 동작 | 의도적으로 제공하지 않으며 인증 정보 값을 무시함 |

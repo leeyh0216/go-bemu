@@ -3,12 +3,12 @@
 
 [English](bigquery-internals.md) | [한국어](../ko/bigquery-internals.md)
 
-# BigQuery and Spark Connector Internals
+# BigQuery Protocol Internals
 
 <!-- section: mental-model -->
 ## Mental Model
 
-The Spark connector crosses three distinct public boundaries:
+BigQuery-compatible callers cross three distinct public boundaries:
 
 1. BigQuery REST for table metadata, query/load jobs, polling, and overwrite
    coordination;
@@ -16,25 +16,21 @@ The Spark connector crosses three distinct public boundaries:
 3. BigQuery Storage Write gRPC for direct append, stream finalization, and
    pending-stream commit.
 
-The exact client behavior discussed here is anchored to [connector
-`0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2).
 BigQuery's canonical service boundaries are the [REST
 reference](https://cloud.google.com/bigquery/docs/reference/rest) and [Storage RPC
 reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
-`go-bemu` exposes REST metadata/query plus opt-in Parquet load jobs, and public
-Partial Storage Read and Storage Write slices. The sections below distinguish
+`go-bemu` exposes REST metadata/query plus Parquet load jobs, and public Partial
+Storage Read and Storage Write slices. The sections below distinguish
 those bounded runtime paths from the remaining BigQuery requirements.
 
 <!-- section: read-planning -->
 ## Read Planning
 
-The connector first resolves a table or query through REST, derives the selected
-columns, filter, snapshot time, and requested parallelism, then sends
-`CreateReadSession`. The exact builder is
-[`ReadSessionCreator.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ReadSessionCreator.java).
-The server returns one reference schema and zero or more named streams. Spark
-creates an input partition per returned stream; requested max parallelism is an
-upper bound, not a command to fabricate streams.
+A Storage Read caller first resolves a table or query through REST, derives the
+selected columns, filter, snapshot time, and requested parallelism, then sends
+`CreateReadSession`. The server returns one reference schema and zero or more
+named streams. A reader can assign work per returned stream; requested max
+parallelism is an upper bound, not a command to fabricate streams.
 
 A correct emulator must bind every logical stream to one stable snapshot. It
 must not rerun an unordered query independently for each range. Projection and
@@ -58,8 +54,6 @@ For Arrow, `serialized_schema` and `serialized_record_batch` contain Arrow IPC
 messages in separate protobuf fields; they are not arbitrary full Arrow files.
 The format source is the [Arrow IPC
 specification](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc).
-The connector-side decoding path begins in
-[`ArrowReaderIterator.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/ArrowReaderIterator.java).
 
 Avro uses one JSON schema plus consecutive binary-encoded row datums. Logical
 types and null unions must follow the [Apache Avro
@@ -80,13 +74,11 @@ wire compatibility.
 <!-- section: direct-exact -->
 ## Direct Write: Pending Streams and Exact Offsets
 
-With `writeMethod=direct` and exactly-once mode, every Spark data partition
-creates a `PENDING` stream. Connector `0.44.2` performs this in
-[`BigQueryDirectDataWriterHelper.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java).
-It opens `AppendRows`, supplies a writer schema, sends serialized Proto rows with
+An exact-offset batch writer creates one `PENDING` stream per producer shard. It
+opens `AppendRows`, supplies a writer schema, sends serialized Proto rows with
 the stream-relative starting offset, validates each response offset, and
-finalizes the stream. The driver collects stream names and commits them after all
-tasks succeed.
+finalizes the stream. The coordinator collects stream names and commits them
+after every producer succeeds.
 
 The official Write API requires exact offset behavior: the next offset is
 accepted, a gap fails, and a replay at an accepted offset is either recognized as
@@ -97,21 +89,24 @@ pending streams visible. The canonical RPC contract is
 and the operational sequence is in [batch loading with pending
 streams](https://cloud.google.com/bigquery/docs/write-api-batch).
 
-The current Partial implementation keeps a process-local ledger keyed by stream,
+The current Partial implementation persists a SQLite ledger keyed by stream,
 including schema fingerprint, next offset, accepted payload digest, final row
-count, state, and staging relation. ProtoRows append, exact offsets, finalize,
-and atomic commit of a validated PENDING group are public. DuckDB mutations are
-serialized through one bounded coordinator; ledger and staging recovery are not
-durable across restart. A process-global offset or arbitrary stream-map lookup
-would be incorrect under concurrent Spark tasks.
+count, operation phase, and commit group. ProtoRows append, exact offsets,
+finalize, and atomic commit of a validated PENDING group are public. DuckDB
+mutations are serialized through one bounded coordinator. Startup reconciles
+prepared intents as unresolved before admitting requests, and an exact retry can
+complete the operation against the paired DuckDB staging state. Independent
+state-file restore and complete physical-proof recovery remain gaps. A
+process-global offset or arbitrary stream-map lookup would be incorrect under
+concurrent producers.
 
 <!-- section: direct-at-least-once -->
 ## Direct Write: Default Stream and At-least-once Mode
 
-With `writeAtLeastOnce=true`, connector `0.44.2` targets the table's `_default`
-stream and omits exact offsets. Rows become visible without finalize/batch
-commit, but a retry after an ambiguous failure can duplicate rows. Google
-documents this distinction in [Storage Write streaming
+A default-stream writer targets the table's `_default` stream and omits exact
+offsets. Rows become visible without finalize/batch commit, but a retry after an
+ambiguous failure can duplicate rows. Google documents this distinction in
+[Storage Write streaming
 semantics](https://cloud.google.com/bigquery/docs/write-api-streaming).
 
 Local tests must keep the two modes separate. Removing a response offset for the
@@ -119,11 +114,10 @@ default stream is not proof of at-least-once retry behavior; fault tests must
 interrupt after the server side effect and before the client receives the
 response.
 
-The public Partial implementation accepts both the official
-`/streams/_default` name and connector `0.44.2`'s legacy `/_default` alias and
-applies rows immediately without an offset. Ambiguous-response retries can
-duplicate rows by design. ArrowRows, BUFFERED and explicit COMMITTED streams,
-and `FlushRows` remain unsupported.
+The public Partial implementation accepts the official `/streams/_default`
+name and applies rows immediately without an offset. Ambiguous-response retries
+can duplicate rows by design. ArrowRows, BUFFERED and explicit COMMITTED
+streams, and `FlushRows` remain unsupported.
 
 <!-- section: overwrite-merge -->
 ## Direct Overwrite and MERGE
@@ -151,10 +145,8 @@ is tracked in #8.
 <!-- section: indirect-write -->
 ## Indirect Write and Load Jobs
 
-With `writeMethod=indirect`, executors write intermediate files to GCS, the
-driver submits `jobs.insert` with a load configuration, polls the job, and
-cleans staging objects. The connector orchestration lives in
-[`BigQueryWriteHelper.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/BigQueryWriteHelper.java).
+An indirect writer places intermediate files in GCS, submits `jobs.insert` with
+a load configuration, polls the job, and cleans staging objects.
 
 A correct emulator resolves every source URI through an object-store port,
 loads immutable inputs into staging, validates schema/bad-record options, then
@@ -172,8 +164,9 @@ workspace, validates Parquet columns and casts against an existing table, and
 applies `WRITE_APPEND`, `WRITE_EMPTY`, or `WRITE_TRUNCATE` in one DuckDB
 transaction. File sources require an explicit local-only option. Destination
 creation, autodetect, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, and
-multipart/resumable download are unsupported; job and idempotency state is
-process-local.
+multipart/resumable download are unsupported. Job metadata and idempotency
+identity persist in SQLite; downloaded objects and temporary staging workspaces
+do not.
 
 <!-- section: rest-jobs -->
 ## REST Jobs, Polling, and Paging
@@ -205,7 +198,7 @@ nullability.
 The current engine adapter stores both NUMERIC and the supported BIGNUMERIC
 subset as `DECIMAL(P,S)`. Canonical metadata remains responsible for their
 distinct logical identities and parameter-presence information. Precision is
-limited to Spark's maximum of 38. GEOGRAPHY has no local semantic
+limited to the runtime's current maximum of 38. GEOGRAPHY has no local semantic
 implementation and is rejected before storage mutation. Query result encoding
 uses schema-aware conversion; `fmt.Sprint` of lists or structs is not a
 BigQuery REST row.
@@ -237,7 +230,7 @@ policy, token introspection, or production authorization.
 | additive schema | schema validator plus warehouse transaction | top-level/nested/repeated-record additions verified |
 | query job | job repository plus GoogleSQL gateway and statement ports | public sync/async path verified; result payload remains process-local |
 | CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, logical streams, stable offsets; Split/compression/historical snapshot/nested projection gaps |
-| AppendRows/finalize/commit | per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit; advanced stream kinds and durability gaps |
+| AppendRows/finalize/commit | durable per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit, startup reconciliation; advanced stream kinds and independent-restore proof gaps |
 | indirect load | object store, staging, load dispositions | opt-in public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
 | overwrite `MERGE` | official analyzer, immutable semantic AST, engine visitor | constant-false replacement verified; dynamic partition and general parity remain #8 |
 | BigQuery-compatible request authentication | REST/gRPC transport behavior | intentionally absent; credential values are ignored |
