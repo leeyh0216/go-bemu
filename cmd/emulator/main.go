@@ -115,13 +115,21 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		"capability_fingerprint", engineCapabilities.Fingerprint(),
 	)
 
-	catalogRepository := memory.NewCatalogRepository()
+	state, err := composeStateRuntime(ctx, cfg.State.DSN)
+	if err != nil {
+		return err
+	}
+	closeState := true
+	defer func() {
+		if closeState {
+			_ = state.Close()
+		}
+	}()
+	catalogRepository := state.catalog
 	jobRepository := memory.NewJobRepository()
 	clock := system.Clock{}
 	catalogService := composeCatalogService(cfg, catalogRepository, catalogStorage, tableDataReader, clock)
-	if _, err := catalogService.CreateProject(ctx, domain.Project{
-		ID: cfg.Defaults.ProjectID, FriendlyName: "BQEMU default project",
-	}); err != nil {
+	if err := ensureDefaultProject(ctx, catalogService, cfg.Defaults.ProjectID); err != nil {
 		return fmt.Errorf("initialize default project: %w", err)
 	}
 	queryAnalyzer, err := v0442.NewAnalyzer(queryFallbackAnalyzer)
@@ -311,11 +319,24 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	// resources to OS teardown rather than crossing the still-active boundary.
 	if queryCloseErr != nil {
 		closeEngine = false
+		closeState = false
 	}
 	if servingFailure != nil {
 		return errors.Join(servingFailure, shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
 	}
 	return errors.Join(shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
+}
+
+func ensureDefaultProject(ctx context.Context, catalog *application.CatalogService, projectID string) error {
+	if _, err := catalog.GetProject(ctx, projectID); err == nil {
+		return nil
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+	_, err := catalog.CreateProject(ctx, domain.Project{
+		ID: projectID, FriendlyName: "BQEMU default project",
+	})
+	return err
 }
 
 func composeCatalogService(

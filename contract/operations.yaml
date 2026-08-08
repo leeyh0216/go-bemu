@@ -78,7 +78,7 @@ operations:
     limitations: {policy: none, byDesign: [], en: This is an emulator extension and is not a BigQuery REST method., ko: BigQuery REST 메서드가 아닌 에뮬레이터 확장 기능입니다.}
     issues: []
     sources: [bqemu-public-api]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bqemu.projects.list
     protocol: rest
@@ -104,7 +104,7 @@ operations:
     limitations: {policy: none, byDesign: [], en: This is an emulator extension., ko: 에뮬레이터 확장 기능입니다.}
     issues: []
     sources: [bqemu-public-api]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bqemu.projects.delete
     protocol: rest
@@ -143,7 +143,7 @@ operations:
     limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: accessPolicyVersion is exposed for generated-client compatibility but access policies and Cloud KMS configuration are intentionally outside the emulator scope., ko: 생성 클라이언트 호환성을 위해 accessPolicyVersion을 노출하지만 액세스 정책과 Cloud KMS 설정은 에뮬레이터 범위에서 의도적으로 제외합니다.}
     issues: []
     sources: [bigquery-rest-v2]
-    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/bqcli/run_contract.py:main]
+    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/bqcli/run_contract.py:main, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.datasets.list
     protocol: rest
@@ -169,7 +169,7 @@ operations:
     limitations: {policy: mixed, byDesign: [google-iam], en: datasetView selection semantics are tracked; accessPolicyVersion is exposed for generated-client compatibility while access-policy data remains outside scope., ko: datasetView 선택 의미는 구현 예정입니다. accessPolicyVersion은 생성 클라이언트 호환성을 위해 노출하지만 액세스 정책 데이터는 범위에서 제외합니다.}
     issues: ['#33']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/bqcli/run_contract.py:main]
+    tests: [python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors, bq:tests/bqcli/run_contract.py:main, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.datasets.patch
     protocol: rest
@@ -221,7 +221,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: "Views, routines, external tables, and advanced partition options are not implemented.", ko: "뷰와 루틴, 외부 테이블, 고급 파티션 옵션은 지원하지 않습니다."}
     issues: ['#21', '#27']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main, spark:tests/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge]
+    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main, spark:tests/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge, spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge, spark:tests/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.tables.list
     protocol: rest
@@ -247,7 +247,7 @@ operations:
     limitations: {policy: mixed, byDesign: [google-control-plane, google-iam], en: selectedFields and view are tracked; Cloud statistics and IAM metadata remain outside the emulator scope., ko: selectedFields와 view는 구현 예정이며 Cloud 통계와 IAM 메타데이터는 에뮬레이터 범위에서 제외합니다.}
     issues: ['#33']
     sources: [bigquery-rest-v2]
-    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main]
+    tests: [python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema, bq:tests/bqcli/run_contract.py:main, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.tables.patch
     protocol: rest

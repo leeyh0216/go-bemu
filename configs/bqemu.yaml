@@ -33,6 +33,11 @@ database:
   dsn: /data/bqemu.duckdb
   tempDirectory: /tmp/bqemu
 
+# Canonical BQEMU metadata is stored separately from engine-owned row data.
+# Keep this file and the DuckDB file in the same mounted /data generation.
+state:
+  dsn: /data/bqemu-state.sqlite
+
 runtime:
   shutdownTimeout: "10s"
   serverDrainTimeout: "5s"

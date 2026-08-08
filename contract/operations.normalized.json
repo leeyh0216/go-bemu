@@ -100,6 +100,7 @@
       ],
       "tests": [
         "bq:tests/bqcli/run_contract.py:main",
+        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
       ]
     },
@@ -138,6 +139,7 @@
       ],
       "tests": [
         "bq:tests/bqcli/run_contract.py:main",
+        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "python:tests/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors"
       ]
     },
@@ -603,6 +605,7 @@
       ],
       "tests": [
         "bq:tests/bqcli/run_contract.py:main",
+        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
       ]
     },
@@ -641,6 +644,7 @@
       ],
       "tests": [
         "bq:tests/bqcli/run_contract.py:main",
+        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "python:tests/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema",
         "spark:tests/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
         "spark:tests/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
@@ -1231,6 +1235,7 @@
         "bqemu-public-api"
       ],
       "tests": [
+        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
@@ -1299,6 +1304,7 @@
         "bqemu-public-api"
       ],
       "tests": [
+        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },

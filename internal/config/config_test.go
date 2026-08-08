@@ -146,6 +146,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"server.grpc.address=127.0.0.1:19060", "server.grpc.maxReceiveMessageBytes=2097152", "server.grpc.maxSendMessageBytes=3145728",
 		"server.tls.certFile=cert.pem", "server.tls.keyFile=key.pem",
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
+		"state.dsn=/tmp/bqemu-state.sqlite",
 		"runtime.shutdownTimeout=9s", "runtime.serverDrainTimeout=4s", "runtime.storageCloseTimeout=4s",
 		"runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
 		"query.operationTimeout=45s", "query.compensationTimeout=10s", "query.anonymousResultTtl=12h",
@@ -180,6 +181,23 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 	}
 	if _, err := load(args, lookup(nil)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStateDSNLoadsIndependentlyFromEngineDatabase(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_DATABASE_DSN": ":memory:",
+		"BQEMU_STATE_DSN":    "/state/bqemu.sqlite",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.Database.DSN != ":memory:" || result.Config.State.DSN != "/state/bqemu.sqlite" {
+		t.Fatalf("database/state DSNs = %#v / %#v", result.Config.Database, result.Config.State)
+	}
+	if _, err := load([]string{"--set", "state.dsn="}, lookup(nil)); err == nil ||
+		!strings.Contains(err.Error(), "state.dsn is required") {
+		t.Fatalf("empty state DSN error = %v", err)
 	}
 }
 

@@ -72,6 +72,7 @@ type Config struct {
 	Defaults   DefaultsConfig  `yaml:"defaults" json:"defaults"`
 	Server     ServerConfig    `yaml:"server" json:"server"`
 	Database   DatabaseConfig  `yaml:"database" json:"database"`
+	State      StateConfig     `yaml:"state" json:"state"`
 	Runtime    RuntimeConfig   `yaml:"runtime" json:"runtime"`
 	Query      QueryConfig     `yaml:"query" json:"query"`
 	TableData  TableDataConfig `yaml:"tableData" json:"tableData"`
@@ -128,6 +129,13 @@ type DatabaseConfig struct {
 	Adapter       string `yaml:"adapter" json:"adapter"`
 	DSN           string `yaml:"dsn" json:"dsn"`
 	TempDirectory string `yaml:"tempDirectory" json:"tempDirectory"`
+}
+
+// StateConfig identifies BQEMU-owned canonical state. It is deliberately
+// separate from DatabaseConfig: database.dsn belongs to the replaceable query
+// engine, while state.dsn is always a SQLite database owned by BQEMU.
+type StateConfig struct {
+	DSN string `yaml:"dsn" json:"dsn"`
 }
 
 // RuntimeConfig divides the bounded process shutdown into a network drain
@@ -324,6 +332,7 @@ func Defaults() Config {
 			GRPC: GRPCConfig{Address: ":9060", MaxReceiveMessageBytes: 32 << 20, MaxSendMessageBytes: 32 << 20},
 		},
 		Database: DatabaseConfig{Adapter: "duckdb", DSN: ":memory:", TempDirectory: os.TempDir()},
+		State:    StateConfig{DSN: ":memory:"},
 		Runtime: RuntimeConfig{
 			ShutdownTimeout: Duration(10 * time.Second), ServerDrainTimeout: Duration(5 * time.Second),
 			StorageCloseTimeout: Duration(4 * time.Second), JobPollInterval: Duration(100 * time.Millisecond),
@@ -487,6 +496,7 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_GRPC_ADDRESS", "server.grpc.address"}, {"BQEMU_TLS_CERT_FILE", "server.tls.certFile"},
 	{"BQEMU_TLS_KEY_FILE", "server.tls.keyFile"}, {"BQEMU_DATABASE_ADAPTER", "database.adapter"},
 	{"BQEMU_DATABASE_DSN", "database.dsn"}, {"BQEMU_TEMP_DIRECTORY", "database.tempDirectory"},
+	{"BQEMU_STATE_DSN", "state.dsn"},
 	{"BQEMU_QUERY_OPERATION_TIMEOUT", "query.operationTimeout"},
 	{"BQEMU_QUERY_COMPENSATION_TIMEOUT", "query.compensationTimeout"},
 	{"BQEMU_QUERY_ANONYMOUS_RESULT_TTL", "query.anonymousResultTtl"},
@@ -606,6 +616,8 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setString(&cfg.Database.DSN)
 	case "database.tempDirectory":
 		return setString(&cfg.Database.TempDirectory)
+	case "state.dsn":
+		return setString(&cfg.State.DSN)
 	case "runtime.shutdownTimeout":
 		return setDuration(&cfg.Runtime.ShutdownTimeout)
 	case "runtime.serverDrainTimeout":
@@ -810,6 +822,9 @@ func (cfg Config) Validate() error {
 	}
 	if strings.TrimSpace(cfg.Database.TempDirectory) == "" {
 		return errors.New("database.tempDirectory is required")
+	}
+	if strings.TrimSpace(cfg.State.DSN) == "" {
+		return errors.New("state.dsn is required")
 	}
 	if cfg.Storage.Read.MaxStreams < 1 || cfg.Storage.Read.MaxStreams > storageReadSystemMaxStreams ||
 		cfg.Storage.Read.DefaultStreamCount < 1 || cfg.Storage.Read.DefaultStreamCount > cfg.Storage.Read.MaxStreams {
