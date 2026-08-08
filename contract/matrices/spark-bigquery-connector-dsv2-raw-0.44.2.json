@@ -26,6 +26,10 @@
       "kind": "source",
       "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java"
     },
+    "spark-35-provider": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-dsv2/spark-3.5-bigquery-lib/src/main/java/com/google/cloud/spark/bigquery/v2/Spark35BigQueryTableProvider.java"
+    },
     "spark-3.5-maven-jar": {
       "kind": "artifact",
       "url": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/spark-3.5-bigquery-0.44.2.jar",
@@ -45,6 +49,39 @@
   },
   "entries": [
     {
+      "id": "SBQ-DSV2-ARTIFACT-CLASSPATH-GUARD-V1",
+      "flow": "artifact-bootstrap",
+      "axes": {
+        "operation": "bootstrap",
+        "transport": "local-classpath",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "tablePartitioning": "not-applicable",
+        "parallelism": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "not-applicable"
+      },
+      "state": "partial",
+      "officialSourceRefs": ["spark-35-provider"],
+      "issueRef": "dsv2-streaming",
+      "limitation": "The lock and classpath guards are local contracts; the separate raw public-edge row proves the released provider and wire path.",
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/spark/evidence/dsv2-raw-streaming-noop-0.44.2.json",
+          "fingerprint": "sha256:3dfa054b17b259897b31768f892ec19fe724b33db83ccec5cc30533eea1aaaf7"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts-dsv2.lock.json",
+          "fingerprint": "sha256:84cf9a053974af6f25a566255b5ebc1b9b1dbca629854bd6d21dc3645cf2fc1d"
+        }
+      ]
+    },
+    {
       "id": "SBQ-DSV2-RAW-STREAM-EXACT-APPEND-V1",
       "flow": "write-structured-streaming",
       "axes": {
@@ -63,7 +100,19 @@
       "state": "gap",
       "officialSourceRefs": ["streaming-write", "writer-context-interface", "direct-writer", "direct-partition-writer"],
       "issueRef": "dsv2-streaming",
-      "limitation": "The raw DSv2 driver invokes interface streaming hooks that are no-ops; finalized PENDING streams are not batch committed."
+      "limitation": "The released raw DSv2 process creates one PENDING stream, appends at offset zero, and finalizes it without GetWriteStream or BatchCommitWriteStreams; zero rows become visible because the driver streaming commit hook is a no-op.",
+      "evidence": [
+        {
+          "kind": "positive-failure-trace",
+          "ref": "tests/spark/evidence/dsv2-raw-streaming-noop-0.44.2.json",
+          "fingerprint": "sha256:3dfa054b17b259897b31768f892ec19fe724b33db83ccec5cc30533eea1aaaf7"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/spark/artifacts-dsv2.lock.json",
+          "fingerprint": "sha256:84cf9a053974af6f25a566255b5ebc1b9b1dbca629854bd6d21dc3645cf2fc1d"
+        }
+      ]
     },
     {
       "id": "SBQ-DSV2-RAW-STREAM-ALO-APPEND-V1",

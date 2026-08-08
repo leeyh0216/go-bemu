@@ -664,12 +664,49 @@ def test_direct_pending_exact_append(
     writer = frame.write.format("bigquery")
     for key, value in connector_options(public_edge).items():
         writer = writer.option(key, value)
+    log_position = public_edge_log_position(public_edge)
     (
         writer.option("writeMethod", "direct")
         .option("writeAtLeastOnce", "false")
         .mode("append")
         .save(f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}")
     )
+    observation = observe_direct_overwrite_flow(public_edge, since=log_position)
+    assert_ordered_operations(
+        observation,
+        (
+            "CreateWriteStream",
+            "AppendRows",
+            "FinalizeWriteStream",
+            "BatchCommitWriteStreams",
+        ),
+    )
+    _assert_operation_counts(
+        observation,
+        exact={
+            "CreateWriteStream": logical_partitions,
+            "GetWriteStream": 0,
+            "AppendRows": logical_partitions,
+            "FinalizeWriteStream": logical_partitions,
+            "BatchCommitWriteStreams": 1,
+        },
+    )
+    expected_observation = {
+        "pending_stream_count": logical_partitions,
+        "pending_stream_types_valid": True,
+        "append_batch_count": logical_partitions,
+        "append_row_count": 8,
+        "commit_stream_count": logical_partitions,
+        "commit_row_count": 8,
+        "commit_succeeded": True,
+        "stream_lifecycle_correlated": True,
+    }
+    for field, expected_value in expected_observation.items():
+        if observation.get(field) != expected_value:
+            pytest.fail(
+                "direct exact append observation mismatch "
+                f"shape={field}:expected:{expected_value}"
+            )
     result = query(
         public_edge,
         test_timeout,
@@ -680,7 +717,12 @@ def test_direct_pending_exact_append(
     partition_name = {1: "ONE", 2: "TWO", 4: "FOUR"}[logical_partitions]
     record_capability(
         f"SBQ-WRITE-DIRECT-EXACT-APPEND-{partition_name}-V1",
-        f"pending-streams:{logical_partitions}",
+        (
+            f"pending-streams:{logical_partitions} "
+            f"append-calls:{logical_partitions} "
+            f"finalize-calls:{logical_partitions} "
+            "get-write-stream-calls:0 batch-commit-calls:1 committed-rows:8"
+        ),
     )
 
 

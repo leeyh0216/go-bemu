@@ -97,15 +97,26 @@ func TestRegistryReturnsDefensiveProfileCopies(t *testing.T) {
 	}
 }
 
-func TestSparkWriteProfilePinsManagedWriterInitializationAndContinuation(t *testing.T) {
+func TestSparkWriteProfilePinsExactAndDefaultStreamInitialization(t *testing.T) {
 	profile, ok := DefaultRegistry().ForConnectorVersion("0.44.2")
 	if !ok {
 		t.Fatal("Spark connector profile is missing")
 	}
-	for _, flow := range []string{"direct-append-pending", "direct-at-least-once-default"} {
-		calls := profile.Flows[flow]
-		var hasGetWriteStream, hasContinuation bool
+	tests := []struct {
+		flow       string
+		wantCreate bool
+		wantGet    bool
+	}{
+		{flow: "direct-append-pending", wantCreate: true, wantGet: false},
+		{flow: "direct-at-least-once-default", wantCreate: false, wantGet: true},
+	}
+	for _, test := range tests {
+		calls := profile.Flows[test.flow]
+		var hasCreateWriteStream, hasGetWriteStream, hasContinuation bool
 		for _, call := range calls {
+			if call.Target == "/google.cloud.bigquery.storage.v1.BigQueryWrite/CreateWriteStream" {
+				hasCreateWriteStream = true
+			}
 			if call.Target == "/google.cloud.bigquery.storage.v1.BigQueryWrite/GetWriteStream" {
 				hasGetWriteStream = true
 			}
@@ -115,8 +126,13 @@ func TestSparkWriteProfilePinsManagedWriterInitializationAndContinuation(t *test
 				}
 			}
 		}
-		if !hasGetWriteStream || !hasContinuation {
-			t.Fatalf("flow %s does not pin managed-writer initialization and continuation: %#v", flow, calls)
+		if hasCreateWriteStream != test.wantCreate ||
+			hasGetWriteStream != test.wantGet ||
+			!hasContinuation {
+			t.Fatalf(
+				"flow %s initialization/continuation mismatch: create=%t get=%t calls=%#v",
+				test.flow, hasCreateWriteStream, hasGetWriteStream, calls,
+			)
 		}
 	}
 }
@@ -152,7 +168,7 @@ func TestRawDSv2StreamingProfileEndsAtFinalizeWithoutBatchCommit(t *testing.T) {
 	}
 	flow := profile.Flows["dsv2-direct-exact-streaming-raw"]
 	wantStages := []string{
-		"destination_metadata", "create_pending_stream", "get_pending_stream", "append_rows", "finalize_stream",
+		"destination_metadata", "create_pending_stream", "append_rows", "finalize_stream",
 	}
 	if len(flow) != len(wantStages) {
 		t.Fatalf("raw DSv2 flow has %d calls, want exactly %d ending at finalize", len(flow), len(wantStages))
@@ -161,15 +177,16 @@ func TestRawDSv2StreamingProfileEndsAtFinalizeWithoutBatchCommit(t *testing.T) {
 		if call.Stage != wantStages[index] {
 			t.Fatalf("raw DSv2 stage[%d]=%q, want %q", index, call.Stage, wantStages[index])
 		}
-		if strings.HasSuffix(call.Target, "/BatchCommitWriteStreams") {
-			t.Fatal("raw DSv2 profile must retain the upstream zero-batch-commit gap")
+		if strings.HasSuffix(call.Target, "/GetWriteStream") ||
+			strings.HasSuffix(call.Target, "/BatchCommitWriteStreams") {
+			t.Fatal("raw DSv2 profile must retain zero GetWriteStream and zero BatchCommitWriteStreams")
 		}
 	}
 	if !strings.HasSuffix(flow[len(flow)-1].Target, "/FinalizeWriteStream") {
 		t.Fatalf("raw DSv2 flow does not terminate at FinalizeWriteStream: %#v", flow)
 	}
 	appendFields := make(map[string]bool)
-	for _, field := range flow[3].RequiredFields {
+	for _, field := range flow[2].RequiredFields {
 		appendFields[field] = true
 	}
 	for _, required := range []string{
@@ -195,8 +212,9 @@ func TestRawDSv2StreamingProfileEndsAtFinalizeWithoutBatchCommit(t *testing.T) {
 			t.Fatalf("raw DSv2 golden must end at finalize with no batch commit: %#v", trace.Events)
 		}
 		for _, event := range trace.Events {
-			if strings.HasSuffix(event.Target, "/BatchCommitWriteStreams") {
-				t.Fatal("raw DSv2 golden must retain zero BatchCommitWriteStreams")
+			if strings.HasSuffix(event.Target, "/GetWriteStream") ||
+				strings.HasSuffix(event.Target, "/BatchCommitWriteStreams") {
+				t.Fatal("raw DSv2 golden must retain zero GetWriteStream and zero BatchCommitWriteStreams")
 			}
 		}
 		return

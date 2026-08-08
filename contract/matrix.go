@@ -188,6 +188,7 @@ func validateMatrixEntry(location string, matrix CapabilityMatrix, entry MatrixE
 		"read-storage": true, "write-direct-pending": true, "write-direct-default": true,
 		"write-direct-overwrite": true, "write-indirect-load": true,
 		"write-structured-streaming": true, "authentication": true,
+		"artifact-bootstrap": true,
 	}
 	if !allowedFlows[entry.Flow] {
 		return fmt.Errorf("%s %s has unknown flow %q", location, entry.ID, entry.Flow)
@@ -231,8 +232,8 @@ func validateMatrixEntry(location string, matrix CapabilityMatrix, entry MatrixE
 
 func validateAxes(location string, axes MatrixAxes) error {
 	allowed := map[string]map[string]bool{
-		"operation":         stringSet("read", "write", "auth"),
-		"transport":         stringSet("rest+storage-read", "rest+storage-write", "rest+gcs+load", "credential-provider"),
+		"operation":         stringSet("read", "write", "auth", "bootstrap"),
+		"transport":         stringSet("rest+storage-read", "rest+storage-write", "rest+gcs+load", "credential-provider", "local-classpath"),
 		"execution":         stringSet("batch", "structured-streaming", "not-applicable"),
 		"format":            stringSet("ARROW", "AVRO", "PROTO_ROWS", "PARQUET", "ORC", "not-applicable"),
 		"delivery":          stringSet("exactly-once", "at-least-once", "not-applicable"),
@@ -241,7 +242,7 @@ func validateAxes(location string, axes MatrixAxes) error {
 		"tablePartitioning": stringSet("unpartitioned", "time", "ingestion-time", "integer-range", "dynamic-overwrite", "not-applicable"),
 		"parallelism":       stringSet("read-stream-1", "read-stream-2", "read-stream-4", "read-stream-16", "read-stream-negotiated", "spark-partition-1", "spark-partition-2", "spark-partition-4", "spark-partition-negotiated", "not-applicable"),
 		"typeFamily":        stringSet("boolean-integer-float", "string-bytes", "numeric-bignumeric", "temporal", "struct-array", "json", "map", "ml-vector-matrix", "geography", "not-applicable"),
-		"auth":              stringSet("static-access-token", "service-account-file", "service-account-base64", "adc-service-account", "adc-user", "wif-external-account", "impersonation", "custom-token-provider"),
+		"auth":              stringSet("static-access-token", "service-account-file", "service-account-base64", "adc-service-account", "adc-user", "wif-external-account", "impersonation", "custom-token-provider", "not-applicable"),
 	}
 	values := map[string]string{
 		"operation": axes.Operation, "transport": axes.Transport, "execution": axes.Execution,

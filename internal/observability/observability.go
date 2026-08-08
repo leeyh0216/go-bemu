@@ -196,11 +196,23 @@ func reflectedMetrics(message protoreflect.Message, depth int) []any {
 			attrs = append(attrs, reflectedMetrics(value.Message(), depth+1)...)
 		case protoreflect.StringKind:
 			if name == "write_stream" || name == "read_stream" || name == "parent" || (depth == 0 && name == "name") {
-				attrs = append(attrs, name, value.String())
+				payload := []byte(value.String())
+				attrs = append(attrs,
+					name+"_shape", "resource_name",
+					name+"_bytes", len(payload),
+					name+"_fingerprint", Digest(payload),
+				)
 			} else {
 				payload := []byte(value.String())
 				attrs = append(attrs, name+"_bytes", len(payload), name+"_digest", Digest(payload))
 			}
+		case protoreflect.EnumKind:
+			enum := field.Enum().Values().ByNumber(value.Enum())
+			if enum == nil {
+				attrs = append(attrs, name+"_shape", "unknown_enum")
+				break
+			}
+			attrs = append(attrs, name, string(enum.Name()))
 		case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 			if name == "offset" || name == "row_count" {
 				attrs = append(attrs, name, value.Int())

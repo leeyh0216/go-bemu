@@ -172,7 +172,17 @@ func TestRawDSv2MatrixCoversExactAndAtLeastOnceStreaming(t *testing.T) {
 		"SBQ-DSV2-RAW-STREAM-EXACT-APPEND-V1": "exactly-once",
 		"SBQ-DSV2-RAW-STREAM-ALO-APPEND-V1":   "at-least-once",
 	}
+	guardFound := false
 	for _, entry := range raw.Entries {
+		if entry.Flow == "artifact-bootstrap" {
+			if guardFound || entry.ID != "SBQ-DSV2-ARTIFACT-CLASSPATH-GUARD-V1" ||
+				entry.State != MatrixPartial || entry.Axes.Operation != "bootstrap" ||
+				entry.Axes.Transport != "local-classpath" || len(entry.Evidence) != 2 {
+				t.Fatalf("raw DSv2 classpath guard row is incomplete: %#v", entry)
+			}
+			guardFound = true
+			continue
+		}
 		delivery, ok := want[entry.ID]
 		if !ok {
 			t.Fatalf("raw DSv2 matrix contains an unreviewed row %q", entry.ID)
@@ -182,7 +192,13 @@ func TestRawDSv2MatrixCoversExactAndAtLeastOnceStreaming(t *testing.T) {
 			entry.IssueRef != "dsv2-streaming" || entry.Limitation == "" {
 			t.Fatalf("raw DSv2 row is incomplete: %#v", entry)
 		}
+		if entry.ID == "SBQ-DSV2-RAW-STREAM-EXACT-APPEND-V1" && len(entry.Evidence) != 2 {
+			t.Fatalf("raw DSv2 exact failure must retain trace and artifact evidence: %#v", entry.Evidence)
+		}
 		delete(want, entry.ID)
+	}
+	if !guardFound {
+		t.Fatal("raw DSv2 matrix is missing the classpath guard row")
 	}
 	if len(want) != 0 {
 		t.Fatalf("raw DSv2 matrix is missing rows: %v", sortedKeysString(want))

@@ -1,8 +1,8 @@
 package observability
 
 // The interceptors observe official protobuf messages without copying generated
-// types. Safe mode logs resource identifiers, offsets, counts, byte sizes,
-// digests, and schema fingerprints; serialized rows remain opaque.
+// types. Safe mode logs resource fingerprints, enum symbols, offsets, counts,
+// byte sizes, and schema fingerprints; names and serialized rows remain opaque.
 // Official source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1
 
 import (

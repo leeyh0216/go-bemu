@@ -927,7 +927,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/spark/evidence/direct-pending-0.44.2.json",
-          "fingerprint": "sha256:d0f1c1938d8a690df662b153bb0497db545aa9e953796404453abf16b1321c3e"
+          "fingerprint": "sha256:c8bd37c8069154c6ea13a7f2cb8188aba67a82b990edbf88d5e2461c8bce23aa"
         },
         {
           "kind": "artifact-lock",
@@ -961,7 +961,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/spark/evidence/direct-pending-0.44.2.json",
-          "fingerprint": "sha256:d0f1c1938d8a690df662b153bb0497db545aa9e953796404453abf16b1321c3e"
+          "fingerprint": "sha256:c8bd37c8069154c6ea13a7f2cb8188aba67a82b990edbf88d5e2461c8bce23aa"
         },
         {
           "kind": "artifact-lock",
@@ -995,7 +995,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/spark/evidence/direct-pending-0.44.2.json",
-          "fingerprint": "sha256:d0f1c1938d8a690df662b153bb0497db545aa9e953796404453abf16b1321c3e"
+          "fingerprint": "sha256:c8bd37c8069154c6ea13a7f2cb8188aba67a82b990edbf88d5e2461c8bce23aa"
         },
         {
           "kind": "artifact-lock",

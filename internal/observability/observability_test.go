@@ -91,11 +91,42 @@ func TestMetadataNeverContainsAuthorizationValue(t *testing.T) {
 	}
 }
 
-func TestProtoMetricsIncludeOffsetStreamBytesAndDigest(t *testing.T) {
+func TestProtoMetricsIncludeOffsetAndResourceFingerprint(t *testing.T) {
 	attrs := fmt.Sprint(ProtoAttrs(&storagepb.ReadRowsRequest{ReadStream: "streams/one", Offset: 42}))
-	for _, expected := range []string{"read_stream", "streams/one", "offset", "42", "wire_bytes", "payload_digest"} {
+	if strings.Contains(attrs, "streams/one") {
+		t.Fatalf("raw read stream leaked in %s", attrs)
+	}
+	for _, expected := range []string{"read_stream_shape resource_name", "read_stream_fingerprint sha256:", "offset", "42", "wire_bytes", "payload_digest"} {
 		if !strings.Contains(attrs, expected) {
 			t.Fatalf("missing %q in %s", expected, attrs)
+		}
+	}
+}
+
+func TestProtoMetricsExposeKnownEnumsWithoutResourceOrPayloadValues(t *testing.T) {
+	const stream = "projects/resource-secret/datasets/private/tables/raw/streams/hidden"
+	getAttrs := fmt.Sprint(ProtoAttrs(&storagepb.GetWriteStreamRequest{
+		Name: stream,
+		View: storagepb.WriteStreamView_BASIC,
+	}))
+	createAttrs := fmt.Sprint(ProtoAttrs(&storagepb.CreateWriteStreamRequest{
+		Parent: "projects/resource-secret/datasets/private/tables/raw",
+		WriteStream: &storagepb.WriteStream{
+			Type: storagepb.WriteStream_PENDING,
+		},
+	}))
+	combined := getAttrs + createAttrs
+	for _, secret := range []string{stream, "resource-secret", "SELECT secret", "row-secret", "Bearer token-secret"} {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("protobuf boundary exposed %q: %s", secret, combined)
+		}
+	}
+	for _, expected := range []string{
+		"view BASIC", "type PENDING", "name_shape resource_name", "name_fingerprint sha256:",
+		"parent_shape resource_name", "parent_fingerprint sha256:",
+	} {
+		if !strings.Contains(combined, expected) {
+			t.Fatalf("protobuf enum/resource summary omitted %q: %s", expected, combined)
 		}
 	}
 }
@@ -179,7 +210,7 @@ func TestGRPCBoundaryLogNeverIncludesAuthorizationMetadata(t *testing.T) {
 	if strings.Contains(output, "grpc-secret") {
 		t.Fatalf("gRPC credential leaked: %s", output)
 	}
-	for _, expected := range []string{"boundary.enter", "boundary.exit", "grpc-request", "authorization=[REDACTED]", "read_stream", "streams/one", "offset"} {
+	for _, expected := range []string{"boundary.enter", "boundary.exit", "grpc-request", "authorization=[REDACTED]", "read_stream_fingerprint", "offset"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("missing %q in gRPC log: %s", expected, output)
 		}

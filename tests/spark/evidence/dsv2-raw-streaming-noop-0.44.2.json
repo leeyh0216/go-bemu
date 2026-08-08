@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "1",
+  "capabilityIds": [
+    "SBQ-DSV2-ARTIFACT-CLASSPATH-GUARD-V1",
+    "SBQ-DSV2-RAW-STREAM-EXACT-APPEND-V1"
+  ],
+  "observedOn": "2026-08-08",
+  "consumer": {
+    "artifact": "spark-3.5-bigquery-0.44.2",
+    "artifactVariant": "dsv2-spark-3.5-raw",
+    "provider": "Spark35BigQueryTableProvider",
+    "spark": "3.5.8",
+    "scala": "2.12.18",
+    "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92"
+  },
+  "artifacts": {
+    "lockFingerprint": "sha256:84cf9a053974af6f25a566255b5ebc1b9b1dbca629854bd6d21dc3645cf2fc1d",
+    "connectorJarBytes": 42618495,
+    "connectorJarFingerprint": "sha256:2e6bbb41bcaf56ae17a5488dd4453698bd35f13e9849f4daed744ca7b57b053f"
+  },
+  "processBoundary": {
+    "isolatedPythonProcess": true,
+    "isolatedSparkJVM": true,
+    "connectorArtifacts": 1,
+    "sparkListedJars": 1,
+    "registeredProviderCount": 1,
+    "otherConnectorProviderCount": 0,
+    "providerCodeSourceMatchesLockedJar": true,
+    "writerContextCodeSourceMatchesLockedJar": true
+  },
+  "classpathGuard": [
+    {"case": "zero", "stage": "connector-count", "shape": "connector-count:0", "assertionFingerprint": "sha256:6e8b76750076fc4dff05687beddca913f3b942212947a3519d36d6ce3a53e58d", "status": "rejected"},
+    {"case": "duplicate", "stage": "connector-count", "shape": "connector-count:2", "assertionFingerprint": "sha256:21773b77d5aa5c19cfe1180de41d974c06f80eb2452a6e7b0373bb0f278f6393", "status": "rejected"},
+    {"case": "mixed", "stage": "connector-count", "shape": "mixed-variants:2", "assertionFingerprint": "sha256:f1f11832869c73a4963eab8b762b87d37ecb2d1545e2e73c269c776abd057b06", "status": "rejected"},
+    {"case": "hash-drift", "stage": "artifact-hash", "shape": "maven-jar:size:14", "assertionFingerprint": "sha256:a2620665e4b66e892e06b08cdcda48888fb0fed7db9a0159f8e2993a21eefc3e", "status": "rejected"}
+  ],
+  "trace": [
+    {"stage": "diagnostic_redaction", "operation": "retained-diagnostic", "shape": "enum-symbols:retained resource-names:0 credentials:0 sql:0 rows:0", "status": "passed"},
+    {"stage": "runtime_identity", "operation": "provider-bootstrap", "shape": "spark:3.5.8 scala:2.12.18 providers:1 other-connector-providers:0", "status": "passed"},
+    {"stage": "create", "operation": "CreateWriteStream", "shape": "calls:1 type:PENDING", "status": "OK"},
+    {"stage": "append", "operation": "AppendRows", "shape": "calls:1 batches:1 start-offset:0 row-count:4", "status": "OK"},
+    {"stage": "finalize", "operation": "FinalizeWriteStream", "shape": "calls:1 row-count:4 lifecycle-fingerprints:correlated", "status": "OK"},
+    {"stage": "driver_hook", "operation": "GetWriteStream+BatchCommitWriteStreams", "shape": "get-calls:0 batch-commit-calls:0 committed-rows:0", "status": "no-op"},
+    {"stage": "visibility", "operation": "query-count", "shape": "micro-batches:1 input-rows:4 type-family:boolean-integer-float visible-rows:0", "status": "positive-failure"},
+    {"stage": "public_edge_assertion", "operation": "SBQ-DSV2-RAW-STREAM-EXACT-APPEND-V1", "shape": "create:1 append:1 finalize:1 get:0 batch-commit:0 visible:0", "fingerprint": "sha256:0bcedcd684f6b711faaf0c246e98461c541321f17a9964ec9a7538b50a00d569", "status": "failed-as-reviewed-gap"}
+  ],
+  "redaction": {
+    "rawRows": false,
+    "rawSQL": false,
+    "rawPayloads": false,
+    "resourceNames": false,
+    "credentials": false,
+    "localPaths": false
+  }
+}

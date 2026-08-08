@@ -27,15 +27,25 @@ import uuid
 
 import pytest
 
+from artifact_variants import (
+    DSV1_VARIANT,
+    DSV2_RAW_VARIANT,
+    enforce_connector_classpath,
+)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-MATRIX_PATH = (
-    REPOSITORY_ROOT
-    / "contract"
-    / "matrices"
-    / "spark-bigquery-connector-0.44.2.json"
+MATRIX_PATHS = tuple(
+    sorted(
+        (REPOSITORY_ROOT / "contract" / "matrices").glob(
+            "spark-bigquery-connector*.json"
+        )
+    )
 )
 ARTIFACT_LOCK_PATH = REPOSITORY_ROOT / "tests" / "spark" / "artifacts.lock.json"
+DSV2_ARTIFACT_LOCK_PATH = (
+    REPOSITORY_ROOT / "tests" / "spark" / "artifacts-dsv2.lock.json"
+)
 STATIC_ACCESS_TOKEN = "bqemu-spark-e2e-static-token"
 TRUSTSTORE_PASSWORD = "bqemu-test-only"
 
@@ -85,19 +95,34 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    with MATRIX_PATH.open("r", encoding="utf-8") as stream:
-        matrix = json.load(stream)
-    entries = {entry["id"]: entry for entry in matrix["entries"]}
+    entries: dict[str, tuple[dict[str, object], str]] = {}
+    for matrix_path in MATRIX_PATHS:
+        with matrix_path.open("r", encoding="utf-8") as stream:
+            matrix = json.load(stream)
+        for entry in matrix["entries"]:
+            capability_id = entry["id"]
+            if capability_id in entries:
+                raise pytest.UsageError(
+                    f"duplicate capability ID across matrices: {capability_id}"
+                )
+            issue_ref = entry.get("issueRef")
+            issue_url = (
+                matrix["issueCatalog"][issue_ref]["url"]
+                if issue_ref is not None
+                else "none"
+            )
+            entries[capability_id] = (entry, issue_url)
     for item in items:
         marker = item.get_closest_marker("capability")
         if marker is None or len(marker.args) != 1:
             raise pytest.UsageError(f"{item.nodeid} must declare one capability ID")
         capability_id = marker.args[0]
-        entry = entries.get(capability_id)
-        if entry is None:
+        selected = entries.get(capability_id)
+        if selected is None:
             raise pytest.UsageError(
                 f"{item.nodeid} references unknown capability {capability_id}"
             )
+        entry, issue_url = selected
         if entry["state"] in {"gap", "cloud-only"}:
             item.add_marker(
                 pytest.mark.xfail(
@@ -105,7 +130,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     raises=CapabilityGapError,
                     reason=(
                         f"{capability_id} state={entry['state']} "
-                        f"issue={matrix['issueCatalog'][entry['issueRef']]['url']}"
+                        f"issue={issue_url}"
                     ),
                 )
             )
@@ -158,6 +183,21 @@ def record_capability(capability_id: str, shape: str) -> None:
         status="passed",
         fix_hint="none",
     )
+
+
+def record_capability_gap(capability_id: str, shape: str, fix_hint: str) -> None:
+    """Retain a reviewed positive failure shape, then satisfy strict xfail."""
+
+    _emit(
+        operation=capability_id,
+        stage="public-edge-positive-failure",
+        shape=shape,
+        status="failed",
+        fix_hint=fix_hint,
+    )
+    raise CapabilityGapError(
+        f"{capability_id} matched reviewed positive failure shape={shape}"
+    ) from None
 
 
 def raise_known_gap(
@@ -220,7 +260,7 @@ def _run(command: list[str], *, cwd: Path, timeout: float, stage: str) -> None:
             / "diagnostics"
             / f"{stage}-tail.log",
         )
-        raise RuntimeError(f"bounded setup command failed at {stage}") from error
+        raise RuntimeError(f"bounded setup command failed at {stage}") from None
 
 
 def _redact_diagnostic_text(text: str) -> str:
@@ -232,16 +272,45 @@ def _redact_diagnostic_text(text: str) -> str:
         text,
     )
     text = re.sub(
+        r"(?i)((?:password|token|credential|secret|private[_-]?key|api[_-]?key)"
+        r"[\"']?\s*(?:=|:)\s*[\"']?)[^\"'\s,;}]+",
+        r"\1<redacted>",
+        text,
+    )
+    text = re.sub(
         r"(/streams/)[A-Za-z0-9._~-]+",
         r"\1<redacted-resource-name>",
         text,
     )
-    for segment in ("projects", "jobs", "queries", "datasets", "tables", "sessions"):
+    for segment in (
+        "projects",
+        "jobs",
+        "queries",
+        "datasets",
+        "tables",
+        "sessions",
+        "streams",
+    ):
         text = re.sub(
-            rf"(/{segment}/)[^/\s?\]&]+",
+            rf"(?i)(?<![A-Za-z0-9._~-])({segment}/)[^/\s?&\]}}\",]+",
             rf"\1<redacted-resource-name>",
             text,
         )
+    resource_key = (
+        r"(?:project|dataset|table|job|query|session|stream)(?:_?id)?"
+        r"|seeded_table|destination|parent|resource"
+    )
+    text = re.sub(
+        rf"(?i)((?<![A-Za-z0-9_])[\"']?(?:{resource_key})[\"']?\s*"
+        rf"(?:=|:|->)\s*[\"']?)[^\"'\s,;}})]+",
+        r"\1<redacted-resource-name>",
+        text,
+    )
+    text = re.sub(
+        r"spark-contract-[a-f0-9]{8}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        "<redacted-resource-name>",
+        text,
+    )
     sql_statement = r"(?:SELECT|WITH|MERGE|DECLARE|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)"
     text = re.sub(
         rf'(?im)((?:"(?:query|sql)"|(?:query|sql))\s*(?::|=|->)\s*"?)'
@@ -409,15 +478,12 @@ def observe_direct_overwrite_flow(
                     if rpc.endswith("/" + operation):
                         sequence.append(operation)
                         if operation == "FinalizeWriteStream":
-                            name = event.get("name")
-                            if not isinstance(name, str):
+                            fingerprint = event.get("name_fingerprint")
+                            if not isinstance(fingerprint, str):
                                 raise AssertionError(
                                     "finalize observation omitted its resource shape"
                                 )
-                            finalized_stream_fingerprints.add(
-                                "sha256:"
-                                + hashlib.sha256(name.encode("utf-8")).hexdigest()
-                            )
+                            finalized_stream_fingerprints.add(fingerprint)
                         break
             continue
 
@@ -530,6 +596,141 @@ def observe_direct_overwrite_flow(
         "temporary_table_correlated": (
             len(created_tables) == 1
             and created_tables == deleted_tables == storage_write_tables
+        ),
+    }
+
+
+def observe_dsv2_exact_streaming_flow(
+    edge: PublicEdge, *, since: int
+) -> dict[str, object]:
+    """Return only the shape of one raw DSv2 exact-streaming micro-batch.
+
+    Resource names, row values, SQL, and credentials are discarded. Stream
+    correlation uses SHA-256 fingerprints emitted at the transport and domain
+    boundaries. Known protobuf enum symbols prove PENDING creation without
+    retaining the request message; the returned empty GetWriteStream shape
+    proves the released writer does not perform an optional lookup.
+
+    Pinned producers:
+    https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-dsv2/spark-3.1-bigquery-lib/src/main/java/com/google/cloud/spark/bigquery/v2/BigQueryStreamingWrite.java#L23-L30
+    https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java#L92-L102
+    """
+
+    with edge.log_path.open("rb") as stream:
+        stream.seek(since)
+        encoded_lines = stream.read().splitlines()
+
+    sequence: list[str] = []
+    created: set[str] = set()
+    appended: set[str] = set()
+    finalized: set[str] = set()
+    create_types: list[str] = []
+    get_views: list[str] = []
+    append_batches = 0
+    append_rows = 0
+    append_offsets: list[int] = []
+    commit_calls = 0
+    committed_rows = 0
+    for encoded in encoded_lines:
+        try:
+            event = json.loads(encoded)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+
+        if event.get("event") == "boundary.enter" and event.get("boundary") in {
+            "grpc.unary",
+            "grpc.stream",
+        }:
+            rpc = event.get("rpc")
+            if not isinstance(rpc, str):
+                continue
+            operation = next(
+                (
+                    name
+                    for name in (
+                        "CreateWriteStream",
+                        "GetWriteStream",
+                        "AppendRows",
+                        "FinalizeWriteStream",
+                        "BatchCommitWriteStreams",
+                    )
+                    if rpc.endswith("/" + name)
+                ),
+                None,
+            )
+            if operation is None:
+                continue
+            sequence.append(operation)
+            if operation == "CreateWriteStream":
+                stream_type = event.get("type")
+                if isinstance(stream_type, str):
+                    create_types.append(stream_type)
+            elif operation == "GetWriteStream":
+                view = event.get("view")
+                fingerprint = event.get("name_fingerprint")
+                if isinstance(view, str):
+                    get_views.append(view)
+            elif operation == "FinalizeWriteStream":
+                fingerprint = event.get("name_fingerprint")
+                if isinstance(fingerprint, str):
+                    finalized.add(fingerprint)
+            elif operation == "BatchCommitWriteStreams":
+                commit_calls += 1
+            continue
+
+        if (
+            event.get("event") == "domain.transition"
+            and event.get("operation") == "storage_write.create_stream"
+        ):
+            fingerprint = event.get("stream_fingerprint")
+            if isinstance(fingerprint, str):
+                created.add(fingerprint)
+            continue
+
+        if (
+            event.get("event") == "side_effect.after"
+            and event.get("side_effect") == "coordinator.stage_pending"
+            and event.get("operation") == "storage_write.append"
+            and event.get("success") is True
+        ):
+            fingerprint = event.get("stream_fingerprint")
+            row_count = event.get("row_count")
+            offset = event.get("start_offset")
+            if (
+                not isinstance(fingerprint, str)
+                or not isinstance(row_count, int)
+                or not isinstance(offset, int)
+            ):
+                raise AssertionError("DSv2 append observation omitted its safe shape")
+            appended.add(fingerprint)
+            append_batches += 1
+            append_rows += row_count
+            append_offsets.append(offset)
+            continue
+
+        if (
+            event.get("event") == "side_effect.after"
+            and event.get("side_effect") == "coordinator.commit_pending"
+            and event.get("operation") == "storage_write.batch_commit"
+            and event.get("success") is True
+        ):
+            row_count = event.get("row_count")
+            if isinstance(row_count, int):
+                committed_rows += row_count
+
+    counts = {operation: sequence.count(operation) for operation in set(sequence)}
+    return {
+        "sequence": tuple(sequence),
+        "counts": counts,
+        "create_types": tuple(create_types),
+        "get_views": tuple(get_views),
+        "append_batches": append_batches,
+        "append_rows": append_rows,
+        "append_offsets": tuple(append_offsets),
+        "batch_commit_calls": commit_calls,
+        "committed_rows": committed_rows,
+        "stream_lifecycle_correlated": (
+            len(created) > 0 and created == appended == finalized
         ),
     }
 
@@ -806,12 +1007,32 @@ def connector_jar(test_timeout: float) -> Path:
         with ARTIFACT_LOCK_PATH.open("r", encoding="utf-8") as stream:
             lock = json.load(stream)
         target = REPOSITORY_ROOT / ".artifacts" / "spark" / lock["artifacts"][0]["output"]
-    with ARTIFACT_LOCK_PATH.open("r", encoding="utf-8") as stream:
-        artifact = json.load(stream)["artifacts"][0]
-    digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    if digest != artifact["sha256"] or target.stat().st_size != artifact["size"]:
-        pytest.fail("connector JAR does not match the reviewed artifact lock")
-    return target
+    return enforce_connector_classpath(
+        [target], expected_variant=DSV1_VARIANT, repository_root=REPOSITORY_ROOT
+    ).path
+
+
+@pytest.fixture(scope="session")
+def dsv2_connector_jar(test_timeout: float) -> Path:
+    configured = os.getenv("BQEMU_SPARK_DSV2_CONNECTOR_JAR")
+    if configured:
+        target = Path(configured).resolve()
+    else:
+        _run(
+            [
+                os.getenv("PYTHON", os.sys.executable),
+                str(REPOSITORY_ROOT / "scripts" / "fetch_spark_artifacts.py"),
+            ],
+            cwd=REPOSITORY_ROOT,
+            timeout=_positive_timeout("BQEMU_ARTIFACT_TIMEOUT_SECONDS", "120"),
+            stage="fetch-dsv2-connector-jar",
+        )
+        with DSV2_ARTIFACT_LOCK_PATH.open("r", encoding="utf-8") as stream:
+            lock = json.load(stream)
+        target = REPOSITORY_ROOT / ".artifacts" / "spark" / lock["artifacts"][0]["output"]
+    return enforce_connector_classpath(
+        [target], expected_variant=DSV2_RAW_VARIANT, repository_root=REPOSITORY_ROOT
+    ).path
 
 
 @pytest.fixture(scope="session")
