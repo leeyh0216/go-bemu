@@ -32,7 +32,6 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/capabilityspec"
 	"github.com/leeyh0216/go-bemu/internal/config"
-	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 	grpcserver "github.com/leeyh0216/go-bemu/internal/transport/grpc"
@@ -130,8 +129,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	jobRepository := state.queryJobs
 	clock := system.Clock{}
 	catalogService := composeCatalogService(cfg, catalogRepository, catalogStorage, ddlStorage, tableDataReader, clock)
-	if err := ensureDefaultProject(ctx, catalogService, cfg.Defaults.ProjectID); err != nil {
-		return fmt.Errorf("initialize default project: %w", err)
+	if err := bootstrapCatalog(ctx, cfg, catalogService); err != nil {
+		return err
 	}
 	queryAnalyzer, err := v0442.NewAnalyzer(queryFallbackAnalyzer)
 	if err != nil {
@@ -336,18 +335,6 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.Join(servingFailure, shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
 	}
 	return errors.Join(shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
-}
-
-func ensureDefaultProject(ctx context.Context, catalog *application.CatalogService, projectID string) error {
-	if _, err := catalog.GetProject(ctx, projectID); err == nil {
-		return nil
-	} else if !errors.Is(err, domain.ErrNotFound) {
-		return err
-	}
-	_, err := catalog.CreateProject(ctx, domain.Project{
-		ID: projectID, FriendlyName: "BQEMU default project",
-	})
-	return err
 }
 
 func composeCatalogService(

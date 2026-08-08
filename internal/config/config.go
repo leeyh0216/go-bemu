@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leeyh0216/go-bemu/internal/domain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,6 +71,7 @@ type Config struct {
 	APIVersion string          `yaml:"apiVersion" json:"apiVersion"`
 	Kind       string          `yaml:"kind" json:"kind"`
 	Defaults   DefaultsConfig  `yaml:"defaults" json:"defaults"`
+	Bootstrap  BootstrapConfig `yaml:"bootstrap" json:"bootstrap"`
 	Server     ServerConfig    `yaml:"server" json:"server"`
 	Database   DatabaseConfig  `yaml:"database" json:"database"`
 	State      StateConfig     `yaml:"state" json:"state"`
@@ -87,6 +89,30 @@ type Config struct {
 type DefaultsConfig struct {
 	ProjectID string `yaml:"projectId" json:"projectId"`
 	Location  string `yaml:"location" json:"location"`
+}
+
+// BootstrapConfig declares canonical catalog resources that must exist before
+// public listeners become ready. An empty project list preserves the legacy
+// behavior of creating defaults.projectId only.
+type BootstrapConfig struct {
+	Projects []BootstrapProjectConfig `yaml:"projects" json:"projects"`
+}
+
+type BootstrapProjectConfig struct {
+	ID           string                   `yaml:"id" json:"id"`
+	FriendlyName string                   `yaml:"friendlyName" json:"friendlyName"`
+	Description  string                   `yaml:"description" json:"description"`
+	Datasets     []BootstrapDatasetConfig `yaml:"datasets" json:"datasets"`
+}
+
+type BootstrapDatasetConfig struct {
+	ID                           string            `yaml:"id" json:"id"`
+	FriendlyName                 string            `yaml:"friendlyName" json:"friendlyName"`
+	Description                  string            `yaml:"description" json:"description"`
+	Location                     string            `yaml:"location" json:"location"`
+	Labels                       map[string]string `yaml:"labels" json:"labels"`
+	DefaultTableExpirationMs     *int64            `yaml:"defaultTableExpirationMs" json:"defaultTableExpirationMs"`
+	DefaultPartitionExpirationMs *int64            `yaml:"defaultPartitionExpirationMs" json:"defaultPartitionExpirationMs"`
 }
 
 type ServerConfig struct {
@@ -760,6 +786,9 @@ func (cfg Config) Validate() error {
 	if strings.TrimSpace(cfg.Defaults.Location) == "" {
 		return errors.New("defaults.location is required")
 	}
+	if err := validateBootstrapConfig(cfg.Bootstrap, cfg.Defaults.Location); err != nil {
+		return err
+	}
 	if err := validateAddress("server.http.address", cfg.Server.HTTP.Address); err != nil {
 		return err
 	}
@@ -927,6 +956,46 @@ func (cfg Config) Validate() error {
 	}
 	if strings.TrimSpace(cfg.Contracts.ProfileDirectory) == "" {
 		return errors.New("contracts.profileDirectory is required")
+	}
+	return nil
+}
+
+func validateBootstrapConfig(bootstrap BootstrapConfig, defaultLocation string) error {
+	projects := make(map[string]struct{}, len(bootstrap.Projects))
+	for projectIndex, configuredProject := range bootstrap.Projects {
+		project := domain.Project{
+			ID: configuredProject.ID, FriendlyName: configuredProject.FriendlyName,
+			Description: configuredProject.Description,
+		}
+		if err := project.Validate(); err != nil {
+			return fmt.Errorf("bootstrap.projects[%d]: %w", projectIndex, err)
+		}
+		if _, duplicate := projects[project.ID]; duplicate {
+			return fmt.Errorf("bootstrap.projects[%d].id is duplicated", projectIndex)
+		}
+		projects[project.ID] = struct{}{}
+
+		datasets := make(map[string]struct{}, len(configuredProject.Datasets))
+		for datasetIndex, configuredDataset := range configuredProject.Datasets {
+			location := configuredDataset.Location
+			if location == "" {
+				location = defaultLocation
+			}
+			dataset := domain.Dataset{
+				ProjectID: project.ID, ID: configuredDataset.ID,
+				FriendlyName: configuredDataset.FriendlyName, Description: configuredDataset.Description,
+				Location: location, Labels: configuredDataset.Labels,
+				DefaultTableExpirationMs:     configuredDataset.DefaultTableExpirationMs,
+				DefaultPartitionExpirationMs: configuredDataset.DefaultPartitionExpirationMs,
+			}
+			if err := dataset.Validate(); err != nil {
+				return fmt.Errorf("bootstrap.projects[%d].datasets[%d]: %w", projectIndex, datasetIndex, err)
+			}
+			if _, duplicate := datasets[dataset.ID]; duplicate {
+				return fmt.Errorf("bootstrap.projects[%d].datasets[%d].id is duplicated", projectIndex, datasetIndex)
+			}
+			datasets[dataset.ID] = struct{}{}
+		}
 	}
 	return nil
 }
