@@ -8,6 +8,8 @@
 <!-- section: guides -->
 ## 안내서
 
+- [시작하기](getting-started.md): Compose, 클라이언트 endpoint, 외부 fake GCS,
+  Spark 옵션, TLS와 개발 컨테이너 네트워크를 설명합니다.
 - [아키텍처](architecture.md): 의존성 규칙, 실행 환경 구성, 영속성 경계와 구현체
   교체 지점을 설명합니다.
 - [BigQuery와 커넥터 내부 동작](bigquery-internals.md): REST 작업, Storage

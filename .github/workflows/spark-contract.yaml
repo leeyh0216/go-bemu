@@ -49,7 +49,7 @@ jobs:
         id: matrix
         env:
           BQEMU_CONSUMER_LANES: ${{ inputs.lanes || 'preview,nightly' }}
-        run: go run ./cmd/contractctl matrix --root . --family spark --lane "$BQEMU_CONSUMER_LANES" --output-key spark --presence-key has_spark >> "$GITHUB_OUTPUT"
+        run: go run ./cmd/contractctl matrix --root . --family spark --lane "$BQEMU_CONSUMER_LANES" --execution public --output-key spark --presence-key has_spark >> "$GITHUB_OUTPUT"
 
   protocol-matrix:
     name: Connector protocol matrix guard
@@ -98,18 +98,18 @@ jobs:
       - name: Run typed TLS REST and gRPC public-edge contract
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
-        run: .artifacts/spark/venv/bin/python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE"
+        run: .artifacts/spark/venv/bin/python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
       - name: Upload payload-safe Spark diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: consumer-${{ matrix.id }}-${{ github.run_id }}
           path: |
-            .artifacts/consumers/${{ matrix.id }}/evidence.json
-            .artifacts/consumers/${{ matrix.id }}/diff.json
-            .artifacts/consumers/${{ matrix.id }}/junit.xml
-            .artifacts/consumers/${{ matrix.id }}/runner.log
-            .artifacts/consumers/${{ matrix.id }}/runner-error.txt
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
             .artifacts/spark/diagnostics/emulator-tail.log
             .artifacts/spark/diagnostics/jvm-tail.log
             .artifacts/spark/diagnostics/trace.jsonl

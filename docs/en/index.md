@@ -8,6 +8,8 @@
 <!-- section: guides -->
 ## Guides
 
+- [Getting started](getting-started.md): Compose, client endpoints, external
+  fake GCS, Spark options, TLS, and development-container networking.
 - [Architecture](architecture.md): dependency rules, runtime composition,
   persistence boundaries, and replacement points.
 - [BigQuery and connector internals](bigquery-internals.md): REST jobs, Storage

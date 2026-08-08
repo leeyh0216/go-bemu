@@ -49,7 +49,12 @@ class AuthConsumerManifestTests(unittest.TestCase):
         base = next(
             case
             for case in source["cases"]
-            if case["runnerAdapter"]["id"] == "spark-pyspark-pytest-v1"
+            if any(
+                execution["id"] == "public"
+                and execution["runnerAdapter"]["id"]
+                == "spark-pyspark-pytest-v1"
+                for execution in case["executions"]
+            )
         )
         patched = json.loads(json.dumps(base))
         patched["id"] = "connector-patch"
@@ -58,7 +63,7 @@ class AuthConsumerManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "consumers.normalized.json"
             manifest.write_text(
-                json.dumps({"schemaVersion": "1", "cases": [patched]}),
+                json.dumps({"schemaVersion": "2", "cases": [patched]}),
                 encoding="utf-8",
             )
             selected = auth.load_auth_cases("connector-patch", manifest)

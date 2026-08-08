@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "bqemu-load-infrastructure/v1",
+  "fakeGCS": {
+    "image": "fsouza/fake-gcs-server@sha256:91afded49de804aa61b5f3eb6c7cd65205acf9e5c5e047cf0ba7d9507af806c8",
+    "version": "1.55.1",
+    "revision": "5fd3ba18c55287fde0a0dcff903c822eb80c709a",
+    "source": "https://github.com/fsouza/fake-gcs-server/tree/v1.55.1"
+  }
+}

@@ -22,6 +22,7 @@ const (
 	consumerManifestPath   = "contract/consumers.yaml"
 	consumerCasesDirectory = "contract/cases"
 	consumerNormalizedPath = "contract/consumers.normalized.json"
+	consumerSchemaVersion  = "2"
 )
 
 var (
@@ -58,15 +59,21 @@ type RunnerAdapter struct {
 }
 
 type CompatibilityProfile struct {
-	ID               string                     `yaml:"id" json:"id"`
-	ScenarioIDs      []string                   `yaml:"scenarioIds" json:"scenarioIds"`
-	SourceProvenance []ConsumerSourceProvenance `yaml:"sourceProvenance" json:"sourceProvenance"`
+	ID          string   `yaml:"id" json:"id"`
+	ScenarioIDs []string `yaml:"scenarioIds" json:"scenarioIds"`
 }
 
 type ConsumerSourceProvenance struct {
 	Name    string `yaml:"name" json:"name"`
 	Version string `yaml:"version" json:"version"`
 	URI     string `yaml:"uri" json:"uri"`
+}
+
+type ConsumerSourceReference struct {
+	Name       string `yaml:"name" json:"name"`
+	VersionKey string `yaml:"versionKey" json:"versionKey"`
+	Version    string `yaml:"version" json:"version"`
+	URI        string `yaml:"uri" json:"uri"`
 }
 
 type ConsumerScenario struct {
@@ -97,17 +104,23 @@ type ConsumerArtifact struct {
 }
 
 type ConsumerCase struct {
-	SchemaVersion          string             `yaml:"schemaVersion" json:"schemaVersion"`
-	ID                     string             `yaml:"id" json:"id"`
-	DisplayName            string             `yaml:"displayName" json:"displayName"`
-	Family                 string             `yaml:"family" json:"family"`
-	Lane                   string             `yaml:"lane" json:"lane"`
-	RuntimeProfileID       string             `yaml:"runtimeProfile" json:"runtimeProfileId"`
-	RunnerAdapterID        string             `yaml:"runnerAdapter" json:"runnerAdapterId"`
-	CompatibilityProfileID string             `yaml:"compatibilityProfile" json:"compatibilityProfileId"`
-	ScenarioSetID          string             `yaml:"scenarioSet" json:"scenarioSetId"`
-	Versions               map[string]string  `yaml:"versions" json:"versions"`
-	Artifacts              []ConsumerArtifact `yaml:"artifacts" json:"artifacts"`
+	SchemaVersion    string                    `yaml:"schemaVersion" json:"schemaVersion"`
+	ID               string                    `yaml:"id" json:"id"`
+	DisplayName      string                    `yaml:"displayName" json:"displayName"`
+	Family           string                    `yaml:"family" json:"family"`
+	Lane             string                    `yaml:"lane" json:"lane"`
+	RuntimeProfileID string                    `yaml:"runtimeProfile" json:"runtimeProfileId"`
+	Versions         map[string]string         `yaml:"versions" json:"versions"`
+	Artifacts        []ConsumerArtifact        `yaml:"artifacts" json:"artifacts"`
+	SourceProvenance []ConsumerSourceReference `yaml:"sourceProvenance" json:"sourceProvenance"`
+	Executions       []ConsumerExecution       `yaml:"executions" json:"executions"`
+}
+
+type ConsumerExecution struct {
+	ID                     string `yaml:"id" json:"id"`
+	RunnerAdapterID        string `yaml:"runnerAdapter" json:"runnerAdapterId"`
+	CompatibilityProfileID string `yaml:"compatibilityProfile" json:"compatibilityProfileId"`
+	ScenarioSetID          string `yaml:"scenarioSet" json:"scenarioSetId"`
 }
 
 type NormalizedConsumerManifest struct {
@@ -116,15 +129,35 @@ type NormalizedConsumerManifest struct {
 }
 
 type ExpandedConsumerCase struct {
+	ID               string                      `json:"id"`
+	DisplayName      string                      `json:"displayName"`
+	Family           string                      `json:"family"`
+	Lane             string                      `json:"lane"`
+	RuntimeProfile   RuntimeProfile              `json:"runtimeProfile"`
+	Artifacts        []ConsumerArtifact          `json:"artifacts"`
+	SourceProvenance []ConsumerSourceProvenance  `json:"sourceProvenance"`
+	Executions       []ExpandedConsumerExecution `json:"executions"`
+}
+
+type ExpandedConsumerExecution struct {
 	ID                   string               `json:"id"`
-	DisplayName          string               `json:"displayName"`
-	Family               string               `json:"family"`
-	Lane                 string               `json:"lane"`
-	RuntimeProfile       RuntimeProfile       `json:"runtimeProfile"`
 	RunnerAdapter        RunnerAdapter        `json:"runnerAdapter"`
 	CompatibilityProfile CompatibilityProfile `json:"compatibilityProfile"`
 	ScenarioSet          ExpandedScenarioSet  `json:"scenarioSet"`
-	Artifacts            []ConsumerArtifact   `json:"artifacts"`
+}
+
+type ConsumerMatrixRow struct {
+	ID                   string                     `json:"id"`
+	DisplayName          string                     `json:"displayName"`
+	Family               string                     `json:"family"`
+	Lane                 string                     `json:"lane"`
+	RuntimeProfile       RuntimeProfile             `json:"runtimeProfile"`
+	Artifacts            []ConsumerArtifact         `json:"artifacts"`
+	SourceProvenance     []ConsumerSourceProvenance `json:"sourceProvenance"`
+	ExecutionID          string                     `json:"executionId"`
+	RunnerAdapter        RunnerAdapter              `json:"runnerAdapter"`
+	CompatibilityProfile CompatibilityProfile       `json:"compatibilityProfile"`
+	ScenarioSet          ExpandedScenarioSet        `json:"scenarioSet"`
 }
 
 type ExpandedScenarioSet struct {
@@ -229,8 +262,8 @@ func loadNormalizedOperationIDs(repositoryRoot string) (map[string]bool, error) 
 }
 
 func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, operationIDs map[string]bool) (NormalizedConsumerManifest, error) {
-	if manifest.SchemaVersion != "1" {
-		return NormalizedConsumerManifest{}, fmt.Errorf("consumer manifest schemaVersion = %q, want 1", manifest.SchemaVersion)
+	if manifest.SchemaVersion != consumerSchemaVersion {
+		return NormalizedConsumerManifest{}, fmt.Errorf("consumer manifest schemaVersion = %q, want %s", manifest.SchemaVersion, consumerSchemaVersion)
 	}
 	for index := range manifest.RunnerAdapters {
 		adapter := &manifest.RunnerAdapters[index]
@@ -361,21 +394,13 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 		if err := uniqueReferences("scenario", profile.ID, profile.ScenarioIDs, keySet(scenarios)); err != nil {
 			return NormalizedConsumerManifest{}, err
 		}
-		for _, provenance := range profile.SourceProvenance {
-			if provenance.Name == "" || provenance.Version == "" || provenance.URI == "" {
-				return NormalizedConsumerManifest{}, fmt.Errorf("compatibility profile %s has incomplete source provenance", profile.ID)
-			}
-			if err := validateSourceProvenance(provenance); err != nil {
-				return NormalizedConsumerManifest{}, fmt.Errorf("compatibility profile %s: %w", profile.ID, err)
-			}
-		}
 	}
 
 	caseIDs := make(map[string]bool, len(cases))
 	expanded := make([]ExpandedConsumerCase, 0, len(cases))
 	for _, consumerCase := range cases {
-		if consumerCase.SchemaVersion != "1" {
-			return NormalizedConsumerManifest{}, fmt.Errorf("case %s schemaVersion = %q, want 1", consumerCase.ID, consumerCase.SchemaVersion)
+		if consumerCase.SchemaVersion != consumerSchemaVersion {
+			return NormalizedConsumerManifest{}, fmt.Errorf("case %s schemaVersion = %q, want %s", consumerCase.ID, consumerCase.SchemaVersion, consumerSchemaVersion)
 		}
 		if !consumerCaseIDPattern.MatchString(consumerCase.ID) {
 			return NormalizedConsumerManifest{}, fmt.Errorf("invalid consumer case ID %q", consumerCase.ID)
@@ -394,72 +419,129 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 		if !ok {
 			return NormalizedConsumerManifest{}, fmt.Errorf("case %s references unknown runtime profile %s", consumerCase.ID, consumerCase.RuntimeProfileID)
 		}
-		adapter, ok := adapters[consumerCase.RunnerAdapterID]
-		if !ok {
-			return NormalizedConsumerManifest{}, fmt.Errorf("case %s references unknown runner adapter %s", consumerCase.ID, consumerCase.RunnerAdapterID)
-		}
-		profile, ok := profiles[consumerCase.CompatibilityProfileID]
-		if !ok {
-			return NormalizedConsumerManifest{}, fmt.Errorf("case %s references unknown compatibility profile %s", consumerCase.ID, consumerCase.CompatibilityProfileID)
-		}
-		set, ok := sets[consumerCase.ScenarioSetID]
-		if !ok {
-			return NormalizedConsumerManifest{}, fmt.Errorf("case %s references unknown scenario set %s", consumerCase.ID, consumerCase.ScenarioSetID)
-		}
-		if runtime.Family != consumerCase.Family || adapter.Family != consumerCase.Family || adapter.RuntimeKind != runtime.Kind {
-			return NormalizedConsumerManifest{}, fmt.Errorf("case %s runtime/adapter family or kind mismatch", consumerCase.ID)
+		if runtime.Family != consumerCase.Family {
+			return NormalizedConsumerManifest{}, fmt.Errorf("case %s runtime family mismatch", consumerCase.ID)
 		}
 		if len(consumerCase.Versions) == 0 {
 			return NormalizedConsumerManifest{}, fmt.Errorf("case %s has no runtime versions", consumerCase.ID)
-		}
-		for _, required := range adapter.RequiredVersions {
-			if consumerCase.Versions[required] == "" {
-				return NormalizedConsumerManifest{}, fmt.Errorf("case %s is missing runtime version %s required by adapter %s", consumerCase.ID, required, adapter.ID)
-			}
-		}
-		if len(consumerCase.Versions) != len(adapter.RequiredVersions) {
-			return NormalizedConsumerManifest{}, fmt.Errorf("case %s defines runtime versions outside adapter %s", consumerCase.ID, adapter.ID)
-		}
-		if consumerCase.Family == "spark" && !strings.HasPrefix(consumerCase.Versions["scala"], consumerCase.Versions["scalaBinary"]+".") {
-			return NormalizedConsumerManifest{}, fmt.Errorf("case %s Scala runtime does not match its binary version", consumerCase.ID)
 		}
 		for key, version := range consumerCase.Versions {
 			if key == "" || version == "" {
 				return NormalizedConsumerManifest{}, fmt.Errorf("case %s has an empty runtime version", consumerCase.ID)
 			}
 		}
-		allowed := sliceSet(profile.ScenarioIDs)
-		setupOperations := sliceSet(adapter.SetupOperationIDs)
-		for _, scenarioID := range set.ScenarioIDs {
-			if !allowed[scenarioID] {
-				return NormalizedConsumerManifest{}, fmt.Errorf("case %s scenario %s is outside compatibility profile %s", consumerCase.ID, scenarioID, profile.ID)
+		if len(consumerCase.Executions) == 0 {
+			return NormalizedConsumerManifest{}, fmt.Errorf("case %s has no executions", consumerCase.ID)
+		}
+		executionIDs := make(map[string]bool, len(consumerCase.Executions))
+		requiredVersions := make(map[string]bool)
+		requiredArtifactUsages := make(map[string]bool)
+		expandedExecutions := make([]ExpandedConsumerExecution, 0, len(consumerCase.Executions))
+		for _, execution := range consumerCase.Executions {
+			if !consumerCaseIDPattern.MatchString(execution.ID) {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s has invalid execution ID %q", consumerCase.ID, execution.ID)
 			}
-			for _, selector := range scenarios[scenarioID].Selectors {
-				prefix, value, found := strings.Cut(selector, ":")
-				if !found || prefix != adapter.SelectorPrefix || value == "" {
-					return NormalizedConsumerManifest{}, fmt.Errorf("case %s scenario %s selector %q is incompatible with adapter %s", consumerCase.ID, scenarioID, selector, adapter.ID)
+			if executionIDs[execution.ID] {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s duplicates execution ID %q", consumerCase.ID, execution.ID)
+			}
+			executionIDs[execution.ID] = true
+			adapter, ok := adapters[execution.RunnerAdapterID]
+			if !ok {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s execution %s references unknown runner adapter %s", consumerCase.ID, execution.ID, execution.RunnerAdapterID)
+			}
+			profile, ok := profiles[execution.CompatibilityProfileID]
+			if !ok {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s execution %s references unknown compatibility profile %s", consumerCase.ID, execution.ID, execution.CompatibilityProfileID)
+			}
+			set, ok := sets[execution.ScenarioSetID]
+			if !ok {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s execution %s references unknown scenario set %s", consumerCase.ID, execution.ID, execution.ScenarioSetID)
+			}
+			if adapter.Family != consumerCase.Family || adapter.RuntimeKind != runtime.Kind {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s execution %s runtime/adapter family or kind mismatch", consumerCase.ID, execution.ID)
+			}
+			for _, required := range adapter.RequiredVersions {
+				requiredVersions[required] = true
+				if consumerCase.Versions[required] == "" {
+					return NormalizedConsumerManifest{}, fmt.Errorf("case %s is missing runtime version %s required by execution %s", consumerCase.ID, required, execution.ID)
 				}
 			}
-			for _, operationID := range scenarios[scenarioID].OperationIDs {
-				if setupOperations[operationID] {
-					return NormalizedConsumerManifest{}, fmt.Errorf("case %s operation %s is both setup and scenario traffic", consumerCase.ID, operationID)
+			for _, usage := range adapter.RequiredArtifactUsages {
+				requiredArtifactUsages[usage] = true
+			}
+			allowed := sliceSet(profile.ScenarioIDs)
+			setupOperations := sliceSet(adapter.SetupOperationIDs)
+			caseScenarios := make([]ConsumerScenario, 0, len(set.ScenarioIDs))
+			for _, scenarioID := range set.ScenarioIDs {
+				if !allowed[scenarioID] {
+					return NormalizedConsumerManifest{}, fmt.Errorf("case %s execution %s scenario %s is outside compatibility profile %s", consumerCase.ID, execution.ID, scenarioID, profile.ID)
+				}
+				scenario := scenarios[scenarioID]
+				for _, selector := range scenario.Selectors {
+					prefix, value, found := strings.Cut(selector, ":")
+					if !found || prefix != adapter.SelectorPrefix || value == "" {
+						return NormalizedConsumerManifest{}, fmt.Errorf("case %s execution %s scenario %s selector %q is incompatible with adapter %s", consumerCase.ID, execution.ID, scenarioID, selector, adapter.ID)
+					}
+				}
+				for _, operationID := range scenario.OperationIDs {
+					if setupOperations[operationID] {
+						return NormalizedConsumerManifest{}, fmt.Errorf("case %s execution %s operation %s is both setup and scenario traffic", consumerCase.ID, execution.ID, operationID)
+					}
+				}
+				caseScenarios = append(caseScenarios, scenario)
+			}
+			expandedExecutions = append(expandedExecutions, ExpandedConsumerExecution{
+				ID: execution.ID, RunnerAdapter: adapter, CompatibilityProfile: profile,
+				ScenarioSet: ExpandedScenarioSet{ID: set.ID, Scenarios: caseScenarios},
+			})
+		}
+		if len(consumerCase.Versions) != len(requiredVersions) {
+			return NormalizedConsumerManifest{}, fmt.Errorf("case %s defines runtime versions outside its execution contracts", consumerCase.ID)
+		}
+		for version := range consumerCase.Versions {
+			if !requiredVersions[version] {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s defines runtime version %s outside its execution contracts", consumerCase.ID, version)
+			}
+		}
+		if consumerCase.Family == "spark" && !strings.HasPrefix(consumerCase.Versions["scala"], consumerCase.Versions["scalaBinary"]+".") {
+			return NormalizedConsumerManifest{}, fmt.Errorf("case %s Scala runtime does not match its binary version", consumerCase.ID)
+		}
+		if len(consumerCase.SourceProvenance) == 0 {
+			return NormalizedConsumerManifest{}, fmt.Errorf("case %s has no source provenance", consumerCase.ID)
+		}
+		sourceNames := make(map[string]bool, len(consumerCase.SourceProvenance))
+		expandedSources := make([]ConsumerSourceProvenance, 0, len(consumerCase.SourceProvenance))
+		for _, source := range consumerCase.SourceProvenance {
+			if source.Name == "" || source.URI == "" || sourceNames[source.Name] || (source.VersionKey == "") == (source.Version == "") {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s has incomplete or duplicate source provenance %q", consumerCase.ID, source.Name)
+			}
+			sourceNames[source.Name] = true
+			version := source.Version
+			if source.VersionKey != "" {
+				version = consumerCase.Versions[source.VersionKey]
+				if version == "" {
+					return NormalizedConsumerManifest{}, fmt.Errorf("case %s source provenance %s references unknown version key %s", consumerCase.ID, source.Name, source.VersionKey)
 				}
 			}
+			provenance := ConsumerSourceProvenance{Name: source.Name, Version: version, URI: source.URI}
+			if err := validateSourceProvenance(provenance); err != nil {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s source provenance %s: %w", consumerCase.ID, source.Name, err)
+			}
+			expandedSources = append(expandedSources, provenance)
 		}
 		if len(consumerCase.Artifacts) == 0 {
 			return NormalizedConsumerManifest{}, fmt.Errorf("case %s has no immutable artifacts", consumerCase.ID)
 		}
 		artifactIDs := make([]string, 0, len(consumerCase.Artifacts))
 		artifactUsageCounts := make(map[string]int, len(consumerCase.Artifacts))
-		allowedArtifactUsages := sliceSet(adapter.RequiredArtifactUsages)
 		for _, artifact := range consumerCase.Artifacts {
 			artifactIDs = append(artifactIDs, artifact.ID)
 			artifactUsageCounts[artifact.Usage]++
 			if artifact.ID == "" || (artifact.Role != "execution" && artifact.Role != "tool-provenance") || !validConsumerArtifactUsage(artifact.Usage) || artifact.URI == "" || !consumerDigestPattern.MatchString(artifact.SHA256) {
 				return NormalizedConsumerManifest{}, fmt.Errorf("case %s artifact %s must define an immutable URI and lowercase SHA-256", consumerCase.ID, artifact.ID)
 			}
-			if !allowedArtifactUsages[artifact.Usage] {
-				return NormalizedConsumerManifest{}, fmt.Errorf("case %s artifact %s usage %s is not accepted by adapter %s", consumerCase.ID, artifact.ID, artifact.Usage, adapter.ID)
+			if !requiredArtifactUsages[artifact.Usage] {
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s artifact %s usage %s is not accepted by any execution", consumerCase.ID, artifact.ID, artifact.Usage)
 			}
 			if (artifact.Usage == "cloud-sdk-release-provenance") != (artifact.Role == "tool-provenance") {
 				return NormalizedConsumerManifest{}, fmt.Errorf("case %s artifact %s role %s is incompatible with usage %s", consumerCase.ID, artifact.ID, artifact.Role, artifact.Usage)
@@ -471,20 +553,22 @@ func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, 
 		if duplicate := firstDuplicate(artifactIDs); duplicate != "" {
 			return NormalizedConsumerManifest{}, fmt.Errorf("case %s duplicates artifact %s", consumerCase.ID, duplicate)
 		}
-		for _, usage := range adapter.RequiredArtifactUsages {
+		for usage := range requiredArtifactUsages {
 			if artifactUsageCounts[usage] != 1 {
-				return NormalizedConsumerManifest{}, fmt.Errorf("case %s must define exactly one %s artifact for adapter %s", consumerCase.ID, usage, adapter.ID)
+				return NormalizedConsumerManifest{}, fmt.Errorf("case %s must define exactly one %s artifact for its executions", consumerCase.ID, usage)
 			}
 		}
 		runtime.Versions = cloneStringMap(consumerCase.Versions)
-		caseScenarios := make([]ConsumerScenario, 0, len(set.ScenarioIDs))
-		for _, id := range set.ScenarioIDs {
-			caseScenarios = append(caseScenarios, scenarios[id])
-		}
-		expanded = append(expanded, ExpandedConsumerCase{ID: consumerCase.ID, DisplayName: consumerCase.DisplayName, Family: consumerCase.Family, Lane: consumerCase.Lane, RuntimeProfile: runtime, RunnerAdapter: adapter, CompatibilityProfile: profile, ScenarioSet: ExpandedScenarioSet{ID: set.ID, Scenarios: caseScenarios}, Artifacts: append([]ConsumerArtifact(nil), consumerCase.Artifacts...)})
+		sort.Slice(expandedExecutions, func(i, j int) bool { return expandedExecutions[i].ID < expandedExecutions[j].ID })
+		expanded = append(expanded, ExpandedConsumerCase{
+			ID: consumerCase.ID, DisplayName: consumerCase.DisplayName, Family: consumerCase.Family,
+			Lane: consumerCase.Lane, RuntimeProfile: runtime,
+			Artifacts:        append([]ConsumerArtifact(nil), consumerCase.Artifacts...),
+			SourceProvenance: expandedSources, Executions: expandedExecutions,
+		})
 	}
 	sort.Slice(expanded, func(i, j int) bool { return expanded[i].ID < expanded[j].ID })
-	return NormalizedConsumerManifest{SchemaVersion: "1", Cases: expanded}, nil
+	return NormalizedConsumerManifest{SchemaVersion: consumerSchemaVersion, Cases: expanded}, nil
 }
 
 func indexByID[T any](kind string, values []T, id func(T) string) (map[string]T, error) {
@@ -552,7 +636,7 @@ func validateConsumerOrdering(scenario ConsumerScenario) error {
 
 func validConsumerArtifactUsage(usage string) bool {
 	switch usage {
-	case "python-wheel", "cloud-sdk-release-provenance", "spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-python-bridge", "spark-runtime":
+	case "python-wheel", "cloud-sdk-release-provenance", "spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-python-bridge", "spark-runtime", "hadoop-gcs-connector-jar":
 		return true
 	default:
 		return false
@@ -591,6 +675,9 @@ func validateSourceProvenance(provenance ConsumerSourceProvenance) error {
 		if parsed.Fragment == "" {
 			return fmt.Errorf("source provenance %s must select an immutable release anchor", provenance.Name)
 		}
+		if !strings.Contains(compactVersionToken(parsed.Fragment), compactVersionToken(provenance.Version)) {
+			return fmt.Errorf("source provenance %s release anchor does not identify version %s", provenance.Name, provenance.Version)
+		}
 		return nil
 	}
 	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
@@ -609,6 +696,16 @@ func validateSourceProvenance(provenance ConsumerSourceProvenance) error {
 		return fmt.Errorf("GitHub source provenance %s ref %s does not identify version %s", provenance.Name, ref, provenance.Version)
 	}
 	return nil
+}
+
+func compactVersionToken(value string) string {
+	var result strings.Builder
+	for _, character := range strings.ToLower(value) {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
+			result.WriteRune(character)
+		}
+	}
+	return result.String()
 }
 func firstDuplicate(values []string) string {
 	seen := make(map[string]bool, len(values))
@@ -642,8 +739,8 @@ func DecodeNormalizedConsumerManifest(contents []byte) (NormalizedConsumerManife
 	if err := ensureJSONEOF(decoder); err != nil {
 		return NormalizedConsumerManifest{}, err
 	}
-	if manifest.SchemaVersion != "1" {
-		return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer schemaVersion = %q, want 1", manifest.SchemaVersion)
+	if manifest.SchemaVersion != consumerSchemaVersion {
+		return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer schemaVersion = %q, want %s", manifest.SchemaVersion, consumerSchemaVersion)
 	}
 	seenCaseIDs := make(map[string]bool, len(manifest.Cases))
 	for _, consumerCase := range manifest.Cases {
@@ -657,26 +754,29 @@ func DecodeNormalizedConsumerManifest(contents []byte) (NormalizedConsumerManife
 		if consumerCase.Lane != "required" && consumerCase.Lane != "preview" && consumerCase.Lane != "nightly" {
 			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has unknown lane %q", consumerCase.ID, consumerCase.Lane)
 		}
-		if !validNormalizedRunnerAdapterID(consumerCase.RunnerAdapter.ID) {
-			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has unknown runner adapter %q", consumerCase.ID, consumerCase.RunnerAdapter.ID)
+		if consumerCase.DisplayName == "" || consumerCase.Family == "" || consumerCase.RuntimeProfile.ID == "" || consumerCase.RuntimeProfile.Family != consumerCase.Family || consumerCase.RuntimeProfile.Kind == "" {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has an invalid runtime profile", consumerCase.ID)
 		}
-		expectedAdapter, _ := normalizedRunnerAdapterContract(consumerCase.RunnerAdapter.ID)
-		if consumerCase.Family == "" || consumerCase.RuntimeProfile.Family != consumerCase.Family || consumerCase.RunnerAdapter.Family != consumerCase.Family || consumerCase.RunnerAdapter.RuntimeKind != consumerCase.RuntimeProfile.Kind {
-			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has a runtime/adapter mismatch", consumerCase.ID)
+		if len(consumerCase.Executions) == 0 {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has no executions", consumerCase.ID)
 		}
-		if consumerCase.RunnerAdapter.Family != expectedAdapter.Family ||
-			consumerCase.RunnerAdapter.RuntimeKind != expectedAdapter.RuntimeKind ||
-			consumerCase.RunnerAdapter.SelectorPrefix != expectedAdapter.SelectorPrefix ||
-			!equalStringSlices(consumerCase.RunnerAdapter.RequiredVersions, expectedAdapter.RequiredVersions) ||
-			!equalStringSlices(consumerCase.RunnerAdapter.RequiredArtifactUsages, expectedAdapter.RequiredArtifactUsages) ||
-			!equalStringMaps(consumerCase.RunnerAdapter.Bootstrap, expectedAdapter.Bootstrap) ||
-			!equalStringSlices(consumerCase.RunnerAdapter.SetupOperationIDs, expectedAdapter.SetupOperationIDs) {
-			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has runner adapter contract drift", consumerCase.ID)
+		if len(consumerCase.SourceProvenance) == 0 {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has no source provenance", consumerCase.ID)
+		}
+		sourceNames := make(map[string]bool, len(consumerCase.SourceProvenance))
+		for _, provenance := range consumerCase.SourceProvenance {
+			if provenance.Name == "" || provenance.Version == "" || provenance.URI == "" || sourceNames[provenance.Name] {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has invalid source provenance", consumerCase.ID)
+			}
+			sourceNames[provenance.Name] = true
+			if err := validateSourceProvenance(provenance); err != nil {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has invalid source provenance: %w", consumerCase.ID, err)
+			}
 		}
 		artifactIDs := make(map[string]bool, len(consumerCase.Artifacts))
 		usageCounts := make(map[string]int, len(consumerCase.Artifacts))
 		for _, artifact := range consumerCase.Artifacts {
-			if artifact.ID == "" || artifactIDs[artifact.ID] || !validConsumerArtifactUsage(artifact.Usage) || !stringInSlice(expectedAdapter.RequiredArtifactUsages, artifact.Usage) || !consumerDigestPattern.MatchString(artifact.SHA256) || (artifact.Role != "execution" && artifact.Role != "tool-provenance") {
+			if artifact.ID == "" || artifactIDs[artifact.ID] || !validConsumerArtifactUsage(artifact.Usage) || !consumerDigestPattern.MatchString(artifact.SHA256) || (artifact.Role != "execution" && artifact.Role != "tool-provenance") {
 				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has an invalid artifact", consumerCase.ID)
 			}
 			if (artifact.Usage == "cloud-sdk-release-provenance") != (artifact.Role == "tool-provenance") {
@@ -688,21 +788,72 @@ func DecodeNormalizedConsumerManifest(contents []byte) (NormalizedConsumerManife
 			artifactIDs[artifact.ID] = true
 			usageCounts[artifact.Usage]++
 		}
-		for _, requiredVersion := range consumerCase.RunnerAdapter.RequiredVersions {
-			if consumerCase.RuntimeProfile.Versions[requiredVersion] == "" {
-				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s is missing runtime version %s", consumerCase.ID, requiredVersion)
+		executionIDs := make(map[string]bool, len(consumerCase.Executions))
+		requiredVersions := make(map[string]bool)
+		requiredArtifactUsages := make(map[string]bool)
+		for _, execution := range consumerCase.Executions {
+			if !consumerCaseIDPattern.MatchString(execution.ID) || executionIDs[execution.ID] {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has an invalid or duplicate execution ID %q", consumerCase.ID, execution.ID)
+			}
+			executionIDs[execution.ID] = true
+			if !validNormalizedRunnerAdapterID(execution.RunnerAdapter.ID) {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has unknown runner adapter %q", consumerCase.ID, execution.ID, execution.RunnerAdapter.ID)
+			}
+			expectedAdapter, _ := normalizedRunnerAdapterContract(execution.RunnerAdapter.ID)
+			if execution.RunnerAdapter.Family != consumerCase.Family || execution.RunnerAdapter.RuntimeKind != consumerCase.RuntimeProfile.Kind {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has a runtime/adapter mismatch", consumerCase.ID, execution.ID)
+			}
+			if execution.RunnerAdapter.Family != expectedAdapter.Family ||
+				execution.RunnerAdapter.RuntimeKind != expectedAdapter.RuntimeKind ||
+				execution.RunnerAdapter.SelectorPrefix != expectedAdapter.SelectorPrefix ||
+				!equalStringSlices(execution.RunnerAdapter.RequiredVersions, expectedAdapter.RequiredVersions) ||
+				!equalStringSlices(execution.RunnerAdapter.RequiredArtifactUsages, expectedAdapter.RequiredArtifactUsages) ||
+				!equalStringMaps(execution.RunnerAdapter.Bootstrap, expectedAdapter.Bootstrap) ||
+				!equalStringSlices(execution.RunnerAdapter.SetupOperationIDs, expectedAdapter.SetupOperationIDs) {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has runner adapter contract drift", consumerCase.ID, execution.ID)
+			}
+			if execution.CompatibilityProfile.ID == "" || execution.ScenarioSet.ID == "" || len(execution.ScenarioSet.Scenarios) == 0 {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has an incomplete compatibility contract", consumerCase.ID, execution.ID)
+			}
+			for _, requiredVersion := range execution.RunnerAdapter.RequiredVersions {
+				requiredVersions[requiredVersion] = true
+				if consumerCase.RuntimeProfile.Versions[requiredVersion] == "" {
+					return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s is missing runtime version %s", consumerCase.ID, execution.ID, requiredVersion)
+				}
+			}
+			for _, requiredUsage := range execution.RunnerAdapter.RequiredArtifactUsages {
+				requiredArtifactUsages[requiredUsage] = true
+			}
+			for _, scenario := range execution.ScenarioSet.Scenarios {
+				if scenario.ID == "" || len(scenario.OperationIDs) == 0 || len(scenario.Selectors) == 0 {
+					return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has an invalid scenario", consumerCase.ID, execution.ID)
+				}
+				for _, selector := range scenario.Selectors {
+					prefix, value, found := strings.Cut(selector, ":")
+					if !found || prefix != execution.RunnerAdapter.SelectorPrefix || value == "" {
+						return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has an invalid scenario selector", consumerCase.ID, execution.ID)
+					}
+				}
 			}
 		}
-		if len(consumerCase.RuntimeProfile.Versions) != len(expectedAdapter.RequiredVersions) {
+		if len(consumerCase.RuntimeProfile.Versions) != len(requiredVersions) {
 			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has runtime version contract drift", consumerCase.ID)
+		}
+		for version, value := range consumerCase.RuntimeProfile.Versions {
+			if value == "" || !requiredVersions[version] {
+				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has runtime version contract drift", consumerCase.ID)
+			}
 		}
 		if consumerCase.Family == "spark" && !strings.HasPrefix(consumerCase.RuntimeProfile.Versions["scala"], consumerCase.RuntimeProfile.Versions["scalaBinary"]+".") {
 			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has Scala binary version drift", consumerCase.ID)
 		}
-		for _, requiredUsage := range consumerCase.RunnerAdapter.RequiredArtifactUsages {
+		for requiredUsage := range requiredArtifactUsages {
 			if !validConsumerArtifactUsage(requiredUsage) || usageCounts[requiredUsage] != 1 {
 				return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has invalid artifact cardinality for usage %s", consumerCase.ID, requiredUsage)
 			}
+		}
+		if len(usageCounts) != len(requiredArtifactUsages) {
+			return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s has an artifact outside its execution contracts", consumerCase.ID)
 		}
 	}
 	return manifest, nil
@@ -803,6 +954,28 @@ func normalizedRunnerAdapterContract(id string) (RunnerAdapter, bool) {
 			RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-python-bridge", "spark-runtime"},
 			Bootstrap:              map[string]string{}, SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bigquery.datasets.insert"},
 		},
+		"python-indirect-load-v1": {
+			ID: "python-indirect-load-v1", Family: "python", RuntimeKind: "python-pytest", SelectorPrefix: "load",
+			RequiredVersions: []string{"python", "client"}, RequiredArtifactUsages: []string{"python-wheel"}, Bootstrap: map[string]string{},
+			SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create"},
+		},
+		"bq-indirect-load-v1": {
+			ID: "bq-indirect-load-v1", Family: "bq", RuntimeKind: "bq-cli", SelectorPrefix: "load",
+			RequiredVersions: []string{"cloudSdk", "bq"}, RequiredArtifactUsages: []string{"cloud-sdk-release-provenance"}, Bootstrap: map[string]string{},
+			SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bqemu.discovery.get"},
+		},
+		"spark-pyspark-indirect-load-v1": {
+			ID: "spark-pyspark-indirect-load-v1", Family: "spark", RuntimeKind: "spark-pyspark", SelectorPrefix: "load",
+			RequiredVersions:       []string{"spark", "connector", "scala", "scalaBinary", "java", "python", "hadoopGcsConnector"},
+			RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-python-bridge", "spark-runtime", "hadoop-gcs-connector-jar"},
+			Bootstrap:              map[string]string{}, SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create"},
+		},
+		"spark-scala-indirect-load-v1": {
+			ID: "spark-scala-indirect-load-v1", Family: "spark", RuntimeKind: "spark-scala", SelectorPrefix: "load",
+			RequiredVersions:       []string{"spark", "connector", "scala", "scalaBinary", "java", "python", "hadoopGcsConnector"},
+			RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-python-bridge", "spark-runtime", "hadoop-gcs-connector-jar"},
+			Bootstrap:              map[string]string{}, SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create"},
+		},
 	}
 	adapter, ok := contracts[id]
 	return adapter, ok
@@ -841,12 +1014,12 @@ func stringInSlice(values []string, target string) bool {
 	return false
 }
 
-func ConsumerMatrix(repositoryRoot, family, lanes string) ([]byte, error) {
-	payload, _, err := ConsumerMatrixWithCount(repositoryRoot, family, lanes)
+func ConsumerMatrix(repositoryRoot, family, lanes string, executionFilters ...string) ([]byte, error) {
+	payload, _, err := ConsumerMatrixWithCount(repositoryRoot, family, lanes, executionFilters...)
 	return payload, err
 }
 
-func ConsumerMatrixWithCount(repositoryRoot, family, lanes string) ([]byte, int, error) {
+func ConsumerMatrixWithCount(repositoryRoot, family, lanes string, executionFilters ...string) ([]byte, int, error) {
 	contents, err := os.ReadFile(filepath.Join(repositoryRoot, consumerNormalizedPath))
 	if err != nil {
 		return nil, 0, err
@@ -867,14 +1040,41 @@ func ConsumerMatrixWithCount(repositoryRoot, family, lanes string) ([]byte, int,
 			laneFilter[lane] = true
 		}
 	}
-	rows := make([]ExpandedConsumerCase, 0)
+	executionFilter := make(map[string]bool)
+	if len(executionFilters) > 1 {
+		return nil, 0, errors.New("consumer execution filter may be specified at most once")
+	}
+	if len(executionFilters) == 1 && executionFilters[0] != "" {
+		for _, executionID := range strings.Split(executionFilters[0], ",") {
+			if !consumerCaseIDPattern.MatchString(executionID) {
+				return nil, 0, fmt.Errorf("invalid consumer execution ID %q", executionID)
+			}
+			if executionFilter[executionID] {
+				return nil, 0, fmt.Errorf("duplicate consumer execution ID %q", executionID)
+			}
+			executionFilter[executionID] = true
+		}
+	}
+	rows := make([]ConsumerMatrixRow, 0)
 	for _, consumerCase := range manifest.Cases {
-		if (family == "" || consumerCase.Family == family) && (len(laneFilter) == 0 || laneFilter[consumerCase.Lane]) {
-			rows = append(rows, consumerCase)
+		if (family != "" && consumerCase.Family != family) || (len(laneFilter) != 0 && !laneFilter[consumerCase.Lane]) {
+			continue
+		}
+		for _, execution := range consumerCase.Executions {
+			if len(executionFilter) != 0 && !executionFilter[execution.ID] {
+				continue
+			}
+			rows = append(rows, ConsumerMatrixRow{
+				ID: consumerCase.ID, DisplayName: consumerCase.DisplayName, Family: consumerCase.Family,
+				Lane: consumerCase.Lane, RuntimeProfile: consumerCase.RuntimeProfile,
+				Artifacts: consumerCase.Artifacts, SourceProvenance: consumerCase.SourceProvenance, ExecutionID: execution.ID,
+				RunnerAdapter: execution.RunnerAdapter, CompatibilityProfile: execution.CompatibilityProfile,
+				ScenarioSet: execution.ScenarioSet,
+			})
 		}
 	}
 	payload, err := json.Marshal(struct {
-		Include []ExpandedConsumerCase `json:"include"`
+		Include []ConsumerMatrixRow `json:"include"`
 	}{Include: rows})
 	if err != nil {
 		return nil, 0, err
@@ -894,9 +1094,9 @@ func FileSHA256(path string) (string, error) {
 func renderConsumerCompatibility(manifest NormalizedConsumerManifest, language string) []byte {
 	var output strings.Builder
 	if language == "ko" {
-		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: ko -->\n\n[English](../en/consumer-compatibility.md) | [한국어](consumer-compatibility.md)\n\n# 소비자 호환성\n\n<!-- section: generated-cases -->\n이 문서는 `contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. 각 소비자의 정확한 버전과 변경되지 않는 출처는 아래 표에 표시합니다. `execution` 산출물은 해시를 확인한 뒤 실행에 사용합니다. `tool-provenance` 산출물은 별도로 설치하고 버전을 확인한 도구의 릴리스 출처만 나타냅니다.\n\n| 사례 | 실행 계열 | 상태 | 런타임 | 시나리오 | 출처 | 산출물 역할/용도 |\n|---|---|---|---|---|---|---|\n")
+		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: ko -->\n\n[English](../en/consumer-compatibility.md) | [한국어](consumer-compatibility.md)\n\n# 소비자 호환성\n\n<!-- section: generated-cases -->\n이 문서는 `contract/consumers.normalized.json`에서 생성됩니다. 공개 동작은 [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 검증합니다. 각 소비자의 정확한 버전과 변경되지 않는 출처는 아래 표에 표시합니다. `execution` 산출물은 해시를 확인한 뒤 실행에 사용합니다. `tool-provenance` 산출물은 별도로 설치하고 버전을 확인한 도구의 릴리스 출처만 나타냅니다.\n\n| 사례 | 실행 | 실행 계열 | 상태 | 런타임 | 시나리오 | 출처 | 산출물 역할/용도 |\n|---|---|---|---|---|---|---|---|\n")
 	} else {
-		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: en -->\n\n[English](consumer-compatibility.md) | [한국어](../ko/consumer-compatibility.md)\n\n# Consumer Compatibility\n\n<!-- section: generated-cases -->\nThis page is generated from `contract/consumers.normalized.json`. Public behavior is verified against the [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest). The table records every consumer's exact version and immutable source. An `execution` artifact is digest-verified and used by the runner. A `tool-provenance` artifact records only the release provenance of a separately installed, version-verified tool.\n\n| Case | Family | Lane | Runtime | Scenarios | Sources | Artifact role/usage |\n|---|---|---|---|---|---|---|\n")
+		output.WriteString("<!-- doc-id: consumer-compatibility -->\n<!-- lang: en -->\n\n[English](consumer-compatibility.md) | [한국어](../ko/consumer-compatibility.md)\n\n# Consumer Compatibility\n\n<!-- section: generated-cases -->\nThis page is generated from `contract/consumers.normalized.json`. Public behavior is verified against the [BigQuery API](https://cloud.google.com/bigquery/docs/reference/rest). The table records every consumer's exact version and immutable source. An `execution` artifact is digest-verified and used by the runner. A `tool-provenance` artifact records only the release provenance of a separately installed, version-verified tool.\n\n| Case | Execution | Family | Lane | Runtime | Scenarios | Sources | Artifact role/usage |\n|---|---|---|---|---|---|---|---|\n")
 	}
 	for _, consumerCase := range manifest.Cases {
 		versionKeys := make([]string, 0, len(consumerCase.RuntimeProfile.Versions))
@@ -908,19 +1108,21 @@ func renderConsumerCompatibility(manifest NormalizedConsumerManifest, language s
 		for _, key := range versionKeys {
 			versions = append(versions, key+" "+consumerCase.RuntimeProfile.Versions[key])
 		}
-		scenarios := make([]string, 0, len(consumerCase.ScenarioSet.Scenarios))
-		for _, scenario := range consumerCase.ScenarioSet.Scenarios {
-			scenarios = append(scenarios, "`"+scenario.ID+"`")
-		}
 		artifacts := make([]string, 0, len(consumerCase.Artifacts))
 		for _, artifact := range consumerCase.Artifacts {
 			artifacts = append(artifacts, "`"+artifact.ID+"` (`"+artifact.Role+"` / `"+artifact.Usage+"`)")
 		}
-		sources := make([]string, 0, len(consumerCase.CompatibilityProfile.SourceProvenance))
-		for _, source := range consumerCase.CompatibilityProfile.SourceProvenance {
+		sources := make([]string, 0, len(consumerCase.SourceProvenance))
+		for _, source := range consumerCase.SourceProvenance {
 			sources = append(sources, fmt.Sprintf("[%s %s](%s)", source.Name, source.Version, source.URI))
 		}
-		fmt.Fprintf(&output, "| `%s` | %s | %s | %s | %s | %s | %s |\n", consumerCase.ID, consumerCase.Family, consumerCase.Lane, strings.Join(versions, ", "), strings.Join(scenarios, "<br>"), strings.Join(sources, "<br>"), strings.Join(artifacts, "<br>"))
+		for _, execution := range consumerCase.Executions {
+			scenarios := make([]string, 0, len(execution.ScenarioSet.Scenarios))
+			for _, scenario := range execution.ScenarioSet.Scenarios {
+				scenarios = append(scenarios, "`"+scenario.ID+"`")
+			}
+			fmt.Fprintf(&output, "| `%s` | `%s` | %s | %s | %s | %s | %s | %s |\n", consumerCase.ID, execution.ID, consumerCase.Family, consumerCase.Lane, strings.Join(versions, ", "), strings.Join(scenarios, "<br>"), strings.Join(sources, "<br>"), strings.Join(artifacts, "<br>"))
+		}
 	}
 	return []byte(output.String())
 }

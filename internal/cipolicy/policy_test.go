@@ -32,6 +32,7 @@ var requiredValidationJobs = []string{
 	"go-tests",
 	"python-client",
 	"bq-cli",
+	"load-contract",
 	"spark-contract",
 	"auth-client-test",
 	"container-smoke",
@@ -207,23 +208,25 @@ func TestConsumerWorkflowsUseNormalizedDynamicMatrices(t *testing.T) {
 	root := repositoryRoot(t)
 	tests := map[string][]string{
 		"ci.yaml": {
-			"contractctl matrix --root . --family python --lane required --output-key python",
-			"contractctl matrix --root . --family bq --lane required --output-key bq",
-			"contractctl matrix --root . --lane required --output-key auth",
+			"contractctl matrix --root . --family python --lane required --execution public --output-key python",
+			"contractctl matrix --root . --family bq --lane required --execution public --output-key bq",
+			"contractctl matrix --root . --lane required --execution public --output-key auth",
+			"contractctl matrix --root . --lane required --execution indirect-load --output-key load",
 			"fromJSON(needs.consumer-matrix.outputs.python)",
 			"fromJSON(needs.consumer-matrix.outputs.bq)",
 			"fromJSON(needs.consumer-matrix.outputs.auth)",
+			"fromJSON(needs.consumer-matrix.outputs.load)",
 		},
 		"spark-contract.yaml": {
-			"contractctl matrix --root . --family spark --lane \"$BQEMU_CONSUMER_LANES\" --output-key spark",
+			"contractctl matrix --root . --family spark --lane \"$BQEMU_CONSUMER_LANES\" --execution public --output-key spark",
 			"default: required",
 			"default: preview,nightly",
 			"fromJSON(needs.consumer-matrix.outputs.spark)",
 			"scripts/consumer_runner.py --case",
 		},
 		"consumer-nonrequired.yaml": {
-			"--family python --lane preview,nightly --output-key python",
-			"--family bq --lane preview,nightly --output-key bq",
+			"--family python --lane preview,nightly --execution public --output-key python",
+			"--family bq --lane preview,nightly --execution public --output-key bq",
 			"fromJSON(needs.consumer-matrix.outputs.python)",
 			"fromJSON(needs.consumer-matrix.outputs.bq)",
 		},
@@ -281,7 +284,7 @@ func TestConsumerUploadsExcludeRawProcessTrees(t *testing.T) {
 			t.Errorf("%s uploads a raw consumer process tree or server log", filename)
 		}
 		for _, required := range []string{"evidence.json", "diff.json", "junit.xml", "runner.log", "runner-error.txt"} {
-			if !strings.Contains(workflow, ".artifacts/consumers/${{ matrix.id }}/"+required) {
+			if !strings.Contains(workflow, ".artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/"+required) {
 				t.Errorf("%s does not preserve %s", filename, required)
 			}
 		}

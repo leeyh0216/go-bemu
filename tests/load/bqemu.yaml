@@ -1,0 +1,68 @@
+# Public-edge load E2E policy. Dynamic listener addresses, the temporary
+# database path, and the fake-GCS audit endpoint are supplied as environment
+# overrides by run_contract.py because every run uses isolated random ports.
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+
+defaults:
+  projectId: load-e2e-project
+  location: US
+
+server:
+  http:
+    address: 127.0.0.1:1
+    publicUrl: http://127.0.0.1:1
+    readHeaderTimeout: "5s"
+    readTimeout: "30s"
+    writeTimeout: "30s"
+    idleTimeout: "30s"
+    maxCompressedRequestBytes: 2097152
+    maxUncompressedRequestBytes: 2097152
+  grpc:
+    address: 127.0.0.1:1
+    maxReceiveMessageBytes: 33554432
+    maxSendMessageBytes: 33554432
+
+database:
+  adapter: duckdb
+  dsn: /tmp/bqemu-load-e2e.duckdb
+  tempDirectory: /tmp
+
+runtime:
+  shutdownTimeout: "10s"
+  serverDrainTimeout: "5s"
+  storageCloseTimeout: "4s"
+  jobPollInterval: "25ms"
+  readSessionTtl: "1h"
+  cleanupInterval: "1m"
+
+storage:
+  read:
+    enabled: false
+  write:
+    enabled: false
+
+load:
+  enabled: true
+  gcsEndpoint: http://127.0.0.1:1
+  allowFileSources: false
+  operationTimeout: "45s"
+  maxObjects: 16
+  maxObjectBytes: 1048576
+  maxTotalBytes: 4194304
+  maxMetadataBytes: 1048576
+  maxListedObjects: 32
+
+logging:
+  level: info
+  format: json
+  unsafePayloads: false
+
+admin:
+  enabled: false
+
+ui:
+  enabled: false
+
+contracts:
+  profileDirectory: contract/profiles

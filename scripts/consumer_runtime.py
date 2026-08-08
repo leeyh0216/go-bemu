@@ -28,6 +28,7 @@ ARTIFACT_USAGES = frozenset(
         "spark-connector-dsv2-jar",
         "spark-python-bridge",
         "spark-runtime",
+        "hadoop-gcs-connector-jar",
     }
 )
 ADAPTER_CONTRACTS = {
@@ -35,6 +36,10 @@ ADAPTER_CONTRACTS = {
     "bq-cli-v1": ("bq", "bq-cli", "bq"),
     "spark-pyspark-pytest-v1": ("spark", "spark-pyspark", "pytest"),
     "spark-scala-shell-v1": ("spark", "spark-scala", "pytest"),
+    "python-indirect-load-v1": ("python", "python-pytest", "load"),
+    "bq-indirect-load-v1": ("bq", "bq-cli", "load"),
+    "spark-pyspark-indirect-load-v1": ("spark", "spark-pyspark", "load"),
+    "spark-scala-indirect-load-v1": ("spark", "spark-scala", "load"),
 }
 ADAPTER_REQUIRED_VERSIONS = {
     "python-pytest-v1": ("python", "client"),
@@ -55,6 +60,14 @@ ADAPTER_REQUIRED_VERSIONS = {
         "java",
         "python",
     ),
+    "python-indirect-load-v1": ("python", "client"),
+    "bq-indirect-load-v1": ("cloudSdk", "bq"),
+    "spark-pyspark-indirect-load-v1": (
+        "spark", "connector", "scala", "scalaBinary", "java", "python", "hadoopGcsConnector",
+    ),
+    "spark-scala-indirect-load-v1": (
+        "spark", "connector", "scala", "scalaBinary", "java", "python", "hadoopGcsConnector",
+    ),
 }
 ADAPTER_REQUIRED_ARTIFACT_USAGES = {
     "python-pytest-v1": ("python-wheel",),
@@ -70,12 +83,30 @@ ADAPTER_REQUIRED_ARTIFACT_USAGES = {
         "spark-python-bridge",
         "spark-runtime",
     ),
+    "python-indirect-load-v1": ("python-wheel",),
+    "bq-indirect-load-v1": ("cloud-sdk-release-provenance",),
+    "spark-pyspark-indirect-load-v1": (
+        "spark-connector-dsv1-jar",
+        "spark-python-bridge",
+        "spark-runtime",
+        "hadoop-gcs-connector-jar",
+    ),
+    "spark-scala-indirect-load-v1": (
+        "spark-connector-dsv1-jar",
+        "spark-python-bridge",
+        "spark-runtime",
+        "hadoop-gcs-connector-jar",
+    ),
 }
 ADAPTER_BOOTSTRAP = {
     "python-pytest-v1": {},
     "bq-cli-v1": {},
     "spark-pyspark-pytest-v1": {},
     "spark-scala-shell-v1": {},
+    "python-indirect-load-v1": {},
+    "bq-indirect-load-v1": {},
+    "spark-pyspark-indirect-load-v1": {},
+    "spark-scala-indirect-load-v1": {},
 }
 ADAPTER_SETUP_OPERATIONS = {
     "python-pytest-v1": (
@@ -94,6 +125,14 @@ ADAPTER_SETUP_OPERATIONS = {
         "bqemu.projects.create",
         "bigquery.datasets.insert",
     ),
+    "python-indirect-load-v1": ("bqemu.health.ready", "bqemu.projects.create"),
+    "bq-indirect-load-v1": (
+        "bqemu.health.ready",
+        "bqemu.projects.create",
+        "bqemu.discovery.get",
+    ),
+    "spark-pyspark-indirect-load-v1": ("bqemu.health.ready", "bqemu.projects.create"),
+    "spark-scala-indirect-load-v1": ("bqemu.health.ready", "bqemu.projects.create"),
 }
 
 
@@ -111,6 +150,35 @@ class ArtifactSpec:
 
 
 @dataclass(frozen=True)
+class SourceProvenance:
+    name: str
+    version: str
+    uri: str
+
+
+@dataclass(frozen=True)
+class NormalizedConsumerExecution:
+    execution_id: str
+    runner_adapter_id: str
+    selector_prefix: str
+    required_versions: tuple[str, ...]
+    required_artifact_usages: tuple[str, ...]
+    bootstrap: Mapping[str, str]
+    setup_operation_ids: tuple[str, ...]
+    compatibility_profile_id: str
+    scenario_set_id: str
+    scenarios: tuple[Mapping[str, Any], ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "bootstrap", MappingProxyType(dict(self.bootstrap)))
+        object.__setattr__(
+            self,
+            "scenarios",
+            tuple(_freeze_json_value(scenario) for scenario in self.scenarios),
+        )
+
+
+@dataclass(frozen=True)
 class NormalizedConsumerCase:
     case_id: str
     display_name: str
@@ -119,24 +187,12 @@ class NormalizedConsumerCase:
     runtime_profile_id: str
     runtime_kind: str
     versions: Mapping[str, str]
-    runner_adapter_id: str
-    selector_prefix: str
-    required_artifact_usages: tuple[str, ...]
-    bootstrap: Mapping[str, str]
-    setup_operation_ids: tuple[str, ...]
-    compatibility_profile_id: str
-    scenario_set_id: str
-    scenarios: tuple[Mapping[str, Any], ...]
     artifacts: tuple[ArtifactSpec, ...]
+    source_provenance: tuple[SourceProvenance, ...]
+    executions: tuple[NormalizedConsumerExecution, ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "versions", MappingProxyType(dict(self.versions)))
-        object.__setattr__(self, "bootstrap", MappingProxyType(dict(self.bootstrap)))
-        object.__setattr__(
-            self,
-            "scenarios",
-            tuple(_freeze_json_value(scenario) for scenario in self.scenarios),
-        )
 
 
 @dataclass(frozen=True)
@@ -153,7 +209,7 @@ def load_normalized_manifest(path: Path) -> NormalizedConsumerManifest:
     except (OSError, json.JSONDecodeError, ValueError) as error:
         raise ConsumerRuntimeError("normalized consumer manifest is unreadable") from error
     root = _exact_object(payload, {"schemaVersion", "cases"}, "manifest")
-    if root["schemaVersion"] != "1" or not isinstance(root["cases"], list):
+    if root["schemaVersion"] != "2" or not isinstance(root["cases"], list):
         raise ConsumerRuntimeError("normalized consumer manifest has an unsupported schema")
 
     cases = tuple(_decode_case(value) for value in root["cases"])
@@ -172,6 +228,22 @@ def load_normalized_case(path: Path, case_id: str) -> NormalizedConsumerCase:
     return matches[0]
 
 
+def load_normalized_execution(
+    path: Path, case_id: str, execution_id: str
+) -> tuple[NormalizedConsumerCase, NormalizedConsumerExecution]:
+    case = load_normalized_case(path, case_id)
+    matches = [
+        execution
+        for execution in case.executions
+        if execution.execution_id == execution_id
+    ]
+    if len(matches) != 1:
+        raise ConsumerRuntimeError(
+            "normalized consumer execution was not found exactly once"
+        )
+    return case, matches[0]
+
+
 def select_normalized_cases(
     path: Path,
     *,
@@ -187,6 +259,21 @@ def select_normalized_cases(
     )
 
 
+def select_normalized_executions(
+    path: Path,
+    *,
+    family: str | None = None,
+    lane: str | None = None,
+    execution_id: str | None = None,
+) -> tuple[tuple[NormalizedConsumerCase, NormalizedConsumerExecution], ...]:
+    return tuple(
+        (case, execution)
+        for case in select_normalized_cases(path, family=family, lane=lane)
+        for execution in case.executions
+        if execution_id is None or execution.execution_id == execution_id
+    )
+
+
 def require_artifact(case: NormalizedConsumerCase, usage: str) -> ArtifactSpec:
     if usage not in ARTIFACT_USAGES:
         raise ConsumerRuntimeError("consumer artifact usage is unknown")
@@ -196,6 +283,18 @@ def require_artifact(case: NormalizedConsumerCase, usage: str) -> ArtifactSpec:
             "consumer case must provide exactly one artifact for the requested usage"
         )
     return matches[0]
+
+
+def require_execution_artifact(
+    case: NormalizedConsumerCase,
+    execution: NormalizedConsumerExecution,
+    usage: str,
+) -> ArtifactSpec:
+    if usage not in execution.required_artifact_usages:
+        raise ConsumerRuntimeError(
+            "consumer execution does not declare the requested artifact usage"
+        )
+    return require_artifact(case, usage)
 
 
 def file_digest(path: Path) -> tuple[str, int]:
@@ -357,10 +456,9 @@ def _decode_case(value: Any) -> NormalizedConsumerCase:
             "family",
             "lane",
             "runtimeProfile",
-            "runnerAdapter",
-            "compatibilityProfile",
-            "scenarioSet",
             "artifacts",
+            "sourceProvenance",
+            "executions",
         },
         "case",
     )
@@ -380,9 +478,98 @@ def _decode_case(value: Any) -> NormalizedConsumerCase:
     runtime_family = _nonempty_string(runtime["family"], "runtimeProfile.family")
     runtime_kind = _nonempty_string(runtime["kind"], "runtimeProfile.kind")
     versions = _string_map(runtime["versions"], "runtimeProfile.versions")
+    if family != runtime_family:
+        raise ConsumerRuntimeError("normalized consumer runtime family does not match")
+    if family == "spark" and not versions.get("scala", "").startswith(
+        versions.get("scalaBinary", "") + "."
+    ):
+        raise ConsumerRuntimeError("normalized Scala runtime and binary versions drifted")
+
+    raw_sources = case["sourceProvenance"]
+    if not isinstance(raw_sources, list) or not raw_sources:
+        raise ConsumerRuntimeError("normalized source provenance must be a non-empty list")
+    sources = tuple(_decode_source_provenance(source) for source in raw_sources)
+    source_names = [source.name for source in sources]
+    if len(source_names) != len(set(source_names)):
+        raise ConsumerRuntimeError("normalized source provenance has duplicate names")
+
+    raw_artifacts = case["artifacts"]
+    if not isinstance(raw_artifacts, list) or not raw_artifacts:
+        raise ConsumerRuntimeError("normalized consumer case has no artifacts")
+    artifacts = tuple(_decode_artifact(artifact) for artifact in raw_artifacts)
+    artifact_ids = [artifact.artifact_id for artifact in artifacts]
+    if len(artifact_ids) != len(set(artifact_ids)):
+        raise ConsumerRuntimeError("normalized consumer case has duplicate artifact IDs")
+
+    raw_executions = case["executions"]
+    if not isinstance(raw_executions, list) or not raw_executions:
+        raise ConsumerRuntimeError("normalized consumer case has no executions")
+    executions = tuple(
+        _decode_execution(
+            execution,
+            family=family,
+            runtime_kind=runtime_kind,
+            versions=versions,
+        )
+        for execution in raw_executions
+    )
+    execution_ids = [execution.execution_id for execution in executions]
+    if len(execution_ids) != len(set(execution_ids)):
+        raise ConsumerRuntimeError("normalized consumer case has duplicate execution IDs")
+    required_versions = {
+        version
+        for execution in executions
+        for version in execution.required_versions
+    }
+    if set(versions) != required_versions:
+        raise ConsumerRuntimeError("normalized consumer runtime versions drifted")
+    required_usages = {
+        usage
+        for execution in executions
+        for usage in execution.required_artifact_usages
+    }
+    if {artifact.usage for artifact in artifacts} != required_usages:
+        raise ConsumerRuntimeError(
+            "normalized consumer case has an artifact outside its execution contracts"
+        )
+    for usage in required_usages:
+        if sum(artifact.usage == usage for artifact in artifacts) != 1:
+            raise ConsumerRuntimeError(
+                "normalized consumer case does not satisfy required artifact cardinality"
+            )
+
+    return NormalizedConsumerCase(
+        case_id=case_id,
+        display_name=display_name,
+        family=family,
+        lane=lane,
+        runtime_profile_id=runtime_id,
+        runtime_kind=runtime_kind,
+        versions=versions,
+        artifacts=artifacts,
+        source_provenance=sources,
+        executions=executions,
+    )
+
+
+def _decode_execution(
+    value: Any,
+    *,
+    family: str,
+    runtime_kind: str,
+    versions: Mapping[str, str],
+) -> NormalizedConsumerExecution:
+    execution = _exact_object(
+        value,
+        {"id", "runnerAdapter", "compatibilityProfile", "scenarioSet"},
+        "execution",
+    )
+    execution_id = _nonempty_string(execution["id"], "execution.id")
+    if CASE_ID_PATTERN.fullmatch(execution_id) is None:
+        raise ConsumerRuntimeError("normalized consumer execution ID is unsafe")
 
     adapter = _exact_object(
-        case["runnerAdapter"],
+        execution["runnerAdapter"],
         {
             "id",
             "family",
@@ -405,8 +592,7 @@ def _decode_case(value: Any) -> NormalizedConsumerCase:
     )
     expected_family, expected_kind, expected_prefix = ADAPTER_CONTRACTS[adapter_id]
     if (
-        family != runtime_family
-        or family != adapter_family
+        family != adapter_family
         or family != expected_family
         or runtime_kind != adapter_kind
         or runtime_kind != expected_kind
@@ -430,12 +616,8 @@ def _decode_case(value: Any) -> NormalizedConsumerCase:
         or tuple(required_usages) != ADAPTER_REQUIRED_ARTIFACT_USAGES[adapter_id]
     ):
         raise ConsumerRuntimeError("normalized consumer adapter requirements drifted")
-    if set(versions) != set(required_versions):
-        raise ConsumerRuntimeError("normalized consumer runtime versions drifted")
-    if family == "spark" and not versions["scala"].startswith(
-        versions["scalaBinary"] + "."
-    ):
-        raise ConsumerRuntimeError("normalized Scala runtime and binary versions drifted")
+    if any(versions.get(version, "") == "" for version in required_versions):
+        raise ConsumerRuntimeError("normalized consumer execution is missing a runtime version")
     bootstrap = _string_map(adapter["bootstrap"], "runnerAdapter.bootstrap", allow_empty=True)
     setup_operation_ids = _string_list(
         adapter["setupOperationIds"], "runnerAdapter.setupOperationIds", allow_empty=True
@@ -447,8 +629,8 @@ def _decode_case(value: Any) -> NormalizedConsumerCase:
         raise ConsumerRuntimeError("normalized consumer adapter setup drifted")
 
     compatibility = _exact_object(
-        case["compatibilityProfile"],
-        {"id", "scenarioIds", "sourceProvenance"},
+        execution["compatibilityProfile"],
+        {"id", "scenarioIds"},
         "compatibilityProfile",
     )
     compatibility_id = _nonempty_string(
@@ -457,20 +639,9 @@ def _decode_case(value: Any) -> NormalizedConsumerCase:
     compatibility_scenarios = _string_list(
         compatibility["scenarioIds"], "compatibilityProfile.scenarioIds"
     )
-    sources = compatibility["sourceProvenance"]
-    if not isinstance(sources, list):
-        raise ConsumerRuntimeError("normalized source provenance must be a list")
-    for source in sources:
-        source_value = _exact_object(
-            source, {"name", "version", "uri"}, "sourceProvenance"
-        )
-        _nonempty_string(source_value["name"], "sourceProvenance.name")
-        _nonempty_string(source_value["version"], "sourceProvenance.version")
-        source_uri = _nonempty_string(source_value["uri"], "sourceProvenance.uri")
-        if urllib.parse.urlparse(source_uri).scheme != "https":
-            raise ConsumerRuntimeError("normalized source provenance must use HTTPS")
-
-    scenario_set = _exact_object(case["scenarioSet"], {"id", "scenarios"}, "scenarioSet")
+    scenario_set = _exact_object(
+        execution["scenarioSet"], {"id", "scenarios"}, "scenarioSet"
+    )
     scenario_set_id = _nonempty_string(scenario_set["id"], "scenarioSet.id")
     raw_scenarios = scenario_set["scenarios"]
     if not isinstance(raw_scenarios, list) or not raw_scenarios:
@@ -492,41 +663,37 @@ def _decode_case(value: Any) -> NormalizedConsumerCase:
                 )
             operation_owners[operation_id] = scenario["id"]
 
-    raw_artifacts = case["artifacts"]
-    if not isinstance(raw_artifacts, list) or not raw_artifacts:
-        raise ConsumerRuntimeError("normalized consumer case has no artifacts")
-    artifacts = tuple(_decode_artifact(artifact) for artifact in raw_artifacts)
-    artifact_ids = [artifact.artifact_id for artifact in artifacts]
-    if len(artifact_ids) != len(set(artifact_ids)):
-        raise ConsumerRuntimeError("normalized consumer case has duplicate artifact IDs")
-    if any(artifact.usage not in required_usages for artifact in artifacts):
-        raise ConsumerRuntimeError(
-            "normalized consumer case has an artifact outside its adapter contract"
-        )
-    for usage in required_usages:
-        if sum(artifact.usage == usage for artifact in artifacts) != 1:
-            raise ConsumerRuntimeError(
-                "normalized consumer case does not satisfy required artifact cardinality"
-            )
-
-    return NormalizedConsumerCase(
-        case_id=case_id,
-        display_name=display_name,
-        family=family,
-        lane=lane,
-        runtime_profile_id=runtime_id,
-        runtime_kind=runtime_kind,
-        versions=versions,
+    return NormalizedConsumerExecution(
+        execution_id=execution_id,
         runner_adapter_id=adapter_id,
         selector_prefix=selector_prefix,
+        required_versions=tuple(required_versions),
         required_artifact_usages=tuple(required_usages),
         bootstrap=bootstrap,
         setup_operation_ids=tuple(setup_operation_ids),
         compatibility_profile_id=compatibility_id,
         scenario_set_id=scenario_set_id,
         scenarios=scenarios,
-        artifacts=artifacts,
     )
+
+
+def _decode_source_provenance(value: Any) -> SourceProvenance:
+    source = _exact_object(value, {"name", "version", "uri"}, "sourceProvenance")
+    name = _nonempty_string(source["name"], "sourceProvenance.name")
+    version = _nonempty_string(source["version"], "sourceProvenance.version")
+    uri = _nonempty_string(source["uri"], "sourceProvenance.uri")
+    parsed = urllib.parse.urlparse(uri)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ConsumerRuntimeError("normalized source provenance must use HTTPS")
+    if parsed.netloc == "github.com":
+        segments = parsed.path.strip("/").split("/")
+        if len(segments) < 4 or segments[2] not in {"tree", "blob"}:
+            raise ConsumerRuntimeError("normalized GitHub provenance is not immutable")
+        if segments[3].lower() in {"main", "master", "head", "develop", "latest"}:
+            raise ConsumerRuntimeError("normalized GitHub provenance is mutable")
+    elif not parsed.fragment:
+        raise ConsumerRuntimeError("normalized source provenance lacks a release anchor")
+    return SourceProvenance(name=name, version=version, uri=uri)
 
 
 def _decode_scenario(value: Any, selector_prefix: str) -> dict[str, Any]:

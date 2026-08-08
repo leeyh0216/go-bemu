@@ -334,8 +334,11 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 | 기능 | 상태 |
 | --- | --- |
 | 파일 시스템 객체 저장소 어댑터 | 로컬에서 별도로 활성화한 경우만 검증했습니다. |
+| 내장 GCS 서버 | 제공하지 않습니다. 외부 GCS 호환 JSON endpoint를 설정해야 합니다. |
 | GCS 및 fake GCS JSON 어댑터 | 목록, 조회, 미디어 요청의 크기에 상한을 둡니다. URI 글로브 확장은 부분 지원입니다. |
 | 기존 테이블로 Parquet 로드 | 스칼라 필드만 부분 지원합니다. 명시한 스키마와 형 변환을 검사합니다. 중첩 또는 반복 필드는 객체를 읽기 전에 `load.parquet.nested-repeated.unsupported-v1`로 거부하며, 10진수 자릿수 축소는 대상을 변경하기 전에 `load.decimal-rounding.unsupported-v1`로 거부합니다. |
+| Python `load_table_from_uri`와 bq `load --source_format=PARQUET` | 공개 REST endpoint와 외부 fake GCS 하나를 사용해 검증했습니다. |
+| Spark 간접 Parquet 쓰기 | PySpark와 Scala Spark를 별도 진입점으로 실행하고 비어 있지 않은 파티션 4개 및 Storage Write RPC 0회를 검증했습니다. |
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
 | 대상 생성, 자동 감지, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
@@ -352,6 +355,10 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 전용 임시 작업 공간에 내려받습니다. 이후 선택한 쓰기 방식을 원자적으로 적용합니다.
 다운로드는 대상 테이블 트랜잭션 밖에서 실행합니다. 로드 작업과 중복 방지 기록은
 프로세스 메모리에 저장합니다.
+
+Spark의 Hadoop GCS Connector 설정과 BQEMU의 `load.gcsEndpoint`는 서로
+독립적입니다. 두 설정은 같은 객체 저장소 서비스를 가리켜야 합니다. Compose와
+클라이언트 설정은 [시작하기](getting-started.md)를 참고해 주십시오.
 
 공개 API 경계는 `Authorization` 헤더와 메타데이터 값을 해석하거나 검증하지
 않습니다. 클라이언트 인증 정보 요구 사항, TLS, 별도의 진단용 관리 토큰, IAM은 서로

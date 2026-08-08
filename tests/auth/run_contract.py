@@ -37,12 +37,13 @@ from scripts.consumer_runtime import (  # noqa: E402
     ArtifactSpec,
     ConsumerRuntimeError,
     NormalizedConsumerCase,
+    NormalizedConsumerExecution,
     check_python_dependencies,
     install_python_artifact,
-    load_normalized_case,
+    load_normalized_execution,
     materialize_artifact,
-    require_artifact,
-    select_normalized_cases,
+    require_execution_artifact,
+    select_normalized_executions,
     verify_python_minor,
 )
 
@@ -101,6 +102,7 @@ class ContractError(RuntimeError):
 @dataclass(frozen=True)
 class AuthConsumerCase:
     normalized: NormalizedConsumerCase
+    execution: NormalizedConsumerExecution
     consumer: str
 
     @property
@@ -113,7 +115,7 @@ class AuthConsumerCase:
 
     @property
     def bootstrap(self) -> Mapping[str, str]:
-        return self.normalized.bootstrap
+        return self.execution.bootstrap
 
     @property
     def artifacts(self) -> tuple[ArtifactSpec, ...]:
@@ -126,10 +128,12 @@ def load_auth_cases(
 ) -> tuple[AuthConsumerCase, ...]:
     try:
         if selected == "all":
-            candidates = select_normalized_cases(manifest_path, lane="required")
+            candidates = select_normalized_executions(
+                manifest_path, lane="required", execution_id="public"
+            )
         else:
-            candidate = load_normalized_case(manifest_path, selected)
-            candidates = (candidate,) if candidate.lane == "required" else ()
+            candidate = load_normalized_execution(manifest_path, selected, "public")
+            candidates = (candidate,) if candidate[0].lane == "required" else ()
     except ConsumerRuntimeError as error:
         raise ContractError(
             "stage=config operation=load-consumer-manifest shape=invalid "
@@ -137,8 +141,8 @@ def load_auth_cases(
         ) from error
 
     cases: list[AuthConsumerCase] = []
-    for normalized in candidates:
-        consumer = AUTH_CONSUMER_BY_ADAPTER.get(normalized.runner_adapter_id)
+    for normalized, execution in candidates:
+        consumer = AUTH_CONSUMER_BY_ADAPTER.get(execution.runner_adapter_id)
         if consumer is None:
             raise ContractError(
                 "stage=config operation=select-auth-adapter shape=unsupported "
@@ -157,6 +161,7 @@ def load_auth_cases(
         cases.append(
             AuthConsumerCase(
                 normalized=normalized,
+                execution=execution,
                 consumer=consumer,
             )
         )
@@ -783,7 +788,9 @@ def require_case_artifact(
     usage: str,
 ) -> ArtifactSpec:
     try:
-        artifact = require_artifact(case.normalized, usage)
+        artifact = require_execution_artifact(
+            case.normalized, case.execution, usage
+        )
     except ConsumerRuntimeError as error:
         raise ContractError(
             "stage=artifact operation=select-case-artifact shape=cardinality "

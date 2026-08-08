@@ -31,9 +31,10 @@ class ConsumerRunnerTest(unittest.TestCase):
         manifest = load_manifest(DEFAULT_MANIFEST)
         unknown = sorted(
             {
-                case.runner_adapter_id
+                execution.runner_adapter_id
                 for case in manifest.cases
-                if case.runner_adapter_id not in ADAPTERS
+                for execution in case.executions
+                if execution.runner_adapter_id not in ADAPTERS
             }
         )
         self.assertEqual(unknown, [])
@@ -52,8 +53,12 @@ class ConsumerRunnerTest(unittest.TestCase):
         )
         context = CaseContext(case, Path("."), Path(".artifacts/test"))
         self.assertEqual(type(build_adapter(context)).__name__, "PythonPytestAdapter")
+        assert context.execution is not None
         context = replace(
-            context, case=replace(case, runner_adapter_id="version-inferred-adapter")
+            context,
+            execution=replace(
+                context.execution, runner_adapter_id="version-inferred-adapter"
+            ),
         )
         with self.assertRaises(ContractError):
             build_adapter(context)
@@ -87,9 +92,8 @@ class ConsumerRunnerTest(unittest.TestCase):
         )
 
     def test_failed_runner_writes_structured_first_operation_diff(self) -> None:
-        case = replace(
-            _python_case(),
-            case_id="case",
+        case = _with_public_execution(
+            replace(_python_case(), case_id="case"),
             setup_operation_ids=(),
             scenarios=(
                 {
@@ -245,17 +249,16 @@ class ConsumerRunnerTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            case = replace(
-                _python_case(), case_id="case", setup_operation_ids=()
+            case = _with_public_execution(
+                replace(_python_case(), case_id="case"), setup_operation_ids=()
             )
             events = collect_actual_events(CaseContext(case, root, artifacts), [scenario])
             self.assertEqual(events[0]["phase"], "unexpected-response")
             self.assertEqual(events[0]["requestShape"], "ambiguous server run boundary")
 
     def test_successful_process_fails_when_declared_operation_was_not_observed(self) -> None:
-        case = replace(
-            _python_case(),
-            case_id="case",
+        case = _with_public_execution(
+            replace(_python_case(), case_id="case"),
             setup_operation_ids=(),
             scenarios=(
                 _scenario(
@@ -273,10 +276,53 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(diff["operationId"], "bigquery.jobs.query")
             self.assertEqual(diff["field"], "cardinality")
 
+    def test_indirect_load_evidence_classifies_scenario_and_setup_operations(self) -> None:
+        case = load_case(DEFAULT_MANIFEST, "bq-cli-2.1.31")
+        execution = next(
+            execution
+            for execution in case.executions
+            if execution.execution_id == "indirect-load"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_root = Path(directory)
+            child_evidence = artifact_root / "load" / "bq" / "evidence.json"
+            child_evidence.parent.mkdir(parents=True)
+            child_evidence.write_text(
+                json.dumps(
+                    {
+                        "consumerOperations": [
+                            "bqemu.discovery.get",
+                            "bigquery.jobs.insert",
+                            "bigquery.jobs.get",
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            adapter = build_adapter(
+                CaseContext(case, Path("."), artifact_root, execution=execution)
+            )
+            adapter.result = subprocess.CompletedProcess([], 0, "", "")
+
+            adapter.collect_evidence()
+
+            self.assertEqual(adapter.result.returncode, 0)
+            evidence = json.loads(
+                (artifact_root / "evidence.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(evidence["comparison"]["status"], "matched")
+            self.assertEqual(
+                [event["phase"] for event in evidence["events"]],
+                ["setup-response", "observed-response", "observed-response"],
+            )
+            self.assertEqual(
+                [event["correlationGroup"] for event in evidence["events"]],
+                ["runner-setup", "bq-indirect-load", "bq-indirect-load"],
+            )
+
     def test_scenario_selectors_are_deduplicated_and_adapter_typed(self) -> None:
-        case = replace(
-            _python_case(),
-            case_id="case",
+        case = _with_public_execution(
+            replace(_python_case(), case_id="case"),
             scenarios=(
                 {"id": "one", "selectors": ["pytest:tests/python/test_one.py"]},
                 {
@@ -412,7 +458,9 @@ class ConsumerRunnerTest(unittest.TestCase):
                 }
             ]
         )
-        case = replace(_python_case(), case_id="case", scenarios=(scenario,))
+        case = _with_public_execution(
+            replace(_python_case(), case_id="case"), scenarios=(scenario,)
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "contract").mkdir()
@@ -459,6 +507,18 @@ def _scenario(expectations: list[dict[str, object]]) -> dict[str, object]:
 
 def _python_case():
     return load_case(DEFAULT_MANIFEST, "google-cloud-bigquery-python-3.43.0")
+
+
+def _with_public_execution(case, **changes):
+    return replace(
+        case,
+        executions=tuple(
+            replace(execution, **changes)
+            if execution.execution_id == "public"
+            else execution
+            for execution in case.executions
+        ),
+    )
 
 
 def _event(operation_id: str, *, run_id: str = "run", run_seq: int = 1) -> dict[str, object]:

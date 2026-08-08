@@ -14,6 +14,7 @@ from scripts.consumer_runtime import (
     ConsumerRuntimeError,
     check_python_dependencies,
     install_python_artifact,
+    load_normalized_execution,
     load_normalized_manifest,
     materialize_artifact,
     verify_python_minor,
@@ -30,29 +31,43 @@ class ConsumerRuntimeTest(unittest.TestCase):
 
         self.assertEqual(len(manifest.cases), 4)
         self.assertEqual(
-            {case.runner_adapter_id for case in manifest.cases},
+            {
+                execution.runner_adapter_id
+                for case in manifest.cases
+                for execution in case.executions
+            },
             {
                 "python-pytest-v1",
                 "bq-cli-v1",
                 "spark-pyspark-pytest-v1",
                 "spark-scala-shell-v1",
+                "python-indirect-load-v1",
+                "bq-indirect-load-v1",
+                "spark-pyspark-indirect-load-v1",
+                "spark-scala-indirect-load-v1",
             },
         )
         case = manifest.cases[0]
         with self.assertRaises(TypeError):
             case.versions["mutated"] = "true"  # type: ignore[index]
         with self.assertRaises(TypeError):
-            case.bootstrap["mutated"] = "true"  # type: ignore[index]
+            case.executions[0].bootstrap["mutated"] = "true"  # type: ignore[index]
         with self.assertRaises(TypeError):
-            case.scenarios[0]["id"] = "mutated"  # type: ignore[index]
+            case.executions[0].scenarios[0]["id"] = "mutated"  # type: ignore[index]
+
+        selected_case, execution = load_normalized_execution(
+            MANIFEST, case.case_id, "public"
+        )
+        self.assertEqual(selected_case.case_id, case.case_id)
+        self.assertEqual(execution.execution_id, "public")
 
     def test_decode_rejects_unknown_schema_adapter_usage_digest_and_field(self) -> None:
         source = json.loads(MANIFEST.read_text(encoding="utf-8"))
         mutations = {
-            "schema": lambda payload: payload.update(schemaVersion="2"),
-            "adapter": lambda payload: payload["cases"][0]["runnerAdapter"].update(
-                id="unknown-adapter"
-            ),
+            "schema": lambda payload: payload.update(schemaVersion="3"),
+            "adapter": lambda payload: payload["cases"][0]["executions"][0][
+                "runnerAdapter"
+            ].update(id="unknown-adapter"),
             "usage": lambda payload: payload["cases"][0]["artifacts"][0].update(
                 usage="guessed-artifact"
             ),
@@ -70,8 +85,8 @@ class ConsumerRuntimeTest(unittest.TestCase):
                 role="execution"
             ),
             "adapter requirements": lambda payload: payload["cases"][0][
-                "runnerAdapter"
-            ].update(requiredArtifactUsages=["spark-runtime"]),
+                "executions"
+            ][0]["runnerAdapter"].update(requiredArtifactUsages=["spark-runtime"]),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
@@ -103,8 +118,8 @@ class ConsumerRuntimeTest(unittest.TestCase):
     def test_decode_rejects_duplicate_json_keys(self) -> None:
         source = MANIFEST.read_text(encoding="utf-8")
         duplicate = source.replace(
-            '{\n  "schemaVersion": "1",',
-            '{\n  "schemaVersion": "1",\n  "schemaVersion": "1",',
+            '{\n  "schemaVersion": "2",',
+            '{\n  "schemaVersion": "2",\n  "schemaVersion": "2",',
             1,
         )
         with tempfile.TemporaryDirectory() as directory:

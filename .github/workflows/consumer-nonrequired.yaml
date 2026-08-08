@@ -30,8 +30,8 @@ jobs:
           cache: true
       - name: Emit normalized non-required matrices
         run: |
-          go run ./cmd/contractctl matrix --root . --family python --lane preview,nightly --output-key python --presence-key has_python >> "$GITHUB_OUTPUT"
-          go run ./cmd/contractctl matrix --root . --family bq --lane preview,nightly --output-key bq --presence-key has_bq >> "$GITHUB_OUTPUT"
+          go run ./cmd/contractctl matrix --root . --family python --lane preview,nightly --execution public --output-key python --presence-key has_python >> "$GITHUB_OUTPUT"
+          go run ./cmd/contractctl matrix --root . --family bq --lane preview,nightly --execution public --output-key bq --presence-key has_bq >> "$GITHUB_OUTPUT"
         id: matrix
 
   python-client:
@@ -60,18 +60,18 @@ jobs:
       - name: Run typed consumer contract
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
-        run: python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE"
+        run: python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
       - name: Upload payload-safe contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: consumer-${{ matrix.id }}-${{ github.run_id }}
           path: |
-            .artifacts/consumers/${{ matrix.id }}/evidence.json
-            .artifacts/consumers/${{ matrix.id }}/diff.json
-            .artifacts/consumers/${{ matrix.id }}/junit.xml
-            .artifacts/consumers/${{ matrix.id }}/runner.log
-            .artifacts/consumers/${{ matrix.id }}/runner-error.txt
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -97,17 +97,17 @@ jobs:
       - name: Run typed consumer contract
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
-        run: python3 scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE"
+        run: python3 scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
       - name: Upload payload-safe contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: consumer-${{ matrix.id }}-${{ github.run_id }}
           path: |
-            .artifacts/consumers/${{ matrix.id }}/evidence.json
-            .artifacts/consumers/${{ matrix.id }}/diff.json
-            .artifacts/consumers/${{ matrix.id }}/junit.xml
-            .artifacts/consumers/${{ matrix.id }}/runner.log
-            .artifacts/consumers/${{ matrix.id }}/runner-error.txt
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
           if-no-files-found: ignore
           retention-days: 7

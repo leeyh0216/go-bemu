@@ -1,18 +1,28 @@
-schemaVersion: "1"
+schemaVersion: "2"
 id: bq-cli-2.1.31
 displayName: bq CLI 2.1.31
 family: bq
 lane: required
 runtimeProfile: google-cloud-sdk-566.0.0
-runnerAdapter: bq-cli-v1
-compatibilityProfile: bq-cli-public-v1
-scenarioSet: bq-public-contract
 versions:
   cloudSdk: "566.0.0"
   bq: "2.1.31"
+sourceProvenance:
+  - name: google-cloud-sdk
+    versionKey: cloudSdk
+    uri: https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28
 artifacts:
   - id: google-cloud-cli-566.0.0-image-provenance
     role: tool-provenance
     usage: cloud-sdk-release-provenance
     uri: oci://gcr.io/google.com/cloudsdktool/google-cloud-cli@sha256:80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5
     sha256: 80a5d770cea35cd01cf233e066115421930336afdec3716c930db5c653ea6aa5
+executions:
+  - id: public
+    runnerAdapter: bq-cli-v1
+    compatibilityProfile: bq-cli-public-v1
+    scenarioSet: bq-public-contract
+  - id: indirect-load
+    runnerAdapter: bq-indirect-load-v1
+    compatibilityProfile: bq-cli-indirect-load-v1
+    scenarioSet: bq-indirect-load-contract

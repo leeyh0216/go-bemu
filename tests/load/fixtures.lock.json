@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "bqemu-load-e2e-fixtures/v1",
+  "generator": {
+    "module": "github.com/duckdb/duckdb-go/v2",
+    "version": "v2.10505.0"
+  },
+  "bucket": "bqemu-load-e2e",
+  "objects": [
+    {
+      "name": "python/part-00000.parquet",
+      "kind": "parquet",
+      "query": "SELECT 101::BIGINT AS id, 'python-alpha'::VARCHAR AS name, true::BOOLEAN AS active UNION ALL SELECT 102::BIGINT, 'python-beta'::VARCHAR, false::BOOLEAN",
+      "content": "",
+      "rows": 2,
+      "bytes": 473,
+      "sha256": "c807d3ea9458c25c96aa7b45002c2da19a8df297b62759ddb464d450f3c18544"
+    },
+    {
+      "name": "bq/part-00000.parquet",
+      "kind": "parquet",
+      "query": "SELECT 201::BIGINT AS id, 'bq-alpha'::VARCHAR AS name, true::BOOLEAN AS active",
+      "content": "",
+      "rows": 1,
+      "bytes": 432,
+      "sha256": "4170373472628e72ccf26028d2c6b9f1d71e03ebcaddce57571c89be0efbebe6"
+    },
+    {
+      "name": "bq/part-00001.parquet",
+      "kind": "parquet",
+      "query": "SELECT 202::BIGINT AS id, 'bq-beta'::VARCHAR AS name, false::BOOLEAN AS active",
+      "content": "",
+      "rows": 1,
+      "bytes": 427,
+      "sha256": "f27ba6858f2e073e6cd9057a6e23f4c796a3bfc508483d985aea431de44814ca"
+    },
+    {
+      "name": "invalid/corrupt.parquet",
+      "kind": "corrupt",
+      "query": "",
+      "content": "bqemu-corrupt-parquet-fixture\n",
+      "rows": 0,
+      "bytes": 30,
+      "sha256": "cf542fa9cb84371f87b28ae9d6d9aeaed2f9368a04a2d251c4aad59082206c3b"
+    },
+    {
+      "name": "invalid/schema-mismatch.parquet",
+      "kind": "parquet",
+      "query": "SELECT 'not-an-integer'::VARCHAR AS id, 'invalid-schema'::VARCHAR AS name, true::BOOLEAN AS active",
+      "content": "",
+      "rows": 1,
+      "bytes": 496,
+      "sha256": "eaff12635a47a422907ebc5427aff1dc940cb471dcf0e1e03718f28b0078a2d1"
+    }
+  ]
+}

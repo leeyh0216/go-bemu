@@ -1,4 +1,4 @@
-schemaVersion: "1"
+schemaVersion: "2"
 runtimeProfiles:
   - id: python-3.13
     family: python
@@ -41,28 +41,47 @@ runnerAdapters:
     requiredVersions: [spark, connector, scala, scalaBinary, java, python]
     requiredArtifactUsages: [spark-connector-dsv1-jar, spark-python-bridge, spark-runtime]
     setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bigquery.datasets.insert]
+  - id: python-indirect-load-v1
+    family: python
+    runtimeKind: python-pytest
+    selectorPrefix: load
+    requiredVersions: [python, client]
+    requiredArtifactUsages: [python-wheel]
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create]
+  - id: bq-indirect-load-v1
+    family: bq
+    runtimeKind: bq-cli
+    selectorPrefix: load
+    requiredVersions: [cloudSdk, bq]
+    requiredArtifactUsages: [cloud-sdk-release-provenance]
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bqemu.discovery.get]
+  - id: spark-pyspark-indirect-load-v1
+    family: spark
+    runtimeKind: spark-pyspark
+    selectorPrefix: load
+    requiredVersions: [spark, connector, scala, scalaBinary, java, python, hadoopGcsConnector]
+    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-python-bridge, spark-runtime, hadoop-gcs-connector-jar]
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create]
+  - id: spark-scala-indirect-load-v1
+    family: spark
+    runtimeKind: spark-scala
+    selectorPrefix: load
+    requiredVersions: [spark, connector, scala, scalaBinary, java, python, hadoopGcsConnector]
+    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-python-bridge, spark-runtime, hadoop-gcs-connector-jar]
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create]
 compatibilityProfiles:
   - id: google-cloud-bigquery-python-public-v1
     scenarioIds: [python-metadata, python-query, python-tabledata]
-    sourceProvenance:
-      - name: google-cloud-bigquery-python
-        version: "3.43.0"
-        uri: https://github.com/googleapis/google-cloud-python/tree/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery
   - id: bq-cli-public-v1
     scenarioIds: [bq-metadata, bq-query]
-    sourceProvenance:
-      - name: google-cloud-sdk
-        version: "566.0.0"
-        uri: https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28
   - id: spark-bigquery-connector-public-v1
     scenarioIds: [spark-pyspark-public-edge, spark-scala-public-edge]
-    sourceProvenance:
-      - name: spark-bigquery-connector
-        version: "0.44.2"
-        uri: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92
-      - name: google-cloud-bigquery-java
-        version: "2.60.0"
-        uri: https://github.com/googleapis/java-bigquery/tree/v2.60.0
+  - id: google-cloud-bigquery-python-indirect-load-v1
+    scenarioIds: [python-indirect-load]
+  - id: bq-cli-indirect-load-v1
+    scenarioIds: [bq-indirect-load]
+  - id: spark-bigquery-connector-indirect-load-v1
+    scenarioIds: [spark-pyspark-indirect-load, spark-scala-indirect-load]
 scenarios:
   - id: python-metadata
     selectors: [pytest:tests/python/test_admin_contract.py]
@@ -174,6 +193,46 @@ scenarios:
         min: 1
         max: 0
         after: [grpc.bigquery-write.finalize-write-stream]
+  - id: python-indirect-load
+    selectors: [load:python]
+    operationIds:
+      - bigquery.jobs.insert
+      - bigquery.jobs.get
+    operationExpectations:
+      - operationId: bigquery.jobs.get
+        min: 1
+        max: 0
+        after: [bigquery.jobs.insert]
+  - id: bq-indirect-load
+    selectors: [load:bq]
+    operationIds:
+      - bigquery.jobs.insert
+      - bigquery.jobs.get
+    operationExpectations:
+      - operationId: bigquery.jobs.get
+        min: 1
+        max: 0
+        after: [bigquery.jobs.insert]
+  - id: spark-pyspark-indirect-load
+    selectors: [load:pyspark]
+    operationIds:
+      - bigquery.jobs.insert
+      - bigquery.jobs.get
+    operationExpectations:
+      - operationId: bigquery.jobs.get
+        min: 1
+        max: 0
+        after: [bigquery.jobs.insert]
+  - id: spark-scala-indirect-load
+    selectors: [load:scala-spark]
+    operationIds:
+      - bigquery.jobs.insert
+      - bigquery.jobs.get
+    operationExpectations:
+      - operationId: bigquery.jobs.get
+        min: 1
+        max: 0
+        after: [bigquery.jobs.insert]
 scenarioSets:
   - id: python-public-contract
     scenarioIds: [python-metadata, python-query, python-tabledata]
@@ -183,3 +242,11 @@ scenarioSets:
     scenarioIds: [spark-pyspark-public-edge]
   - id: spark-scala-public-contract
     scenarioIds: [spark-scala-public-edge]
+  - id: python-indirect-load-contract
+    scenarioIds: [python-indirect-load]
+  - id: bq-indirect-load-contract
+    scenarioIds: [bq-indirect-load]
+  - id: spark-pyspark-indirect-load-contract
+    scenarioIds: [spark-pyspark-indirect-load]
+  - id: spark-scala-indirect-load-contract
+    scenarioIds: [spark-scala-indirect-load]

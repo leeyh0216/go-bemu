@@ -85,6 +85,7 @@ jobs:
       python: ${{ steps.matrix.outputs.python }}
       bq: ${{ steps.matrix.outputs.bq }}
       auth: ${{ steps.matrix.outputs.auth }}
+      load: ${{ steps.matrix.outputs.load }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -94,9 +95,10 @@ jobs:
       - name: Emit normalized required matrices
         id: matrix
         run: |
-          go run ./cmd/contractctl matrix --root . --family python --lane required --output-key python >> "$GITHUB_OUTPUT"
-          go run ./cmd/contractctl matrix --root . --family bq --lane required --output-key bq >> "$GITHUB_OUTPUT"
-          go run ./cmd/contractctl matrix --root . --lane required --output-key auth >> "$GITHUB_OUTPUT"
+          go run ./cmd/contractctl matrix --root . --family python --lane required --execution public --output-key python >> "$GITHUB_OUTPUT"
+          go run ./cmd/contractctl matrix --root . --family bq --lane required --execution public --output-key bq >> "$GITHUB_OUTPUT"
+          go run ./cmd/contractctl matrix --root . --lane required --execution public --output-key auth >> "$GITHUB_OUTPUT"
+          go run ./cmd/contractctl matrix --root . --lane required --execution indirect-load --output-key load >> "$GITHUB_OUTPUT"
 
   python-client:
     name: Python / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
@@ -123,18 +125,18 @@ jobs:
       - name: Run real-process client contract
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
-        run: python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE"
+        run: python scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
       - name: Upload redacted contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: consumer-${{ matrix.id }}-${{ github.run_id }}
           path: |
-            .artifacts/consumers/${{ matrix.id }}/evidence.json
-            .artifacts/consumers/${{ matrix.id }}/diff.json
-            .artifacts/consumers/${{ matrix.id }}/junit.xml
-            .artifacts/consumers/${{ matrix.id }}/runner.log
-            .artifacts/consumers/${{ matrix.id }}/runner-error.txt
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -159,18 +161,85 @@ jobs:
       - name: Run real-process bq contract
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
-        run: python3 scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE"
+        run: python3 scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
       - name: Upload payload-safe contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: consumer-${{ matrix.id }}-${{ github.run_id }}
           path: |
-            .artifacts/consumers/${{ matrix.id }}/evidence.json
-            .artifacts/consumers/${{ matrix.id }}/diff.json
-            .artifacts/consumers/${{ matrix.id }}/junit.xml
-            .artifacts/consumers/${{ matrix.id }}/runner.log
-            .artifacts/consumers/${{ matrix.id }}/runner-error.txt
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+  load-contract:
+    name: Indirect load / ${{ matrix.id }} / ${{ matrix.executionId }}
+    needs: consumer-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.consumer-matrix.outputs.load) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: ${{ matrix.family != 'bq' }}
+        with:
+          python-version: ${{ matrix.runtimeProfile.versions.python }}
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        if: ${{ matrix.family == 'spark' }}
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.runtimeProfile.versions.java }}
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        if: ${{ matrix.family != 'bq' }}
+        with:
+          enable-cache: true
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        if: ${{ matrix.family == 'bq' }}
+        with:
+          version: ${{ matrix.runtimeProfile.versions.cloudSdk }}
+          install_components: bq
+      - name: Install Python client dependencies
+        if: ${{ matrix.family == 'python' }}
+        run: uv pip sync --system --require-hashes tests/python/requirements.lock
+      - name: Install Spark runtime dependencies
+        if: ${{ matrix.family == 'spark' }}
+        env:
+          BQEMU_SPARK_PYTHON_VERSION: ${{ matrix.runtimeProfile.versions.python }}
+        run: make spark-prepare
+      - name: Run typed indirect Parquet load contract
+        env:
+          BQEMU_CONSUMER_CASE: ${{ matrix.id }}
+          BQEMU_CONSUMER_EXECUTION: ${{ matrix.executionId }}
+        run: |
+          if test "${{ matrix.family }}" = spark; then
+            python=.artifacts/spark/venv/bin/python
+          else
+            python=python3
+          fi
+          "$python" scripts/consumer_runner.py --case "$BQEMU_CONSUMER_CASE" --execution "$BQEMU_CONSUMER_EXECUTION"
+      - name: Upload payload-safe load evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: load-${{ matrix.id }}-${{ github.run_id }}
+          path: |
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/load/*/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/load/*/*.safe.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -302,6 +371,7 @@ jobs:
       - go-tests
       - python-client
       - bq-cli
+      - load-contract
       - spark-contract
       - auth-client-test
       - container-smoke
@@ -316,6 +386,7 @@ jobs:
           GO_RESULT: ${{ needs.go-tests.result }}
           PYTHON_RESULT: ${{ needs.python-client.result }}
           BQ_RESULT: ${{ needs.bq-cli.result }}
+          LOAD_RESULT: ${{ needs.load-contract.result }}
           SPARK_RESULT: ${{ needs.spark-contract.result }}
           AUTH_CLIENT_RESULT: ${{ needs.auth-client-test.result }}
           CONTAINER_RESULT: ${{ needs.container-smoke.result }}
@@ -328,6 +399,7 @@ jobs:
             "go-tests:$GO_RESULT" \
             "python-client:$PYTHON_RESULT" \
             "bq-cli:$BQ_RESULT" \
+            "load-contract:$LOAD_RESULT" \
             "spark-contract:$SPARK_RESULT" \
             "auth-client-test:$AUTH_CLIENT_RESULT" \
             "container-smoke:$CONTAINER_RESULT"

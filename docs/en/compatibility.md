@@ -306,8 +306,11 @@ service and connector
 | Capability | Status |
 | --- | --- |
 | filesystem object-store adapter | Verified only behind explicit local opt-in |
+| embedded GCS server | Not provided; configure an external GCS-compatible JSON endpoint |
 | GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
 | Parquet load into an existing table | Partial; scalar fields only, with explicit schema/cast validation; nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1`, and decimal narrowing fails before destination mutation with `load.decimal-rounding.unsupported-v1` |
+| Python `load_table_from_uri` and bq `load --source_format=PARQUET` | Verified against the public REST endpoint and one external fake GCS service |
+| Spark indirect Parquet write | Verified with separate PySpark and Scala Spark entrypoints, four non-empty partitions, and zero Storage Write RPCs |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
@@ -324,6 +327,9 @@ The opt-in path downloads bounded immutable objects into a private temporary
 workspace, then applies the selected disposition atomically. Download is outside
 the destination transaction, and load jobs and idempotency records are
 process-local.
+Spark configures the Hadoop GCS Connector independently from BQEMU's
+`load.gcsEndpoint`; both must resolve to the same object-store service. See
+[Getting started](getting-started.md) for the Compose and client settings.
 The public edge does not parse or validate `Authorization` header or metadata
 values. Client credential requirements, TLS, the separate diagnostics admin
 token, and IAM are distinct compatibility claims. See [Local client credentials

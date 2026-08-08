@@ -1,12 +1,9 @@
-schemaVersion: "1"
+schemaVersion: "2"
 id: spark-pyspark-3.5.8-connector-0.44.2
 displayName: PySpark 3.5.8 / Connector 0.44.2
 family: spark
 lane: required
 runtimeProfile: spark-3.5.8-pyspark
-runnerAdapter: spark-pyspark-pytest-v1
-compatibilityProfile: spark-bigquery-connector-public-v1
-scenarioSet: spark-pyspark-public-contract
 versions:
   spark: "3.5.8"
   connector: "0.44.2"
@@ -14,6 +11,14 @@ versions:
   scalaBinary: "2.12"
   java: "17"
   python: "3.11"
+  hadoopGcsConnector: "2.2.8"
+sourceProvenance:
+  - name: spark-bigquery-connector
+    versionKey: connector
+    uri: https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92
+  - name: google-cloud-bigquery-java
+    version: "2.60.0"
+    uri: https://github.com/googleapis/java-bigquery/tree/v2.60.0
 artifacts:
   - id: spark-bigquery-connector-0.44.2-jar
     role: execution
@@ -35,3 +40,17 @@ artifacts:
     usage: spark-python-bridge
     uri: https://files.pythonhosted.org/packages/10/30/a58b32568f1623aaad7db22aa9eafc4c6c194b429ff35bdc55ca2726da47/py4j-0.10.9.7-py2.py3-none-any.whl
     sha256: 85defdfd2b2376eb3abf5ca6474b51ab7e0de341c75a02f46dc9b5976f5a5c1b
+  - id: hadoop-gcs-connector-2.2.8-shaded-jar
+    role: execution
+    usage: hadoop-gcs-connector-jar
+    uri: https://repo.maven.apache.org/maven2/com/google/cloud/bigdataoss/gcs-connector/hadoop2-2.2.8/gcs-connector-hadoop2-2.2.8-shaded.jar
+    sha256: 7401d3891761bb922b1d1df8fc6f4b07460224b3a4bd708744e7b5c24f43e740
+executions:
+  - id: public
+    runnerAdapter: spark-pyspark-pytest-v1
+    compatibilityProfile: spark-bigquery-connector-public-v1
+    scenarioSet: spark-pyspark-public-contract
+  - id: indirect-load
+    runnerAdapter: spark-pyspark-indirect-load-v1
+    compatibilityProfile: spark-bigquery-connector-indirect-load-v1
+    scenarioSet: spark-pyspark-indirect-load-contract

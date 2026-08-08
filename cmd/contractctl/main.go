@@ -18,13 +18,14 @@ func main() {
 
 func run(arguments []string) error {
 	if len(arguments) == 0 || (arguments[0] != "compile" && arguments[0] != "check" && arguments[0] != "matrix") {
-		return fmt.Errorf("usage: contractctl <compile|check|matrix> [--root directory] [--family name] [--lane name]")
+		return fmt.Errorf("usage: contractctl <compile|check|matrix> [--root directory] [--family name] [--lane name] [--execution id]")
 	}
 	command := arguments[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	root := flags.String("root", ".", "repository root")
 	family := flags.String("family", "", "consumer family filter (matrix only)")
 	lane := flags.String("lane", "", "consumer lane filter (matrix only)")
+	execution := flags.String("execution", "", "consumer execution ID filter (matrix only)")
 	outputKey := flags.String("output-key", "", "prefix matrix JSON with a GitHub output key")
 	presenceKey := flags.String("presence-key", "", "emit whether the selected matrix has rows")
 	if err := flags.Parse(arguments[1:]); err != nil {
@@ -43,7 +44,7 @@ func run(arguments []string) error {
 	case "check":
 		return contract.CheckOperationArtifacts(absolute)
 	case "matrix":
-		matrix, count, err := contract.ConsumerMatrixWithCount(absolute, *family, *lane)
+		matrix, count, err := contract.ConsumerMatrixWithCount(absolute, *family, *lane, *execution)
 		if err != nil {
 			return err
 		}

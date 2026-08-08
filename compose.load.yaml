@@ -1,0 +1,38 @@
+services:
+  bqemu:
+    environment:
+      BQEMU_LOAD_ENABLED: "true"
+      BQEMU_LOAD_GCS_ENDPOINT: http://fake-gcs:4443
+      BQEMU_LOAD_ALLOW_FILE_SOURCES: "false"
+    depends_on:
+      fake-gcs:
+        condition: service_started
+
+  fake-gcs:
+    image: fsouza/fake-gcs-server@sha256:91afded49de804aa61b5f3eb6c7cd65205acf9e5c5e047cf0ba7d9507af806c8
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      - -backend
+      - memory
+      - -scheme
+      - http
+      - -port
+      - "4443"
+      - -data
+      - /data
+      - -external-url
+      - http://localhost:${BQEMU_FAKE_GCS_PORT:-4443}
+      - -log-level
+      - info
+    ports:
+      - "127.0.0.1:${BQEMU_FAKE_GCS_PORT:-4443}:4443"
+    volumes:
+      - ./examples/load/fake-gcs:/data:ro
+    tmpfs:
+      - /storage:mode=0700
+      - /tmp:mode=0700

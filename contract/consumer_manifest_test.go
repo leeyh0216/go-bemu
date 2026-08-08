@@ -9,7 +9,7 @@ import (
 )
 
 func TestConsumerYAMLRejectsUnknownFieldsAndMultipleDocuments(t *testing.T) {
-	manifest := `schemaVersion: "1"
+	manifest := `schemaVersion: "2"
 runtimeProfiles: []
 runnerAdapters: []
 compatibilityProfiles: []
@@ -35,7 +35,7 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 			manifest.RuntimeProfiles = append(manifest.RuntimeProfiles, manifest.RuntimeProfiles[0])
 		},
 		"unknown adapter": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
-			(*cases)[0].RunnerAdapterID = "missing"
+			(*cases)[0].Executions[0].RunnerAdapterID = "missing"
 		},
 		"unknown operation": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
 			manifest.Scenarios[0].OperationIDs = append(manifest.Scenarios[0].OperationIDs, "bigquery.unknown")
@@ -78,7 +78,9 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 				RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-python-bridge", "spark-runtime"},
 			}
 			(*cases)[0].Family = "spark"
+			(*cases)[0].Executions[0].RunnerAdapterID = "spark-pyspark-pytest-v1"
 			(*cases)[0].Versions = map[string]string{"spark": "3.5.8", "connector": "0.44.2", "scala": "2.12.18", "scalaBinary": "2.13", "java": "17", "python": "3.11"}
+			(*cases)[0].SourceProvenance = []ConsumerSourceReference{{Name: "connector", VersionKey: "connector", URI: "https://github.com/example/project/tree/v0.44.2"}}
 			(*cases)[0].Artifacts = []ConsumerArtifact{
 				{ID: "dsv1", Role: "execution", Usage: "spark-connector-dsv1-jar", URI: "https://example.invalid/dsv1.jar", SHA256: strings.Repeat("a", 64)},
 				{ID: "dsv2", Role: "execution", Usage: "spark-connector-dsv2-jar", URI: "https://example.invalid/dsv2.jar", SHA256: strings.Repeat("b", 64)},
@@ -108,8 +110,14 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 		"selector adapter mismatch": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
 			manifest.Scenarios[0].Selectors = []string{"bq:tests/bqcli/run_contract.py:main"}
 		},
-		"mutable source provenance": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
-			manifest.CompatibilityProfiles[0].SourceProvenance = []ConsumerSourceProvenance{{Name: "client", Version: "3.43.0", URI: "https://github.com/googleapis/google-cloud-python/tree/main/packages/google-cloud-bigquery"}}
+		"mutable source provenance": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
+			(*cases)[0].SourceProvenance[0].URI = "https://github.com/googleapis/google-cloud-python/tree/main/packages/google-cloud-bigquery"
+		},
+		"unknown provenance version key": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
+			(*cases)[0].SourceProvenance[0].VersionKey = "missing"
+		},
+		"duplicate execution ID": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
+			(*cases)[0].Executions = append((*cases)[0].Executions, (*cases)[0].Executions[0])
 		},
 		"OCI digest mismatch": func(_ *ConsumerManifest, cases *[]ConsumerCase, _ map[string]bool) {
 			(*cases)[0].Artifacts[0].URI = "oci://example.invalid/client@sha256:" + strings.Repeat("b", 64)
@@ -156,7 +164,7 @@ func TestNormalizedConsumerManifestIsDeterministicAndFullyExpanded(t *testing.T)
 		t.Fatal(err)
 	}
 	consumerCase := decoded.Cases[0]
-	if consumerCase.RuntimeProfile.Versions["client"] != "3.43.0" || consumerCase.RunnerAdapter.ID == "" || len(consumerCase.ScenarioSet.Scenarios) != 1 || len(consumerCase.Artifacts) != 1 {
+	if consumerCase.RuntimeProfile.Versions["client"] != "3.43.0" || len(consumerCase.Executions) != 1 || consumerCase.Executions[0].RunnerAdapter.ID == "" || len(consumerCase.Executions[0].ScenarioSet.Scenarios) != 1 || len(consumerCase.Artifacts) != 1 || consumerCase.SourceProvenance[0].Version != "3.43.0" {
 		t.Fatalf("normalized case is not fully expanded: %#v", consumerCase)
 	}
 }
@@ -169,7 +177,7 @@ func TestNormalizedConsumerManifestDecodeFailsClosed(t *testing.T) {
 	if _, err := DecodeNormalizedConsumerManifest([]byte(strings.Replace(string(contents), `"schemaVersion":`, `"unknown": true, "schemaVersion":`, 1))); err == nil {
 		t.Fatal("expected unknown normalized field to fail")
 	}
-	if _, err := DecodeNormalizedConsumerManifest([]byte(strings.Replace(string(contents), `"schemaVersion": "1",`, `"schemaVersion": "1", "schemaVersion": "1",`, 1))); err == nil {
+	if _, err := DecodeNormalizedConsumerManifest([]byte(strings.Replace(string(contents), `"schemaVersion": "2",`, `"schemaVersion": "2", "schemaVersion": "2",`, 1))); err == nil {
 		t.Fatal("expected duplicate normalized key to fail")
 	}
 	valid, err := DecodeNormalizedConsumerManifest(contents)
@@ -184,7 +192,7 @@ func TestNormalizedConsumerManifestDecodeFailsClosed(t *testing.T) {
 			manifest.Cases = append(manifest.Cases, manifest.Cases[0])
 		},
 		"unknown adapter": func(manifest *NormalizedConsumerManifest) {
-			manifest.Cases[0].RunnerAdapter.ID = "unknown-adapter"
+			manifest.Cases[0].Executions[0].RunnerAdapter.ID = "unknown-adapter"
 		},
 		"unknown usage": func(manifest *NormalizedConsumerManifest) {
 			manifest.Cases[0].Artifacts[0].Usage = "guessed-artifact"
@@ -212,7 +220,13 @@ func TestNormalizedConsumerManifestDecodeFailsClosed(t *testing.T) {
 			manifest.Cases[0].Artifacts = append(manifest.Cases[0].Artifacts, artifact)
 		},
 		"adapter requirement drift": func(manifest *NormalizedConsumerManifest) {
-			manifest.Cases[0].RunnerAdapter.RequiredArtifactUsages = []string{"spark-runtime"}
+			manifest.Cases[0].Executions[0].RunnerAdapter.RequiredArtifactUsages = []string{"spark-runtime"}
+		},
+		"duplicate execution ID": func(manifest *NormalizedConsumerManifest) {
+			manifest.Cases[0].Executions = append(manifest.Cases[0].Executions, manifest.Cases[0].Executions[0])
+		},
+		"mutable source provenance": func(manifest *NormalizedConsumerManifest) {
+			manifest.Cases[0].SourceProvenance[0].URI = "https://github.com/example/project/tree/main"
 		},
 		"runtime version drift": func(manifest *NormalizedConsumerManifest) {
 			manifest.Cases[0].RuntimeProfile.Versions["unexpected"] = "1"
@@ -282,12 +296,12 @@ func TestAddingOneConnectorPatchCaseYAMLAutoAddsContractAndAuthMatrixRows(t *tes
 	if err := os.WriteFile(filepath.Join(temporaryRoot, consumerNormalizedPath), contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	matrix, err := ConsumerMatrix(temporaryRoot, "spark", "required")
+	matrix, err := ConsumerMatrix(temporaryRoot, "spark", "required", "public")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var payload struct {
-		Include []ExpandedConsumerCase `json:"include"`
+		Include []ConsumerMatrixRow `json:"include"`
 	}
 	if err := json.Unmarshal(matrix, &payload); err != nil {
 		t.Fatal(err)
@@ -295,38 +309,39 @@ func TestAddingOneConnectorPatchCaseYAMLAutoAddsContractAndAuthMatrixRows(t *tes
 	if len(payload.Include) != 3 {
 		t.Fatalf("matrix rows = %#v", payload.Include)
 	}
-	var patchRow *ExpandedConsumerCase
+	var patchRow *ConsumerMatrixRow
 	for index := range payload.Include {
 		if payload.Include[index].ID == "spark-pyspark-3.5.8-connector-0.44.3" {
 			patchRow = &payload.Include[index]
 		}
 	}
-	if patchRow == nil || patchRow.RunnerAdapter.ID != "spark-pyspark-pytest-v1" || patchRow.RuntimeProfile.Versions["connector"] != "0.44.3" || !strings.Contains(patchRow.Artifacts[0].URI, "/0.44.3/") {
+	if patchRow == nil || patchRow.ExecutionID != "public" || patchRow.RunnerAdapter.ID != "spark-pyspark-pytest-v1" || patchRow.RuntimeProfile.Versions["connector"] != "0.44.3" || !strings.Contains(patchRow.Artifacts[0].URI, "/0.44.3/") || patchRow.SourceProvenance[0].Version != "0.44.3" {
 		t.Fatalf("patch matrix row = %#v", patchRow)
 	}
-	authMatrix, err := ConsumerMatrix(temporaryRoot, "", "required")
+	loadMatrix, err := ConsumerMatrix(temporaryRoot, "spark", "required", "indirect-load")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var authPayload struct {
-		Include []ExpandedConsumerCase `json:"include"`
+	var loadPayload struct {
+		Include []ConsumerMatrixRow `json:"include"`
 	}
-	if err := json.Unmarshal(authMatrix, &authPayload); err != nil {
+	if err := json.Unmarshal(loadMatrix, &loadPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(authPayload.Include) != 5 {
-		t.Fatalf("auth matrix rows = %#v", authPayload.Include)
+	if len(loadPayload.Include) != 3 {
+		t.Fatalf("load matrix rows = %#v", loadPayload.Include)
 	}
-	foundAuthPatch := false
-	for _, row := range authPayload.Include {
+	foundLoadPatch := false
+	for _, row := range loadPayload.Include {
 		if row.ID == patchRow.ID {
-			foundAuthPatch = row.RunnerAdapter.ID == patchRow.RunnerAdapter.ID &&
+			foundLoadPatch = row.ExecutionID == "indirect-load" &&
+				row.RunnerAdapter.ID == "spark-pyspark-indirect-load-v1" &&
 				row.RuntimeProfile.Versions["connector"] == patchRow.RuntimeProfile.Versions["connector"] &&
 				row.Artifacts[0].SHA256 == patchRow.Artifacts[0].SHA256
 		}
 	}
-	if !foundAuthPatch {
-		t.Fatalf("auth matrix does not reuse the connector patch row: %#v", authPayload.Include)
+	if !foundLoadPatch {
+		t.Fatalf("load matrix does not reuse the connector patch case: %#v", loadPayload.Include)
 	}
 }
 
@@ -354,7 +369,7 @@ func TestConsumerMatrixSeparatesRequiredPreviewAndNightlyLanes(t *testing.T) {
 	nightly.ID, nightly.Lane = "nightly-case", "nightly"
 	preview.ID, preview.Lane = "preview-case", "preview"
 	required.ID, required.Lane = "required-case", "required"
-	manifest := NormalizedConsumerManifest{SchemaVersion: "1", Cases: []ExpandedConsumerCase{
+	manifest := NormalizedConsumerManifest{SchemaVersion: consumerSchemaVersion, Cases: []ExpandedConsumerCase{
 		nightly,
 		preview,
 		required,
@@ -372,12 +387,12 @@ func TestConsumerMatrixSeparatesRequiredPreviewAndNightlyLanes(t *testing.T) {
 	}
 	for _, lane := range []string{"required", "preview", "nightly"} {
 		t.Run(lane, func(t *testing.T) {
-			matrix, err := ConsumerMatrix(root, "spark", lane)
+			matrix, err := ConsumerMatrix(root, "spark", lane, "public")
 			if err != nil {
 				t.Fatal(err)
 			}
 			var payload struct {
-				Include []ExpandedConsumerCase `json:"include"`
+				Include []ConsumerMatrixRow `json:"include"`
 			}
 			if err := json.Unmarshal(matrix, &payload); err != nil {
 				t.Fatal(err)
@@ -387,21 +402,24 @@ func TestConsumerMatrixSeparatesRequiredPreviewAndNightlyLanes(t *testing.T) {
 			}
 		})
 	}
-	matrix, count, err := ConsumerMatrixWithCount(root, "python", "preview,nightly")
+	matrix, count, err := ConsumerMatrixWithCount(root, "python", "preview,nightly", "public")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 || string(matrix) != `{"include":[]}` {
 		t.Fatalf("empty non-required matrix = %s count=%d", matrix, count)
 	}
-	if _, _, err := ConsumerMatrixWithCount(root, "spark", "preview,unknown"); err == nil {
+	if _, _, err := ConsumerMatrixWithCount(root, "spark", "preview,unknown", "public"); err == nil {
 		t.Fatal("expected unknown lane to fail")
+	}
+	if _, _, err := ConsumerMatrixWithCount(root, "spark", "required", "public,public"); err == nil {
+		t.Fatal("expected duplicate execution filter to fail")
 	}
 }
 
 func validConsumerFixture() (ConsumerManifest, []ConsumerCase, map[string]bool) {
 	manifest := ConsumerManifest{
-		SchemaVersion:   "1",
+		SchemaVersion:   consumerSchemaVersion,
 		RuntimeProfiles: []RuntimeProfile{{ID: "python", Family: "python", Kind: "python-pytest"}},
 		RunnerAdapters: []RunnerAdapter{{
 			ID: "python-pytest-v1", Family: "python", RuntimeKind: "python-pytest", SelectorPrefix: "pytest",
@@ -413,10 +431,14 @@ func validConsumerFixture() (ConsumerManifest, []ConsumerCase, map[string]bool) 
 		ScenarioSets:          []ScenarioSet{{ID: "query-set", ScenarioIDs: []string{"query"}}},
 	}
 	cases := []ConsumerCase{{
-		SchemaVersion: "1", ID: "case-one", DisplayName: "Case one", Family: "python", Lane: "required",
-		RuntimeProfileID: "python", RunnerAdapterID: "python-pytest-v1", CompatibilityProfileID: "python-v1", ScenarioSetID: "query-set",
-		Versions:  map[string]string{"python": "3.13", "client": "3.43.0"},
-		Artifacts: []ConsumerArtifact{{ID: "wheel", Role: "execution", Usage: "python-wheel", URI: "https://example.invalid/client.whl", SHA256: strings.Repeat("a", 64)}},
+		SchemaVersion: consumerSchemaVersion, ID: "case-one", DisplayName: "Case one", Family: "python", Lane: "required",
+		RuntimeProfileID: "python",
+		Versions:         map[string]string{"python": "3.13", "client": "3.43.0"},
+		Artifacts:        []ConsumerArtifact{{ID: "wheel", Role: "execution", Usage: "python-wheel", URI: "https://example.invalid/client.whl", SHA256: strings.Repeat("a", 64)}},
+		SourceProvenance: []ConsumerSourceReference{{Name: "client", VersionKey: "client", URI: "https://github.com/example/client/tree/v3.43.0"}},
+		Executions: []ConsumerExecution{{
+			ID: "public", RunnerAdapterID: "python-pytest-v1", CompatibilityProfileID: "python-v1", ScenarioSetID: "query-set",
+		}},
 	}}
 	return manifest, cases, map[string]bool{
 		"bigquery.jobs.query":   true,
@@ -427,22 +449,28 @@ func validConsumerFixture() (ConsumerManifest, []ConsumerCase, map[string]bool) 
 }
 
 func validConsumerCaseYAML(id string) string {
-	return `schemaVersion: "1"
+	return `schemaVersion: "2"
 id: ` + id + `
 displayName: Example
 family: python
 lane: required
 runtimeProfile: python
-runnerAdapter: python-pytest-v1
-compatibilityProfile: python-v1
-scenarioSet: query-set
 versions: {python: "3.13", client: "3.43.0"}
+sourceProvenance:
+  - name: client
+    versionKey: client
+    uri: https://github.com/example/client/tree/v3.43.0
 artifacts:
   - id: wheel
     role: execution
     usage: python-wheel
     uri: https://example.invalid/client.whl
     sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+executions:
+  - id: public
+    runnerAdapter: python-pytest-v1
+    compatibilityProfile: python-v1
+    scenarioSet: query-set
 `
 }
 
