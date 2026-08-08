@@ -1180,13 +1180,23 @@
         "parallelism": "spark-partition-negotiated",
         "tablePartitioning": "dynamic-overwrite"
       },
-      "state": "partial",
+      "state": "verified",
       "officialSourceRefs": [
         "connector-readme",
         "direct-writer"
       ],
-      "issueRef": "overwrite",
-      "limitation": "DATE-partition direct exact overwrite is exercised; range partitions and indirect execution still require public-process evidence."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/integration/spark/evidence/direct-dynamic-overwrite-0.44.2.json",
+          "fingerprint": "sha256:ccb83b6032a2600b8cb69cca28ba6989ed500cdff0d87701f8b7a69c596d227a"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/integration/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-WRITE-DIRECT-ALO-OVERWRITE-V1",
