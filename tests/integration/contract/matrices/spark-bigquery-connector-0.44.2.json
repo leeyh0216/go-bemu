@@ -1578,14 +1578,24 @@
         "parallelism": "spark-partition-4",
         "tablePartitioning": "dynamic-overwrite"
       },
-      "state": "partial",
+      "state": "verified",
       "officialSourceRefs": [
         "spark-config",
         "indirect-write-helper",
         "query-materialization"
       ],
-      "issueRef": "overwrite",
-      "limitation": "The GCS Parquet staging, temporary load, and dynamic partition script require public-process evidence."
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/integration/spark/evidence/indirect-dynamic-overwrite-0.44.2.json",
+          "fingerprint": "sha256:b7dcc62328f36a4101ee783a78f88926b9dd6df1129b47028589f78ecaf69a79"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/integration/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
     },
     {
       "id": "SBQ-WRITE-INDIRECT-AVRO-APPEND-V1",

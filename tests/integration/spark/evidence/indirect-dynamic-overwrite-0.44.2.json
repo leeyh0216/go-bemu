@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "1",
+  "capabilityIds": [
+    "SBQ-WRITE-INDIRECT-DYNAMIC-OVERWRITE-V1"
+  ],
+  "observedOn": "2026-08-09",
+  "run": {
+    "url": "https://github.com/leeyh0216/go-bemu/actions/runs/31281493242",
+    "headSha": "75a62aaf023d5b4ca2110372d468d0e6aef3b988"
+  },
+  "consumer": {
+    "connector": "spark-bigquery-connector-0.44.2",
+    "spark": "3.5.8",
+    "scalaBinaryVersion": "2.12",
+    "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92"
+  },
+  "artifacts": {
+    "lockFingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf",
+    "connectorJarFingerprint": "sha256:516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e",
+    "hadoopGCSConnectorJarFingerprint": "sha256:7401d3891761bb922b1d1df8fc6f4b07460224b3a4bd708744e7b5c24f43e740"
+  },
+  "executions": [
+    {
+      "entrypoint": "pyspark",
+      "caseId": "spark-pyspark-3.5.8-connector-0.44.2",
+      "evidenceFingerprint": "sha256:730b514af4a052030e1d9f25a858e0c2ead0f6053a9dc74a911bfbefe6bfb9ce",
+      "comparison": "matched",
+      "observedOperations": 14
+    },
+    {
+      "entrypoint": "scala",
+      "caseId": "spark-scala-3.5.8-connector-0.44.2",
+      "evidenceFingerprint": "sha256:d6beea9c72e06636ebfea9577a0958b20c5fb71e1ab10b81763b0c4b9cd86d53",
+      "comparison": "matched",
+      "observedOperations": 14
+    }
+  ],
+  "trace": [
+    {
+      "stage": "gcs_parquet_staging",
+      "operation": "objects.insert+objects.copy+objects.delete",
+      "shape": "spark-partitions:4 parquet-files:4 staged-rows:8 cleanup-empty:true",
+      "status": "passed"
+    },
+    {
+      "stage": "temporary_table_load",
+      "operation": "tables.insert+jobs.insert+jobs.get",
+      "shape": "temporary-tables:1 load-jobs:1 input-files:4 output-rows:8",
+      "status": "DONE"
+    },
+    {
+      "stage": "dynamic_partition_replace",
+      "operation": "jobs.insert+jobs.getQueryResults+jobs.get",
+      "shape": "script-jobs:1 partition-type:date touched-partitions:1 untouched-partitions:1 storage-write-rpcs:0",
+      "status": "DONE"
+    },
+    {
+      "stage": "temporary_table_cleanup",
+      "operation": "tables.delete",
+      "shape": "requests:1 after-script:true",
+      "status": "204"
+    },
+    {
+      "stage": "result_assertion",
+      "operation": "tabledata.list",
+      "shape": "replacement-rows:8 untouched-rows:1 resulting-rows:9",
+      "status": "passed"
+    }
+  ]
+}
