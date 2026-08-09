@@ -102,7 +102,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
@@ -141,7 +141,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
@@ -290,7 +290,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
       ]
     },
@@ -328,7 +328,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
       ]
     },
@@ -366,7 +366,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs",
         "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
       ]
@@ -748,7 +748,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
@@ -787,7 +787,7 @@
         "bigquery-rest-v2"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution"
       ]
@@ -1446,7 +1446,7 @@
         "bqemu-public-api"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
@@ -1515,7 +1515,7 @@
         "bqemu-public-api"
       ],
       "tests": [
-        "go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
+        "go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart",
         "go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery"
       ]
     },
@@ -1578,7 +1578,7 @@
           "effect": "service-availability",
           "verification": "unit",
           "tests": [
-            "go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose"
+            "go:internal/bootstrap/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose"
           ],
           "en": "The Storage Read service implementation is enabled; its descriptor remains registered when disabled.",
           "ko": "Storage Read 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다."
@@ -1597,7 +1597,7 @@
         "bigquery-storage-v1"
       ],
       "tests": [
-        "go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose",
+        "go:internal/bootstrap/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume"
       ]
     },
@@ -1626,7 +1626,7 @@
           "effect": "service-availability",
           "verification": "unit",
           "tests": [
-            "go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose"
+            "go:internal/bootstrap/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose"
           ],
           "en": "The Storage Read service implementation is enabled; its descriptor remains registered when disabled.",
           "ko": "Storage Read 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다."
@@ -1645,7 +1645,7 @@
         "bigquery-storage-v1"
       ],
       "tests": [
-        "go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose",
+        "go:internal/bootstrap/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume"
       ]
     },
@@ -1709,7 +1709,7 @@
           "effect": "service-availability",
           "verification": "unit",
           "tests": [
-            "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
+            "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
           ],
           "en": "The Storage Write service implementation is enabled; its descriptor remains registered when disabled.",
           "ko": "Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다."
@@ -1728,7 +1728,7 @@
         "bigquery-storage-v1"
       ],
       "tests": [
-        "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
+        "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
@@ -1757,7 +1757,7 @@
           "effect": "service-availability",
           "verification": "unit",
           "tests": [
-            "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
+            "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
           ],
           "en": "The Storage Write service implementation is enabled; its descriptor remains registered when disabled.",
           "ko": "Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다."
@@ -1776,7 +1776,7 @@
         "bigquery-storage-v1"
       ],
       "tests": [
-        "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
+        "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
@@ -1805,7 +1805,7 @@
           "effect": "service-availability",
           "verification": "unit",
           "tests": [
-            "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
+            "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
           ],
           "en": "The Storage Write service implementation is enabled; its descriptor remains registered when disabled.",
           "ko": "Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다."
@@ -1825,7 +1825,7 @@
         "bigquery-storage-v1"
       ],
       "tests": [
-        "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
+        "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
@@ -1854,7 +1854,7 @@
           "effect": "service-availability",
           "verification": "unit",
           "tests": [
-            "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
+            "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
           ],
           "en": "The Storage Write service implementation is enabled; its descriptor remains registered when disabled.",
           "ko": "Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다."
@@ -1873,7 +1873,7 @@
         "bigquery-storage-v1"
       ],
       "tests": [
-        "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
+        "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },
@@ -1937,7 +1937,7 @@
           "effect": "service-availability",
           "verification": "unit",
           "tests": [
-            "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
+            "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose"
           ],
           "en": "The Storage Write service implementation is enabled; its descriptor remains registered when disabled.",
           "ko": "Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다."
@@ -1956,7 +1956,7 @@
         "bigquery-storage-v1"
       ],
       "tests": [
-        "go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
+        "go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose",
         "go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance"
       ]
     },

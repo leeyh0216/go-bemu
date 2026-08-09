@@ -13,4 +13,4 @@
 REST / gRPC -> transport-local use-case interface -> application handler -> consumer-owned port -> adapter
 ```
 
-`internal/application`은 adapter나 transport package를 import하거나 SQLite/DuckDB 구현 타입을 노출하면 안 됩니다. package boundary test가 이 방향을 강제하며, `cmd/emulator` 조립부가 typed port를 제공합니다.
+`internal/application`은 adapter나 transport package를 import하거나 SQLite/DuckDB 구현 타입을 노출하면 안 됩니다. package boundary test가 이 방향을 강제하며, `internal/bootstrap`이 typed port를 제공하고 `cmd/emulator`는 process signal과 exit status만 소유합니다.

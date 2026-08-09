@@ -56,7 +56,7 @@ inside the adapter, and public plans carry only a fingerprint of that mapping.
 
 Construct concrete adapters only in the executable composition root. The
 current composition contract is
-[`cmd/emulator/engine_runtime.go`](../../cmd/emulator/engine_runtime.go).
+[`internal/bootstrap/engine_runtime.go`](../../internal/bootstrap/engine_runtime.go).
 
 `engineRuntime` validates every required port and lifecycle object once. The
 composition root then immediately splits it into narrow catalog, query, load,
@@ -138,7 +138,7 @@ advertised.
 
 Storage Read and Storage Write implementations also satisfy consumer-owned
 resolver and factory ports. Keep the new engine concrete type from crossing
-the composition functions in `cmd/emulator`.
+the composition functions in `internal/bootstrap`.
 
 <!-- section: errors -->
 ## Error Contract
@@ -161,7 +161,7 @@ also attaching a stable error code and capability identifier.
    the runtime requires.
 4. Validate plan bindings before starting SQL generation, a transaction, or
    file access.
-5. Wire every port explicitly in the `cmd/emulator` composition root.
+5. Wire every port explicitly in the `internal/bootstrap` composition root.
 6. Run the planning conformance suite from
    [`internal/enginetest`](../../internal/enginetest).
 7. Test physical transactions, rollback, and type mappings separately in the

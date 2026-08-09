@@ -1,4 +1,4 @@
-package main
+package bootstrap
 
 // Storage Write composition preserves many logical streams while serializing
 // DuckDB work through a bounded single-worker coordinator. Request bytes use

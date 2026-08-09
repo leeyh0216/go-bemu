@@ -13,4 +13,4 @@ The public boundary follows the [BigQuery REST API](https://cloud.google.com/big
 REST / gRPC -> transport-local use-case interface -> application handler -> consumer-owned port -> adapter
 ```
 
-`internal/application` must not import an adapter or transport package, nor expose SQLite or DuckDB implementation types. The package boundary test enforces that direction. Composition in `cmd/emulator` supplies the typed ports.
+`internal/application` must not import an adapter or transport package, nor expose SQLite or DuckDB implementation types. The package boundary test enforces that direction. `internal/bootstrap` supplies the typed ports; `cmd/emulator` only owns process signals and exit status.

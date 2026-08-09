@@ -49,7 +49,8 @@ adapters/duckdb, memory, objectstore, system  ----|
 | `internal/adapters/duckdb` | 저장소 객체 이름, 유형 변환, SQL 실행 | REST 리소스, 작업 수명 주기 |
 | `internal/adapters/memory` | 프로세스 내부 저장소 | 쿼리 의미 |
 | `internal/transport/*` | 공개 REST/gRPC 경계 | 데이터베이스 의존성 |
-| `cmd/emulator` | 객체 조립과 수명 주기 | 업무 규칙 |
+| `cmd/emulator` | signal, process exit, release version | adapter 조립 또는 수명 주기 소유권 |
+| `internal/bootstrap` | typed runtime 조립, 시작 복구, listener, 종료 | 업무 규칙 |
 
 컴파일 시점 검증 구문은 어댑터가 포트를 구현했는지 확인합니다. 애플리케이션
 테스트에서도 DuckDB를 시험용 구현으로 바꿀 수 있어야 합니다. 컴파일 성공만으로

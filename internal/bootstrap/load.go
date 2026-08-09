@@ -1,4 +1,4 @@
-package main
+package bootstrap
 
 // Load-job composition binds public gs:// sources to the required
 // GCS-compatible JSON endpoint at the outermost adapter boundary.

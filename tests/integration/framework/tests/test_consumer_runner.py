@@ -256,6 +256,34 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(events[0]["phase"], "unexpected-response")
             self.assertEqual(events[0]["requestShape"], "ambiguous server run boundary")
 
+    def test_collector_accepts_canonical_configuration_transition(self) -> None:
+        scenario = _scenario(
+            [{"operationId": "bigquery.jobs.query", "min": 1, "max": 0, "after": []}]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "contract").mkdir()
+            (root / "contract" / "operations.normalized.json").write_text(
+                json.dumps({"operations": []}), encoding="utf-8"
+            )
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            (artifacts / "server.log").write_text(
+                json.dumps(
+                    {
+                        "event": "domain.transition",
+                        "state_from": "CONFIGURING",
+                        "state_to": "CONFIGURED",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            case = _with_public_execution(
+                replace(_python_case(), case_id="case"), setup_operation_ids=()
+            )
+            events = collect_actual_events(CaseContext(case, root, artifacts), [scenario])
+            self.assertEqual(events, [])
+
     def test_successful_process_fails_when_declared_operation_was_not_observed(self) -> None:
         case = _with_public_execution(
             replace(_python_case(), case_id="case"),

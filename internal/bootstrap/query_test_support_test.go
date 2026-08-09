@@ -1,4 +1,4 @@
-package main
+package bootstrap
 
 import (
 	"github.com/leeyh0216/go-bemu/internal/application"

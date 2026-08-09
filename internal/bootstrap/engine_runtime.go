@@ -1,4 +1,4 @@
-package main
+package bootstrap
 
 // EngineRuntime exists only in the executable composition root. It validates
 // one adapter bundle and is immediately split into consumer-owned narrow ports;

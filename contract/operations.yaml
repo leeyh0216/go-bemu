@@ -80,7 +80,7 @@ operations:
     limitations: {policy: none, byDesign: [], en: This is an emulator extension and is not a BigQuery REST method., ko: BigQuery REST 메서드가 아닌 에뮬레이터 확장 기능입니다.}
     issues: []
     sources: [bqemu-public-api]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bqemu.projects.list
     protocol: rest
@@ -106,7 +106,7 @@ operations:
     limitations: {policy: none, byDesign: [], en: This is an emulator extension., ko: 에뮬레이터 확장 기능입니다.}
     issues: []
     sources: [bqemu-public-api]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bqemu.projects.delete
     protocol: rest
@@ -145,7 +145,7 @@ operations:
     limitations: {policy: by-design, byDesign: [google-control-plane, google-iam], en: accessPolicyVersion is exposed for generated-client compatibility but access policies and Cloud KMS configuration are intentionally outside the emulator scope., ko: 생성 클라이언트 호환성을 위해 accessPolicyVersion을 노출하지만 액세스 정책과 Cloud KMS 설정은 에뮬레이터 범위에서 의도적으로 제외합니다.}
     issues: []
     sources: [bigquery-rest-v2]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.datasets.list
     protocol: rest
@@ -171,7 +171,7 @@ operations:
     limitations: {policy: mixed, byDesign: [google-iam], en: datasetView selection semantics are tracked; accessPolicyVersion is exposed for generated-client compatibility while access-policy data remains outside scope., ko: datasetView 선택 의미는 구현 예정입니다. accessPolicyVersion은 생성 클라이언트 호환성을 위해 노출하지만 액세스 정책 데이터는 범위에서 제외합니다.}
     issues: ['#33']
     sources: [bigquery-rest-v2]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.datasets.patch
     protocol: rest
@@ -223,7 +223,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: "Routines, external tables, legacy-SQL views, and advanced partition options are not implemented.", ko: "루틴, 외부 테이블, Legacy SQL 뷰, 고급 파티션 옵션은 지원하지 않습니다."}
     issues: ['#21', '#44']
     sources: [bigquery-rest-v2]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.tables.list
     protocol: rest
@@ -249,7 +249,7 @@ operations:
     limitations: {policy: mixed, byDesign: [google-control-plane, google-iam], en: "selectedFields, Cloud statistics, and IAM metadata remain outside the emulator scope.", ko: "selectedFields, Cloud 통계와 IAM 메타데이터는 에뮬레이터 범위에서 제외합니다."}
     issues: ['#33', '#44']
     sources: [bigquery-rest-v2]
-    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:internal/bootstrap/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
   - id: bigquery.tables.patch
     protocol: rest
@@ -314,7 +314,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: "Row payloads are process-local; after restart, a non-empty result fails with backendError instead of returning a false empty result.", ko: "결과 행은 프로세스 안에서만 유지합니다. 재시작 후 비어 있지 않은 결과를 조회하면 잘못된 빈 결과 대신 backendError를 반환합니다."}
     issues: ['#3', '#26']
     sources: [bigquery-rest-v2]
-    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:internal/bootstrap/state_restart:TestRuntimeJobMetadataSurvivesRestart]
 
   - id: bigquery.jobs.insert
     protocol: rest
@@ -328,7 +328,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: "This JSON endpoint accepts query jobs and gs:// Parquet load jobs. Multipart and resumable media upload are separate routes. Unsupported load formats end with notImplemented.", ko: "이 JSON endpoint는 쿼리 작업과 gs:// Parquet 로드 작업을 받습니다. multipart와 resumable 미디어 업로드는 별도 route입니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."}
     issues: ['#5', '#26']
     sources: [bigquery-rest-v2]
-    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs, go:internal/bootstrap/state_restart:TestRuntimeJobMetadataSurvivesRestart]
 
   - id: bigquery.jobs.insert.upload
     protocol: rest
@@ -410,7 +410,7 @@ operations:
     limitations: {policy: tracked, byDesign: [], en: Only currently implemented emulator job types and metadata are returned., ko: 현재 구현된 에뮬레이터 작업 유형과 메타데이터만 반환합니다.}
     issues: ['#3', '#26']
     sources: [bigquery-rest-v2]
-    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart]
+    tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery, go:internal/bootstrap/state_restart:TestRuntimeJobMetadataSurvivesRestart]
 
   - id: bigquery.tabledata.list
     protocol: rest
@@ -561,11 +561,11 @@ operations:
     grpc: {service: google.cloud.bigquery.storage.v1.BigQueryRead, method: CreateReadSession}
     supportedInput: {en: "Arrow or Avro, recursive selected fields in catalog order, bounded streams, and row filters with boolean logic, comparisons, IN, BETWEEN, NULL checks, LIKE, scalar casts, and ingestion-time partition pseudo columns are supported.", ko: "Arrow 또는 Avro, 카탈로그 순서를 유지하는 재귀 필드 선택, 제한된 스트림, 논리식·비교·IN·BETWEEN·NULL 검사·LIKE·스칼라 캐스트와 ingestion-time partition pseudo column 행 필터를 지원합니다."}
     conditions:
-      - {setting: storage.read.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose], en: The Storage Read service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Read 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+      - {setting: storage.read.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:internal/bootstrap/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose], en: The Storage Read service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Read 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
     limitations: {policy: tracked, byDesign: [], en: "Historical snapshots, compression, stream splitting, and durable snapshot recovery are not implemented.", ko: "과거 스냅샷, 압축, 스트림 분할, 스냅샷 영속 복구는 지원하지 않습니다."}
     issues: ['#6']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume]
+    tests: [go:internal/bootstrap/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume]
 
   - id: grpc.bigquery-read.read-rows
     protocol: grpc
@@ -576,11 +576,11 @@ operations:
     grpc: {service: google.cloud.bigquery.storage.v1.BigQueryRead, method: ReadRows}
     supportedInput: {en: Arrow and Avro row batches with stream-relative offsets are supported., ko: Arrow와 Avro 행 배치 및 스트림 기준 오프셋을 지원합니다.}
     conditions:
-      - {setting: storage.read.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose], en: The Storage Read service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Read 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+      - {setting: storage.read.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:internal/bootstrap/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose], en: The Storage Read service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Read 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
     limitations: {policy: tracked, byDesign: [], en: Responses and session snapshots have configured size limits while remaining Storage Read work is tracked., ko: 응답과 세션 스냅샷에 설정된 크기 제한이 있으며 나머지 Storage Read 작업은 이슈에서 관리합니다.}
     issues: ['#6']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume]
+    tests: [go:internal/bootstrap/storage_read:TestComposeStorageReadSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_read:TestStorageReadWireFormatsAndOffsetResume]
 
   - id: grpc.bigquery-read.split-read-stream
     protocol: grpc
@@ -604,11 +604,11 @@ operations:
     grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: CreateWriteStream}
     supportedInput: {en: PENDING streams in INSERT mode are supported., ko: INSERT 모드의 PENDING 스트림을 지원합니다.}
     conditions:
-      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
     limitations: {policy: tracked, byDesign: [], en: Explicit COMMITTED and BUFFERED streams and CDC mode are not implemented., ko: 명시적 COMMITTED 및 BUFFERED 스트림과 CDC 모드는 지원하지 않습니다.}
     issues: ['#7', '#20']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
+    tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.append-rows
     protocol: grpc
@@ -619,11 +619,11 @@ operations:
     grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: AppendRows}
     supportedInput: {en: "ProtoRows, exact pending-stream offsets, connection inheritance, and default-stream append are supported.", ko: "ProtoRows와 PENDING 스트림의 정확한 오프셋, 연결 상속, 기본 스트림 추가를 지원합니다."}
     conditions:
-      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
     limitations: {policy: tracked, byDesign: [], en: ArrowRows and missing-value default expressions are not implemented., ko: ArrowRows와 누락 값의 기본 표현식은 지원하지 않습니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
+    tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.get-write-stream
     protocol: grpc
@@ -634,11 +634,11 @@ operations:
     grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: GetWriteStream}
     supportedInput: {en: BASIC and FULL views of emulator-managed streams are supported., ko: 에뮬레이터가 관리하는 스트림의 BASIC 및 FULL 보기를 지원합니다.}
     conditions:
-      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
     limitations: {policy: tracked, byDesign: [], en: Only stream metadata held by the configured coordinator is returned., ko: 설정된 조정자가 관리하는 스트림 메타데이터만 반환합니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
+    tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.finalize-write-stream
     protocol: grpc
@@ -649,11 +649,11 @@ operations:
     grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: FinalizeWriteStream}
     supportedInput: {en: Emulator-managed pending streams can be finalized and return a row count., ko: 에뮬레이터가 관리하는 PENDING 스트림을 종료하고 행 수를 반환합니다.}
     conditions:
-      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
     limitations: {policy: tracked, byDesign: [], en: Finalization follows the local coordinator state machine while remaining state-machine work is tracked., ko: 로컬 조정자의 상태 전이 규칙을 따르며 나머지 상태 머신 작업은 이슈에서 관리합니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
+    tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.batch-commit-write-streams
     protocol: grpc
@@ -664,11 +664,11 @@ operations:
     grpc: {service: google.cloud.bigquery.storage.v1.BigQueryWrite, method: BatchCommitWriteStreams}
     supportedInput: {en: A validated group of streams for one parent table can be committed atomically., ko: 하나의 상위 테이블에 속한 검증된 스트림 그룹을 원자적으로 커밋할 수 있습니다.}
     conditions:
-      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
+      - {setting: storage.write.enabled, equals: true, effect: service-availability, verification: unit, tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose], en: The Storage Write service implementation is enabled; its descriptor remains registered when disabled., ko: Storage Write 서비스 구현을 활성화합니다. 비활성화해도 디스크립터는 등록된 상태로 유지됩니다.}
     limitations: {policy: tracked, byDesign: [], en: Distributed concurrency and cloud throughput guarantees are not implemented., ko: 분산 동시성과 Cloud 처리량 보장은 지원하지 않습니다.}
     issues: ['#7']
     sources: [bigquery-storage-v1]
-    tests: [go:cmd/emulator/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
+    tests: [go:internal/bootstrap/storage_write:TestComposeStorageWriteSupportsExplicitDisableAndCleanClose, go:internal/transport/grpc/storage_write:TestStorageWriteProtoRowsLifecycleAndConnectionInheritance]
 
   - id: grpc.bigquery-write.flush-rows
     protocol: grpc

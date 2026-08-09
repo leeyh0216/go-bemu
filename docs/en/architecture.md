@@ -41,7 +41,8 @@ types. Adapters implement outbound side effects.
 | `internal/adapters/duckdb` | physical names, type mapping, SQL execution | REST resources, job lifecycle |
 | `internal/adapters/memory` | process-local repositories | query semantics |
 | `internal/transport/*` | public REST/gRPC boundary | database imports |
-| `cmd/emulator` | composition and lifecycle | business rules |
+| `cmd/emulator` | signal, process exit, and release version | adapter composition or lifecycle ownership |
+| `internal/bootstrap` | typed runtime composition, startup recovery, listeners, and shutdown | business rules |
 
 Compile-time assertions prove that an adapter implements a port. Application
 tests must also replace DuckDB with a fake; an assertion alone does not prove the

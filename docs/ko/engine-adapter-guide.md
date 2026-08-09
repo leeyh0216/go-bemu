@@ -52,7 +52,7 @@
 ## 실행 환경 구성
 
 구체 어댑터 생성은 실행 파일의 조립 코드에서만 수행합니다. 현재 조립 계약은
-[`cmd/emulator/engine_runtime.go`](../../cmd/emulator/engine_runtime.go)에 있습니다.
+[`internal/bootstrap/engine_runtime.go`](../../internal/bootstrap/engine_runtime.go)에 있습니다.
 
 `engineRuntime`은 모든 필수 포트와 수명 주기 객체가 존재하는지 한 번 확인합니다.
 조립이 끝나면 카탈로그, 쿼리, 로드, Storage Read/Write와 같은 좁은 포트로 즉시
@@ -128,7 +128,7 @@ decorator, `UNNEST` relation은 엔진 fallback이 아닙니다. 지원을 표�
 semantic binding, lowering을 명시적으로 구현해야 합니다.
 
 Storage Read와 Storage Write 구현도 소비자가 소유한 `resolver`와 `factory` 포트를
-구현합니다. 새 엔진의 구체 타입이 `cmd/emulator`의 조립 함수 밖으로 넘어가지 않도록
+구현합니다. 새 엔진의 구체 타입이 `internal/bootstrap`의 조립 함수 밖으로 넘어가지 않도록
 합니다.
 
 <!-- section: errors -->
@@ -149,7 +149,7 @@ Storage Read와 Storage Write 구현도 소비자가 소유한 `resolver`와 `fa
 2. 부작용이 없는 `SchemaAdapterPlanner`와 `LoadAdapterPlanner`를 구현합니다.
 3. 카탈로그, 쿼리, 테이블 데이터, Storage Read/Write의 필요한 포트만 구현합니다.
 4. 실행 메서드에서 계획 바인딩을 확인한 뒤에만 SQL, 트랜잭션, 파일 접근을 시작합니다.
-5. `cmd/emulator`의 조립 코드에서 모든 포트를 명시적으로 연결합니다.
+5. `internal/bootstrap`의 조립 코드에서 모든 포트를 명시적으로 연결합니다.
 6. [`internal/enginetest`](../../internal/enginetest)의 계획 적합성 검사를 실행합니다.
 7. 어댑터 패키지에서 실제 트랜잭션, 롤백과 자료형 대응을 별도로 시험합니다.
 

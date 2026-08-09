@@ -867,7 +867,13 @@ def collect_actual_events(context: CaseContext, scenarios: list[dict[str, Any]])
             if isinstance(decoded, dict):
                 decoded_lines.append(decoded)
         startup_count = sum(
-            event.get("event") == "runtime.configuration.loaded" for event in decoded_lines
+            event.get("event") == "runtime.configuration.loaded"
+            or (
+                event.get("event") == "domain.transition"
+                and event.get("state_from") == "CONFIGURING"
+                and event.get("state_to") == "CONFIGURED"
+            )
+            for event in decoded_lines
         )
         if startup_count != 1:
             events.append(

@@ -1,4 +1,4 @@
-package main
+package bootstrap
 
 // This test crosses the composition root with the official generated client.
 // It intentionally does not replace DuckDB or the gRPC transport with fakes.

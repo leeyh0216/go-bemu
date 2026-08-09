@@ -1,4 +1,4 @@
-package main
+package bootstrap
 
 // Storage Read composition binds the protocol-independent session service to
 // a replaceable snapshot materializer. DuckDB is selected only here; the
