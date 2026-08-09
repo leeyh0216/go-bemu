@@ -26,7 +26,7 @@ runnerAdapters:
     selectorPrefix: bq
     requiredVersions: [cloudSdk, bq]
     requiredArtifactUsages: [cloud-sdk-release-provenance]
-    setupOperationIds: [bqemu.health.ready, bqemu.projects.create]
+    setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bqemu.discovery.get]
   - id: spark-pyspark-pytest-v1
     family: spark
     runtimeKind: spark-pyspark

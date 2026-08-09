@@ -997,7 +997,7 @@ func normalizedRunnerAdapterContract(id string) (RunnerAdapter, bool) {
 		"bq-cli-v1": {
 			ID: "bq-cli-v1", Family: "bq", RuntimeKind: "bq-cli", SelectorPrefix: "bq",
 			RequiredVersions: []string{"cloudSdk", "bq"}, RequiredArtifactUsages: []string{"cloud-sdk-release-provenance"}, Bootstrap: map[string]string{},
-			SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create"},
+			SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bqemu.discovery.get"},
 		},
 		"spark-pyspark-pytest-v1": {
 			ID: "spark-pyspark-pytest-v1", Family: "spark", RuntimeKind: "spark-pyspark", SelectorPrefix: "pytest",

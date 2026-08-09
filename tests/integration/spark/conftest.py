@@ -179,7 +179,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "limitation": entry.get("limitation", ""),
             "strict_xfail": entry.get("strictXfail", False),
         }
-        if marker.kwargs != expected:
+        actual = dict(marker.kwargs)
+        # Coverage operations are a set. The generated index sorts them for a
+        # deterministic projection, while source annotations keep their
+        # readable call order.
+        actual["operations"] = tuple(sorted(actual.get("operations", ())))
+        if actual != expected:
             raise pytest.UsageError(
                 f"{item.nodeid} contract_case metadata does not match generated index"
             )

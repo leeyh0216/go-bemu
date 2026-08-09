@@ -112,7 +112,11 @@ ADAPTER_SETUP_OPERATIONS = {
         "bqemu.projects.create",
         "bqemu.projects.delete",
     ),
-    "bq-cli-v1": ("bqemu.health.ready", "bqemu.projects.create"),
+    "bq-cli-v1": (
+        "bqemu.health.ready",
+        "bqemu.projects.create",
+        "bqemu.discovery.get",
+    ),
     "spark-pyspark-pytest-v1": (
         "bqemu.health.ready",
         "bqemu.projects.create",

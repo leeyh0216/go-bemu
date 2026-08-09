@@ -91,6 +91,15 @@ class ConsumerRunnerTest(unittest.TestCase):
             "tool-version-identity-matched",
         )
 
+    def test_bq_public_execution_classifies_discovery_as_setup(self) -> None:
+        case = load_case(DEFAULT_MANIFEST, "bq-cli-2.1.31")
+        execution = next(
+            execution
+            for execution in case.executions
+            if execution.execution_id == "public"
+        )
+        self.assertIn("bqemu.discovery.get", execution.setup_operation_ids)
+
     def test_failed_runner_writes_structured_first_operation_diff(self) -> None:
         case = _with_public_execution(
             replace(_python_case(), case_id="case"),

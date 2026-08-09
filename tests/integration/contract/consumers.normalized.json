@@ -113,7 +113,8 @@
             "bootstrap": {},
             "setupOperationIds": [
               "bqemu.health.ready",
-              "bqemu.projects.create"
+              "bqemu.projects.create",
+              "bqemu.discovery.get"
             ]
           },
           "compatibilityProfile": {
