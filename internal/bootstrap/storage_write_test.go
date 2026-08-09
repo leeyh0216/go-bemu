@@ -56,4 +56,7 @@ func TestComposeStorageWriteSupportsExplicitDisableAndCleanClose(t *testing.T) {
 	if err := runtime.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := runtime.Close(ctx); err != nil {
+		t.Fatalf("second close must be idempotent: %v", err)
+	}
 }

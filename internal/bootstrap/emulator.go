@@ -59,6 +59,35 @@ func Run(ctx context.Context, args []string, stdout io.Writer, version string) e
 	return runWithVersion(ctx, args, stdout, version)
 }
 
+// startupFaultHook is an internal fault-injection seam for composition tests.
+// Production contexts carry no hook, so the executable's startup path has no
+// additional runtime behavior.
+type startupFaultHook func(phase string) error
+
+type startupFaultHookKey struct{}
+
+type startupResourceHook func(name string, state string)
+
+type startupResourceHookKey struct{}
+
+func checkStartupFault(ctx context.Context, phase string) error {
+	hook, _ := ctx.Value(startupFaultHookKey{}).(startupFaultHook)
+	if hook == nil {
+		return nil
+	}
+	if err := hook(phase); err != nil {
+		return fmt.Errorf("injected startup failure after %s: %w", phase, err)
+	}
+	return nil
+}
+
+func observeStartupResource(ctx context.Context, name string, state string) {
+	hook, _ := ctx.Value(startupResourceHookKey{}).(startupResourceHook)
+	if hook != nil {
+		hook(name, state)
+	}
+}
+
 func runWithVersion(ctx context.Context, args []string, stdout io.Writer, version string) error {
 	if len(args) == 1 && args[0] == "--version" {
 		_, err := fmt.Fprintln(stdout, version)
@@ -94,14 +123,19 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 	if err := prepareDirectory(ctx, cfg.Database.TempDirectory); err != nil {
 		return err
 	}
+	if err := checkStartupFault(ctx, "temporary-directory"); err != nil {
+		return err
+	}
 	storageEngine, err := composeDuckDBEngine(cfg.Database.DSN)
 	if err != nil {
 		return err
 	}
+	observeStartupResource(ctx, "duckdb-engine", "acquired")
 	closeEngine := true
 	defer func() {
 		if closeEngine {
 			_ = storageEngine.Close()
+			observeStartupResource(ctx, "duckdb-engine", "released")
 		}
 	}()
 	engineCapabilities := storageEngine.capabilities
@@ -121,25 +155,36 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 		"engine_version", engineCapabilities.Identity().Version(),
 		"capability_fingerprint", engineCapabilities.Fingerprint(),
 	)
+	if err := checkStartupFault(ctx, "duckdb-engine"); err != nil {
+		return err
+	}
 
 	state, err := composeStateRuntime(ctx, cfg.State.DSN)
 	if err != nil {
 		return err
 	}
+	observeStartupResource(ctx, "sqlite-state", "acquired")
 	closeState := true
 	defer func() {
 		if closeState {
 			_ = state.Close()
+			observeStartupResource(ctx, "sqlite-state", "released")
 		}
 	}()
 	if err := reconcileStorePair(ctx, state, storageEngine); err != nil {
 		return fmt.Errorf("reconcile SQLite/DuckDB generation: %w", err)
+	}
+	if err := checkStartupFault(ctx, "sqlite-state"); err != nil {
+		return err
 	}
 	catalogRepository := state.catalog
 	jobRepository := state.queryJobs
 	clock := system.Clock{}
 	catalogService := composeCatalogService(cfg, catalogRepository, catalogStorage, ddlStorage, tableDataReader, clock)
 	if err := bootstrapCatalog(ctx, cfg, catalogService); err != nil {
+		return err
+	}
+	if err := checkStartupFault(ctx, "catalog-bootstrap"); err != nil {
 		return err
 	}
 	if err := application.ValidateQueryMaterializationTarget(
@@ -151,6 +196,9 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 	googleSQLGateway, err := googlesqladapter.NewGateway(catalogService)
 	if err != nil {
 		return fmt.Errorf("configure GoogleSQL analyzer gateway: %w", err)
+	}
+	if err := checkStartupFault(ctx, "googlesql-gateway"); err != nil {
+		return err
 	}
 	queryService, err := application.NewQueryService(
 		jobRepository, clock, system.IDGenerator{},
@@ -171,6 +219,9 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 	if err != nil {
 		return fmt.Errorf("configure query service: %w", err)
 	}
+	if err := checkStartupFault(ctx, "query-service"); err != nil {
+		return err
+	}
 	loadRuntime, err := composeLoadJobs(
 		cfg, state.loadJobs, state.loadMutations, catalogService, loader, clock, system.IDGenerator{},
 	)
@@ -180,6 +231,9 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 	loadService := loadRuntime.service
 	if err := loadService.Recover(ctx); err != nil {
 		return fmt.Errorf("recover load mutations: %w", err)
+	}
+	if err := checkStartupFault(ctx, "load-service"); err != nil {
+		return err
 	}
 	readRuntime, err := composeStorageRead(
 		cfg, readFactory, googleSQLGateway, catalogService, clock, system.IDGenerator{}, logger, state.readSessions,
@@ -194,6 +248,9 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 			_ = readRuntime.Close(closeContext)
 		}
 	}()
+	if err := checkStartupFault(ctx, "storage-read"); err != nil {
+		return err
+	}
 	writeRuntime, err := composeStorageWrite(
 		ctx, cfg, writeFactory, catalogService, clock, system.IDGenerator{}, logger, state.writeState,
 	)
@@ -207,6 +264,9 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 			_ = writeRuntime.Close(closeContext)
 		}
 	}()
+	if err := checkStartupFault(ctx, "storage-write"); err != nil {
+		return err
+	}
 
 	restOptions := make([]rest.Option, 0, 4)
 	restOptions = append(restOptions, rest.WithRequestBodyLimits(
@@ -220,6 +280,9 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 	})
 	if err != nil {
 		return fmt.Errorf("configure media uploads: %w", err)
+	}
+	if err := checkStartupFault(ctx, "media-upload"); err != nil {
+		return err
 	}
 	restOptions = append(restOptions, rest.WithMediaUpload(mediaUploads))
 	if cfg.UI.Enabled {
@@ -260,6 +323,9 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 		Read: readRuntime.Service, Write: writeRuntime.Service,
 	}, grpcOptions...)
 	grpcService := grpcRuntime.Server()
+	if err := checkStartupFault(ctx, "grpc-runtime"); err != nil {
+		return err
+	}
 
 	endpoints := make([]servingEndpoint, 0, 3)
 	publicListener, err := net.Listen("tcp", cfg.Server.HTTP.Address)
@@ -346,17 +412,12 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 	}
 	defer listeners.Close(context.Background())
 
-	var servingFailure error
-	select {
-	case <-ctx.Done():
+	servingFailure, shutdownRequested := awaitServeResult(ctx, results)
+	if shutdownRequested {
 		logger.InfoContext(context.Background(), "shutdown requested",
 			"event", "domain.transition", "state_from", "SERVING", "state_to", "STOPPING",
 			"reason", context.Cause(ctx),
 		)
-	case result := <-results:
-		if !isExpectedServeError(result.err) {
-			servingFailure = fmt.Errorf("%s server stopped: %w", result.name, result.err)
-		}
 	}
 
 	grpcRuntime.MarkNotServing()
@@ -381,6 +442,18 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 		return errors.Join(servingFailure, shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
 	}
 	return errors.Join(shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
+}
+
+func awaitServeResult(ctx context.Context, results <-chan serveResult) (error, bool) {
+	select {
+	case <-ctx.Done():
+		return nil, true
+	case result := <-results:
+		if isExpectedServeError(result.err) {
+			return nil, false
+		}
+		return fmt.Errorf("%s server stopped: %w", result.name, result.err), false
+	}
 }
 
 func composeCatalogService(

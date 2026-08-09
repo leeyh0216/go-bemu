@@ -5,9 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,6 +24,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/engine"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
+	"google.golang.org/grpc"
 )
 
 func TestRunPrintEffectiveConfigDoesNotStartListeners(t *testing.T) {
@@ -48,6 +53,72 @@ func TestRunPrintEffectiveConfigDoesNotStartListeners(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "projectId: test-project") || !strings.Contains(output.String(), "dsn: ':memory:'") {
 		t.Fatalf("unexpected effective configuration:\n%s", output.String())
+	}
+}
+
+func TestInjectedStartupFailuresReleaseEveryComposedPreListenerResource(t *testing.T) {
+	previous := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	phases := []string{
+		"temporary-directory", "duckdb-engine", "sqlite-state", "catalog-bootstrap",
+		"googlesql-gateway", "query-service", "load-service", "storage-read",
+		"storage-write", "media-upload", "grpc-runtime",
+	}
+	for phaseIndex, phase := range phases {
+		t.Run(phase, func(t *testing.T) {
+			baselineGoroutines := runtime.NumGoroutine()
+			directory := t.TempDir()
+			httpAddress := unusedLoopbackAddress(t)
+			grpcAddress := unusedLoopbackAddress(t)
+			sentinel := errors.New("injected " + phase)
+			ctx := context.WithValue(t.Context(), startupFaultHookKey{}, startupFaultHook(func(actual string) error {
+				if actual == phase {
+					return sentinel
+				}
+				return nil
+			}))
+			resourceStates := make(map[string][]string)
+			ctx = context.WithValue(ctx, startupResourceHookKey{}, startupResourceHook(func(name string, state string) {
+				resourceStates[name] = append(resourceStates[name], state)
+			}))
+			err := runWithVersion(ctx, []string{
+				"--set", "defaults.projectId=phase-test",
+				"--set", "server.http.address=" + httpAddress,
+				"--set", "server.http.publicUrl=http://" + httpAddress,
+				"--set", "server.grpc.address=" + grpcAddress,
+				"--set", "database.dsn=" + filepath.Join(directory, "engine.duckdb"),
+				"--set", "database.tempDirectory=" + filepath.Join(directory, "tmp"),
+				"--set", "state.dsn=" + filepath.Join(directory, "state.sqlite"),
+				"--set", "storage.read.enabled=false",
+				"--set", "storage.write.enabled=false",
+			}, io.Discard, "test")
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("startup failure = %v, want %v", err, sentinel)
+			}
+			if phaseIndex > 0 && strings.Join(resourceStates["duckdb-engine"], ",") != "acquired,released" {
+				t.Fatalf("%s DuckDB handle states = %v", phase, resourceStates["duckdb-engine"])
+			}
+			if phaseIndex > 1 && strings.Join(resourceStates["sqlite-state"], ",") != "acquired,released" {
+				t.Fatalf("%s SQLite handle states = %v", phase, resourceStates["sqlite-state"])
+			}
+			for _, address := range []string{httpAddress, grpcAddress} {
+				listener, listenErr := net.Listen("tcp", address)
+				if listenErr != nil {
+					t.Fatalf("%s retained listener %s: %v", phase, address, listenErr)
+				}
+				if closeErr := listener.Close(); closeErr != nil {
+					t.Fatal(closeErr)
+				}
+			}
+			deadline := time.Now().Add(time.Second)
+			for runtime.NumGoroutine() > baselineGoroutines && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			if current := runtime.NumGoroutine(); current > baselineGoroutines {
+				t.Fatalf("%s leaked goroutines: baseline=%d current=%d", phase, baselineGoroutines, current)
+			}
+		})
 	}
 }
 
@@ -86,6 +157,117 @@ func TestPrepareDirectoryCreatesConfiguredPath(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Fatalf("configured path is not a directory: %s", directory)
+	}
+}
+
+func TestShutdownServersReportsDrainTimeoutAndReleasesListener(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		close(entered)
+		<-release
+		writer.WriteHeader(http.StatusOK)
+	})}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	requestDone := make(chan struct{})
+	go func() {
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+		close(requestDone)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("request did not enter handler")
+	}
+	drainContext, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	if err := shutdownServers(drainContext, server, nil, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+	}
+	if rebound, listenErr := net.Listen("tcp", listener.Addr().String()); listenErr != nil {
+		t.Fatalf("HTTP listener remained open after drain timeout: %v", listenErr)
+	} else {
+		_ = rebound.Close()
+	}
+	close(release)
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("request did not return after handler release")
+	}
+	select {
+	case serveErr := <-serveDone:
+		if !errors.Is(serveErr, http.ErrServerClosed) {
+			t.Fatalf("serve error = %v", serveErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop after drain timeout")
+	}
+}
+
+func TestShutdownServersIsIdempotentAcrossPublicTransports(t *testing.T) {
+	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := &http.Server{Handler: http.NewServeMux()}
+	httpDone := make(chan error, 1)
+	go func() { httpDone <- httpServer.Serve(httpListener) }()
+
+	grpcListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpcServer := grpc.NewServer()
+	grpcDone := make(chan error, 1)
+	go func() { grpcDone <- grpcServer.Serve(grpcListener) }()
+
+	for call := 1; call <= 2; call++ {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		err := shutdownServers(ctx, httpServer, nil, grpcServer)
+		cancel()
+		if err != nil {
+			t.Fatalf("shutdown call %d = %v", call, err)
+		}
+	}
+	for name, done := range map[string]<-chan error{"http": httpDone, "grpc": grpcDone} {
+		select {
+		case serveErr := <-done:
+			if !isExpectedServeError(serveErr) {
+				t.Fatalf("%s serve error = %v", name, serveErr)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not stop", name)
+		}
+	}
+	for _, address := range []string{httpListener.Addr().String(), grpcListener.Addr().String()} {
+		listener, listenErr := net.Listen("tcp", address)
+		if listenErr != nil {
+			t.Fatalf("listener %s remained bound after idempotent shutdown: %v", address, listenErr)
+		}
+		_ = listener.Close()
+	}
+}
+
+func TestAwaitServeResultMakesUnexpectedServerFailureTerminal(t *testing.T) {
+	results := make(chan serveResult, 1)
+	results <- serveResult{name: "rest", err: errors.New("accept failed")}
+	if err, shutdownRequested := awaitServeResult(t.Context(), results); shutdownRequested || err == nil || !strings.Contains(err.Error(), "rest server stopped: accept failed") {
+		t.Fatalf("serve failure = %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err, shutdownRequested := awaitServeResult(cancelled, make(chan serveResult)); err != nil || !shutdownRequested {
+		t.Fatalf("cancelled serving wait = %v, shutdown=%t", err, shutdownRequested)
 	}
 }
 
