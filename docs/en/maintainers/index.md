@@ -23,6 +23,7 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 
 - [SQL regression cases](sql-regression.md): data-driven fixtures, typed
   expectations, focused execution, and required CI behavior.
+- [Stable releases](release.md): canonical SemVer and main-only publishing.
 - [Storage engine adapter guide](../engine-adapter-guide.md): capabilities,
   planning contracts, composition, and conformance tests.
 - [Schema evolution and CDC](../schema-evolution-cdc.md): schema mutation and

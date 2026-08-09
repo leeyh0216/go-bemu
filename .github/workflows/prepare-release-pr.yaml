@@ -1,0 +1,55 @@
+name: prepare-release-pr
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Stable version bump
+        required: false
+        type: choice
+        options: [patch, minor, major]
+      version:
+        description: Exact stable MAJOR.MINOR.PATCH (instead of bump)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Prepare canonical version branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if test -n "$VERSION" && test -n "$BUMP"; then
+            echo "choose bump or version, not both" >&2
+            exit 1
+          fi
+          if test -n "$VERSION"; then
+            version=$(go run ./cmd/releasectl prepare --version "$VERSION")
+          else
+            version=$(go run ./cmd/releasectl prepare --bump "${BUMP:-patch}")
+          fi
+          branch="release/v$version"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add release/version.json
+          git commit -m "chore(release): prepare v$version"
+          git push --force-with-lease origin "$branch"
+          gh pr create --base main --head "$branch" --title "chore(release): prepare v$version" --body "Canonical stable version descriptor for v$version."

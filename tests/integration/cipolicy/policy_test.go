@@ -26,6 +26,7 @@ var approvedActionOwners = map[string]string{
 }
 
 var requiredValidationJobs = []string{
+	"version-policy",
 	"static-validation",
 	"consumer-matrix",
 	"go-smoke",
@@ -140,7 +141,11 @@ func TestCIRequiresAllValidationBeforePublish(t *testing.T) {
 	on := requiredMapping(t, workflow, "on")
 	push := requiredMapping(t, on, "push")
 	requireSequenceContains(t, requiredValue(t, push, "branches"), "main", "push branches")
-	requireSequenceContains(t, requiredValue(t, push, "tags"), "v*", "push tags")
+	for _, key := range mappingKeys(t, push) {
+		if key == "tags" {
+			t.Fatal("release tags must be created only after main validation, not trigger CI publishing")
+		}
+	}
 
 	jobs := requiredMapping(t, workflow, "jobs")
 	sqlRegression := requiredMapping(t, jobs, "sql-regression")
@@ -194,15 +199,19 @@ func TestCIRequiresAllValidationBeforePublish(t *testing.T) {
 		}
 	}
 
+	tagRelease := requiredMapping(t, jobs, "tag-release")
+	if got := requiredScalar(t, tagRelease, "needs"); got != "validation-complete" {
+		t.Fatalf("tag-release.needs = %q, want validation-complete", got)
+	}
 	publish := requiredMapping(t, jobs, "publish")
-	if got := requiredScalar(t, publish, "needs"); got != "validation-complete" {
-		t.Fatalf("publish.needs = %q, want validation-complete", got)
+	if got := requiredScalar(t, publish, "needs"); got != "tag-release" {
+		t.Fatalf("publish.needs = %q, want tag-release", got)
 	}
 	if got := requiredScalar(t, publish, "uses"); got != "./.github/workflows/publish-ghcr.yaml" {
 		t.Fatalf("publish.uses = %q, want local publish workflow", got)
 	}
-	condition := requiredScalar(t, publish, "if")
-	for _, required := range []string{"github.event_name == 'push'", "refs/heads/main", "refs/tags/v"} {
+	condition := requiredScalar(t, tagRelease, "if")
+	for _, required := range []string{"github.event_name == 'push'", "refs/heads/main"} {
 		if !strings.Contains(condition, required) {
 			t.Errorf("publish.if = %q, missing %q", condition, required)
 		}

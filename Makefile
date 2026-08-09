@@ -30,7 +30,7 @@ PYTHON3 ?= python3
 
 SQLC_VERSION ?= v1.31.1
 
-.PHONY: help doctor docker-doctor setup python-setup python-dataframe-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test ci-report-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup python-dataframe-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test ci-report-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup version-check version-bump version-set vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -44,6 +44,9 @@ help:
 	  'make build        Build the emulator and local credential helper' \
 	  'make run          Run locally with repository data and temp directories' \
 	  'make contract-generate Regenerate canonical API/RPC contract artifacts' \
+	  'make version-check Validate the canonical stable release version' \
+	  'make version-bump BUMP=patch Prepare the next release version' \
+	  'make version-set VERSION=1.2.3 Set an exact stable release version' \
 	  'make contract-check Check API/RPC manifest, annotations, and generated files' \
 	  'make integration-contract-generate Regenerate integration case artifacts' \
 	  'make integration-contract-check Check integration cases and generated files' \
@@ -80,8 +83,19 @@ python-dataframe-setup:
 
 build:
 	mkdir -p $(dir $(BINARY)) $(dir $(AUTH_FIXTURE_BINARY))
-	CGO_ENABLED=1 go build -trimpath -o "$(BINARY)" ./cmd/emulator
+	version=$$(go run ./cmd/releasectl check); CGO_ENABLED=1 go build -trimpath -ldflags "-X main.buildVersion=$$version" -o "$(BINARY)" ./cmd/emulator
 	CGO_ENABLED=0 go build -trimpath -o "$(AUTH_FIXTURE_BINARY)" ./cmd/bqemu-auth-fixture
+
+version-check:
+	go run ./cmd/releasectl check
+
+version-bump:
+	test -n "$(BUMP)"
+	go run ./cmd/releasectl prepare --bump "$(BUMP)"
+
+version-set:
+	test -n "$(VERSION)"
+	go run ./cmd/releasectl prepare --version "$(VERSION)"
 
 auth-client-setup: python-setup auth-spark-setup
 

@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +19,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version-policy:
+    name: Stable release version policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate canonical stable version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          if test "$EVENT_NAME" = pull_request && test "$BASE_REF" = main; then
+            git fetch origin main --depth=1
+            base_version=$(git show origin/main:release/version.json | jq -r .version)
+            version=$(go run ./cmd/releasectl check --base-version "$base_version")
+            if git rev-parse --verify --quiet "refs/tags/v$version"; then
+              echo "release tag v$version already exists" >&2
+              exit 1
+            fi
+          else
+            go run ./cmd/releasectl check
+          fi
+
   static-validation:
     name: Static validation and workflow policy
     runs-on: ubuntu-latest
@@ -440,6 +468,7 @@ jobs:
     name: All required validation succeeded
     if: ${{ always() }}
     needs:
+      - version-policy
       - static-validation
       - consumer-matrix
       - go-smoke
@@ -458,6 +487,7 @@ jobs:
       - name: Reject failed, cancelled, or skipped validation
         env:
           STATIC_RESULT: ${{ needs.static-validation.result }}
+          VERSION_POLICY_RESULT: ${{ needs.version-policy.result }}
           CONSUMER_MATRIX_RESULT: ${{ needs.consumer-matrix.result }}
           GO_SMOKE_RESULT: ${{ needs.go-smoke.result }}
           GO_RESULT: ${{ needs.go-tests.result }}
@@ -473,6 +503,7 @@ jobs:
           failed=0
           for result in \
             "static-validation:$STATIC_RESULT" \
+            "version-policy:$VERSION_POLICY_RESULT" \
             "consumer-matrix:$CONSUMER_MATRIX_RESULT" \
             "go-smoke:$GO_SMOKE_RESULT" \
             "go-tests:$GO_RESULT" \
@@ -494,15 +525,77 @@ jobs:
           done
           exit "$failed"
 
-  publish:
-    name: Publish validated image
+  tag-release:
+    name: Tag validated main release
     needs: validation-complete
-    if: >-
-      ${{
-        github.event_name == 'push' &&
-        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-      }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      minor: ${{ steps.version.outputs.minor }}
+      major: ${{ steps.version.outputs.major }}
+      revision: ${{ steps.version.outputs.revision }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - id: version
+        name: Read canonical version and tag main SHA
+        run: |
+          version=$(go run ./cmd/releasectl check)
+          revision=$(git rev-parse HEAD)
+          minor=$(echo "$version" | cut -d. -f1-2)
+          major=$(echo "$version" | cut -d. -f1)
+          tag="v$version"
+          existing=$(git rev-list -n 1 "$tag" 2>/dev/null || true)
+          if test -n "$existing" && test "$existing" != "$revision"; then
+            echo "tag $tag already points to $existing, not $revision" >&2
+            exit 1
+          fi
+          if test -z "$existing"; then
+            git tag -a "$tag" -m "Release $tag" "$revision"
+            git push origin "$tag"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "minor=$minor" >> "$GITHUB_OUTPUT"
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish tagged release image
+    needs: tag-release
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/publish-ghcr.yaml
+    with:
+      version: ${{ needs.tag-release.outputs.version }}
+      minor: ${{ needs.tag-release.outputs.minor }}
+      major: ${{ needs.tag-release.outputs.major }}
+      revision: ${{ needs.tag-release.outputs.revision }}
+
+  github-release:
+    name: Create GitHub Release
+    needs: [tag-release, publish]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or verify release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.tag-release.outputs.version }}
+          REVISION: ${{ needs.tag-release.outputs.revision }}
+        run: |
+          target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish 2>/dev/null || true)
+          if test -n "$target"; then
+            test "$target" = "$REVISION"
+          else
+            gh release create "$TAG" --verify-tag --target "$REVISION" --generate-notes
+          fi

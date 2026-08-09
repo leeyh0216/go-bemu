@@ -180,6 +180,23 @@ type BqemuTableLabel struct {
 	LabelValue string
 }
 
+type BqemuView struct {
+	ProjectID           string
+	DatasetID           string
+	ViewID              string
+	FriendlyName        string
+	Description         string
+	LabelsJson          string
+	QuerySql            string
+	UseLegacySql        int64
+	SchemaJson          string
+	DependenciesJson    string
+	AnalysisFingerprint string
+	Location            string
+	CreatedAt           string
+	UpdatedAt           string
+}
+
 type BqemuWriteAppendReceipt struct {
 	StreamName        string
 	StartOffset       int64

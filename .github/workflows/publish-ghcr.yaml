@@ -2,6 +2,19 @@ name: publish-ghcr
 
 on:
   workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      revision:
+        required: true
+        type: string
+      minor:
+        required: true
+        type: string
+      major:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -47,18 +60,20 @@ jobs:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.BQEMU_IMAGE }}
-          flavor: latest=auto
+          flavor: latest=false
           tags: |
-            type=raw,value=edge,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=sha,format=long
+            type=raw,value=${{ inputs.version }}
+            type=raw,value=${{ inputs.minor }}
+            type=raw,value=${{ inputs.major }},enable=${{ !startsWith(inputs.version, '0.') }}
+            type=raw,value=latest
+            type=raw,value=sha-${{ inputs.revision }}
           labels: |
             org.opencontainers.image.title=go-bemu
             org.opencontainers.image.description=Standalone BigQuery emulator backed by DuckDB
             org.opencontainers.image.source=https://github.com/leeyh0216/go-bemu
             org.opencontainers.image.url=https://github.com/leeyh0216/go-bemu
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ inputs.revision }}
 
       - name: Build and publish image
         id: publish
@@ -72,6 +87,9 @@ jobs:
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           annotations: ${{ steps.metadata.outputs.annotations }}
+          build-args: |
+            BQEMU_VERSION=${{ inputs.version }}
+            BQEMU_REVISION=${{ inputs.revision }}
           cache-from: type=gha,scope=go-bemu-ghcr
           cache-to: type=gha,mode=max,scope=go-bemu-ghcr
           provenance: mode=max

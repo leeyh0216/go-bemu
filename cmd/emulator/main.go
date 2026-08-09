@@ -47,6 +47,9 @@ type serveResult struct {
 	err  error
 }
 
+// buildVersion is injected from release/version.json by release builds.
+var buildVersion = "dev"
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -59,6 +62,10 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 1 && args[0] == "--version" {
+		_, err := fmt.Fprintln(stdout, buildVersion)
+		return err
+	}
 	loaded, err := config.Load(args)
 	if err != nil {
 		return err

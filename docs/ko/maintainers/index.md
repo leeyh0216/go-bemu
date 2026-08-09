@@ -23,6 +23,7 @@
 
 - [SQL 회귀 케이스](sql-regression.md): 데이터 기반 픽스처, 자료형이 있는 기대값,
   집중 실행과 필수 CI 동작을 설명합니다.
+- [안정 릴리스](release.md): canonical SemVer와 main 전용 게시를 설명합니다.
 - [저장 엔진 어댑터 구현 안내서](../engine-adapter-guide.md): 기능 선언, 계획 계약,
   실행 환경 구성, 적합성 검사를 설명합니다.
 - [스키마 변경과 CDC](../schema-evolution-cdc.md): 스키마 변경과 쓰기 경로 설계를
