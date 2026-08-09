@@ -309,7 +309,7 @@ WHERE type = 'table' AND name = 'bqemu_schema_migrations'`).Scan(&legacyCount); 
 FROM bqemu_goose_db_version WHERE is_applied = 1`).Scan(&maximumVersion); err != nil {
 		t.Fatal(err)
 	}
-	if legacyCount != 0 || maximumVersion != 7 {
+	if legacyCount != 0 || maximumVersion != 8 {
 		t.Fatalf("legacy import retained ledger=%d with Goose version=%d", legacyCount, maximumVersion)
 	}
 }
@@ -356,6 +356,7 @@ func TestEmbeddedGooseMigrationsAreVersionedSQLResources(t *testing.T) {
 		"migrations/00005_load_mutation_journal.sql",
 		"migrations/00006_drop_legacy_migration_ledger.sql",
 		"migrations/00007_logical_views.sql",
+		"migrations/00008_runtime_pair_generation.sql",
 	}
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("migration resource paths = %#v, want %#v", paths, want)

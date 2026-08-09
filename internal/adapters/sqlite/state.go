@@ -59,6 +59,7 @@ var requiredSchemaObjects = map[string]string{
 	"bqemu_load_mutations_recovery":           "index",
 	"bqemu_load_mutation_identity_immutable":  "trigger",
 	"bqemu_load_mutation_transition":          "trigger",
+	"bqemu_runtime_pair_generation":           "table",
 }
 
 // Repositories owns the SQLite connection but exposes only context-specific
@@ -120,6 +121,29 @@ func (r *Repositories) LoadJobs() loadports.JobRepository              { return 
 func (r *Repositories) LoadMutations() loadports.MutationJournal       { return r.loadMutations }
 func (r *Repositories) ReadSessions() readports.SessionStateRepository { return r.readSessions }
 func (r *Repositories) WriteState() writeports.StateRepository         { return r.writeState }
+
+func (r *Repositories) PairGeneration(ctx context.Context) (string, bool, error) {
+	var generation string
+	err := r.db.QueryRowContext(ctx, `SELECT generation FROM bqemu_runtime_pair_generation WHERE singleton = 1`).Scan(&generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read runtime pair generation: %w", err)
+	}
+	return generation, true, nil
+}
+
+func (r *Repositories) SetPairGeneration(ctx context.Context, generation string) error {
+	if generation == "" {
+		return errors.New("runtime pair generation is required")
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO bqemu_runtime_pair_generation (singleton, generation, created_at) VALUES (1, ?, ?)`, generation, encodeTime(time.Now().UTC()))
+	if err != nil {
+		return fmt.Errorf("write runtime pair generation: %w", err)
+	}
+	return nil
+}
 
 func reconcileInterruptedQueryJobs(ctx context.Context, db *sql.DB, now time.Time) error {
 	tx, err := db.BeginTx(ctx, nil)

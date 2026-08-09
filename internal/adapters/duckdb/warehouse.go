@@ -82,6 +82,38 @@ func (w *Warehouse) Ping(ctx context.Context) error {
 	return nil
 }
 
+func (w *Warehouse) PairGeneration(ctx context.Context) (string, bool, error) {
+	if _, err := w.db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS "_bqemu_runtime"`); err != nil {
+		return "", false, fmt.Errorf("create DuckDB runtime metadata schema: %w", err)
+	}
+	if _, err := w.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS "_bqemu_runtime"."pair_generation" (singleton INTEGER PRIMARY KEY, generation VARCHAR NOT NULL)`); err != nil {
+		return "", false, fmt.Errorf("create DuckDB runtime pair generation: %w", err)
+	}
+	var generation string
+	err := w.db.QueryRowContext(ctx, `SELECT generation FROM "_bqemu_runtime"."pair_generation" WHERE singleton = 1`).Scan(&generation)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read DuckDB runtime pair generation: %w", err)
+	}
+	return generation, true, nil
+}
+
+func (w *Warehouse) SetPairGeneration(ctx context.Context, generation string) error {
+	if generation == "" {
+		return fmt.Errorf("DuckDB runtime pair generation is required")
+	}
+	if _, _, err := w.PairGeneration(ctx); err != nil {
+		return err
+	}
+	_, err := w.db.ExecContext(ctx, `INSERT INTO "_bqemu_runtime"."pair_generation" (singleton, generation) VALUES (1, ?)`, generation)
+	if err != nil {
+		return fmt.Errorf("write DuckDB runtime pair generation: %w", err)
+	}
+	return nil
+}
+
 func physicalSchema(projectID, datasetID string) string {
 	return "bq_" + hex.EncodeToString([]byte(projectID)) + "_" + hex.EncodeToString([]byte(datasetID))
 }

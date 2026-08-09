@@ -22,7 +22,9 @@ export BQEMU_REST=http://localhost:9050
 ```
 
 Compose stores the catalog and table data in the `bqemu-data` volume. Keeping
-that volume across restarts is the user's responsibility.
+that volume across restarts is the user's responsibility. The SQLite state and
+DuckDB files are one generation: retain or replace both together. BQEMU refuses
+to become ready when only one file, or two different generations, are restored.
 
 <!-- section: endpoints -->
 ## Choose The Endpoint

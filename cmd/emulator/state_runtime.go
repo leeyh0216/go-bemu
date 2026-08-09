@@ -14,13 +14,15 @@ import (
 // stateRuntime is composition-owned. Application services receive only the
 // catalog port and cannot access SQLite lifecycle or transaction internals.
 type stateRuntime struct {
-	catalog       ports.CatalogRepository
-	queryJobs     ports.JobRepository
-	loadJobs      loadports.JobRepository
-	loadMutations loadports.MutationJournal
-	readSessions  readports.SessionStateRepository
-	writeState    writeports.StateRepository
-	close         func() error
+	catalog           ports.CatalogRepository
+	queryJobs         ports.JobRepository
+	loadJobs          loadports.JobRepository
+	loadMutations     loadports.MutationJournal
+	readSessions      readports.SessionStateRepository
+	writeState        writeports.StateRepository
+	pairGeneration    func(context.Context) (string, bool, error)
+	setPairGeneration func(context.Context, string) error
+	close             func() error
 }
 
 func composeStateRuntime(ctx context.Context, dsn string) (*stateRuntime, error) {
@@ -31,10 +33,18 @@ func composeStateRuntime(ctx context.Context, dsn string) (*stateRuntime, error)
 	return &stateRuntime{
 		catalog: repositories.Catalog(), queryJobs: repositories.QueryJobs(),
 		loadJobs: repositories.LoadJobs(), readSessions: repositories.ReadSessions(),
-		loadMutations: repositories.LoadMutations(),
-		writeState:    repositories.WriteState(),
-		close:         repositories.Close,
+		loadMutations:  repositories.LoadMutations(),
+		writeState:     repositories.WriteState(),
+		pairGeneration: repositories.PairGeneration, setPairGeneration: repositories.SetPairGeneration,
+		close: repositories.Close,
 	}, nil
+}
+
+func (runtime *stateRuntime) PairGeneration(ctx context.Context) (string, bool, error) {
+	return runtime.pairGeneration(ctx)
+}
+func (runtime *stateRuntime) SetPairGeneration(ctx context.Context, generation string) error {
+	return runtime.setPairGeneration(ctx, generation)
 }
 
 func (runtime *stateRuntime) Close() error {

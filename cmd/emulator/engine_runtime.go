@@ -6,6 +6,7 @@ package main
 // from it at run time.
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 
@@ -34,6 +35,10 @@ type engineRuntimeDescriptor struct {
 	ReadFactory           readports.SnapshotMaterializerFactory
 	WriteFactory          writeports.CoordinatorFactory
 	Lifecycle             engineLifecycle
+	PairGeneration        interface {
+		PairGeneration(context.Context) (string, bool, error)
+		SetPairGeneration(context.Context, string) error
+	}
 }
 
 type engineRuntime struct {
@@ -48,6 +53,10 @@ type engineRuntime struct {
 	readFactory           readports.SnapshotMaterializerFactory
 	writeFactory          writeports.CoordinatorFactory
 	lifecycle             engineLifecycle
+	pairGeneration        interface {
+		PairGeneration(context.Context) (string, bool, error)
+		SetPairGeneration(context.Context, string) error
+	}
 }
 
 func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error) {
@@ -69,6 +78,7 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 		{name: "Storage Read factory", value: descriptor.ReadFactory},
 		{name: "Storage Write factory", value: descriptor.WriteFactory},
 		{name: "engine lifecycle", value: descriptor.Lifecycle},
+		{name: "engine pair generation", value: descriptor.PairGeneration},
 	} {
 		if runtimeDependencyIsNil(dependency.value) {
 			return nil, fmt.Errorf("%w: engine runtime %s is required", domain.ErrPrecondition, dependency.name)
@@ -80,7 +90,8 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 		statementExecutor: descriptor.StatementExecutor, statementMaterializer: descriptor.StatementMaterializer,
 		tableData: descriptor.TableData, loader: descriptor.Loader,
 		readFactory: descriptor.ReadFactory, writeFactory: descriptor.WriteFactory,
-		lifecycle: descriptor.Lifecycle,
+		lifecycle:      descriptor.Lifecycle,
+		pairGeneration: descriptor.PairGeneration,
 	}, nil
 }
 
@@ -94,13 +105,20 @@ func composeDuckDBEngine(dsn string) (*engineRuntime, error) {
 		Health:       warehouse, Catalog: warehouse, DDL: warehouse,
 		StatementExecutor: warehouse, StatementMaterializer: warehouse,
 		TableData: warehouse, Loader: warehouse, ReadFactory: warehouse, WriteFactory: warehouse,
-		Lifecycle: warehouse,
+		Lifecycle: warehouse, PairGeneration: warehouse,
 	})
 	if err != nil {
 		_ = warehouse.Close()
 		return nil, fmt.Errorf("compose DuckDB engine runtime: %w", err)
 	}
 	return runtime, nil
+}
+
+func (runtime *engineRuntime) PairGeneration(ctx context.Context) (string, bool, error) {
+	return runtime.pairGeneration.PairGeneration(ctx)
+}
+func (runtime *engineRuntime) SetPairGeneration(ctx context.Context, generation string) error {
+	return runtime.pairGeneration.SetPairGeneration(ctx, generation)
 }
 
 func validateRuntimeCapabilities(capabilities enginecontract.Capabilities) (enginecontract.Capabilities, error) {

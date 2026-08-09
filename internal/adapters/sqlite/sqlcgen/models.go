@@ -124,6 +124,12 @@ type BqemuReadStream struct {
 	EndOffset   int64
 }
 
+type BqemuRuntimePairGeneration struct {
+	Singleton  int64
+	Generation string
+	CreatedAt  string
+}
+
 type BqemuTable struct {
 	ProjectID                    string
 	DatasetID                    string

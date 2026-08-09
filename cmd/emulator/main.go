@@ -132,6 +132,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			_ = state.Close()
 		}
 	}()
+	if err := reconcileStorePair(ctx, state, storageEngine); err != nil {
+		return fmt.Errorf("reconcile SQLite/DuckDB generation: %w", err)
+	}
 	catalogRepository := state.catalog
 	jobRepository := state.queryJobs
 	clock := system.Clock{}

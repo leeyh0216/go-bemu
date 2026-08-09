@@ -22,7 +22,9 @@ export BQEMU_REST=http://localhost:9050
 ```
 
 Compose는 카탈로그와 테이블 데이터를 `bqemu-data` 볼륨에 보관합니다. 재시작 후에도
-데이터를 사용하려면 사용자가 이 볼륨을 유지해야 합니다.
+데이터를 사용하려면 사용자가 이 볼륨을 유지해야 합니다. SQLite state와 DuckDB 파일은
+하나의 generation이므로 함께 보존하거나 함께 교체해야 합니다. 한 파일만 복원하거나
+generation이 다른 두 파일을 조합하면 BQEMU는 ready 상태가 되지 않습니다.
 
 <!-- section: endpoints -->
 ## 접속 주소 선택하기
