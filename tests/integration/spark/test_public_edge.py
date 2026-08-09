@@ -58,6 +58,7 @@ def seeded_table(public_edge: PublicEdge, test_timeout: float) -> str:
             "VALUES (1, 'one', 1.5, true), (2, 'two', 2.5, false), "
             "(3, 'three', 3.5, true), (4, 'four', 4.5, false)"
         ),
+        phase="setup",
     )
     return f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}"
 
@@ -102,6 +103,7 @@ def advanced_read_table(public_edge: PublicEdge, test_timeout: float) -> str:
             "(4, 'delta', DATE '2024-02-01', TIMESTAMP '2024-02-01T04:00:00Z', "
             "NULL, STRUCT('Daegu' AS city, 40 AS code))"
         ),
+        phase="setup",
     )
     return f"{public_edge.project_id}.{public_edge.dataset_id}.{table_id}"
 
@@ -1441,6 +1443,7 @@ def test_direct_pending_exact_static_overwrite(
         public_edge,
         test_timeout,
         f"INSERT INTO `{destination}` VALUES (-2, false, -1.5), (-1, true, -0.5)",
+        phase="setup",
     )
 
     replacement = (
@@ -1598,6 +1601,7 @@ def test_direct_pending_exact_dynamic_partition_overwrite(
             "(2, DATE '2026-01-01', 'old-two'), "
             "(3, DATE '2026-01-02', 'keep')"
         ),
+        phase="setup",
     )
 
     replacement = spark_session.sql(

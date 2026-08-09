@@ -838,6 +838,15 @@ def collect_actual_events(context: CaseContext, scenarios: list[dict[str, Any]])
                 continue
             if isinstance(decoded, dict):
                 decoded_lines.append(decoded)
+        test_phases: dict[str, str] = {}
+        for event in decoded_lines:
+            phase = _test_harness_phase(event)
+            if phase is None:
+                continue
+            request_id = event.get("request_id")
+            if not isinstance(request_id, str) or not request_id:
+                raise ContractError("tagged integration request has no request ID")
+            test_phases[request_id] = phase
         startup_count = sum(
             event.get("event") == "runtime.configuration.loaded" for event in decoded_lines
         )
@@ -879,7 +888,11 @@ def collect_actual_events(context: CaseContext, scenarios: list[dict[str, Any]])
                 protocol = "gRPC"
                 request_shape = rpc
                 response_status = event.get("grpc_code")
-            if operation_id in scenario_by_operation:
+            test_phase = test_phases.get(str(event.get("request_id", "")))
+            if test_phase is not None:
+                phase = f"test-{test_phase}-response"
+                correlation_group = f"test-{test_phase}"
+            elif operation_id in scenario_by_operation:
                 phase = "observed-response"
                 correlation_group = scenario_by_operation[operation_id]
             elif operation_id in setup_operations:
@@ -903,6 +916,29 @@ def collect_actual_events(context: CaseContext, scenarios: list[dict[str, Any]])
                 }
             )
     return events
+
+
+def _test_harness_phase(event: dict[str, Any]) -> str | None:
+    if event.get("event") != "boundary.enter" or event.get("boundary") != "http":
+        return None
+    headers = event.get("headers")
+    if not isinstance(headers, list):
+        return None
+    phases: set[str] = set()
+    prefix = "x-bqemu-integration-phase="
+    for header in headers:
+        if not isinstance(header, str):
+            continue
+        normalized = header.lower()
+        if not normalized.startswith(prefix):
+            continue
+        phase = normalized.removeprefix(prefix)
+        if phase not in {"setup", "assertion"}:
+            raise ContractError("integration request has an invalid phase")
+        phases.add(phase)
+    if len(phases) > 1:
+        raise ContractError("integration request has conflicting phases")
+    return next(iter(phases), None)
 
 
 def compare_contract(

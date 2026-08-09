@@ -265,6 +265,85 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(events[0]["phase"], "unexpected-response")
             self.assertEqual(events[0]["requestShape"], "ambiguous server run boundary")
 
+    def test_collector_excludes_tagged_harness_setup_and_assertion_requests(self) -> None:
+        scenario = _scenario(
+            [{"operationId": "bigquery.jobs.query", "min": 1, "max": 0, "after": []}]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "contract").mkdir()
+            (root / "contract" / "operations.normalized.json").write_text(
+                json.dumps(
+                    {
+                        "operations": [
+                            {
+                                "id": "bigquery.jobs.query",
+                                "rest": {
+                                    "method": "POST",
+                                    "path": "/bigquery/v2/projects/{projectId}/queries",
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            events = [
+                {"event": "runtime.configuration.loaded"},
+                {
+                    "event": "boundary.enter",
+                    "boundary": "http",
+                    "request_id": "setup",
+                    "headers": ["x-bqemu-integration-phase=setup"],
+                },
+                {
+                    "event": "boundary.exit",
+                    "boundary": "http",
+                    "request_id": "setup",
+                    "method": "POST",
+                    "path": "/bigquery/v2/projects/p/queries",
+                    "status": 200,
+                },
+                {
+                    "event": "boundary.enter",
+                    "boundary": "http",
+                    "request_id": "assertion",
+                    "headers": ["x-bqemu-integration-phase=assertion"],
+                },
+                {
+                    "event": "boundary.exit",
+                    "boundary": "http",
+                    "request_id": "assertion",
+                    "method": "POST",
+                    "path": "/bigquery/v2/projects/p/queries",
+                    "status": 200,
+                },
+                {
+                    "event": "boundary.exit",
+                    "boundary": "http",
+                    "request_id": "consumer",
+                    "method": "POST",
+                    "path": "/bigquery/v2/projects/p/queries",
+                    "status": 200,
+                },
+            ]
+            (artifacts / "server.log").write_text(
+                "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+            )
+            case = _with_public_execution(
+                replace(_python_case(), case_id="case"), setup_operation_ids=()
+            )
+            collected = collect_actual_events(
+                CaseContext(case, root, artifacts), [scenario]
+            )
+            self.assertEqual(
+                [event["phase"] for event in collected],
+                ["test-setup-response", "test-assertion-response", "observed-response"],
+            )
+            self.assertIsNone(compare_contract([scenario], collected))
+
     def test_successful_process_fails_when_declared_operation_was_not_observed(self) -> None:
         case = _with_public_execution(
             replace(_python_case(), case_id="case"),

@@ -58,7 +58,6 @@
 | `bigquery.jobs.get` | 14 |
 | `bigquery.jobs.getQueryResults` | 14 |
 | `bigquery.jobs.insert` | 14 |
-| `bigquery.jobs.query` | 1 |
 | `bigquery.tabledata.list` | 2 |
 | `bigquery.tables.delete` | 2 |
 | `bigquery.tables.get` | 19 |

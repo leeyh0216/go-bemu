@@ -1132,7 +1132,6 @@
                   "reason": ""
                 },
                 "operationIds": [
-                  "bigquery.jobs.query",
                   "bigquery.tabledata.list",
                   "bigquery.tables.get",
                   "bigquery.tables.insert",
@@ -1152,12 +1151,6 @@
                   "spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector"
                 ],
                 "operationExpectations": [
-                  {
-                    "operationId": "bigquery.jobs.query",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
                   {
                     "operationId": "bigquery.tabledata.list",
                     "min": 1,

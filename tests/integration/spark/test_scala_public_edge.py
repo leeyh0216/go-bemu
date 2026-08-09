@@ -34,7 +34,6 @@ def _scala_string(value: str) -> str:
     profile="spark-bigquery-connector-dsv1-0.44.2",
     wire_flow="read-arrow",
     operations=(
-        "bigquery.jobs.query",
         "bigquery.tables.get",
         "grpc.bigquery-read.create-read-session",
         "grpc.bigquery-read.read-rows",
@@ -63,6 +62,7 @@ def test_scala_spark_reads_through_connector(
         public_edge,
         test_timeout,
         f"INSERT INTO `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}` VALUES (1, 'one'), (2, 'two')",
+        phase="setup",
     )
 
     options = connector_options(public_edge)

@@ -20,7 +20,7 @@ import socket
 import ssl
 import subprocess
 import time
-from typing import Iterator
+from typing import Iterator, Literal
 import urllib.error
 import urllib.request
 import uuid
@@ -807,10 +807,15 @@ def _json_request(
     payload: dict[str, object] | None = None,
     ca_file: Path | None = None,
     allowed_statuses: frozenset[int] = frozenset(),
+    integration_phase: Literal["setup", "assertion"] | None = None,
 ) -> dict[str, object] | None:
+    if integration_phase not in {None, "setup", "assertion"}:
+        raise ValueError("integration phase must be setup or assertion")
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=body, method=method)
     request.add_header("Authorization", "Bearer " + STATIC_ACCESS_TOKEN)
+    if integration_phase is not None:
+        request.add_header("X-BQEMU-Integration-Phase", integration_phase)
     if body is not None:
         request.add_header("Content-Type", "application/json")
     trust = ca_file if ca_file is not None else edge.ca_file if edge is not None else None
@@ -1277,13 +1282,20 @@ def list_table_data(
     return result
 
 
-def query(edge: PublicEdge, timeout: float, sql: str) -> dict[str, object]:
+def query(
+    edge: PublicEdge,
+    timeout: float,
+    sql: str,
+    *,
+    phase: Literal["setup", "assertion"] = "assertion",
+) -> dict[str, object]:
     result = _json_request(
         edge,
         edge.http_endpoint + f"/bigquery/v2/projects/{edge.project_id}/queries",
         "POST",
         timeout,
         {"query": sql, "useLegacySql": False},
+        integration_phase=phase,
     )
     if result is None:
         raise RuntimeError("query returned no response")

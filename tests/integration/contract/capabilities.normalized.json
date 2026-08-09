@@ -50,7 +50,6 @@
         "spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector"
       ],
       "operationIds": [
-        "bigquery.jobs.query",
         "bigquery.tables.get",
         "grpc.bigquery-read.create-read-session",
         "grpc.bigquery-read.read-rows"
@@ -585,7 +584,6 @@
       "profile": "spark-bigquery-connector-dsv1-0.44.2",
       "wireFlow": "read-arrow",
       "operationIds": [
-        "bigquery.jobs.query",
         "bigquery.tables.get",
         "grpc.bigquery-read.create-read-session",
         "grpc.bigquery-read.read-rows"
@@ -1118,15 +1116,6 @@
         "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration",
         "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown",
         "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection"
-      ]
-    },
-    {
-      "operationId": "bigquery.jobs.query",
-      "caseIds": [
-        "SBQ-READ-ARROW-FILTER-V1"
-      ],
-      "tests": [
-        "spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector"
       ]
     },
     {

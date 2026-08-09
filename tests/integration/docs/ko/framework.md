@@ -120,6 +120,10 @@ load 전용 흐름은 `load:` adapter가 선택하고 구조화한 runtime evide
 증명합니다. 선택 test function으로 직접 표현하지 못하는 예외는 `trafficSource`에
 명시하며, 다른 scenario kind에는 사용할 수 없습니다.
 
+테스트 harness REST 호출은 `setup` 또는 `assertion`으로 표시해야 합니다. Spark helper는
+이 phase를 request log에 남기고 runner는 그 응답을 호출자 wire claim에서 제외합니다.
+comparator를 통과시키기 위해 harness 전용 operation을 `contract_case(...)`에 넣지 않습니다.
+
 <!-- section: extending -->
 ## 사례 추가 또는 변경
 

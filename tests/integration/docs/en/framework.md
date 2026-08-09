@@ -127,6 +127,11 @@ sequence from structured runtime evidence rather than a selected test function.
 The exception is explicit in `trafficSource` and cannot be used by another
 scenario kind.
 
+Test-harness REST calls must be marked as `setup` or `assertion`. The Spark
+helpers attach that phase to the request log, and the runner excludes those
+responses from the caller's wire claim. Do not add a harness-only operation to
+`contract_case(...)` just to satisfy the comparator.
+
 <!-- section: extending -->
 ## Add Or Change A Case
 
