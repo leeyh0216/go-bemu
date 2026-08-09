@@ -10,6 +10,13 @@ coverage.out
 .envrc.local
 .pytest_cache/
 .venv/
+web/node_modules/
+web/dist/
+.cache/
+.tmp/
+tmp/
+*.tmp
+*.log
 __pycache__/
 *.pyc
 .DS_Store
