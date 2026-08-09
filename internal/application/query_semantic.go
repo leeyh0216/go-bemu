@@ -36,24 +36,27 @@ func (s *QueryService) prepareQueryAdmission(
 	if analysis.RequiresCatalogMutation && s.ddlExecutor == nil {
 		return preparedQuery{}, unsupportedDDL("catalog DDL executor is not configured")
 	}
-	return preparedQuery{statement: statement, analysis: analysis}, nil
+	return preparedQuery{statement: statement, analysis: analysis, sourceSQL: request.SQL}, nil
 }
 
 func queryAnalysisFromStatement(statement semantic.Statement) ports.QueryAnalysis {
 	references := statement.ReferencedTables()
 	targets := statement.MutationTargets()
 	kind := statement.Kind()
-	if kind == queryast.StatementCreateTable {
+	if kind == queryast.StatementCreateTable || kind == queryast.StatementCreateView {
 		references = referencesWithoutTargets(references, targets)
 	}
+	producesRows := len(statement.OutputColumns()) != 0 && kind != queryast.StatementCreateView
 	return ports.QueryAnalysis{
 		ReferencedTables: references,
 		MutationTargets:  targets,
-		ProducesRows:     len(statement.OutputColumns()) != 0,
+		ProducesRows:     producesRows,
 		RequiresCatalogMutation: kind == queryast.StatementCreateTable ||
 			kind == queryast.StatementDropTable ||
 			kind == queryast.StatementAlterTable ||
-			kind == queryast.StatementTruncateTable,
+			kind == queryast.StatementTruncateTable ||
+			kind == queryast.StatementCreateView ||
+			kind == queryast.StatementDropView,
 	}
 }
 
@@ -80,6 +83,7 @@ func referencesWithoutTargets(
 func (s *QueryService) executeAnalyzedStatement(
 	ctx context.Context,
 	statement semantic.Statement,
+	sourceSQL string,
 	correlationID string,
 ) (domain.QueryResult, error) {
 	switch statement.Kind() {
@@ -93,6 +97,15 @@ func (s *QueryService) executeAnalyzedStatement(
 			return domain.QueryResult{}, unsupportedDDL("catalog DDL executor is not configured")
 		}
 		if err := s.ddlExecutor.ExecuteDDL(ctx, command, correlationID); err != nil {
+			return domain.QueryResult{}, err
+		}
+		return domain.QueryResult{}, nil
+	case queryast.StatementCreateView, queryast.StatementDropView:
+		executor, ok := s.ddlExecutor.(ports.ViewDDLExecutor)
+		if !ok {
+			return domain.QueryResult{}, unsupportedDDL("logical view DDL executor is not configured")
+		}
+		if err := executor.ExecuteViewDDL(ctx, statement, sourceSQL, correlationID); err != nil {
 			return domain.QueryResult{}, err
 		}
 		return domain.QueryResult{}, nil

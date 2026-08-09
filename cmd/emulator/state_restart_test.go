@@ -109,6 +109,10 @@ logging:
     ]}
   ]}
 }`, http.StatusOK)
+	runtimeRequest(t, baseURL, http.MethodPost, "/bigquery/v2/projects/persisted-project/datasets/analytics/tables", `{
+  "tableReference":{"tableId":"event_ids"},
+  "view":{"query":"SELECT event_id FROM analytics.events","useLegacySql":false}
+}`, http.StatusOK)
 	stop()
 
 	stop = startRuntimeForRestartTest(t, configPath, baseURL)
@@ -140,6 +144,16 @@ logging:
 	if table["description"] != "durable table" || amount["precision"] != "38" ||
 		amount["scale"] != "18" || amount["roundingMode"] != "ROUND_HALF_EVEN" {
 		t.Fatalf("restarted table = %#v", table)
+	}
+	view := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/persisted-project/datasets/analytics/tables/event_ids", "", http.StatusOK)
+	if view["type"] != "VIEW" || view["view"].(map[string]any)["query"] != "SELECT event_id FROM analytics.events" {
+		t.Fatalf("restarted view = %#v", view)
+	}
+	query := runtimeRequest(t, baseURL, http.MethodPost,
+		"/bigquery/v2/projects/persisted-project/queries", `{"query":"SELECT event_id FROM analytics.event_ids","useLegacySql":false}`, http.StatusOK)
+	if query["errors"] != nil {
+		t.Fatalf("restarted view query = %#v", query)
 	}
 
 	stop()

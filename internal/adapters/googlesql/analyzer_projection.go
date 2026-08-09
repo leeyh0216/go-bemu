@@ -90,6 +90,8 @@ func resolvedStatementKind(resolved gsql.ResolvedStatementNode) (queryast.Statem
 		return "", unsupportedResolvedStatement()
 	case *gsql.ResolvedCreateTableStmt:
 		return queryast.StatementCreateTable, nil
+	case *gsql.ResolvedCreateViewStmt:
+		return queryast.StatementCreateView, nil
 	case *gsql.ResolvedAlterTableStmt:
 		return queryast.StatementAlterTable, nil
 	case *gsql.ResolvedDropStmt:
@@ -97,10 +99,14 @@ func resolvedStatementKind(resolved gsql.ResolvedStatementNode) (queryast.Statem
 		if err != nil {
 			return "", analyzerBoundaryFailure()
 		}
-		if !strings.EqualFold(objectType, "TABLE") {
+		switch {
+		case strings.EqualFold(objectType, "TABLE"):
+			return queryast.StatementDropTable, nil
+		case strings.EqualFold(objectType, "VIEW"):
+			return queryast.StatementDropView, nil
+		default:
 			return "", unsupportedResolvedStatement()
 		}
-		return queryast.StatementDropTable, nil
 	case *gsql.ResolvedTruncateStmt:
 		return queryast.StatementTruncateTable, nil
 	default:
@@ -291,6 +297,10 @@ func syntaxTargetKeys(statement queryast.Statement) ([]queryast.NodeKey, error) 
 	case *queryast.CreateTableStatement:
 		return []queryast.NodeKey{value.Target().NodeKey()}, nil
 	case *queryast.DropTableStatement:
+		return []queryast.NodeKey{value.Target().NodeKey()}, nil
+	case *queryast.CreateViewStatement:
+		return []queryast.NodeKey{value.Target().NodeKey()}, nil
+	case *queryast.DropViewStatement:
 		return []queryast.NodeKey{value.Target().NodeKey()}, nil
 	case *queryast.AlterTableStatement:
 		return []queryast.NodeKey{value.Target().NodeKey()}, nil
@@ -602,6 +612,8 @@ func (projection *resolvedProjection) outputColumns(resolved gsql.ResolvedStatem
 	case *gsql.ResolvedQueryStmt:
 		columns, err = statement.OutputColumnList()
 	case *gsql.ResolvedCreateTableAsSelectStmt:
+		columns, err = statement.OutputColumnList()
+	case *gsql.ResolvedCreateViewStmt:
 		columns, err = statement.OutputColumnList()
 	default:
 		return nil, nil

@@ -80,20 +80,23 @@ func (mapper *statementMapper) mapDropStatement(node *gsql.ASTDropStatement) (qu
 	if err != nil {
 		return nil, parserFailure()
 	}
-	if kind != gsql.SchemaObjectKindKTable {
-		return nil, unsupportedNode(queryast.StatementDropTable, "drop-object-kind", node)
+	statementKind := queryast.StatementDropTable
+	if kind == gsql.SchemaObjectKindKView {
+		statementKind = queryast.StatementDropView
+	} else if kind != gsql.SchemaObjectKindKTable {
+		return nil, unsupportedNode(statementKind, "drop-object-kind", node)
 	}
 	if exists, err := node.IsIfExists(); err != nil {
 		return nil, parserFailure()
 	} else if exists {
-		return nil, unsupportedNode(queryast.StatementDropTable, "drop-if-exists", node)
+		return nil, unsupportedNode(statementKind, "drop-if-exists", node)
 	}
 	mode, err := node.DropMode()
 	if err != nil {
 		return nil, parserFailure()
 	}
 	if mode != gsql.ASTDropStatementEnums_DropModeDropModeUnspecified {
-		return nil, unsupportedNode(queryast.StatementDropTable, "drop-mode", node)
+		return nil, unsupportedNode(statementKind, "drop-mode", node)
 	}
 	nameNode, err := node.Name()
 	if err != nil || nameNode == nil {
@@ -107,7 +110,83 @@ func (mapper *statementMapper) mapDropStatement(node *gsql.ASTDropStatement) (qu
 	if err != nil {
 		return nil, err
 	}
+	if statementKind == queryast.StatementDropView {
+		return queryast.NewDropViewStatement(source, target)
+	}
 	return queryast.NewDropTableStatement(source, target)
+}
+
+func (mapper *statementMapper) mapCreateViewStatement(node *gsql.ASTCreateViewStatement) (queryast.Statement, error) {
+	if enabled, err := node.IsIfNotExists(); err != nil {
+		return nil, parserFailure()
+	} else if enabled {
+		return nil, unsupportedNode(queryast.StatementCreateView, "create-if-not-exists", node)
+	}
+	for _, scope := range []struct {
+		kind string
+		get  func() (bool, error)
+	}{
+		{kind: "create-temp", get: node.IsTemp},
+		{kind: "create-public", get: node.IsPublic},
+		{kind: "create-private", get: node.IsPrivate},
+	} {
+		enabled, err := scope.get()
+		if err != nil {
+			return nil, parserFailure()
+		}
+		if enabled {
+			return nil, unsupportedNode(queryast.StatementCreateView, scope.kind, node)
+		}
+	}
+	orReplace, err := node.IsOrReplace()
+	if err != nil {
+		return nil, parserFailure()
+	}
+	if recursive, err := node.Recursive(); err != nil {
+		return nil, parserFailure()
+	} else if recursive {
+		return nil, unsupportedNode(queryast.StatementCreateView, "create-recursive", node)
+	}
+	if columns, err := node.ColumnWithOptionsList(); err != nil {
+		return nil, parserFailure()
+	} else if columns != nil {
+		return nil, unsupportedNode(queryast.StatementCreateView, "create-view-columns", node)
+	}
+	if options, err := node.OptionsList(); err != nil {
+		return nil, parserFailure()
+	} else if options != nil {
+		return nil, unsupportedNode(queryast.StatementCreateView, "create-view-options", node)
+	}
+	if security, err := node.SqlSecurity(); err != nil {
+		return nil, parserFailure()
+	} else if security != gsql.ASTCreateStatementEnums_SqlSecuritySqlSecurityUnspecified {
+		return nil, unsupportedNode(queryast.StatementCreateView, "create-view-security", node)
+	}
+	name, err := node.Name()
+	if err != nil || name == nil {
+		return nil, parserFailure()
+	}
+	target, err := mapper.mapTargetRelation(name, nil)
+	if err != nil {
+		return nil, err
+	}
+	queryNode, err := node.Query()
+	if err != nil || queryNode == nil {
+		return nil, parserFailure()
+	}
+	query, err := mapper.mapQuery(queryast.StatementCreateView, queryNode)
+	if err != nil {
+		return nil, err
+	}
+	source, err := mapper.source(node)
+	if err != nil {
+		return nil, err
+	}
+	querySource, err := mapper.source(queryNode)
+	if err != nil {
+		return nil, err
+	}
+	return queryast.NewCreateViewStatement(source, target, query, querySource, orReplace)
 }
 
 func (mapper *statementMapper) mapTruncateStatement(node *gsql.ASTTruncateStatement) (queryast.Statement, error) {

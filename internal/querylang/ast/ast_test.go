@@ -255,6 +255,14 @@ func (visitor *statementKindVisitor) VisitDropTable(*queryast.DropTableStatement
 	visitor.kind = queryast.StatementDropTable
 	return nil
 }
+func (visitor *statementKindVisitor) VisitCreateView(*queryast.CreateViewStatement) error {
+	visitor.kind = queryast.StatementCreateView
+	return nil
+}
+func (visitor *statementKindVisitor) VisitDropView(*queryast.DropViewStatement) error {
+	visitor.kind = queryast.StatementDropView
+	return nil
+}
 func (visitor *statementKindVisitor) VisitAlterTable(*queryast.AlterTableStatement) error {
 	visitor.kind = queryast.StatementAlterTable
 	return nil

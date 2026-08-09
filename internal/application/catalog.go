@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +32,8 @@ type CatalogService struct {
 	catalog                   ports.CatalogRepository
 	warehouse                 ports.CatalogStorage
 	ddlStorage                ports.DDLStorage
+	views                     ports.ViewRepository
+	viewStorage               ports.LogicalViewStorage
 	tableDataReader           ports.TableDataReader
 	clock                     ports.Clock
 	defaultLocation           string
@@ -143,6 +146,12 @@ func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.CatalogS
 		defaultLocation: "US", compensationTimeout: 30 * time.Second,
 		tableDataOperationTimeout: 30 * time.Second, maxTableDataPageRows: 10_000,
 		maxTableDataResponseBytes: 10_000_000, maxTableDataRowBytes: 100_000_000,
+	}
+	if views, ok := catalog.(ports.ViewRepository); ok {
+		service.views = views
+	}
+	if storage, ok := warehouse.(ports.LogicalViewStorage); ok {
+		service.viewStorage = storage
 	}
 	for _, option := range options {
 		option(service)
@@ -327,6 +336,9 @@ func (s *CatalogService) createTable(ctx context.Context, table domain.Table) (d
 	if err := table.Validate(); err != nil {
 		return domain.Table{}, err
 	}
+	if err := s.ensureNoViewAtTableReference(ctx, table.ProjectID, table.DatasetID, table.ID); err != nil {
+		return domain.Table{}, err
+	}
 	schemaPlan, err := planEngineSchema(ctx, s.warehouse, engine.SchemaIntentDescriptor{
 		Operation:   engine.SchemaOperationCreate,
 		Target:      domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
@@ -387,6 +399,19 @@ func (s *CatalogService) GetTable(ctx context.Context, projectID, datasetID, tab
 	return s.getTableLocked(ctx, projectID, datasetID, tableID)
 }
 
+// GetView returns the canonical logical-view definition. It intentionally is
+// not folded into TableRepository: TABLE and VIEW have different invariants.
+func (s *CatalogService) GetView(ctx context.Context, projectID, datasetID, tableID string) (domain.View, error) {
+	if s.views == nil {
+		return domain.View{}, fmt.Errorf("%w: logical views are not configured", domain.ErrUnsupported)
+	}
+	if err := s.resourceMutationMu.LockContext(ctx); err != nil {
+		return domain.View{}, err
+	}
+	defer s.resourceMutationMu.Unlock()
+	return s.views.GetView(ctx, projectID, datasetID, tableID)
+}
+
 // ListTableData validates bounded paging and resolves canonical table metadata
 // under the same lock used by expiration and resource mutations. The adapter is
 // called only after GetTable's lazy TTL boundary has confirmed a live table.
@@ -431,6 +456,9 @@ func (s *CatalogService) ListTableData(ctx context.Context, projectID, datasetID
 	table, err := s.getTableLocked(operationCtx, projectID, datasetID, tableID)
 	if err != nil {
 		return ports.TableDataPage{}, err
+	}
+	if table.Type == "VIEW" {
+		return ports.TableDataPage{}, fmt.Errorf("%w: tabledata.list does not support logical views", domain.ErrUnsupported)
 	}
 	page, err := s.tableDataReader.ListTableData(operationCtx, ports.TableDataReadRequest{
 		Reference: domain.TableReference{ProjectID: projectID, DatasetID: datasetID, TableID: tableID},
@@ -486,7 +514,14 @@ func validateTableDataPage(page ports.TableDataPage, offset int64, limit int) er
 func (s *CatalogService) getTableLocked(ctx context.Context, projectID, datasetID, tableID string) (domain.Table, error) {
 	table, err := s.catalog.GetTable(ctx, projectID, datasetID, tableID)
 	if err != nil {
-		return domain.Table{}, err
+		if !errors.Is(err, domain.ErrNotFound) || s.views == nil {
+			return domain.Table{}, err
+		}
+		view, viewErr := s.views.GetView(ctx, projectID, datasetID, tableID)
+		if viewErr != nil {
+			return domain.Table{}, viewErr
+		}
+		return tableFromView(view), nil
 	}
 	if !tableExpired(table, s.clock.Now()) {
 		return table, nil
@@ -519,6 +554,9 @@ func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table dom
 	if err := table.Validate(); err != nil {
 		return err
 	}
+	if err := s.ensureNoViewAtTableReference(ctx, table.ProjectID, table.DatasetID, table.ID); err != nil {
+		return err
+	}
 	if _, err := planEngineSchema(ctx, s.warehouse, engine.SchemaIntentDescriptor{
 		Operation:   engine.SchemaOperationValidate,
 		Target:      domain.TableReference{ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID},
@@ -549,6 +587,18 @@ func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table dom
 	table.CreatedAt = now
 	table.UpdatedAt = now
 	return s.catalog.CreateTable(ctx, table)
+}
+
+func (s *CatalogService) ensureNoViewAtTableReference(ctx context.Context, projectID, datasetID, tableID string) error {
+	if s.views == nil {
+		return nil
+	}
+	if _, err := s.views.GetView(ctx, projectID, datasetID, tableID); err == nil {
+		return fmt.Errorf("%w: view %s/%s/%s conflicts with table", domain.ErrConflict, projectID, datasetID, tableID)
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+	return nil
 }
 
 func planEngineSchema(
@@ -604,7 +654,26 @@ func (s *CatalogService) listTablesLocked(ctx context.Context, projectID, datase
 			live = append(live, current)
 		}
 	}
+	if s.views != nil {
+		views, viewErr := s.views.ListViews(ctx, projectID, datasetID)
+		if viewErr != nil {
+			return nil, viewErr
+		}
+		for _, view := range views {
+			live = append(live, tableFromView(view))
+		}
+	}
+	sort.Slice(live, func(i, j int) bool { return strings.ToLower(live[i].ID) < strings.ToLower(live[j].ID) })
 	return live, nil
+}
+
+func tableFromView(view domain.View) domain.Table {
+	return domain.Table{
+		ProjectID: view.ProjectID, DatasetID: view.DatasetID, ID: view.ID,
+		FriendlyName: view.FriendlyName, Description: view.Description, Labels: domain.CloneView(view).Labels,
+		Type: "VIEW", Schema: domain.CloneFields(view.Schema), Location: view.Location,
+		CreatedAt: view.CreatedAt, UpdatedAt: view.UpdatedAt,
+	}
 }
 
 func tableExpired(table domain.Table, now time.Time) bool {
@@ -654,6 +723,9 @@ func (s *CatalogService) DeleteTable(ctx context.Context, projectID, datasetID, 
 	defer s.resourceMutationMu.Unlock()
 
 	if _, err := s.catalog.GetTable(ctx, projectID, datasetID, tableID); err != nil {
+		return err
+	}
+	if err := s.ensureNoDependentViews(ctx, domain.TableReference{ProjectID: projectID, DatasetID: datasetID, TableID: tableID}); err != nil {
 		return err
 	}
 	if err := s.warehouse.DropTable(ctx, projectID, datasetID, tableID); err != nil && !errors.Is(err, domain.ErrNotFound) {

@@ -159,6 +159,11 @@ type clusteringResource struct {
 	Fields []string `json:"fields"`
 }
 
+type viewResource struct {
+	Query        string `json:"query"`
+	UseLegacySQL bool   `json:"useLegacySql"`
+}
+
 type tableResource struct {
 	Kind                string                     `json:"kind,omitempty"`
 	ETag                string                     `json:"etag,omitempty"`
@@ -176,8 +181,20 @@ type tableResource struct {
 	RangePartitioning   *rangePartitioningResource `json:"rangePartitioning,omitempty"`
 	Clustering          *clusteringResource        `json:"clustering,omitempty"`
 	DefaultRoundingMode *domain.RoundingMode       `json:"defaultRoundingMode,omitempty"`
+	View                *viewResource              `json:"view,omitempty"`
 	CreationTime        string                     `json:"creationTime,omitempty"`
 	LastModifiedTime    string                     `json:"lastModifiedTime,omitempty"`
+}
+
+func tableFromLogicalView(view domain.View, baseURL string) tableResource {
+	resource := tableFromDomain(domain.Table{
+		ProjectID: view.ProjectID, DatasetID: view.DatasetID, ID: view.ID,
+		FriendlyName: view.FriendlyName, Description: view.Description, Labels: view.Labels,
+		Type: "VIEW", Schema: view.Schema, Location: view.Location,
+		CreatedAt: view.CreatedAt, UpdatedAt: view.UpdatedAt,
+	}, baseURL)
+	resource.View = &viewResource{Query: view.Query, UseLegacySQL: view.UseLegacySQL}
+	return resource
 }
 
 func projectFromDomain(project domain.Project) projectResource {

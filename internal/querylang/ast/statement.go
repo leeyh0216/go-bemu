@@ -18,6 +18,8 @@ const (
 	StatementMerge         StatementKind = "MERGE"
 	StatementCreateTable   StatementKind = "CREATE_TABLE"
 	StatementDropTable     StatementKind = "DROP_TABLE"
+	StatementCreateView    StatementKind = "CREATE_VIEW"
+	StatementDropView      StatementKind = "DROP_VIEW"
 	StatementAlterTable    StatementKind = "ALTER_TABLE"
 	StatementTruncateTable StatementKind = "TRUNCATE_TABLE"
 )
@@ -42,6 +44,8 @@ type StatementVisitor interface {
 	VisitMerge(*MergeStatement) error
 	VisitCreateTable(*CreateTableStatement) error
 	VisitDropTable(*DropTableStatement) error
+	VisitCreateView(*CreateViewStatement) error
+	VisitDropView(*DropViewStatement) error
 	VisitAlterTable(*AlterTableStatement) error
 	VisitTruncateTable(*TruncateTableStatement) error
 }
@@ -530,6 +534,64 @@ func (statement *CreateTableStatement) writeSemantic(builder *fingerprintBuilder
 type DropTableStatement struct {
 	statementBase
 	target *TableRelation
+}
+
+// CreateViewStatement keeps the view body as a typed GoogleSQL query AST so
+// consumers never need to parse the definition text themselves.
+type CreateViewStatement struct {
+	statementBase
+	target      *TableRelation
+	query       Query
+	querySource Source
+	orReplace   bool
+}
+
+func NewCreateViewStatement(source Source, target *TableRelation, query Query, querySource Source, orReplace bool) (*CreateViewStatement, error) {
+	if !validSource(source) || !validSource(querySource) || querySource.digest != source.digest || target == nil || query.body == nil {
+		return nil, fmt.Errorf("invalid CREATE VIEW statement")
+	}
+	value := &CreateViewStatement{statementBase: statementBase{source: source}, target: target, query: query.clone(), querySource: querySource, orReplace: orReplace}
+	value.fingerprint = semanticFingerprint(value)
+	return value, nil
+}
+func (*CreateViewStatement) statementNode()                   {}
+func (*CreateViewStatement) Kind() StatementKind              { return StatementCreateView }
+func (statement *CreateViewStatement) Target() *TableRelation { return statement.target }
+func (statement *CreateViewStatement) Query() Query           { return statement.query.clone() }
+func (statement *CreateViewStatement) QuerySource() Source    { return statement.querySource }
+func (statement *CreateViewStatement) OrReplace() bool        { return statement.orReplace }
+func (statement *CreateViewStatement) Accept(visitor StatementVisitor) error {
+	return visitor.VisitCreateView(statement)
+}
+func (statement *CreateViewStatement) writeSemantic(builder *fingerprintBuilder) {
+	builder.token("create-view")
+	statement.target.writeSemantic(builder)
+	statement.query.writeSemantic(builder)
+	builder.boolean(statement.orReplace)
+}
+
+type DropViewStatement struct {
+	statementBase
+	target *TableRelation
+}
+
+func NewDropViewStatement(source Source, target *TableRelation) (*DropViewStatement, error) {
+	if !validSource(source) || target == nil {
+		return nil, fmt.Errorf("invalid DROP VIEW statement")
+	}
+	value := &DropViewStatement{statementBase: statementBase{source: source}, target: target}
+	value.fingerprint = semanticFingerprint(value)
+	return value, nil
+}
+func (*DropViewStatement) statementNode()                   {}
+func (*DropViewStatement) Kind() StatementKind              { return StatementDropView }
+func (statement *DropViewStatement) Target() *TableRelation { return statement.target }
+func (statement *DropViewStatement) Accept(visitor StatementVisitor) error {
+	return visitor.VisitDropView(statement)
+}
+func (statement *DropViewStatement) writeSemantic(builder *fingerprintBuilder) {
+	builder.token("drop-view")
+	statement.target.writeSemantic(builder)
 }
 
 func NewDropTableStatement(source Source, target *TableRelation) (*DropTableStatement, error) {

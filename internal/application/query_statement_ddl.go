@@ -152,6 +152,14 @@ func (*ddlCommandVisitor) VisitMerge(*queryast.MergeStatement) error {
 	return unsupportedDDL("MERGE is not a catalog DDL statement")
 }
 
+func (*ddlCommandVisitor) VisitCreateView(*queryast.CreateViewStatement) error {
+	return unsupportedDDL("CREATE VIEW is not a catalog DDL statement")
+}
+
+func (*ddlCommandVisitor) VisitDropView(*queryast.DropViewStatement) error {
+	return unsupportedDDL("DROP VIEW is not a catalog DDL statement")
+}
+
 func ddlFieldFromAST(name string, typ queryast.Type, notNull bool) (domain.Field, error) {
 	if typ == nil {
 		return domain.Field{}, invalidAnalyzedDDL()

@@ -219,9 +219,9 @@ operations:
     support: partial
     verification: transport
     rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables', discovery: true}
-    supportedInput: {en: "Schema, labels, description, expiration, and basic partitioning metadata are supported.", ko: "스키마와 라벨, 설명, 만료, 기본 파티션 메타데이터를 지원합니다."}
-    limitations: {policy: tracked, byDesign: [], en: "Views, routines, external tables, and advanced partition options are not implemented.", ko: "뷰와 루틴, 외부 테이블, 고급 파티션 옵션은 지원하지 않습니다."}
-    issues: ['#21', '#27']
+    supportedInput: {en: "Physical-table metadata and GoogleSQL logical views (`view.query`, `useLegacySql=false`) are supported.", ko: "물리 테이블 메타데이터와 GoogleSQL 논리 뷰(`view.query`, `useLegacySql=false`)를 지원합니다."}
+    limitations: {policy: tracked, byDesign: [], en: "Routines, external tables, legacy-SQL views, and advanced partition options are not implemented.", ko: "루틴, 외부 테이블, Legacy SQL 뷰, 고급 파티션 옵션은 지원하지 않습니다."}
+    issues: ['#21', '#44']
     sources: [bigquery-rest-v2]
     tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
@@ -232,9 +232,9 @@ operations:
     support: partial
     verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables', discovery: true}
-    supportedInput: {en: maxResults and pageToken are supported., ko: maxResults와 pageToken을 지원합니다.}
+    supportedInput: {en: maxResults and pageToken are supported for physical tables and logical views., ko: 물리 테이블과 논리 뷰에서 maxResults와 pageToken을 지원합니다.}
     limitations: {policy: mixed, byDesign: [google-control-plane], en: Supported local metadata is returned; remaining list fields are tracked while Google-managed metadata stays out of scope., ko: 지원하는 로컬 메타데이터를 반환하며 나머지 목록 필드는 구현 예정이고 Google 관리 메타데이터는 범위에서 제외합니다.}
-    issues: ['#33']
+    issues: ['#33', '#44']
     sources: [bigquery-rest-v2]
     tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery]
 
@@ -245,9 +245,9 @@ operations:
     support: partial
     verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}', discovery: true}
-    supportedInput: {en: "Project, dataset, and table path parameters are supported.", ko: "프로젝트와 데이터 세트, 테이블 경로 매개변수를 지원합니다."}
-    limitations: {policy: mixed, byDesign: [google-control-plane, google-iam], en: selectedFields and view are tracked; Cloud statistics and IAM metadata remain outside the emulator scope., ko: selectedFields와 view는 구현 예정이며 Cloud 통계와 IAM 메타데이터는 에뮬레이터 범위에서 제외합니다.}
-    issues: ['#33']
+    supportedInput: {en: "Project, dataset, and table path parameters and logical-view definition fields are supported.", ko: "프로젝트와 데이터 세트, 테이블 경로 매개변수와 논리 뷰 정의 필드를 지원합니다."}
+    limitations: {policy: mixed, byDesign: [google-control-plane, google-iam], en: "selectedFields, Cloud statistics, and IAM metadata remain outside the emulator scope.", ko: "selectedFields, Cloud 통계와 IAM 메타데이터는 에뮬레이터 범위에서 제외합니다."}
+    issues: ['#33', '#44']
     sources: [bigquery-rest-v2]
     tests: [go:internal/transport/rest/catalog_server:TestCatalogRESTMetadataPatchETagAndSchemaEvolution, go:internal/transport/rest/catalog_server:TestCatalogRESTCreateGetListDeleteAndDiscovery, go:cmd/emulator/state_restart:TestRuntimeCatalogMetadataSurvivesRestart]
 
@@ -419,9 +419,9 @@ operations:
     support: partial
     verification: transport
     rest: {method: GET, path: '/bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}/data', discovery: true}
-    supportedInput: {en: "maxResults, pageToken, startIndex, and selected wire format options are supported.", ko: "maxResults와 pageToken, startIndex, 일부 출력 형식 옵션을 지원합니다."}
-    limitations: {policy: tracked, byDesign: [], en: selectedFields projection is rejected and response sizes are bounded., ko: selectedFields 프로젝션은 거부하며 응답 크기에 제한이 있습니다.}
-    issues: ['#3']
+    supportedInput: {en: "maxResults, pageToken, startIndex, and selected wire format options are supported for physical tables.", ko: "물리 테이블에서 maxResults와 pageToken, startIndex, 일부 출력 형식 옵션을 지원합니다."}
+    limitations: {policy: tracked, byDesign: [], en: "selectedFields projection is rejected, response sizes are bounded, and logical views return stable unsupported.", ko: "selectedFields 프로젝션은 거부하고 응답 크기를 제한하며 논리 뷰는 안정적으로 미지원 처리합니다."}
+    issues: ['#3', '#44']
     sources: [bigquery-rest-v2]
     tests: [go:internal/transport/rest/tabledata:TestTableDataListPagesNestedRowsAcrossPublicRESTEdge]
 

@@ -106,7 +106,7 @@ limit](https://cloud.google.com/bigquery/docs/paging-results#api-limits)을 재�
 
 | 기능 | 상태 | 지원 범위 |
 | --- | --- | --- |
-| 의미 기반 SQL DDL | 부분 지원 | GoogleSQL AST 계획으로 `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, 최상위 `ADD`, `RENAME`, `DROP COLUMN`, `ALTER COLUMN SET DATA TYPE`을 실행합니다. 지원하지 않는 절은 변경 전에 `query.ddl.catalog-sync-v1`로 거부하며 SQLite와 엔진 사이의 중단 복구는 #26에 남아 있습니다. |
+| 의미 기반 SQL DDL | 부분 지원 | 공식 GoogleSQL AST/analyzer로 `CREATE [OR REPLACE] VIEW`, `DROP VIEW`, `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`, 최상위 `ADD`, `RENAME`, `DROP COLUMN`, `ALTER COLUMN SET DATA TYPE`을 실행합니다. 뷰 의존성 순환과 의존 뷰가 있는 스키마 변경은 물리 변경 전에 거부하며 SQLite와 엔진 사이의 중단 복구는 #26에 남아 있습니다. |
 | 여러 문장으로 된 쿼리 | 부분 지원 | `DECLARE`, `SET`, 지원하는 쿼리 및 DML을 한 트랜잭션에서 실행합니다. 제어 흐름, 동적 SQL, 임시 루틴은 공식 [여러 문장 쿼리 계약](https://cloud.google.com/bigquery/docs/multi-statement-queries)의 미지원 범위입니다. |
 | 취소 | 부분 지원 | 종료 과정에서는 새 작업을 거부하고 실행 중인 작업을 취소한 뒤 Storage와 DuckDB를 닫습니다. 공개 [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel)과 취소 상태는 지원하지 않습니다. |
 | Parquet 로드 `jobs.insert`, `jobs.get`, `jobs.list` | 부분 지원 | 항상 사용할 수 있습니다. 구성, 상태, 오류, 시각, 통계는 SQLite에 저장합니다. |

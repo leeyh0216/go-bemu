@@ -105,11 +105,21 @@ func (gateway *Gateway) analyzeSingleStatement(
 		return &statementAnalysisError{kind: kind, cause: err}
 	}
 	mapper := statementMapper{sourceDigest: document.source.Digest()}
-	if _, requiresCatalogBinding := external.(*gsql.ASTAlterTableStatement); requiresCatalogBinding {
-		syntax, err := mapper.mapStatement(external)
-		if err != nil {
+	syntax, mappingErr := mapper.mapStatement(external)
+	// CREATE VIEW is the sole statement whose target must be catalog-visible to
+	// the official analyzer before it is resolved. For every other statement we
+	// retain a mapper error until after analysis so analyzer diagnostics (for
+	// example an unknown column type) keep their established public
+	// classification.
+	if create, isCreateView := syntax.(*queryast.CreateViewStatement); isCreateView {
+		if mappingErr != nil {
+			return semantic.Statement{}, statementFailure(mappingErr)
+		}
+		if err := registerCreateViewTarget(snapshot, request, create); err != nil {
 			return semantic.Statement{}, statementFailure(err)
 		}
+	}
+	if _, requiresCatalogBinding := external.(*gsql.ASTAlterTableStatement); requiresCatalogBinding {
 		return projectCatalogStatement(request, syntax, snapshot)
 	}
 	output, err := gsql.AnalyzeStatementFromParserAST(
@@ -129,9 +139,8 @@ func (gateway *Gateway) analyzeSingleStatement(
 	if err := ctx.Err(); err != nil {
 		return semantic.Statement{}, err
 	}
-	syntax, err := mapper.mapStatement(external)
-	if err != nil {
-		return semantic.Statement{}, statementFailure(err)
+	if mappingErr != nil {
+		return semantic.Statement{}, statementFailure(mappingErr)
 	}
 	return projectResolvedStatement(ctx, request, syntax, snapshot, resolved)
 }
@@ -186,6 +195,7 @@ type catalogSnapshot struct {
 	typeFactory *gsql.TypeFactory
 	language    *gsql.LanguageOptions
 	tables      map[string]registeredTable
+	datasets    map[string]*gsql.SimpleCatalog
 }
 
 type registeredTable struct {
@@ -214,6 +224,9 @@ func buildCatalogSnapshot(
 			tables := datasets[datasetIndex].Tables
 			sort.Slice(tables, func(i, j int) bool { return canonicalLess(tables[i].ID, tables[j].ID) })
 			metadata[projectIndex].Datasets[datasetIndex].Tables = tables
+			views := datasets[datasetIndex].Views
+			sort.Slice(views, func(i, j int) bool { return canonicalLess(views[i].ID, views[j].ID) })
+			metadata[projectIndex].Datasets[datasetIndex].Views = views
 		}
 	}
 
@@ -235,7 +248,7 @@ func buildCatalogSnapshot(
 
 	snapshot := &catalogSnapshot{
 		root: root, typeFactory: typeFactory, language: language,
-		tables: make(map[string]registeredTable),
+		tables: make(map[string]registeredTable), datasets: make(map[string]*gsql.SimpleCatalog),
 	}
 	defaultProject := request.DefaultProjectID
 	if defaultProject == "" {
@@ -272,6 +285,7 @@ func buildCatalogSnapshot(
 					return nil, catalogShapeFailure()
 				}
 			}
+			snapshot.datasets[catalogDatasetKey(projectMetadata.Project.ID, datasetMetadata.Dataset.ID)] = datasetCatalog
 			for _, table := range datasetMetadata.Tables {
 				if table.ProjectID != projectMetadata.Project.ID || table.DatasetID != datasetMetadata.Dataset.ID {
 					return nil, canonicalSchemaFailure(domain.ErrInvalid)
@@ -302,9 +316,92 @@ func buildCatalogSnapshot(
 				}
 				snapshot.tables[tableKey(registered.reference)] = registered
 			}
+			for _, view := range datasetMetadata.Views {
+				if view.ProjectID != projectMetadata.Project.ID || view.DatasetID != datasetMetadata.Dataset.ID {
+					return nil, canonicalSchemaFailure(domain.ErrInvalid)
+				}
+				if err := view.Validate(); err != nil {
+					return nil, canonicalSchemaFailure(err)
+				}
+				registered, tableNode, err := registerTable(typeFactory, domain.Table{
+					ProjectID: view.ProjectID, DatasetID: view.DatasetID, ID: view.ID, Type: "TABLE", Schema: view.Schema,
+				}, nextTableID)
+				if err != nil {
+					return nil, err
+				}
+				nextTableID++
+				if _, exists := snapshot.tables[tableKey(registered.reference)]; exists {
+					return nil, canonicalSchemaFailure(domain.ErrConflict)
+				}
+				if err := datasetCatalog.AddTable2(view.ID, tableNode); err != nil {
+					return nil, catalogShapeFailure()
+				}
+				if err := root.AddTable2(tableFullName(registered.reference), tableNode); err != nil {
+					return nil, catalogShapeFailure()
+				}
+				if projectMetadata.Project.ID == defaultProject {
+					if err := root.AddTable2(datasetMetadata.Dataset.ID+"."+view.ID, tableNode); err != nil {
+						return nil, catalogShapeFailure()
+					}
+				}
+				if projectMetadata.Project.ID == defaultProject && datasetMetadata.Dataset.ID == request.DefaultDataset {
+					if err := root.AddTable2(view.ID, tableNode); err != nil {
+						return nil, catalogShapeFailure()
+					}
+				}
+				snapshot.tables[tableKey(registered.reference)] = registered
+			}
 		}
 	}
 	return snapshot, nil
+}
+
+func registerCreateViewTarget(snapshot *catalogSnapshot, request ports.QueryRequest, statement *queryast.CreateViewStatement) error {
+	if snapshot == nil || statement == nil || statement.Target() == nil {
+		return analyzerBoundaryFailureAt("create-view-target")
+	}
+	reference, err := resolveAnalyzedPath(request, statement.Target().Path().Segments())
+	if err != nil {
+		return err
+	}
+	key := tableKey(reference)
+	if _, exists := snapshot.tables[key]; exists {
+		return nil
+	}
+	dataset := snapshot.datasets[catalogDatasetKey(reference.ProjectID, reference.DatasetID)]
+	if dataset == nil {
+		return fmt.Errorf("%w: %s", domain.ErrNotFound, tableFullName(reference))
+	}
+	node, err := gsql.NewSimpleTable(reference.TableID, int64(len(snapshot.tables)+1_000_000))
+	if err != nil {
+		return analyzerBoundaryFailure()
+	}
+	fullName := tableFullName(reference)
+	if err := node.SetFullName(fullName); err != nil {
+		return analyzerBoundaryFailure()
+	}
+	if err := dataset.AddTable2(reference.TableID, node); err != nil {
+		return catalogShapeFailure()
+	}
+	if err := snapshot.root.AddTable2(fullName, node); err != nil {
+		return catalogShapeFailure()
+	}
+	defaultProject := request.DefaultProjectID
+	if defaultProject == "" {
+		defaultProject = request.ProjectID
+	}
+	if reference.ProjectID == defaultProject {
+		if err := snapshot.root.AddTable2(reference.DatasetID+"."+reference.TableID, node); err != nil {
+			return catalogShapeFailure()
+		}
+	}
+	if reference.ProjectID == defaultProject && reference.DatasetID == request.DefaultDataset {
+		if err := snapshot.root.AddTable2(reference.TableID, node); err != nil {
+			return catalogShapeFailure()
+		}
+	}
+	snapshot.tables[key] = registeredTable{reference: reference}
+	return nil
 }
 
 func ownedCatalogMetadata(snapshot ports.GoogleSQLCatalogSnapshot) []ports.GoogleSQLProjectSnapshot {
@@ -317,6 +414,10 @@ func ownedCatalogMetadata(snapshot ports.GoogleSQLCatalogSnapshot) []ports.Googl
 			projects[projectIndex].Datasets[datasetIndex].Tables = make([]domain.Table, len(dataset.Tables))
 			for tableIndex, table := range dataset.Tables {
 				projects[projectIndex].Datasets[datasetIndex].Tables[tableIndex] = cloneTable(table)
+			}
+			projects[projectIndex].Datasets[datasetIndex].Views = make([]domain.View, len(dataset.Views))
+			for viewIndex, view := range dataset.Views {
+				projects[projectIndex].Datasets[datasetIndex].Views[viewIndex] = domain.CloneView(view)
 			}
 		}
 	}
@@ -619,6 +720,10 @@ func tableFullName(reference domain.TableReference) string {
 
 func tableKey(reference domain.TableReference) string {
 	return strings.ToLower(tableFullName(reference))
+}
+
+func catalogDatasetKey(projectID, datasetID string) string {
+	return strings.ToLower(projectID + "\x00" + datasetID)
 }
 
 func catalogReadFailure(err error) error {

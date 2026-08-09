@@ -28,6 +28,7 @@ type GoogleSQLProjectSnapshot struct {
 type GoogleSQLDatasetSnapshot struct {
 	Dataset domain.Dataset
 	Tables  []domain.Table
+	Views   []domain.View
 }
 
 // GoogleSQLGateway is the application's single syntax and semantic analysis

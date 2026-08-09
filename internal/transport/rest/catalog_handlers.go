@@ -8,6 +8,7 @@ package rest
 // parent from the resource named on the wire.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -255,6 +256,10 @@ func (s *Server) createTable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("%w: tableReference parent must match the request path", domain.ErrInvalid))
 		return
 	}
+	if request.View != nil {
+		s.createLogicalView(w, r, request, fields, projectID, datasetID)
+		return
+	}
 	table := domain.Table{
 		ProjectID: projectID, DatasetID: datasetID,
 		ID: request.TableReference.TableID, FriendlyName: request.FriendlyName,
@@ -309,6 +314,54 @@ func (s *Server) createTable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tableFromDomain(created, s.baseURLFor(r)))
 }
 
+func (s *Server) createLogicalView(w http.ResponseWriter, r *http.Request, request tableResource, fields map[string]json.RawMessage, projectID, datasetID string) {
+	if s.queries == nil {
+		writeError(w, fmt.Errorf("%w: logical view DDL requires the query service", domain.ErrUnsupported))
+		return
+	}
+	if request.View.UseLegacySQL {
+		writeError(w, fmt.Errorf("%w: legacy SQL views are not supported", domain.ErrInvalid))
+		return
+	}
+	if request.Type != "" && request.Type != "VIEW" {
+		writeError(w, fmt.Errorf("%w: table type conflicts with view resource", domain.ErrInvalid))
+		return
+	}
+	for _, field := range []string{"schema", "expirationTime", "timePartitioning", "rangePartitioning", "clustering"} {
+		if hasField(fields, field) {
+			writeError(w, fmt.Errorf("%w: %s is derived or unsupported for logical views", domain.ErrInvalid, field))
+			return
+		}
+	}
+	reference := domain.TableReference{ProjectID: projectID, DatasetID: datasetID, TableID: request.TableReference.TableID}
+	if reference.ProjectID == "" || reference.DatasetID == "" || reference.TableID == "" || strings.ContainsAny(reference.ProjectID+reference.DatasetID+reference.TableID, "`\x00") {
+		writeError(w, fmt.Errorf("%w: view tableReference is invalid", domain.ErrInvalid))
+		return
+	}
+	if strings.TrimSpace(request.View.Query) == "" {
+		writeError(w, fmt.Errorf("%w: view.query is required", domain.ErrInvalid))
+		return
+	}
+	// This only serializes a validated resource identity. The view query itself
+	// crosses the normal official GoogleSQL parser/analyzer admission path.
+	sql := fmt.Sprintf("CREATE VIEW `%s.%s.%s` AS %s", projectID, datasetID, reference.TableID, request.View.Query)
+	if _, err := s.queries.RunSync(r.Context(), queryInputFromWire(projectID, "", "", sql, nil, nil, "", "", "", nil)); err != nil {
+		writeError(w, err)
+		return
+	}
+	table, err := s.catalog.GetTable(r.Context(), projectID, datasetID, reference.TableID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	resource, err := s.tableResource(r.Context(), table, s.baseURLFor(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resource)
+}
+
 func (s *Server) patchTable(w http.ResponseWriter, r *http.Request) {
 	s.mutateTable(w, r, false)
 }
@@ -336,6 +389,10 @@ func (s *Server) mutateTable(w http.ResponseWriter, r *http.Request, replace boo
 	}
 	if err := checkIfMatch(r, metadataETag(current)); err != nil {
 		writeError(w, err)
+		return
+	}
+	if current.Type == "VIEW" {
+		writeError(w, fmt.Errorf("%w: logical-view updates are not supported; use CREATE OR REPLACE VIEW", domain.ErrUnsupported))
 		return
 	}
 	if _, present := fields["tableReference"]; present &&
@@ -387,7 +444,12 @@ func (s *Server) getTable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tableFromDomain(table, s.baseURLFor(r)))
+	resource, err := s.tableResource(r.Context(), table, s.baseURLFor(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resource)
 }
 
 func (s *Server) listTables(w http.ResponseWriter, r *http.Request) {
@@ -403,7 +465,12 @@ func (s *Server) listTables(w http.ResponseWriter, r *http.Request) {
 	}
 	resources := make([]tableResource, end-start)
 	for i, table := range tables[start:end] {
-		resources[i] = tableFromDomain(table, s.baseURLFor(r))
+		resource, resourceErr := s.tableResource(r.Context(), table, s.baseURLFor(r))
+		if resourceErr != nil {
+			writeError(w, resourceErr)
+			return
+		}
+		resources[i] = resource
 	}
 	response := map[string]any{
 		"kind": "bigquery#tableList", "tables": resources, "totalItems": len(tables),
@@ -415,11 +482,44 @@ func (s *Server) listTables(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteTable(w http.ResponseWriter, r *http.Request) {
+	table, err := s.catalog.GetTable(r.Context(), r.PathValue("projectId"), r.PathValue("datasetId"), r.PathValue("tableId"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if table.Type == "VIEW" {
+		if s.queries == nil {
+			writeError(w, fmt.Errorf("%w: logical view DDL requires the query service", domain.ErrUnsupported))
+			return
+		}
+		sql := fmt.Sprintf("DROP VIEW `%s.%s.%s`", table.ProjectID, table.DatasetID, table.ID)
+		if _, err := s.queries.RunSync(r.Context(), queryInputFromWire(table.ProjectID, "", "", sql, nil, nil, "", "", "", nil)); err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if err := s.catalog.DeleteTable(r.Context(), r.PathValue("projectId"), r.PathValue("datasetId"), r.PathValue("tableId")); err != nil {
 		writeError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) tableResource(ctx context.Context, table domain.Table, baseURL string) (tableResource, error) {
+	if table.Type != "VIEW" {
+		return tableFromDomain(table, baseURL), nil
+	}
+	views, ok := s.catalog.(ViewMetadataUseCases)
+	if !ok {
+		return tableResource{}, fmt.Errorf("%w: logical view metadata is not configured", domain.ErrUnsupported)
+	}
+	view, err := views.GetView(ctx, table.ProjectID, table.DatasetID, table.ID)
+	if err != nil {
+		return tableResource{}, err
+	}
+	return tableFromLogicalView(view, baseURL), nil
 }
 
 func parseOptionalInt64(value, field string) (int64, error) {

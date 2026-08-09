@@ -37,7 +37,11 @@ func (s *CatalogService) GoogleSQLCatalogSnapshot(ctx context.Context) (ports.Go
 			Project: project, Datasets: make([]ports.GoogleSQLDatasetSnapshot, len(datasets)),
 		}
 		for datasetIndex, dataset := range datasets {
-			tables, err := s.listTablesLocked(ctx, project.ID, dataset.ID)
+			// Logical views are carried in the separate Views collection below.
+			// Do not use listTablesLocked here: its REST-facing projection includes
+			// views as table resources, which would register the same analyzer name
+			// twice and make the official catalog reject the snapshot.
+			tables, err := s.catalog.ListTables(ctx, project.ID, dataset.ID)
 			if err != nil {
 				return ports.GoogleSQLCatalogSnapshot{}, err
 			}
@@ -45,8 +49,19 @@ func (s *CatalogService) GoogleSQLCatalogSnapshot(ctx context.Context) (ports.Go
 			for tableIndex, table := range tables {
 				ownedTables[tableIndex] = cloneGoogleSQLCatalogTable(table)
 			}
+			ownedViews := make([]domain.View, 0)
+			if s.views != nil {
+				views, viewErr := s.views.ListViews(ctx, project.ID, dataset.ID)
+				if viewErr != nil {
+					return ports.GoogleSQLCatalogSnapshot{}, viewErr
+				}
+				ownedViews = make([]domain.View, len(views))
+				for viewIndex, view := range views {
+					ownedViews[viewIndex] = domain.CloneView(view)
+				}
+			}
 			projectSnapshot.Datasets[datasetIndex] = ports.GoogleSQLDatasetSnapshot{
-				Dataset: cloneGoogleSQLCatalogDataset(dataset), Tables: ownedTables,
+				Dataset: cloneGoogleSQLCatalogDataset(dataset), Tables: ownedTables, Views: ownedViews,
 			}
 		}
 		snapshot.Projects[projectIndex] = projectSnapshot

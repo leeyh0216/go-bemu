@@ -21,15 +21,18 @@ type CatalogRepository struct {
 	projects map[string]domain.Project
 	datasets map[string]domain.Dataset
 	tables   map[string]domain.Table
+	views    map[string]domain.View
 }
 
 var _ ports.CatalogRepository = (*CatalogRepository)(nil)
+var _ ports.ViewRepository = (*CatalogRepository)(nil)
 
 func NewCatalogRepository() *CatalogRepository {
 	return &CatalogRepository{
 		projects: make(map[string]domain.Project),
 		datasets: make(map[string]domain.Dataset),
 		tables:   make(map[string]domain.Table),
+		views:    make(map[string]domain.View),
 	}
 }
 
@@ -83,6 +86,11 @@ func (r *CatalogRepository) DeleteProject(_ context.Context, id string) error {
 	for key, table := range r.tables {
 		if table.ProjectID == id {
 			delete(r.tables, key)
+		}
+	}
+	for key, view := range r.views {
+		if view.ProjectID == id {
+			delete(r.views, key)
 		}
 	}
 	delete(r.projects, id)
@@ -152,6 +160,11 @@ func (r *CatalogRepository) DeleteDataset(_ context.Context, projectID, datasetI
 			delete(r.tables, tableKey)
 		}
 	}
+	for viewKey, view := range r.views {
+		if view.ProjectID == projectID && view.DatasetID == datasetID {
+			delete(r.views, viewKey)
+		}
+	}
 	delete(r.datasets, key)
 	return nil
 }
@@ -215,6 +228,74 @@ func (r *CatalogRepository) DeleteTable(_ context.Context, projectID, datasetID,
 		return fmt.Errorf("%w: table %s", domain.ErrNotFound, key)
 	}
 	delete(r.tables, key)
+	return nil
+}
+
+func (r *CatalogRepository) CreateView(_ context.Context, view domain.View) error {
+	if err := view.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.datasets[datasetKey(view.ProjectID, view.DatasetID)]; !ok {
+		return fmt.Errorf("%w: dataset %s/%s", domain.ErrNotFound, view.ProjectID, view.DatasetID)
+	}
+	key := tableKey(view.ProjectID, view.DatasetID, view.ID)
+	if _, ok := r.views[key]; ok {
+		return fmt.Errorf("%w: view %s", domain.ErrConflict, key)
+	}
+	r.views[key] = domain.CloneView(view)
+	return nil
+}
+
+func (r *CatalogRepository) ReplaceView(_ context.Context, view domain.View) error {
+	if err := view.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := tableKey(view.ProjectID, view.DatasetID, view.ID)
+	if _, ok := r.views[key]; !ok {
+		return fmt.Errorf("%w: view %s", domain.ErrNotFound, key)
+	}
+	r.views[key] = domain.CloneView(view)
+	return nil
+}
+
+func (r *CatalogRepository) GetView(_ context.Context, projectID, datasetID, viewID string) (domain.View, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	view, ok := r.views[tableKey(projectID, datasetID, viewID)]
+	if !ok {
+		return domain.View{}, fmt.Errorf("%w: view %s/%s/%s", domain.ErrNotFound, projectID, datasetID, viewID)
+	}
+	return domain.CloneView(view), nil
+}
+
+func (r *CatalogRepository) ListViews(_ context.Context, projectID, datasetID string) ([]domain.View, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.datasets[datasetKey(projectID, datasetID)]; !ok {
+		return nil, fmt.Errorf("%w: dataset %s/%s", domain.ErrNotFound, projectID, datasetID)
+	}
+	views := make([]domain.View, 0)
+	for _, view := range r.views {
+		if view.ProjectID == projectID && view.DatasetID == datasetID {
+			views = append(views, domain.CloneView(view))
+		}
+	}
+	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
+	return views, nil
+}
+
+func (r *CatalogRepository) DeleteView(_ context.Context, projectID, datasetID, viewID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := tableKey(projectID, datasetID, viewID)
+	if _, ok := r.views[key]; !ok {
+		return fmt.Errorf("%w: view %s", domain.ErrNotFound, key)
+	}
+	delete(r.views, key)
 	return nil
 }
 

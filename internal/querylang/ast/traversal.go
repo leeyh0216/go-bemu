@@ -110,6 +110,13 @@ func (collector *relationCollector) statement(statement Statement) error {
 		return collector.relation(value.target)
 	case *DropTableStatement:
 		return collector.relation(value.target)
+	case *CreateViewStatement:
+		if err := collector.relation(value.target); err != nil {
+			return err
+		}
+		return collector.query(value.query)
+	case *DropViewStatement:
+		return collector.relation(value.target)
 	case *AlterTableStatement:
 		return collector.relation(value.target)
 	case *TruncateTableStatement:
