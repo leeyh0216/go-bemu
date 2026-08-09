@@ -15,6 +15,15 @@ import (
 )
 
 func compileRowRestriction(input string, schema []catalogdomain.Field) (string, []any, error) {
+	return compileRowRestrictionForTable(input, schema, "")
+}
+
+func compileTableRowRestriction(input string, table catalogdomain.Table) (string, []any, error) {
+	partitionType, _ := table.IngestionTimePartitioning()
+	return compileRowRestrictionForTable(input, table.Schema, partitionType)
+}
+
+func compileRowRestrictionForTable(input string, schema []catalogdomain.Field, ingestionPartitionType string) (string, []any, error) {
 	if strings.TrimSpace(input) == "" {
 		return "", nil, nil
 	}
@@ -26,7 +35,7 @@ func compileRowRestriction(input string, schema []catalogdomain.Field) (string, 
 	if err != nil {
 		return "", nil, err
 	}
-	lowerer := restrictionLowerer{schema: schema}
+	lowerer := restrictionLowerer{schema: schema, ingestionPartitionType: ingestionPartitionType}
 	if err := lowerer.validate(expression); err != nil {
 		return "", nil, err
 	}
@@ -39,7 +48,8 @@ func compileRowRestriction(input string, schema []catalogdomain.Field) (string, 
 }
 
 type restrictionLowerer struct {
-	schema []catalogdomain.Field
+	schema                 []catalogdomain.Field
+	ingestionPartitionType string
 }
 
 func (lowerer restrictionLowerer) validate(expression queryast.Expression) error {
@@ -122,6 +132,15 @@ func (lowerer restrictionLowerer) validate(expression queryast.Expression) error
 
 func (lowerer restrictionLowerer) validatePath(path queryast.IdentifierPath) error {
 	segments := path.Segments()
+	if len(segments) == 1 && catalogdomain.IsPartitionPseudoColumn(segments[0]) {
+		if lowerer.ingestionPartitionType == "" {
+			return fmt.Errorf("row restriction references partition pseudo column %q on a non-ingestion-partitioned table", segments[0])
+		}
+		if strings.EqualFold(segments[0], catalogdomain.PartitionDatePseudoColumn) && !strings.EqualFold(lowerer.ingestionPartitionType, "DAY") {
+			return fmt.Errorf("row restriction references %q but table partitioning is %s", segments[0], lowerer.ingestionPartitionType)
+		}
+		return nil
+	}
 	field, found := findFieldPath(lowerer.schema, segments)
 	if !found {
 		return fmt.Errorf("row restriction references unknown field %q", strings.Join(segments, "."))

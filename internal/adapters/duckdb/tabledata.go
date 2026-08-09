@@ -29,9 +29,54 @@ var _ ports.TableStatisticsReader = (*Warehouse)(nil)
 // accounting unit, never a public row wire format.
 func (w *Warehouse) TableStatistics(ctx context.Context, reference domain.TableReference) (statistics ports.TableStatistics, err error) {
 	tableName := quoteIdentifier(physicalSchema(reference.ProjectID, reference.DatasetID)) + "." + quoteIdentifier(reference.TableID)
-	statement := "SELECT COUNT(*), COALESCE(SUM(OCTET_LENGTH(ENCODE(TO_JSON(t)))), 0) FROM " + tableName + " AS t"
-	if err := w.db.QueryRowContext(ctx, statement).Scan(&statistics.RowCount, &statistics.LogicalBytes); err != nil {
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ports.TableStatistics{}, fmt.Errorf("begin table storage statistics transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	rows, err := tx.QueryContext(ctx, `
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_schema = ? AND table_name = ?
+		ORDER BY ordinal_position`, physicalSchema(reference.ProjectID, reference.DatasetID), reference.TableID)
+	if err != nil {
+		return ports.TableStatistics{}, fmt.Errorf("list table storage statistic columns: %w", err)
+	}
+	columns := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return ports.TableStatistics{}, fmt.Errorf("scan table storage statistic column: %w", err)
+		}
+		if !domain.IsPartitionPseudoColumn(name) {
+			columns = append(columns, name)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return ports.TableStatistics{}, fmt.Errorf("iterate table storage statistic columns: %w", err)
+	}
+	if err = rows.Close(); err != nil {
+		return ports.TableStatistics{}, fmt.Errorf("close table storage statistic columns: %w", err)
+	}
+	if len(columns) == 0 {
+		return ports.TableStatistics{}, fmt.Errorf("table storage statistics found no canonical columns")
+	}
+	fields := make([]string, len(columns))
+	for index, name := range columns {
+		fields[index] = quoteIdentifier(name) + " := " + quoteIdentifier(name)
+	}
+	statement := "SELECT COUNT(*), COALESCE(SUM(OCTET_LENGTH(ENCODE(TO_JSON(STRUCT_PACK(" + strings.Join(fields, ", ") + "))))), 0) FROM " + tableName
+	if err = tx.QueryRowContext(ctx, statement).Scan(&statistics.RowCount, &statistics.LogicalBytes); err != nil {
 		return ports.TableStatistics{}, fmt.Errorf("read table storage statistics: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return ports.TableStatistics{}, fmt.Errorf("commit table storage statistics transaction: %w", err)
 	}
 	statistics.PhysicalBytes = statistics.LogicalBytes
 	return statistics, nil
@@ -77,7 +122,11 @@ func (w *Warehouse) ListTableData(ctx context.Context, request ports.TableDataRe
 	// f/v encoder below the port remain the only authoritative byte gates.
 	// https://cloud.google.com/bigquery/docs/reference/rest/v2/TableRow
 	// https://cloud.google.com/bigquery/docs/paging-results#api-limits
-	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+tableName+" ORDER BY rowid LIMIT ? OFFSET ?", limit, offset)
+	columns := make([]string, len(request.Schema))
+	for index, field := range request.Schema {
+		columns[index] = quoteIdentifier(field.Name)
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT "+strings.Join(columns, ", ")+" FROM "+tableName+" ORDER BY rowid LIMIT ? OFFSET ?", limit, offset)
 	if err != nil {
 		return ports.TableDataPage{}, fmt.Errorf("read table data page: %w", err)
 	}

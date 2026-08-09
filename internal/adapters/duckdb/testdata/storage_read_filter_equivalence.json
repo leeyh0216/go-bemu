@@ -1,0 +1,16 @@
+{
+  "schema": [
+    {"name": "id", "type": "INT64", "mode": "REQUIRED"},
+    {"name": "name", "type": "STRING"},
+    {"name": "active", "type": "BOOL"}
+  ],
+  "rows": [
+    "(1, 'Alpha', TRUE)",
+    "(2, 'alpha', TRUE)",
+    "(3, 'alpine', FALSE)",
+    "(4, 'beta', TRUE)"
+  ],
+  "selectedFields": ["id", "name"],
+  "rowRestriction": "id BETWEEN 2 AND 3 AND STARTS_WITH(LOWER(name), 'a')",
+  "query": "SELECT id, name FROM `data-project.analytics.filter_equivalence` WHERE id BETWEEN 2 AND 3 AND starts_with(lower(name), 'a') ORDER BY id"
+}

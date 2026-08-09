@@ -12,11 +12,13 @@ package duckdb
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -27,6 +29,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/ports"
 	readdomain "github.com/leeyh0216/go-bemu/internal/storageread/domain"
 	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
@@ -168,6 +171,55 @@ func TestDuckDBReadSnapshotEmptySelectedFieldsMeansFullSchema(t *testing.T) {
 	}
 }
 
+func TestDuckDBReadSnapshotBindsIngestionTimePartitionPseudoColumns(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "ingestion_partitioned", Type: "TABLE",
+		Schema:           []catalogdomain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}},
+		TimePartitioning: &catalogdomain.TimePartitioning{Type: "DAY"},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table, "(1), (2)")
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+
+	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+		RowRestriction: "_PARTITIONTIME IS NOT NULL AND _PARTITIONDATE IS NOT NULL",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := snapshotPort.(*duckDBReadSnapshot)
+	defer closeReadSnapshot(t, snapshot)
+	if got := snapshot.Metadata().RowCount; got != 2 {
+		t.Fatalf("partition pseudo-column filtered row_count = %d, want 2", got)
+	}
+	statistics, err := warehouse.TableStatistics(ctx, catalogdomain.TableReference{
+		ProjectID: table.ProjectID, DatasetID: table.DatasetID, TableID: table.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var physicalRowBytes int64
+	physicalTable := quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + "." + quoteIdentifier(table.ID)
+	if err := warehouse.db.QueryRowContext(ctx,
+		"SELECT SUM(OCTET_LENGTH(ENCODE(TO_JSON(t)))) FROM "+physicalTable+" AS t",
+	).Scan(&physicalRowBytes); err != nil {
+		t.Fatal(err)
+	}
+	if statistics.RowCount != 2 || statistics.LogicalBytes <= 0 || statistics.LogicalBytes >= physicalRowBytes {
+		t.Fatalf("canonical partition statistics = %#v, physical row bytes = %d", statistics, physicalRowBytes)
+	}
+
+	nonPartitioned := table
+	nonPartitioned.ID = "not_partitioned"
+	nonPartitioned.TimePartitioning = nil
+	if _, _, err := compileTableRowRestriction("_PARTITIONTIME IS NOT NULL", nonPartitioned); err == nil {
+		t.Fatal("non-partitioned table accepted _PARTITIONTIME")
+	}
+}
+
 func TestDuckDBReadSnapshotReadsNestedAndRepeatedDriverValues(t *testing.T) {
 	ctx, cancel := duckDBReadTestContext(t)
 	defer cancel()
@@ -234,8 +286,12 @@ func newReadTestWarehouse(t *testing.T, ctx context.Context, table catalogdomain
 
 func insertReadTestRows(t *testing.T, ctx context.Context, warehouse *Warehouse, table catalogdomain.Table, values string) {
 	t.Helper()
-	statement := fmt.Sprintf("INSERT INTO %s.%s VALUES %s",
-		quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)), quoteIdentifier(table.ID), values)
+	columns := make([]string, len(table.Schema))
+	for index, field := range table.Schema {
+		columns[index] = quoteIdentifier(field.Name)
+	}
+	statement := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES %s",
+		quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)), quoteIdentifier(table.ID), strings.Join(columns, ", "), values)
 	if _, err := warehouse.db.ExecContext(ctx, statement); err != nil {
 		t.Fatalf("insert read test rows: %v", err)
 	}
@@ -688,6 +744,8 @@ func TestDuckDBReadSnapshotProjectsNestedStructFieldsWithRestriction(t *testing.
 	insertReadTestRows(t, ctx, warehouse, table, "(1, {'name':'alice', 'rank':7}), (2, {'name':'bob', 'rank':3})")
 	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
 
+	var projectedFields []catalogdomain.Field
+	var projectedRows [][]byte
 	for _, format := range []readdomain.Format{readdomain.FormatArrow, readdomain.FormatAvro} {
 		t.Run(format.String(), func(t *testing.T) {
 			snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
@@ -705,7 +763,72 @@ func TestDuckDBReadSnapshotProjectsNestedStructFieldsWithRestriction(t *testing.
 			if got := fieldNames(snapshot.fields); !slices.Equal(got, []string{"profile"}) || len(snapshot.fields[0].Fields) != 1 || snapshot.fields[0].Fields[0].Name != "rank" {
 				t.Fatalf("nested projected schema = %#v", snapshot.fields)
 			}
+			if projectedFields == nil {
+				projectedFields = cloneCatalogFields(snapshot.fields)
+				projectedRows = slices.Clone(snapshot.memoryRows)
+				return
+			}
+			if !reflect.DeepEqual(projectedFields, snapshot.fields) || len(projectedRows) != len(snapshot.memoryRows) {
+				t.Fatalf("%s projection differs from Arrow schema=%#v rows=%d", format, snapshot.fields, len(snapshot.memoryRows))
+			}
+			for index := range projectedRows {
+				if !bytes.Equal(projectedRows[index], snapshot.memoryRows[index]) {
+					t.Fatalf("%s projected row %d differs from Arrow", format, index)
+				}
+			}
 		})
+	}
+}
+
+func TestDuckDBReadSnapshotMatchesDataDrivenGoogleSQLFilterResult(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	var fixture struct {
+		Schema         []catalogdomain.Field `json:"schema"`
+		Rows           []string              `json:"rows"`
+		SelectedFields []string              `json:"selectedFields"`
+		RowRestriction string                `json:"rowRestriction"`
+		Query          string                `json:"query"`
+	}
+	payload, err := os.ReadFile("testdata/storage_read_filter_equivalence.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(payload, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "filter_equivalence", Type: "TABLE", Schema: fixture.Schema,
+	}
+	if err := table.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table, strings.Join(fixture.Rows, ", "))
+	queryResult, err := warehouse.Query(ctx, ports.QueryRequest{ProjectID: table.ProjectID, SQL: fixture.Query})
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+		SelectedFields: fixture.SelectedFields, RowRestriction: fixture.RowRestriction,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := snapshotPort.(*duckDBReadSnapshot)
+	defer closeReadSnapshot(t, snapshot)
+	actual := make([][]any, len(snapshot.memoryRows))
+	for index, encoded := range snapshot.memoryRows {
+		row, err := decodeSnapshotRow(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual[index] = tableDataCanonicalRow(snapshot.fields, row)
+	}
+	if !reflect.DeepEqual(queryResult.Rows, actual) {
+		t.Fatalf("fixture query rows = %#v, Storage Read rows = %#v", queryResult.Rows, actual)
 	}
 }
 

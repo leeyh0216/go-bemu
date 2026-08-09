@@ -546,6 +546,9 @@ func (c *StorageWriteCoordinator) describeTable(ctx context.Context, queryer sto
 			_ = rows.Close()
 			return tableLayout{}, fmt.Errorf("scan Storage Write destination schema: %w", err)
 		}
+		if catalogdomain.IsPartitionPseudoColumn(name) {
+			continue
+		}
 		physicalColumns = append(physicalColumns, physicalColumn{name: name, dataType: dataType, nullable: nullable})
 	}
 	if err := rows.Err(); err != nil {

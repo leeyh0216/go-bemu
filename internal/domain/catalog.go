@@ -85,6 +85,9 @@ func (f Field) Validate() error {
 	if len(f.Name) > 1024 || !resourceIDPattern.MatchString(f.Name) {
 		return fmt.Errorf("%w: invalid field name %q", ErrInvalid, f.Name)
 	}
+	if IsPartitionPseudoColumn(f.Name) {
+		return fmt.Errorf("%w: field name %q is reserved for ingestion-time partitioning", ErrInvalid, f.Name)
+	}
 	t := strings.ToUpper(f.Type)
 	switch t {
 	case "GEOGRAPHY":
@@ -127,6 +130,11 @@ type TimePartitioning struct {
 	ExpirationMs int64
 }
 
+const (
+	PartitionTimePseudoColumn = "_PARTITIONTIME"
+	PartitionDatePseudoColumn = "_PARTITIONDATE"
+)
+
 type Range struct {
 	Start    int64
 	End      int64
@@ -167,6 +175,27 @@ func (t Table) Validate() error {
 		return err
 	}
 	return nil
+}
+
+// IsPartitionPseudoColumn reports the BigQuery-owned columns available only
+// for ingestion-time partitioned tables. They must never enter canonical user
+// schema, but adapters may expose them to filter binding.
+func IsPartitionPseudoColumn(name string) bool {
+	return strings.EqualFold(name, PartitionTimePseudoColumn) || strings.EqualFold(name, PartitionDatePseudoColumn)
+}
+
+// IngestionTimePartitioning returns the canonical granularity only when this
+// table is partitioned by ingestion time rather than by a schema field.
+func (t Table) IngestionTimePartitioning() (string, bool) {
+	if t.TimePartitioning == nil || strings.TrimSpace(t.TimePartitioning.Field) != "" {
+		return "", false
+	}
+	switch typ := strings.ToUpper(strings.TrimSpace(t.TimePartitioning.Type)); typ {
+	case "DAY", "HOUR", "MONTH", "YEAR":
+		return typ, true
+	default:
+		return "", false
+	}
 }
 
 func validateFieldList(fields []Field, parent []string) error {
