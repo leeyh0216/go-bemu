@@ -34,8 +34,6 @@ import (
 
 const storageReadMaterializeOperation = "storage_read.snapshot.materialize"
 
-var errNestedReadProjectionUnsupported = errors.New("nested Storage Read projection is not implemented")
-
 // Request-derived failures are classified before they cross the outbound
 // port. INVALID_ARGUMENT means the projection/filter cannot be valid for this
 // table, NOT_FOUND means the catalog resource is absent, and UNIMPLEMENTED
@@ -120,9 +118,6 @@ func (m *DuckDBReadSnapshotMaterializer) Materialize(ctx context.Context, reques
 	}
 	fields, err := projectReadFields(table.Schema, request.SelectedFields)
 	if err != nil {
-		if errors.Is(err, errNestedReadProjectionUnsupported) {
-			return nil, classifiedReadSnapshotError(readdomain.ErrorUnimplemented, err)
-		}
 		return nil, classifiedReadSnapshotError(readdomain.ErrorInvalidArgument, err)
 	}
 	filterSQL, filterArgs, err := compileRowRestriction(request.RowRestriction, table.Schema)
@@ -247,36 +242,89 @@ func projectReadFields(schema []catalogdomain.Field, selected []string) ([]catal
 	if len(selected) == 0 {
 		return cloneCatalogFields(schema), nil
 	}
-	wanted := make(map[string]struct{}, len(selected))
+	type selection struct {
+		all      bool
+		children map[string]*selection
+	}
+	root := &selection{children: map[string]*selection{}}
 	for _, name := range selected {
-		if strings.Contains(name, ".") {
-			// Nested projection is valid in the official API. Classify this
-			// adapter limitation separately from a missing/invalid field name.
-			// Source: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
-			return nil, fmt.Errorf("%w: %q", errNestedReadProjectionUnsupported, name)
+		parts := strings.Split(name, ".")
+		if strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("selected_field is empty")
 		}
-		key := strings.ToLower(name)
-		if _, duplicate := wanted[key]; duplicate {
-			continue
+		current := root
+		for _, part := range parts {
+			if strings.TrimSpace(part) == "" {
+				return nil, fmt.Errorf("selected_field %q has an empty path component", name)
+			}
+			key := strings.ToLower(part)
+			if current.children == nil {
+				current.children = map[string]*selection{}
+			}
+			if current.children[key] == nil {
+				current.children[key] = &selection{children: map[string]*selection{}}
+			}
+			current = current.children[key]
 		}
-		if _, found := findFieldPath(schema, []string{name}); !found {
-			return nil, fmt.Errorf("selected_field %q does not exist", name)
-		}
-		wanted[key] = struct{}{}
+		current.all = true
+		current.children = nil
 	}
-	projected := make([]catalogdomain.Field, 0, len(wanted))
-	for _, field := range schema {
-		if _, ok := wanted[strings.ToLower(field.Name)]; ok {
-			projected = append(projected, cloneCatalogField(field))
+	var project func([]catalogdomain.Field, *selection, string) ([]catalogdomain.Field, error)
+	project = func(fields []catalogdomain.Field, selected *selection, prefix string) ([]catalogdomain.Field, error) {
+		projected := make([]catalogdomain.Field, 0, len(selected.children))
+		for _, field := range fields {
+			choice := selected.children[strings.ToLower(field.Name)]
+			if choice == nil {
+				continue
+			}
+			copy := cloneCatalogField(field)
+			path := field.Name
+			if prefix != "" {
+				path = prefix + "." + path
+			}
+			if !choice.all {
+				if !strings.EqualFold(field.Type, "RECORD") {
+					return nil, fmt.Errorf("selected_field %q is not a STRUCT field", path)
+				}
+				if strings.EqualFold(field.Mode, "REPEATED") {
+					return nil, fmt.Errorf("nested projection of repeated STRUCT field %q is not supported", path)
+				}
+				var err error
+				copy.Fields, err = project(field.Fields, choice, path)
+				if err != nil {
+					return nil, err
+				}
+				if len(copy.Fields) == 0 {
+					return nil, fmt.Errorf("selected_field %q does not exist", path)
+				}
+			}
+			projected = append(projected, copy)
 		}
+		for key := range selected.children {
+			found := false
+			for _, field := range fields {
+				if strings.EqualFold(field.Name, key) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("selected_field %q does not exist", key)
+			}
+		}
+		return projected, nil
 	}
-	return projected, nil
+	return project(schema, root, "")
 }
 
 func materializeReadStatement(projectID, datasetID, tableID string, fields []catalogdomain.Field, filter string) string {
 	columns := make([]string, len(fields))
 	for index, field := range fields {
 		identifier := quoteIdentifier(field.Name)
+		if strings.EqualFold(field.Type, "RECORD") && !strings.EqualFold(field.Mode, "REPEATED") {
+			columns[index] = renderReadStructProjection(identifier, field.Fields) + " AS " + identifier
+			continue
+		}
 		if strings.EqualFold(field.Type, "JSON") && !strings.EqualFold(field.Mode, "REPEATED") {
 			// duckdb-go can decode JSON objects into map[string]any, which may
 			// coerce JSON numbers through float64. Storage Read represents JSON as
@@ -294,6 +342,19 @@ func materializeReadStatement(projectID, datasetID, tableID string, fields []cat
 		statement += " WHERE " + filter
 	}
 	return statement
+}
+
+func renderReadStructProjection(identifier string, fields []catalogdomain.Field) string {
+	arguments := make([]string, len(fields))
+	for index, field := range fields {
+		path := identifier + "." + quoteIdentifier(field.Name)
+		value := path
+		if strings.EqualFold(field.Type, "RECORD") && !strings.EqualFold(field.Mode, "REPEATED") {
+			value = renderReadStructProjection(path, field.Fields)
+		}
+		arguments[index] = quoteIdentifier(field.Name) + " := " + value
+	}
+	return "CASE WHEN " + identifier + " IS NULL THEN NULL ELSE struct_pack(" + strings.Join(arguments, ", ") + ") END"
 }
 
 func cloneCatalogFields(fields []catalogdomain.Field) []catalogdomain.Field {

@@ -637,7 +637,7 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 			name: "nested projection",
 			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 				SelectedFields: []string{"tags.value"}},
-			want: readdomain.ErrorUnimplemented,
+			want: readdomain.ErrorInvalidArgument,
 		},
 		{
 			name: "missing projection",
@@ -669,6 +669,43 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("table changed after rejected restriction: rows = %d", rows)
+	}
+}
+
+func TestDuckDBReadSnapshotProjectsNestedStructFieldsWithRestriction(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "nested_projection", Type: "TABLE",
+		Schema: []catalogdomain.Field{
+			{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+			{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{
+				{Name: "name", Type: "STRING"}, {Name: "rank", Type: "INT64"},
+			}},
+		},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table, "(1, {'name':'alice', 'rank':7}), (2, {'name':'bob', 'rank':3})")
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+
+	for _, format := range []readdomain.Format{readdomain.FormatArrow, readdomain.FormatAvro} {
+		t.Run(format.String(), func(t *testing.T) {
+			snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+				Table: readTestTableResource(table), Format: format,
+				SelectedFields: []string{"profile.rank"}, RowRestriction: "profile.rank BETWEEN 5 AND 9",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := snapshotPort.(*duckDBReadSnapshot)
+			defer closeReadSnapshot(t, snapshot)
+			if snapshot.Metadata().RowCount != 1 {
+				t.Fatalf("nested projection row_count = %d, want 1", snapshot.Metadata().RowCount)
+			}
+			if got := fieldNames(snapshot.fields); !slices.Equal(got, []string{"profile"}) || len(snapshot.fields[0].Fields) != 1 || snapshot.fields[0].Fields[0].Name != "rank" {
+				t.Fatalf("nested projected schema = %#v", snapshot.fields)
+			}
+		})
 	}
 }
 
