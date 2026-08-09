@@ -137,6 +137,11 @@ func TestCapabilityAnnotationsMergeEquivalentTests(t *testing.T) {
 		strings.Join(index.Claims[1].OperationIDs, ",") != "grpc.bigquery-read.create-read-session" {
 		t.Fatalf("test-local claims = %#v", index.Claims)
 	}
+	if len(index.APICoverage) != 2 ||
+		strings.Join(index.APICoverage[0].Tests, ",") != "spark:tests/integration/spark/test_one.py:test_case" ||
+		strings.Join(index.APICoverage[1].Tests, ",") != "spark:tests/integration/spark/test_two.py:test_case" {
+		t.Fatalf("API coverage must retain each test-local claim = %#v", index.APICoverage)
+	}
 }
 
 func TestCapabilityAnnotationsRejectDuplicateTestLocalClaims(t *testing.T) {

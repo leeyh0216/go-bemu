@@ -215,7 +215,7 @@ func normalizeCapabilityAnnotations(annotations []capabilityAnnotation, operatio
 		SchemaVersion: capabilitySchemaVersion,
 		Cases:         cases,
 		Claims:        claims,
-		APICoverage:   buildCapabilityAPICoverage(cases),
+		APICoverage:   buildCapabilityAPICoverage(claims),
 	}, nil
 }
 
@@ -324,19 +324,17 @@ func appendUnique(values []string, value string) []string {
 	return append(values, value)
 }
 
-func buildCapabilityAPICoverage(cases []CapabilityCase) []CapabilityAPICoverage {
+func buildCapabilityAPICoverage(claims []CapabilityClaim) []CapabilityAPICoverage {
 	byOperation := make(map[string]*CapabilityAPICoverage)
-	for _, capability := range cases {
-		for _, operationID := range capability.OperationIDs {
+	for _, claim := range claims {
+		for _, operationID := range claim.OperationIDs {
 			coverage := byOperation[operationID]
 			if coverage == nil {
 				coverage = &CapabilityAPICoverage{OperationID: operationID}
 				byOperation[operationID] = coverage
 			}
-			coverage.CaseIDs = appendUnique(coverage.CaseIDs, capability.ID)
-			for _, testID := range capability.Tests {
-				coverage.Tests = appendUnique(coverage.Tests, testID)
-			}
+			coverage.CaseIDs = appendUnique(coverage.CaseIDs, claim.ID)
+			coverage.Tests = appendUnique(coverage.Tests, claim.Test)
 		}
 	}
 	coverage := make([]CapabilityAPICoverage, 0, len(byOperation))
