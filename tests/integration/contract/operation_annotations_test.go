@@ -55,6 +55,42 @@ func TestIntegrationCommandMarkerRejectsAdditionalMetadata(t *testing.T) {
 	}
 }
 
+func TestIntegrationOperationAnnotationsAcceptsSparkContractCaseBySelector(t *testing.T) {
+	root := integrationAnnotationRoot(t)
+	path := filepath.Join(root, "tests", "integration", "spark", "test_sample.py")
+	source := `
+from conftest import contract_case
+
+@contract_case(
+    "SBQ-READ-EXAMPLE-V1",
+    state="verified",
+    category="read",
+    summary="Read a table",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=("example.query",),
+)
+def test_query():
+    pass
+`
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(source)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := ConsumerManifest{Scenarios: []ConsumerScenario{{
+		ID:           "spark-query",
+		Selectors:    []string{"pytest:tests/integration/spark/test_sample.py"},
+		OperationIDs: []string{"example.query"},
+	}}}
+	if err := ValidateIntegrationOperationAnnotations(root, manifest, map[string]bool{"example.query": true}); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest.Scenarios[0].OperationIDs = nil
+	if err := ValidateIntegrationOperationAnnotations(root, manifest, map[string]bool{"example.query": true}); err == nil || !strings.Contains(err.Error(), "absent from scenario evidence") {
+		t.Fatalf("missing selector operation error = %v", err)
+	}
+}
+
 func integrationAnnotationRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -62,6 +98,17 @@ func integrationAnnotationRoot(t *testing.T) string {
 		if err := os.MkdirAll(filepath.Join(root, "tests", "integration", directory), 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	extractor, err := os.ReadFile("extract_capability_annotations.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "tests", "integration", "contract", "extract_capability_annotations.py")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, extractor, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	return root
 }

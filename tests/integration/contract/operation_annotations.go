@@ -40,7 +40,7 @@ func ValidateIntegrationOperationAnnotations(repositoryRoot string, manifest Con
 			return fmt.Errorf("integration operation annotation references unknown operation %q", operationID)
 		}
 		for testID := range tests {
-			if !declared[testID][operationID] {
+			if !declared[testID][operationID] && !sparkSelectorDeclaresOperation(manifest, testID, operationID) {
 				return fmt.Errorf("integration operation %s annotation in %s is absent from scenario evidence", operationID, testID)
 			}
 		}
@@ -60,6 +60,34 @@ func ValidateIntegrationOperationAnnotations(repositoryRoot string, manifest Con
 	return nil
 }
 
+// sparkSelectorDeclaresOperation allows a literal contract_case annotation to
+// own the operation list for a Spark test. The scenario selector remains the
+// reviewed boundary that says which public integration workflow exercises it.
+func sparkSelectorDeclaresOperation(manifest ConsumerManifest, testID, operationID string) bool {
+	if !strings.HasPrefix(testID, "spark:") {
+		return false
+	}
+	value := strings.TrimPrefix(testID, "spark:")
+	path, _, found := strings.Cut(value, ":")
+	if !found {
+		return false
+	}
+	for _, scenario := range manifest.Scenarios {
+		for _, selector := range scenario.Selectors {
+			prefix, selectorPath, found := strings.Cut(selector, ":")
+			if !found || prefix != "pytest" || selectorPath != path {
+				continue
+			}
+			for _, declaredOperation := range scenario.OperationIDs {
+				if declaredOperation == operationID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func collectIntegrationOperationAnnotations(repositoryRoot string) (map[string]map[string]bool, error) {
 	annotations := make(map[string]map[string]bool)
 	directories := []struct {
@@ -67,7 +95,6 @@ func collectIntegrationOperationAnnotations(repositoryRoot string) (map[string]m
 		kind string
 	}{
 		{path: "tests/integration/python", kind: "python"},
-		{path: "tests/integration/spark", kind: "spark"},
 		{path: "tests/integration/bqcli", kind: "bq"},
 	}
 	for _, directory := range directories {
@@ -93,6 +120,42 @@ func collectIntegrationOperationAnnotations(repositoryRoot string) (map[string]m
 		})
 		if err != nil {
 			return nil, err
+		}
+	}
+	sparkAnnotations, err := collectSparkCapabilityOperationAnnotations(repositoryRoot)
+	if err != nil {
+		return nil, err
+	}
+	for operationID, tests := range sparkAnnotations {
+		if annotations[operationID] == nil {
+			annotations[operationID] = make(map[string]bool)
+		}
+		for testID := range tests {
+			annotations[operationID][testID] = true
+		}
+	}
+	return annotations, nil
+}
+
+func collectSparkCapabilityOperationAnnotations(repositoryRoot string) (map[string]map[string]bool, error) {
+	paths, err := filepath.Glob(filepath.Join(repositoryRoot, "tests", "integration", "spark", "test_*.py"))
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return map[string]map[string]bool{}, nil
+	}
+	capabilities, err := collectCapabilityAnnotations(repositoryRoot)
+	if err != nil {
+		return nil, err
+	}
+	annotations := make(map[string]map[string]bool)
+	for _, capability := range capabilities {
+		for _, operationID := range capability.OperationIDs {
+			if annotations[operationID] == nil {
+				annotations[operationID] = make(map[string]bool)
+			}
+			annotations[operationID][capability.Test] = true
 		}
 	}
 	return annotations, nil
