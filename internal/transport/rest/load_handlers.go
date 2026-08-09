@@ -147,6 +147,44 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 	if wire.ParquetOptions != nil && wire.ParquetOptions.EnableListInference != nil {
 		configuration.ParquetOptions.EnableListInference = *wire.ParquetOptions.EnableListInference
 	}
+	if wire.TimePartitioning != nil {
+		var expiration *int64
+		if wire.TimePartitioning.ExpirationMs != nil {
+			parsed, parseErr := parseLoadRequiredInt64(*wire.TimePartitioning.ExpirationMs, "timePartitioning.expirationMs")
+			if parseErr != nil {
+				writeLoadError(w, parseErr)
+				return
+			}
+			expiration = &parsed
+		}
+		configuration.TimePartitioning = &loadDomain.TimePartitioning{
+			Type: wire.TimePartitioning.Type, Field: wire.TimePartitioning.Field, ExpirationMs: expiration,
+		}
+	}
+	if wire.RangePartitioning != nil {
+		start, parseErr := parseLoadRequiredInt64(wire.RangePartitioning.Range.Start, "rangePartitioning.range.start")
+		if parseErr != nil {
+			writeLoadError(w, parseErr)
+			return
+		}
+		end, parseErr := parseLoadRequiredInt64(wire.RangePartitioning.Range.End, "rangePartitioning.range.end")
+		if parseErr != nil {
+			writeLoadError(w, parseErr)
+			return
+		}
+		interval, parseErr := parseLoadRequiredInt64(wire.RangePartitioning.Range.Interval, "rangePartitioning.range.interval")
+		if parseErr != nil {
+			writeLoadError(w, parseErr)
+			return
+		}
+		configuration.RangePartitioning = &loadDomain.RangePartitioning{
+			Field: wire.RangePartitioning.Field,
+			Range: domain.Range{Start: start, End: end, Interval: interval},
+		}
+	}
+	if wire.Clustering != nil {
+		configuration.ClusteringFields = append([]string{}, wire.Clustering.Fields...)
+	}
 	if wire.Schema != nil {
 		configuration.Schema = loadFieldsFromWire(wire.Schema.Fields)
 	}
@@ -244,7 +282,8 @@ func unsupportedLoadOptions(payload []byte, wire loadConfigurationResource) ([]s
 		"sourceUris": {}, "destinationTable": {}, "schema": {}, "sourceFormat": {},
 		"writeDisposition": {}, "createDisposition": {}, "autodetect": {},
 		"schemaUpdateOptions": {}, "ignoreUnknownValues": {}, "maxBadRecords": {},
-		"parquetOptions": {}, "decimalTargetTypes": {}, "nullMarkers": {},
+		"parquetOptions": {}, "timePartitioning": {}, "rangePartitioning": {}, "clustering": {},
+		"decimalTargetTypes": {}, "nullMarkers": {},
 		"projectionFields": {}, "timestampTargetPrecision": {},
 	}
 	unsupported := make([]string, 0)
@@ -277,6 +316,49 @@ func unsupportedLoadOptions(payload []byte, wire loadConfigurationResource) ([]s
 			}
 		}
 	}
+	for _, option := range []struct {
+		name    string
+		allowed map[string]struct{}
+	}{
+		{name: "timePartitioning", allowed: map[string]struct{}{"type": {}, "field": {}, "expirationMs": {}}},
+		{name: "rangePartitioning", allowed: map[string]struct{}{"field": {}, "range": {}}},
+		{name: "clustering", allowed: map[string]struct{}{"fields": {}}},
+	} {
+		value, ok := fields[option.name]
+		if !ok || rawJSONNull(value) {
+			continue
+		}
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(value, &nested); err != nil {
+			return nil, fmt.Errorf("%w: %s must be an object", loadDomain.ErrInvalid, option.name)
+		}
+		for field, fieldValue := range nested {
+			if _, supported := option.allowed[field]; !supported {
+				unsupported = append(unsupported, unsupportedLoadOption(option.name+"."+field, fieldValue))
+			}
+		}
+	}
+	if value, ok := fields["rangePartitioning"]; ok && !rawJSONNull(value) {
+		var partitioning struct {
+			Range json.RawMessage `json:"range"`
+		}
+		if err := json.Unmarshal(value, &partitioning); err != nil {
+			return nil, fmt.Errorf("%w: rangePartitioning must be an object", loadDomain.ErrInvalid)
+		}
+		if rawPresent(partitioning.Range) && !rawJSONNull(partitioning.Range) {
+			var rangeFields map[string]json.RawMessage
+			if err := json.Unmarshal(partitioning.Range, &rangeFields); err != nil {
+				return nil, fmt.Errorf("%w: rangePartitioning.range must be an object", loadDomain.ErrInvalid)
+			}
+			for field, fieldValue := range rangeFields {
+				switch field {
+				case "start", "end", "interval":
+				default:
+					unsupported = append(unsupported, unsupportedLoadOption("rangePartitioning.range."+field, fieldValue))
+				}
+			}
+		}
+	}
 	// decimalTargetTypes has a data-dependent default, so only the CLI's
 	// explicit JSON null is equivalent to omission for the supported slice.
 	if value, ok := fields["decimalTargetTypes"]; ok && !rawJSONNull(value) {
@@ -298,6 +380,14 @@ func unsupportedLoadOptions(payload []byte, wire loadConfigurationResource) ([]s
 	}
 	sort.Strings(unsupported)
 	return unsupported, nil
+}
+
+func parseLoadRequiredInt64(value, field string) (int64, error) {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s must be an int64 decimal string", loadDomain.ErrInvalid, field)
+	}
+	return parsed, nil
 }
 
 func rawJSONNull(value json.RawMessage) bool {

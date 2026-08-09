@@ -177,7 +177,9 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 			"sourceUris":[%q],
 			"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"created_events"},
 			"sourceFormat":"PARQUET","writeDisposition":"WRITE_EMPTY","createDisposition":"CREATE_IF_NEEDED",
-			"parquetOptions":{"enableListInference":true}
+			"parquetOptions":{"enableListInference":true},
+			"timePartitioning":{"type":"DAY","expirationMs":"86400000"},
+			"clustering":{"fields":["id"]}
 		}}
 	}`, "gs://load-bucket/input/*.parquet")
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", createBody, http.StatusOK)
@@ -189,13 +191,20 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	if createdOptions["enableListInference"] != true {
 		t.Fatalf("load job lost Parquet options: %#v", createdJob)
 	}
+	createdLoad := createdJob["configuration"].(map[string]any)["load"].(map[string]any)
+	if createdLoad["timePartitioning"].(map[string]any)["expirationMs"] != "86400000" ||
+		createdLoad["clustering"].(map[string]any)["fields"].([]any)[0] != "id" {
+		t.Fatalf("load job lost destination layout: %#v", createdJob)
+	}
 	createdTable := restLoadRequest(t, server.URL, http.MethodGet,
 		"/bigquery/v2/projects/test-project/datasets/analytics/tables/created_events", "", http.StatusOK)
-	if createdTable["location"] != "US" {
+	if createdTable["location"] != "US" ||
+		createdTable["timePartitioning"].(map[string]any)["expirationMs"] != "86400000" ||
+		createdTable["clustering"].(map[string]any)["fields"].([]any)[0] != "id" {
 		t.Fatalf("created table metadata = %#v", createdTable)
 	}
 	query = restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/queries",
-		`{"query":"SELECT count(*) AS row_count FROM `+"`test-project.analytics.created_events`"+`","useLegacySql":false}`, http.StatusOK)
+		`{"query":"SELECT count(*) AS row_count FROM `+"`test-project.analytics.created_events`"+` WHERE _PARTITIONDATE IS NOT NULL","useLegacySql":false}`, http.StatusOK)
 	if query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "2" {
 		t.Fatalf("unexpected query result after destination creation: %#v", query)
 	}

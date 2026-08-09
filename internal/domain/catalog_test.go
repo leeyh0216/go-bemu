@@ -53,3 +53,37 @@ func TestTableRejectsInvalidPartitionMetadataAndReservedFields(t *testing.T) {
 		})
 	}
 }
+
+func TestTableValidatesClusteringFields(t *testing.T) {
+	base := Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "events",
+		Schema: []Field{
+			{Name: "event_date", Type: "DATE"},
+			{Name: "customer_id", Type: "STRING"},
+			{Name: "items", Type: "INT64", Mode: "REPEATED"},
+			{Name: "amount", Type: "FLOAT64"},
+		},
+	}
+	valid := base
+	valid.ClusteringFields = []string{"customer_id", "event_date"}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid clustering error = %v", err)
+	}
+
+	for name, fields := range map[string][]string{
+		"empty":            {},
+		"missing":          {"missing"},
+		"duplicate":        {"customer_id", "CUSTOMER_ID"},
+		"repeated":         {"items"},
+		"unsupported type": {"amount"},
+		"too many":         {"customer_id", "event_date", "customer_id_2", "customer_id_3", "customer_id_4"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			table := base
+			table.ClusteringFields = fields
+			if err := table.Validate(); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}

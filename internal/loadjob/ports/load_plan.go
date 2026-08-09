@@ -230,10 +230,13 @@ func validateLoadPlanRequest(capabilities engine.Capabilities, request LoadPlanR
 		return fmt.Errorf("%w: schema plan does not match the load destination", domain.ErrPrecondition)
 	}
 	table := catalogdomain.Table{
-		ProjectID: request.Destination.Reference.ProjectID,
-		DatasetID: request.Destination.Reference.DatasetID,
-		ID:        request.Destination.Reference.TableID,
-		Schema:    request.Destination.Schema,
+		ProjectID:         request.Destination.Reference.ProjectID,
+		DatasetID:         request.Destination.Reference.DatasetID,
+		ID:                request.Destination.Reference.TableID,
+		Schema:            request.Destination.Schema,
+		TimePartitioning:  request.Destination.TimePartitioning,
+		RangePartitioning: request.Destination.RangePartitioning,
+		ClusteringFields:  request.Destination.ClusteringFields,
 	}
 	if err := table.Validate(); err != nil {
 		if errors.Is(err, catalogdomain.ErrUnsupported) {
@@ -288,25 +291,32 @@ func classifyAdapterPlanningError(err error) error {
 
 func cloneLoadPlanRequest(input LoadPlanRequest) LoadPlanRequest {
 	result := input
-	result.Destination.Schema = catalogdomain.CloneFields(input.Destination.Schema)
+	result.Destination = domain.CloneTable(input.Destination)
 	result.Objects = append([]ResolvedObject(nil), input.Objects...)
 	return result
 }
 
 func loadPlanRequestFingerprint(request LoadPlanRequest) string {
 	return fingerprint(struct {
-		Destination       domain.TableReference   `json:"destination"`
-		Location          string                  `json:"location"`
-		Schema            []domain.Field          `json:"schema"`
-		CreateDestination bool                    `json:"createDestination"`
-		UpdateDestination bool                    `json:"updateDestination"`
-		SchemaPlan        string                  `json:"schemaPlan"`
-		SourceFormat      domain.SourceFormat     `json:"sourceFormat"`
-		WriteDisposition  domain.WriteDisposition `json:"writeDisposition"`
-		Objects           []ResolvedObject        `json:"objects"`
+		Destination       domain.TableReference            `json:"destination"`
+		Location          string                           `json:"location"`
+		Schema            []domain.Field                   `json:"schema"`
+		TimePartitioning  *catalogdomain.TimePartitioning  `json:"timePartitioning,omitempty"`
+		RangePartitioning *catalogdomain.RangePartitioning `json:"rangePartitioning,omitempty"`
+		ClusteringFields  []string                         `json:"clusteringFields,omitempty"`
+		CreateDestination bool                             `json:"createDestination"`
+		UpdateDestination bool                             `json:"updateDestination"`
+		SchemaPlan        string                           `json:"schemaPlan"`
+		SourceFormat      domain.SourceFormat              `json:"sourceFormat"`
+		WriteDisposition  domain.WriteDisposition          `json:"writeDisposition"`
+		Objects           []ResolvedObject                 `json:"objects"`
 	}{
 		Destination: request.Destination.Reference, Location: request.Destination.Location,
-		Schema: request.Destination.Schema, CreateDestination: request.CreateDestination,
+		Schema:            request.Destination.Schema,
+		TimePartitioning:  request.Destination.TimePartitioning,
+		RangePartitioning: request.Destination.RangePartitioning,
+		ClusteringFields:  request.Destination.ClusteringFields,
+		CreateDestination: request.CreateDestination,
 		UpdateDestination: request.UpdateDestination,
 		SchemaPlan:        request.SchemaPlan.Fingerprint(),
 		SourceFormat:      request.SourceFormat, WriteDisposition: request.WriteDisposition,

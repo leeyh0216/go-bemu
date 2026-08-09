@@ -175,7 +175,12 @@ are inferred from the Parquet schema; LIST fields additionally require
 destination accepts only explicitly enabled nullable field additions and
 REQUIRED-to-NULLABLE relaxations. The physical schema update and appended rows
 share the destination transaction; canonical SQLite metadata is published
-after commit. Local paths and non-GCS URI schemes are rejected before job
+after commit. A newly created destination also carries validated time-unit or
+integer-range partition metadata, partition expiration, and ordered clustering
+fields into the same immutable load plan. Ingestion-time destinations create
+and populate `_PARTITIONTIME` and `_PARTITIONDATE`; a request cannot replace an
+existing destination's layout. Partition expiration sweeping and physical
+reclustering are not yet implemented. Local paths and non-GCS URI schemes are rejected before job
 persistence. The separate `autodetect` request flag, query-job schema updates,
 Avro/ORC/CSV/NDJSON, and
 multipart/resumable download are unsupported. Job metadata and idempotency

@@ -177,6 +177,9 @@ func (t Table) Validate() error {
 	if err := validateTablePartitioning(t); err != nil {
 		return err
 	}
+	if err := validateTableClustering(t); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -230,6 +233,36 @@ func validateTablePartitioning(table Table) error {
 		}
 		if partitioning.Range.End <= partitioning.Range.Start || partitioning.Range.Interval <= 0 {
 			return fmt.Errorf("%w: range partitioning requires end > start and interval > 0", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+func validateTableClustering(table Table) error {
+	if table.ClusteringFields == nil {
+		return nil
+	}
+	if len(table.ClusteringFields) == 0 || len(table.ClusteringFields) > 4 {
+		return fmt.Errorf("%w: clustering requires between one and four fields", ErrInvalid)
+	}
+	seen := make(map[string]struct{}, len(table.ClusteringFields))
+	for _, name := range table.ClusteringFields {
+		field, found := topLevelField(table.Schema, name)
+		if !found {
+			return fmt.Errorf("%w: clustering field %q does not exist at the top level", ErrInvalid, name)
+		}
+		key := strings.ToLower(field.Name)
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("%w: duplicate clustering field %q", ErrInvalid, name)
+		}
+		seen[key] = struct{}{}
+		if strings.EqualFold(field.Mode, "REPEATED") {
+			return fmt.Errorf("%w: clustering field %q must not be repeated", ErrInvalid, name)
+		}
+		switch strings.ToUpper(field.Type) {
+		case "BIGNUMERIC", "BOOL", "BOOLEAN", "DATE", "DATETIME", "INT64", "INTEGER", "NUMERIC", "STRING", "TIMESTAMP":
+		default:
+			return fmt.Errorf("%w: clustering field %q has unsupported type %q", ErrInvalid, name, field.Type)
 		}
 	}
 	return nil

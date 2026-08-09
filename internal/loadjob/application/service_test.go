@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -69,12 +70,13 @@ func (s *testObjectStore) Open(_ context.Context, object ports.ObjectInfo) (io.R
 }
 
 type testCatalog struct {
-	table           domain.Table
-	missing         bool
-	datasetLocation string
-	publishErr      error
-	published       *[]domain.Table
-	updated         *[]domain.Table
+	table                        domain.Table
+	missing                      bool
+	datasetLocation              string
+	defaultPartitionExpirationMs *int64
+	publishErr                   error
+	published                    *[]domain.Table
+	updated                      *[]domain.Table
 }
 
 func (c testCatalog) GetTable(_ context.Context, reference domain.TableReference) (domain.Table, error) {
@@ -84,14 +86,20 @@ func (c testCatalog) GetTable(_ context.Context, reference domain.TableReference
 	return c.table, nil
 }
 
-func (c testCatalog) GetDatasetLocation(_ context.Context, projectID, datasetID string) (string, error) {
+func (c testCatalog) GetDataset(_ context.Context, projectID, datasetID string) (domain.Dataset, error) {
 	if projectID != c.table.Reference.ProjectID || datasetID != c.table.Reference.DatasetID {
-		return "", domain.ErrNotFound
+		return domain.Dataset{}, domain.ErrNotFound
 	}
 	if c.datasetLocation != "" {
-		return c.datasetLocation, nil
+		return domain.Dataset{
+			Location:                     c.datasetLocation,
+			DefaultPartitionExpirationMs: catalogdomain.CloneOptionalInt64(c.defaultPartitionExpirationMs),
+		}, nil
 	}
-	return "US", nil
+	return domain.Dataset{
+		Location:                     "US",
+		DefaultPartitionExpirationMs: catalogdomain.CloneOptionalInt64(c.defaultPartitionExpirationMs),
+	}, nil
 }
 
 func (c testCatalog) PublishTable(_ context.Context, table domain.Table) error {
@@ -357,6 +365,10 @@ func TestServiceCreatesAndPublishesMissingDestination(t *testing.T) {
 		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
 		Location:  "US",
 		Schema:    []domain.Field{{Name: "id", Type: "INT64"}},
+		RangePartitioning: &domain.RangePartitioning{
+			Field: "id", Range: catalogdomain.Range{Start: 0, End: 100, Interval: 10},
+		},
+		ClusteringFields: []string{"id"},
 	}
 	published := make([]domain.Table, 0, 1)
 	config := DefaultConfig()
@@ -371,6 +383,10 @@ func TestServiceCreatesAndPublishesMissingDestination(t *testing.T) {
 	}
 	configuration := testConfiguration(domain.FormatParquet)
 	configuration.Schema = catalogdomain.CloneFields(table.Schema)
+	configuration.RangePartitioning = &domain.RangePartitioning{
+		Field: "id", Range: catalogdomain.Range{Start: 0, End: 100, Interval: 10},
+	}
+	configuration.ClusteringFields = []string{"id"}
 	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "create-destination"}
 	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
 		t.Fatal(err)
@@ -379,7 +395,9 @@ func TestServiceCreatesAndPublishesMissingDestination(t *testing.T) {
 	if job.Error != nil || job.Statistics.OutputRows != 3 {
 		t.Fatalf("job = %+v", job)
 	}
-	if len(published) != 1 || published[0].Reference != table.Reference || !schemasEqual(published[0].Schema, table.Schema) {
+	if len(published) != 1 || published[0].Reference != table.Reference || !schemasEqual(published[0].Schema, table.Schema) ||
+		!reflect.DeepEqual(published[0].RangePartitioning, table.RangePartitioning) ||
+		!reflect.DeepEqual(published[0].ClusteringFields, table.ClusteringFields) {
 		t.Fatalf("published destinations = %#v", published)
 	}
 	loader.mu.Lock()
@@ -387,6 +405,76 @@ func TestServiceCreatesAndPublishesMissingDestination(t *testing.T) {
 	loader.mu.Unlock()
 	if discards != 0 {
 		t.Fatalf("successful destination was discarded %d times", discards)
+	}
+}
+
+func TestServiceRejectsExistingDestinationLayoutDriftBeforeObjectAccess(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US", Schema: []domain.Field{{Name: "event_time", Type: "TIMESTAMP"}, {Name: "customer_id", Type: "STRING"}},
+		TimePartitioning: &catalogdomain.TimePartitioning{Type: "DAY", Field: "event_time", ExpirationMs: 86_400_000},
+		ClusteringFields: []string{"customer_id"},
+	}
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	loader := &testLoader{}
+	service, err := NewService(
+		NewMemoryJobRepository(), objects, testCatalog{table: table}, loader,
+		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := testConfiguration(domain.FormatParquet)
+	expiration := int64(86_400_000)
+	configuration.TimePartitioning = &domain.TimePartitioning{Type: "HOUR", Field: "event_time", ExpirationMs: &expiration}
+	configuration.ClusteringFields = []string{"customer_id"}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "layout-drift"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "conditionNotMet" {
+		t.Fatalf("job = %+v", job)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	if opens != 0 || loader.calls != 0 || loader.plannerCalls != 0 || loader.loadPlanCalls != 0 {
+		t.Fatalf("layout drift crossed a side-effect boundary: opens=%d loads=%d planner=%d load_plan=%d", opens, loader.calls, loader.plannerCalls, loader.loadPlanCalls)
+	}
+}
+
+func TestServiceAppliesDatasetDefaultPartitionExpiration(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US", Schema: []domain.Field{{Name: "event_time", Type: "TIMESTAMP"}},
+	}
+	published := make([]domain.Table, 0, 1)
+	expiration := int64(172_800_000)
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		NewMemoryJobRepository(), objects,
+		testCatalog{table: table, missing: true, published: &published, defaultPartitionExpirationMs: &expiration},
+		&testLoader{}, testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Schema = catalogdomain.CloneFields(table.Schema)
+	configuration.TimePartitioning = &domain.TimePartitioning{Type: "DAY", Field: "event_time"}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "partition-default"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error != nil || len(published) != 1 || published[0].TimePartitioning == nil ||
+		published[0].TimePartitioning.ExpirationMs != expiration {
+		t.Fatalf("published destination = %#v, job = %+v", published, job)
 	}
 }
 

@@ -310,6 +310,7 @@ service.
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | Parquet schema inference | Supported for scalar/STRUCT fields; LIST-to-REPEATED is opt-in with `enableListInference=true` |
 | load `schemaUpdateOptions` | `ALLOW_FIELD_ADDITION` and `ALLOW_FIELD_RELAXATION` are supported for `WRITE_APPEND`. Explicit schemas and Parquet-inferred schemas support top-level and nested updates; other drift fails before destination mutation. |
+| load destination partitioning and clustering | New destinations preserve time-unit or integer-range partition metadata, partition expiration, and one-to-four valid clustering fields. Ingestion-time destinations populate `_PARTITIONTIME` and `_PARTITIONDATE`; existing destinations accept only an identical requested layout. Partition expiration sweeping and physical DuckDB reclustering remain tracked by #47. |
 | `autodetect`, query-job schema updates, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | Implemented when configured |
 | BigQuery-compatible endpoint authentication | Intentionally absent; missing, arbitrary, and malformed credentials are ignored |

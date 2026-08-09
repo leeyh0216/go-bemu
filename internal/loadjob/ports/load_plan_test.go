@@ -37,6 +37,8 @@ func TestLoadPlanIsImmutableAndContainsNoArtifactLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := testLoadPlanRequest(schemaPlan, schema)
+	request.Destination.TimePartitioning = &catalogdomain.TimePartitioning{Type: "DAY", ExpirationMs: 86_400_000}
+	request.Destination.ClusteringFields = []string{"amount"}
 	plan, err := planner.Plan(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -44,13 +46,18 @@ func TestLoadPlanIsImmutableAndContainsNoArtifactLocation(t *testing.T) {
 
 	precision = 1
 	request.Destination.Schema[0].Name = "changed"
+	request.Destination.TimePartitioning.ExpirationMs = 1
+	request.Destination.ClusteringFields[0] = "changed"
 	request.Objects[0].Fingerprint = strings.Repeat("c", 64)
 	detached := plan.Request()
 	detached.Destination.Schema[0].Name = "also_changed"
+	detached.Destination.TimePartitioning.Type = "HOUR"
+	detached.Destination.ClusteringFields[0] = "also_changed"
 	detached.Objects[0].Size = 999
 
 	planned := plan.Request()
 	if planned.Destination.Schema[0].Name != "amount" || *planned.Destination.Schema[0].Precision != 20 ||
+		planned.Destination.TimePartitioning.ExpirationMs != 86_400_000 || planned.Destination.ClusteringFields[0] != "amount" ||
 		planned.Objects[0].Fingerprint != strings.Repeat("b", 64) || planned.Objects[0].Size != 7 {
 		t.Fatalf("load plan retained mutable input: %#v", planned)
 	}

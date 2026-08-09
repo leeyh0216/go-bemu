@@ -70,11 +70,26 @@ type TableReference struct {
 }
 
 type Field = catalogdomain.Field
+type RangePartitioning = catalogdomain.RangePartitioning
+
+type TimePartitioning struct {
+	Type         string
+	Field        string
+	ExpirationMs *int64
+}
+
+type Dataset struct {
+	Location                     string
+	DefaultPartitionExpirationMs *int64
+}
 
 type Table struct {
-	Reference TableReference
-	Location  string
-	Schema    []Field
+	Reference         TableReference
+	Location          string
+	Schema            []Field
+	TimePartitioning  *catalogdomain.TimePartitioning
+	RangePartitioning *RangePartitioning
+	ClusteringFields  []string
 }
 
 type ParquetOptions struct {
@@ -94,6 +109,9 @@ type LoadConfiguration struct {
 	MaxBadRecords       int64
 	UnsupportedOptions  []string
 	ParquetOptions      ParquetOptions
+	TimePartitioning    *TimePartitioning
+	RangePartitioning   *RangePartitioning
+	ClusteringFields    []string
 }
 
 type JobError struct {
@@ -167,6 +185,15 @@ func normalizeConfiguration(configuration LoadConfiguration) LoadConfiguration {
 		return configuration.SchemaUpdateOptions[left] < configuration.SchemaUpdateOptions[right]
 	})
 	configuration.UnsupportedOptions = append([]string(nil), configuration.UnsupportedOptions...)
+	configuration.TimePartitioning = cloneTimePartitioning(configuration.TimePartitioning)
+	if configuration.TimePartitioning != nil {
+		configuration.TimePartitioning.Type = strings.ToUpper(strings.TrimSpace(configuration.TimePartitioning.Type))
+		if configuration.TimePartitioning.Type == "" {
+			configuration.TimePartitioning.Type = "DAY"
+		}
+	}
+	configuration.RangePartitioning = cloneRangePartitioning(configuration.RangePartitioning)
+	configuration.ClusteringFields = cloneOptionalStrings(configuration.ClusteringFields)
 	return configuration
 }
 
@@ -217,6 +244,57 @@ func ValidateConfiguration(configuration LoadConfiguration) error {
 	}
 	if err := ValidateSchema(configuration.Schema); err != nil {
 		return err
+	}
+	if err := validateDestinationMetadata(configuration); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDestinationMetadata(configuration LoadConfiguration) error {
+	if configuration.TimePartitioning != nil && configuration.RangePartitioning != nil {
+		return fmt.Errorf("%w: timePartitioning and rangePartitioning are mutually exclusive", ErrInvalid)
+	}
+	if partitioning := configuration.TimePartitioning; partitioning != nil {
+		switch partitioning.Type {
+		case "DAY", "HOUR", "MONTH", "YEAR":
+		default:
+			return fmt.Errorf("%w: invalid timePartitioning type %q", ErrInvalid, partitioning.Type)
+		}
+		if partitioning.ExpirationMs != nil && *partitioning.ExpirationMs < 0 {
+			return fmt.Errorf("%w: timePartitioning.expirationMs must be non-negative", ErrInvalid)
+		}
+	}
+	if partitioning := configuration.RangePartitioning; partitioning != nil {
+		if strings.TrimSpace(partitioning.Field) == "" || partitioning.Range.End <= partitioning.Range.Start || partitioning.Range.Interval <= 0 {
+			return fmt.Errorf("%w: rangePartitioning requires a field, end > start, and interval > 0", ErrInvalid)
+		}
+	}
+	if configuration.ClusteringFields != nil && (len(configuration.ClusteringFields) == 0 || len(configuration.ClusteringFields) > 4) {
+		return fmt.Errorf("%w: clustering requires between one and four fields", ErrInvalid)
+	}
+	if len(configuration.Schema) == 0 {
+		return nil
+	}
+	return ValidateTable(Table{
+		Reference: configuration.Destination, Schema: configuration.Schema,
+		TimePartitioning: ResolveTimePartitioning(configuration.TimePartitioning, nil), RangePartitioning: configuration.RangePartitioning,
+		ClusteringFields: configuration.ClusteringFields,
+	})
+}
+
+func ValidateTable(table Table) error {
+	catalogTable := catalogdomain.Table{
+		ProjectID: table.Reference.ProjectID, DatasetID: table.Reference.DatasetID, ID: table.Reference.TableID,
+		Schema: cloneFields(table.Schema), TimePartitioning: cloneCatalogTimePartitioning(table.TimePartitioning),
+		RangePartitioning: cloneRangePartitioning(table.RangePartitioning),
+		ClusteringFields:  cloneOptionalStrings(table.ClusteringFields),
+	}
+	if err := catalogTable.Validate(); err != nil {
+		if errors.Is(err, catalogdomain.ErrUnsupported) {
+			return fmt.Errorf("%w: %v", ErrUnsupported, err)
+		}
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return nil
 }
@@ -325,6 +403,60 @@ func (j *Job) Clone() *Job {
 
 func cloneFields(fields []Field) []Field {
 	return catalogdomain.CloneFields(fields)
+}
+
+func CloneTable(table Table) Table {
+	result := table
+	result.Schema = cloneFields(table.Schema)
+	result.TimePartitioning = cloneCatalogTimePartitioning(table.TimePartitioning)
+	result.RangePartitioning = cloneRangePartitioning(table.RangePartitioning)
+	result.ClusteringFields = cloneOptionalStrings(table.ClusteringFields)
+	return result
+}
+
+func cloneTimePartitioning(value *TimePartitioning) *TimePartitioning {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	clone.ExpirationMs = catalogdomain.CloneOptionalInt64(value.ExpirationMs)
+	return &clone
+}
+
+func cloneCatalogTimePartitioning(value *catalogdomain.TimePartitioning) *catalogdomain.TimePartitioning {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func ResolveTimePartitioning(value *TimePartitioning, defaultExpiration *int64) *catalogdomain.TimePartitioning {
+	if value == nil {
+		return nil
+	}
+	expiration := int64(0)
+	if value.ExpirationMs != nil {
+		expiration = *value.ExpirationMs
+	} else if defaultExpiration != nil {
+		expiration = *defaultExpiration
+	}
+	return &catalogdomain.TimePartitioning{Type: value.Type, Field: value.Field, ExpirationMs: expiration}
+}
+
+func cloneRangePartitioning(value *RangePartitioning) *RangePartitioning {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneOptionalStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append(make([]string, 0, len(values)), values...)
 }
 
 func validateReference(reference JobReference) error {

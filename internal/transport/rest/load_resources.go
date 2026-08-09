@@ -18,21 +18,24 @@ type combinedJobProbe struct {
 }
 
 type loadConfigurationResource struct {
-	SourceURIs               []string                `json:"sourceUris"`
-	DestinationTable         tableReference          `json:"destinationTable"`
-	Schema                   *tableSchema            `json:"schema,omitempty"`
-	SourceFormat             string                  `json:"sourceFormat,omitempty"`
-	WriteDisposition         string                  `json:"writeDisposition,omitempty"`
-	CreateDisposition        string                  `json:"createDisposition,omitempty"`
-	Autodetect               bool                    `json:"autodetect,omitempty"`
-	SchemaUpdateOptions      []string                `json:"schemaUpdateOptions,omitempty"`
-	IgnoreUnknownValues      bool                    `json:"ignoreUnknownValues,omitempty"`
-	MaxBadRecords            int64                   `json:"maxBadRecords,omitempty"`
-	ParquetOptions           *parquetOptionsResource `json:"parquetOptions,omitempty"`
-	DecimalTargetTypes       []string                `json:"decimalTargetTypes,omitempty"`
-	NullMarkers              []string                `json:"nullMarkers,omitempty"`
-	ProjectionFields         []string                `json:"projectionFields,omitempty"`
-	TimestampTargetPrecision []int32                 `json:"timestampTargetPrecision,omitempty"`
+	SourceURIs               []string                      `json:"sourceUris"`
+	DestinationTable         tableReference                `json:"destinationTable"`
+	Schema                   *tableSchema                  `json:"schema,omitempty"`
+	SourceFormat             string                        `json:"sourceFormat,omitempty"`
+	WriteDisposition         string                        `json:"writeDisposition,omitempty"`
+	CreateDisposition        string                        `json:"createDisposition,omitempty"`
+	Autodetect               bool                          `json:"autodetect,omitempty"`
+	SchemaUpdateOptions      []string                      `json:"schemaUpdateOptions,omitempty"`
+	IgnoreUnknownValues      bool                          `json:"ignoreUnknownValues,omitempty"`
+	MaxBadRecords            int64                         `json:"maxBadRecords,omitempty"`
+	ParquetOptions           *parquetOptionsResource       `json:"parquetOptions,omitempty"`
+	TimePartitioning         *loadTimePartitioningResource `json:"timePartitioning,omitempty"`
+	RangePartitioning        *rangePartitioningResource    `json:"rangePartitioning,omitempty"`
+	Clustering               *clusteringResource           `json:"clustering,omitempty"`
+	DecimalTargetTypes       []string                      `json:"decimalTargetTypes,omitempty"`
+	NullMarkers              []string                      `json:"nullMarkers,omitempty"`
+	ProjectionFields         []string                      `json:"projectionFields,omitempty"`
+	TimestampTargetPrecision []int32                       `json:"timestampTargetPrecision,omitempty"`
 }
 
 // ParquetOptions is an optional, typed part of JobConfigurationLoad. The
@@ -43,6 +46,12 @@ type parquetOptionsResource struct {
 	EnableListInference *bool   `json:"enableListInference,omitempty"`
 	EnumAsString        *bool   `json:"enumAsString,omitempty"`
 	MapTargetType       *string `json:"mapTargetType,omitempty"`
+}
+
+type loadTimePartitioningResource struct {
+	Type         string  `json:"type,omitempty"`
+	Field        string  `json:"field,omitempty"`
+	ExpirationMs *string `json:"expirationMs,omitempty"`
 }
 
 type loadJobRequest struct {
@@ -105,6 +114,28 @@ func loadJobFromDomain(job *loadDomain.Job) loadJobResource {
 	if configuration.ParquetOptions.EnableListInference {
 		value := true
 		load.ParquetOptions = &parquetOptionsResource{EnableListInference: &value}
+	}
+	if configuration.TimePartitioning != nil {
+		load.TimePartitioning = &loadTimePartitioningResource{
+			Type: configuration.TimePartitioning.Type, Field: configuration.TimePartitioning.Field,
+		}
+		if configuration.TimePartitioning.ExpirationMs != nil {
+			expiration := strconv.FormatInt(*configuration.TimePartitioning.ExpirationMs, 10)
+			load.TimePartitioning.ExpirationMs = &expiration
+		}
+	}
+	if configuration.RangePartitioning != nil {
+		load.RangePartitioning = &rangePartitioningResource{
+			Field: configuration.RangePartitioning.Field,
+			Range: rangeResource{
+				Start:    strconv.FormatInt(configuration.RangePartitioning.Range.Start, 10),
+				End:      strconv.FormatInt(configuration.RangePartitioning.Range.End, 10),
+				Interval: strconv.FormatInt(configuration.RangePartitioning.Range.Interval, 10),
+			},
+		}
+	}
+	if configuration.ClusteringFields != nil {
+		load.Clustering = &clusteringResource{Fields: append([]string{}, configuration.ClusteringFields...)}
 	}
 	resource := loadJobResource{
 		Kind: "bigquery#job",

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 )
 
 func TestValidateConfigurationAcceptsOnlyGCSObjectURIs(t *testing.T) {
@@ -57,6 +59,49 @@ func TestConfigurationDigestIncludesParquetListInference(t *testing.T) {
 	}
 	if withInference == withoutInference {
 		t.Fatal("Parquet list inference did not change load idempotency identity")
+	}
+}
+
+func TestConfigurationNormalizesAndFingerprintsDestinationLayout(t *testing.T) {
+	expiration := int64(86_400_000)
+	configuration := LoadConfiguration{
+		SourceURIs:   []string{"gs://bucket/path/input.parquet"},
+		Destination:  TableReference{ProjectID: "project", DatasetID: "dataset", TableID: "table"},
+		SourceFormat: FormatParquet, WriteDisposition: WriteAppend, CreateDisposition: CreateIfNeeded,
+		Schema:           []Field{{Name: "event_time", Type: "TIMESTAMP"}, {Name: "customer_id", Type: "STRING"}},
+		TimePartitioning: &TimePartitioning{Field: "event_time", ExpirationMs: &expiration},
+		ClusteringFields: []string{"customer_id"},
+	}
+	job, err := NewJob(JobReference{ProjectID: "project", Location: "US", JobID: "layout"}, configuration, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Configuration.TimePartitioning.Type != "DAY" {
+		t.Fatalf("default partition type = %q", job.Configuration.TimePartitioning.Type)
+	}
+	changed := configuration
+	changed.ClusteringFields = []string{"event_time"}
+	changedDigest, err := ConfigurationDigest(normalizeConfiguration(changed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedDigest == job.ConfigurationDigest {
+		t.Fatal("destination layout did not change load idempotency identity")
+	}
+
+	rangeConfiguration := configuration
+	rangeConfiguration.TimePartitioning = nil
+	rangeConfiguration.Schema = []Field{{Name: "bucket_id", Type: "INT64"}}
+	rangeConfiguration.RangePartitioning = &RangePartitioning{
+		Field: "bucket_id", Range: catalogdomain.Range{Start: 0, End: 100, Interval: 10},
+	}
+	rangeConfiguration.ClusteringFields = nil
+	if _, err := NewJob(JobReference{ProjectID: "project", Location: "US", JobID: "range"}, rangeConfiguration, time.Unix(1, 0)); err != nil {
+		t.Fatalf("range-partitioned configuration error = %v", err)
+	}
+	rangeConfiguration.TimePartitioning = &TimePartitioning{Type: "DAY"}
+	if _, err := NewJob(JobReference{ProjectID: "project", Location: "US", JobID: "both"}, rangeConfiguration, time.Unix(1, 0)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("mutually exclusive partitioning error = %v", err)
 	}
 }
 

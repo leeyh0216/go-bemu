@@ -26,7 +26,7 @@ type ObjectStore interface {
 
 type TableCatalog interface {
 	GetTable(context.Context, domain.TableReference) (domain.Table, error)
-	GetDatasetLocation(context.Context, string, string) (string, error)
+	GetDataset(context.Context, string, string) (domain.Dataset, error)
 	PublishTable(context.Context, domain.Table) error
 	PublishSchemaUpdate(context.Context, domain.TableReference, []domain.Field, []domain.Field) error
 }

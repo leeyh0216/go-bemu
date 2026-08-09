@@ -272,8 +272,8 @@ func (w *Warehouse) DiscardLoadedTable(ctx context.Context, table loadDomain.Tab
 }
 
 func createLoadDestinationStatement(table loadDomain.Table) (string, error) {
-	columns := make([]string, len(table.Schema))
-	for index, field := range table.Schema {
+	columns := make([]string, 0, len(table.Schema)+2)
+	for _, field := range table.Schema {
 		physicalType, err := duckDBType(field)
 		if err != nil {
 			return "", err
@@ -282,7 +282,23 @@ func createLoadDestinationStatement(table loadDomain.Table) (string, error) {
 		if strings.EqualFold(normalizeMode(field.Mode), "REQUIRED") {
 			column += " NOT NULL"
 		}
-		columns[index] = column
+		columns = append(columns, column)
+	}
+	catalogTable := catalogdomain.Table{
+		ProjectID: table.Reference.ProjectID, DatasetID: table.Reference.DatasetID, ID: table.Reference.TableID,
+		Schema: catalogdomain.CloneFields(table.Schema), TimePartitioning: table.TimePartitioning,
+		RangePartitioning: table.RangePartitioning, ClusteringFields: table.ClusteringFields,
+	}
+	if partitionType, ok := catalogTable.IngestionTimePartitioning(); ok {
+		partitionTime := ingestionTimePartitionDefault(partitionType)
+		partitionColumn := quoteIdentifier(catalogdomain.PartitionTimePseudoColumn)
+		partitionBoundary := ingestionTimePartitionBoundary(partitionType, partitionColumn)
+		columns = append(columns,
+			partitionColumn+" TIMESTAMPTZ DEFAULT ("+partitionTime+") CHECK ("+
+				partitionColumn+" = "+partitionBoundary+")",
+			quoteIdentifier(catalogdomain.PartitionDatePseudoColumn)+" DATE GENERATED ALWAYS AS (CAST("+
+				partitionColumn+" AT TIME ZONE 'UTC' AS DATE)) VIRTUAL",
+		)
 	}
 	return fmt.Sprintf(
 		"CREATE TABLE %s.%s (%s)",

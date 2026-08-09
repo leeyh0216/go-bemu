@@ -27,21 +27,27 @@ func NewLoadTableCatalog(catalog LoadCatalogUseCases) loadports.TableCatalog {
 	return &loadTableCatalog{catalog: catalog}
 }
 
-func (c *loadTableCatalog) GetDatasetLocation(ctx context.Context, projectID, datasetID string) (string, error) {
+func (c *loadTableCatalog) GetDataset(ctx context.Context, projectID, datasetID string) (loadDomain.Dataset, error) {
 	dataset, err := c.catalog.GetDataset(ctx, projectID, datasetID)
 	if err != nil {
-		return "", mapCatalogLoadError(err)
+		return loadDomain.Dataset{}, mapCatalogLoadError(err)
 	}
-	return dataset.Location, nil
+	return loadDomain.Dataset{
+		Location:                     dataset.Location,
+		DefaultPartitionExpirationMs: catalogDomain.CloneOptionalInt64(dataset.DefaultPartitionExpirationMs),
+	}, nil
 }
 
 func (c *loadTableCatalog) PublishTable(ctx context.Context, table loadDomain.Table) error {
 	err := c.catalog.PublishMaterializedTable(ctx, catalogDomain.Table{
-		ProjectID: table.Reference.ProjectID,
-		DatasetID: table.Reference.DatasetID,
-		ID:        table.Reference.TableID,
-		Location:  table.Location,
-		Schema:    catalogDomain.CloneFields(table.Schema),
+		ProjectID:         table.Reference.ProjectID,
+		DatasetID:         table.Reference.DatasetID,
+		ID:                table.Reference.TableID,
+		Location:          table.Location,
+		Schema:            catalogDomain.CloneFields(table.Schema),
+		TimePartitioning:  cloneLoadTimePartitioning(table.TimePartitioning),
+		RangePartitioning: cloneLoadRangePartitioning(table.RangePartitioning),
+		ClusteringFields:  cloneLoadOptionalStrings(table.ClusteringFields),
 	})
 	return mapCatalogLoadError(err)
 }
@@ -64,7 +70,33 @@ func (c *loadTableCatalog) GetTable(ctx context.Context, reference loadDomain.Ta
 	}
 	return loadDomain.Table{
 		Reference: reference, Location: table.Location, Schema: loadFieldsFromCatalog(table.Schema),
+		TimePartitioning:  cloneLoadTimePartitioning(table.TimePartitioning),
+		RangePartitioning: cloneLoadRangePartitioning(table.RangePartitioning),
+		ClusteringFields:  cloneLoadOptionalStrings(table.ClusteringFields),
 	}, nil
+}
+
+func cloneLoadTimePartitioning(value *catalogDomain.TimePartitioning) *catalogDomain.TimePartitioning {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneLoadRangePartitioning(value *catalogDomain.RangePartitioning) *loadDomain.RangePartitioning {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneLoadOptionalStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append(make([]string, 0, len(values)), values...)
 }
 
 func loadFieldsFromCatalog(fields []catalogDomain.Field) []loadDomain.Field {

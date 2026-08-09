@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -249,6 +250,9 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 				return statistics, err
 			}
 		}
+		if err := domain.ValidateTable(destination.table); err != nil {
+			return statistics, err
+		}
 		schemaPlan, err = s.planDestinationSchema(ctx, destination)
 		if err != nil {
 			return statistics, err
@@ -363,8 +367,11 @@ func (s *Service) resolveDestination(
 		if table.Location != "" && !strings.EqualFold(table.Location, job.Reference.Location) {
 			return destinationResolution{}, fmt.Errorf("%w: destination table and job locations differ", domain.ErrInvalid)
 		}
+		if err := validateDestinationMetadataCompatibility(table, configuration); err != nil {
+			return destinationResolution{}, err
+		}
 		resolution := destinationResolution{
-			table: table, beforeSchema: catalogdomain.CloneFields(table.Schema),
+			table: domain.CloneTable(table), beforeSchema: catalogdomain.CloneFields(table.Schema),
 		}
 		if len(configuration.Schema) == 0 {
 			resolution.infer = len(configuration.SchemaUpdateOptions) != 0
@@ -388,23 +395,75 @@ func (s *Service) resolveDestination(
 	if configuration.CreateDisposition == domain.CreateNever {
 		return destinationResolution{}, fmt.Errorf("%w: destination table", domain.ErrNotFound)
 	}
-	location, err := s.tables.GetDatasetLocation(
+	dataset, err := s.tables.GetDataset(
 		ctx, configuration.Destination.ProjectID, configuration.Destination.DatasetID,
 	)
 	if err != nil {
 		return destinationResolution{}, err
 	}
-	if location != "" && !strings.EqualFold(location, job.Reference.Location) {
+	if dataset.Location != "" && !strings.EqualFold(dataset.Location, job.Reference.Location) {
 		return destinationResolution{}, fmt.Errorf("%w: destination dataset and job locations differ", domain.ErrInvalid)
 	}
 	return destinationResolution{
 		table: domain.Table{
-			Reference: configuration.Destination,
-			Location:  location,
-			Schema:    catalogdomain.CloneFields(configuration.Schema),
+			Reference:         configuration.Destination,
+			Location:          dataset.Location,
+			Schema:            catalogdomain.CloneFields(configuration.Schema),
+			TimePartitioning:  domain.ResolveTimePartitioning(configuration.TimePartitioning, dataset.DefaultPartitionExpirationMs),
+			RangePartitioning: cloneRangePartitioning(configuration.RangePartitioning),
+			ClusteringFields:  cloneOptionalStrings(configuration.ClusteringFields),
 		},
 		create: true, infer: len(configuration.Schema) == 0,
 	}, nil
+}
+
+func validateDestinationMetadataCompatibility(table domain.Table, configuration domain.LoadConfiguration) error {
+	if configuration.TimePartitioning != nil && !equalTimePartitioning(table.TimePartitioning, configuration.TimePartitioning) {
+		return fmt.Errorf("%w: timePartitioning cannot change an existing destination", domain.ErrPrecondition)
+	}
+	if configuration.RangePartitioning != nil && !equalRangePartitioning(table.RangePartitioning, configuration.RangePartitioning) {
+		return fmt.Errorf("%w: rangePartitioning cannot change an existing destination", domain.ErrPrecondition)
+	}
+	if configuration.ClusteringFields != nil && !equalOrderedFieldNames(table.ClusteringFields, configuration.ClusteringFields) {
+		return fmt.Errorf("%w: clustering cannot change an existing destination", domain.ErrPrecondition)
+	}
+	return nil
+}
+
+func equalTimePartitioning(left *catalogdomain.TimePartitioning, right *domain.TimePartitioning) bool {
+	return left != nil && right != nil && strings.EqualFold(left.Type, right.Type) &&
+		strings.EqualFold(left.Field, right.Field) && (right.ExpirationMs == nil || left.ExpirationMs == *right.ExpirationMs)
+}
+
+func equalRangePartitioning(left, right *domain.RangePartitioning) bool {
+	return left != nil && right != nil && strings.EqualFold(left.Field, right.Field) && reflect.DeepEqual(left.Range, right.Range)
+}
+
+func equalOrderedFieldNames(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !strings.EqualFold(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneRangePartitioning(value *domain.RangePartitioning) *domain.RangePartitioning {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneOptionalStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append(make([]string, 0, len(values)), values...)
 }
 
 func mergeInferredSchemaUpdate(current, inferred []domain.Field, allowRelaxation bool) []domain.Field {

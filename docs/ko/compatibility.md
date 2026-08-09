@@ -336,6 +336,7 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
 | Parquet 스키마 추론 | 스칼라와 STRUCT를 지원합니다. LIST를 REPEATED로 추론하려면 `enableListInference=true`가 필요합니다. |
 | 적재 `schemaUpdateOptions` | `WRITE_APPEND`에서 `ALLOW_FIELD_ADDITION`과 `ALLOW_FIELD_RELAXATION`을 지원합니다. 명시적 스키마와 Parquet 추론 스키마 모두 최상위·중첩 변경을 처리하며 다른 변경은 대상을 수정하기 전에 거부합니다. |
+| 적재 대상 파티셔닝과 클러스터링 | 새 대상은 시간 단위 또는 정수 범위 파티션 메타데이터, 파티션 만료 시간, 유효한 클러스터 필드 1~4개를 보존합니다. 수집 시간 파티션 대상은 `_PARTITIONTIME`과 `_PARTITIONDATE`를 채웁니다. 기존 대상은 요청한 구성이 기존 구성과 같을 때만 허용합니다. 파티션 만료 정리와 DuckDB 물리 재클러스터링은 #47의 남은 범위입니다. |
 | `autodetect`, 쿼리 작업 스키마 변경, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
 | REST/gRPC TLS | 설정하면 사용할 수 있습니다. |
 | BigQuery 호환 엔드포인트 인증 | 의도적으로 제공하지 않습니다. 인증 정보가 없거나 임의 값 또는 잘못된 형식이어도 무시합니다. |
