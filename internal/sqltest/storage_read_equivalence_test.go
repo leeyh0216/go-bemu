@@ -3,6 +3,7 @@ package sqltest
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"reflect"
@@ -100,29 +101,36 @@ func TestStorageReadFilterMatchesGoogleSQLRegressionCase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := materializer.Materialize(ctx, readports.MaterializeRequest{
-		Table:  "projects/test-project/datasets/analytics/tables/partitioned_events",
-		Format: readdomain.FormatArrow, SelectedFields: []string{"id", "name"}, RowRestriction: restriction,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = snapshot.Close(context.Background()) }()
-	readRows := decodeStorageReadIDNameRows(t, ctx, snapshot)
-
 	fields := fixtureFieldsToDomain(test.Expected.Schema)
 	want, err := canonicalRows(fields, reference.Result.Rows)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := canonicalRows(fields, readRows)
-	if err != nil {
-		t.Fatal(err)
-	}
 	slices.Sort(want)
-	slices.Sort(got)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Storage Read rows = %v, reference query rows = %v", got, want)
+	for _, format := range []readdomain.Format{readdomain.FormatArrow, readdomain.FormatAvro} {
+		format := format
+		t.Run(format.String(), func(t *testing.T) {
+			snapshot, err := materializer.Materialize(ctx, readports.MaterializeRequest{
+				Table:          "projects/test-project/datasets/analytics/tables/partitioned_events",
+				Format:         format,
+				SelectedFields: []string{"id", "name"},
+				RowRestriction: restriction,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = snapshot.Close(context.Background()) })
+			readRows := decodeStorageReadIDNameRows(t, ctx, snapshot)
+
+			got, err := canonicalRows(fields, readRows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slices.Sort(got)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Storage Read %s rows = %v, reference query rows = %v", format, got, want)
+			}
+		})
 	}
 }
 
@@ -149,8 +157,8 @@ func decodeStorageReadIDNameRows(t *testing.T, ctx context.Context, snapshot rea
 		t.Fatal(err)
 	}
 	defer iterator.Close()
-	var stream bytes.Buffer
-	stream.Write(metadata.Schema.Serialized)
+	var payload bytes.Buffer
+	var rowCount int64
 	for {
 		batch, nextErr := iterator.Next(ctx)
 		if nextErr == io.EOF {
@@ -159,8 +167,28 @@ func decodeStorageReadIDNameRows(t *testing.T, ctx context.Context, snapshot rea
 		if nextErr != nil {
 			t.Fatal(nextErr)
 		}
-		stream.Write(batch.SerializedRows)
+		payload.Write(batch.SerializedRows)
+		rowCount += batch.RowCount
 	}
+	if rowCount != metadata.RowCount {
+		t.Fatalf("Storage Read batch row count = %d, want %d", rowCount, metadata.RowCount)
+	}
+	switch metadata.Schema.Format {
+	case readdomain.FormatArrow:
+		return decodeArrowStorageReadIDNameRows(t, metadata.Schema.Serialized, payload.Bytes())
+	case readdomain.FormatAvro:
+		return decodeAvroStorageReadIDNameRows(t, payload.Bytes(), metadata.RowCount)
+	default:
+		t.Fatalf("unsupported Storage Read format %s", metadata.Schema.Format)
+		return nil
+	}
+}
+
+func decodeArrowStorageReadIDNameRows(t *testing.T, schema, payload []byte) [][]any {
+	t.Helper()
+	var stream bytes.Buffer
+	stream.Write(schema)
+	stream.Write(payload)
 	stream.Write([]byte{0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0})
 	reader, err := ipc.NewReader(&stream)
 	if err != nil {
@@ -186,4 +214,69 @@ func decodeStorageReadIDNameRows(t *testing.T, ctx context.Context, snapshot rea
 		t.Fatal(fmt.Errorf("decode Storage Read rows: %w", err))
 	}
 	return rows
+}
+
+// The regression fixture projects a required INT64 followed by a nullable
+// STRING. Decode that public AvroRows shape independently from the production
+// encoder so the Arrow and Avro paths are compared to the same GoogleSQL rows.
+func decodeAvroStorageReadIDNameRows(t *testing.T, payload []byte, rowCount int64) [][]any {
+	t.Helper()
+	offset := 0
+	rows := make([][]any, 0, rowCount)
+	for rowIndex := int64(0); rowIndex < rowCount; rowIndex++ {
+		id, err := readAvroLong(payload, &offset)
+		if err != nil {
+			t.Fatalf("decode Avro row %d id: %v", rowIndex, err)
+		}
+		union, err := readAvroLong(payload, &offset)
+		if err != nil {
+			t.Fatalf("decode Avro row %d name union: %v", rowIndex, err)
+		}
+		var name any
+		switch union {
+		case 0:
+		case 1:
+			value, err := readAvroBytes(payload, &offset)
+			if err != nil {
+				t.Fatalf("decode Avro row %d name: %v", rowIndex, err)
+			}
+			name = string(value)
+		default:
+			t.Fatalf("decode Avro row %d name union = %d, want 0 or 1", rowIndex, union)
+		}
+		rows = append(rows, []any{id, name})
+	}
+	if offset != len(payload) {
+		t.Fatalf("AvroRows has %d trailing bytes", len(payload)-offset)
+	}
+	return rows
+}
+
+func readAvroLong(payload []byte, offset *int) (int64, error) {
+	if *offset >= len(payload) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	encoded, size := binary.Uvarint(payload[*offset:])
+	if size == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	if size < 0 {
+		return 0, fmt.Errorf("invalid varint")
+	}
+	*offset += size
+	return int64(encoded>>1) ^ -int64(encoded&1), nil
+}
+
+func readAvroBytes(payload []byte, offset *int) ([]byte, error) {
+	length, err := readAvroLong(payload, offset)
+	if err != nil {
+		return nil, err
+	}
+	if length < 0 || length > int64(len(payload)-*offset) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	end := *offset + int(length)
+	value := payload[*offset:end]
+	*offset = end
+	return value, nil
 }

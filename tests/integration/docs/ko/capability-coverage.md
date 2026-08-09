@@ -29,6 +29,8 @@
 | `verified` | Arrow query source read | `SBQ-READ-ARROW-QUERY-V1` |
 | `verified` | Arrow table read with sixteen requested streams | `SBQ-READ-ARROW-STREAM-SIXTEEN-V1` |
 | `verified` | Arrow table read with four requested streams | `SBQ-READ-ARROW-TABLE-V1` |
+| `partial` | Avro filter pushdown | `SBQ-READ-AVRO-FILTER-V1` |
+| 제한 | Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported. ([issue](https://github.com/leeyh0216/go-bemu/issues/6)) |  |
 | `verified` | Avro query source read | `SBQ-READ-AVRO-QUERY-V1` |
 | `verified` | Avro table read with one requested stream | `SBQ-READ-AVRO-STREAM-ONE-V1` |
 | `verified` | Avro table read with sixteen requested streams | `SBQ-READ-AVRO-STREAM-SIXTEEN-V1` |
@@ -60,11 +62,11 @@
 | `bigquery.jobs.insert` | 14 |
 | `bigquery.tabledata.list` | 2 |
 | `bigquery.tables.delete` | 2 |
-| `bigquery.tables.get` | 19 |
+| `bigquery.tables.get` | 20 |
 | `bigquery.tables.insert` | 11 |
 | `bigquery.tables.patch` | 1 |
-| `grpc.bigquery-read.create-read-session` | 19 |
-| `grpc.bigquery-read.read-rows` | 19 |
+| `grpc.bigquery-read.create-read-session` | 20 |
+| `grpc.bigquery-read.read-rows` | 20 |
 | `grpc.bigquery-write.append-rows` | 9 |
 | `grpc.bigquery-write.batch-commit-write-streams` | 6 |
 | `grpc.bigquery-write.create-write-stream` | 6 |

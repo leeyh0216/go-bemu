@@ -185,6 +185,24 @@
       ]
     },
     {
+      "id": "SBQ-READ-AVRO-FILTER-V1",
+      "state": "partial",
+      "category": "read",
+      "summary": "Avro filter pushdown",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-avro",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ],
+      "issue": "https://github.com/leeyh0216/go-bemu/issues/6",
+      "limitation": "Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported."
+    },
+    {
       "id": "SBQ-READ-AVRO-QUERY-V1",
       "state": "verified",
       "category": "read",
@@ -705,6 +723,22 @@
       ]
     },
     {
+      "id": "SBQ-READ-AVRO-FILTER-V1",
+      "test": "spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read",
+      "state": "partial",
+      "category": "read",
+      "summary": "Avro filter pushdown",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-avro",
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ],
+      "issue": "https://github.com/leeyh0216/go-bemu/issues/6",
+      "limitation": "Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported."
+    },
+    {
       "id": "SBQ-READ-AVRO-QUERY-V1",
       "test": "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro",
       "state": "verified",
@@ -1154,6 +1188,7 @@
         "SBQ-READ-ARROW-QUERY-V1",
         "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
         "SBQ-READ-ARROW-TABLE-V1",
+        "SBQ-READ-AVRO-FILTER-V1",
         "SBQ-READ-AVRO-QUERY-V1",
         "SBQ-READ-AVRO-STREAM-ONE-V1",
         "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
@@ -1224,6 +1259,7 @@
         "SBQ-READ-ARROW-QUERY-V1",
         "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
         "SBQ-READ-ARROW-TABLE-V1",
+        "SBQ-READ-AVRO-FILTER-V1",
         "SBQ-READ-AVRO-QUERY-V1",
         "SBQ-READ-AVRO-STREAM-ONE-V1",
         "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
@@ -1261,6 +1297,7 @@
         "SBQ-READ-ARROW-QUERY-V1",
         "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
         "SBQ-READ-ARROW-TABLE-V1",
+        "SBQ-READ-AVRO-FILTER-V1",
         "SBQ-READ-AVRO-QUERY-V1",
         "SBQ-READ-AVRO-STREAM-ONE-V1",
         "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",

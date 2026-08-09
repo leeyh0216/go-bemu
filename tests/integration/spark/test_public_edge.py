@@ -498,25 +498,57 @@ def test_nested_projection_through_storage_read(
     )
 
 
-@contract_case(
-    "SBQ-READ-ARROW-FILTER-V1",
-    state="partial",
-    category="read",
-    summary="Arrow filter pushdown",
-    profile="spark-bigquery-connector-dsv1-0.44.2",
-    wire_flow="read-arrow",
-    operations=(
-        "bigquery.tables.get",
-        "grpc.bigquery-read.create-read-session",
-        "grpc.bigquery-read.read-rows",
-    ),
-    issue="https://github.com/leeyh0216/go-bemu/issues/6",
-    limitation="Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported.",
+@pytest.mark.parametrize(
+    ("wire_format", "capability_id"),
+    [
+        pytest.param(
+            "ARROW",
+            "SBQ-READ-ARROW-FILTER-V1",
+            marks=contract_case(
+                "SBQ-READ-ARROW-FILTER-V1",
+                state="partial",
+                category="read",
+                summary="Arrow filter pushdown",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-arrow",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+                issue="https://github.com/leeyh0216/go-bemu/issues/6",
+                limitation="Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported.",
+            ),
+            id="arrow",
+        ),
+        pytest.param(
+            "AVRO",
+            "SBQ-READ-AVRO-FILTER-V1",
+            marks=contract_case(
+                "SBQ-READ-AVRO-FILTER-V1",
+                state="partial",
+                category="read",
+                summary="Avro filter pushdown",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-avro",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+                issue="https://github.com/leeyh0216/go-bemu/issues/6",
+                limitation="Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported.",
+            ),
+            id="avro",
+        ),
+    ],
 )
 def test_advanced_filter_pushdown_through_storage_read(
     spark_session,
     public_edge: PublicEdge,
     advanced_read_table: str,
+    wire_format: str,
+    capability_id: str,
 ) -> None:
     from pyspark.sql import functions as sql
 
@@ -526,7 +558,7 @@ def test_advanced_filter_pushdown_through_storage_read(
         public_edge,
         source=advanced_read_table,
         source_kind="table",
-        wire_format="ARROW",
+        wire_format=wire_format,
         requested_streams=2,
     )
     predicate = (
@@ -551,14 +583,14 @@ def test_advanced_filter_pushdown_through_storage_read(
     observation = observe_query_read_flow(public_edge, since=log_position)
     _assert_read_session_shape(
         observation,
-        wire_format="ARROW",
+        wire_format=wire_format,
         selected_field_count=2,
         has_row_restriction=True,
     )
     record_capability(
-        "SBQ-READ-ARROW-FILTER-V1",
+        capability_id,
         (
-            "arrow in+like+null-safe+boolean+date+timestamp-filter:verified "
+            f"{wire_format.lower()} in+like+null-safe+boolean+date+timestamp-filter:verified "
             "selected-fields:2 rows:2 "
             f"row-fingerprint:sha256:{_row_fingerprint(actual)}"
         ),
