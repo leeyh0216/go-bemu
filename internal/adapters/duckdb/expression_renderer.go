@@ -220,6 +220,8 @@ func (visitor *duckDBExpressionVisitor) VisitFunctionCall(call *queryast.Functio
 		return visitor.renderPlainFunction(call, "if", 3, 3)
 	case "ABS", "CEIL", "CEILING", "FLOOR", "LOWER", "UPPER", "LENGTH":
 		return visitor.renderPlainFunction(call, strings.ToLower(name), 1, 1)
+	case "STARTS_WITH":
+		return visitor.renderPlainFunction(call, "starts_with", 2, 2)
 	case "ROUND":
 		return visitor.renderPlainFunction(call, "round", 1, 2)
 	case "ARRAY_LENGTH":

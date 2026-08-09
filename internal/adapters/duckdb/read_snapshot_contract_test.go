@@ -464,6 +464,7 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 	defer cancel()
 	schema := []catalogdomain.Field{
 		{Name: "id", Type: "INT64"},
+		{Name: "name", Type: "STRING"},
 		{Name: "active", Type: "BOOL"},
 		{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "rank", Type: "FLOAT64"}}},
 	}
@@ -483,7 +484,7 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 			t.Errorf("arg %d = %#v, want %#v", index, args[index], wantArgs[index])
 		}
 	}
-	for _, supported := range []string{"id IN (1)", "id BETWEEN 1 AND 2", "id IS NOT NULL", "CAST(id AS STRING) = '1'"} {
+	for _, supported := range []string{"id IN (1)", "id BETWEEN 1 AND 2", "id IS NOT NULL", "CAST(id AS STRING) = '1'", "STARTS_WITH(LOWER(name), 'a')"} {
 		if _, _, err := compileRowRestriction(supported, schema); err != nil {
 			t.Errorf("GoogleSQL AST restriction %q = %v", supported, err)
 		}
