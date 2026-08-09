@@ -480,6 +480,10 @@ func TestParquetLoadReceiptPreventsDuplicateMutationAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
+	receipt, found, err := restarted.InspectLoadMutation(ctx, request.MutationID)
+	if err != nil || !found || receipt.Result != first || len(receipt.PlanFingerprint) != 64 {
+		t.Fatalf("restarted load receipt = %#v, found=%v, err=%v", receipt, found, err)
+	}
 	second, err := executeTestLoad(ctx, restarted, request)
 	if err != nil {
 		t.Fatal(err)

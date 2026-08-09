@@ -46,3 +46,33 @@ func TestPublishLoadedTableSchemaRequiresExpectedAdditiveRelaxingTransition(t *t
 		t.Fatalf("updated table = %#v", updated)
 	}
 }
+
+func TestPublishMaterializedTableTreatsSchemaRepresentationAsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	repository := memory.NewCatalogRepository()
+	service := NewCatalogService(repository, &fakeWarehouse{}, fixedClock{now: time.Unix(2, 0)})
+	if _, err := service.CreateProject(ctx, domain.Project{ID: "test-project"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateDataset(ctx, domain.Dataset{ProjectID: "test-project", ID: "analytics"}); err != nil {
+		t.Fatal(err)
+	}
+	table := domain.Table{
+		ProjectID: "test-project", DatasetID: "analytics", ID: "events",
+		Schema: []domain.Field{{
+			Name: "payload", Type: "STRUCT", Fields: []domain.Field{{Name: "id", Type: "INT64"}},
+		}},
+	}
+	if err := service.PublishMaterializedTable(ctx, table); err != nil {
+		t.Fatal(err)
+	}
+	retry := table
+	retry.Schema = domain.CloneFields(table.Schema)
+	if err := service.PublishMaterializedTable(ctx, retry); err != nil {
+		t.Fatalf("idempotent materialized publication = %v", err)
+	}
+	tables, err := repository.ListTables(ctx, "test-project", "analytics")
+	if err != nil || len(tables) != 1 {
+		t.Fatalf("published tables = %#v, %v", tables, err)
+	}
+}

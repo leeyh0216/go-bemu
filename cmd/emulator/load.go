@@ -21,11 +21,12 @@ import (
 func composeLoadJobs(
 	cfg config.Config,
 	jobs loadports.JobRepository,
+	mutations loadports.MutationJournal,
 	catalog rest.LoadCatalogUseCases,
 	loader loadports.Loader,
 	clock loadports.Clock,
 	ids loadports.IDGenerator,
-) (rest.LoadJobUseCases, error) {
+) (*loadapplication.Service, error) {
 	gcs, err := objectstore.NewGCSJSON(objectstore.GCSJSONConfig{
 		Endpoint: cfg.Load.GCSEndpoint,
 		Client: &http.Client{
@@ -44,7 +45,7 @@ func composeLoadJobs(
 	}
 	service, err := loadapplication.NewService(
 		jobs, gcs, rest.NewLoadTableCatalog(catalog),
-		loader, clock, ids, loadConfig,
+		loader, clock, ids, loadConfig, loadapplication.WithMutationJournal(mutations),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configure load job service: %w", err)

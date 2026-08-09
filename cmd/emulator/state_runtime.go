@@ -14,12 +14,13 @@ import (
 // stateRuntime is composition-owned. Application services receive only the
 // catalog port and cannot access SQLite lifecycle or transaction internals.
 type stateRuntime struct {
-	catalog      ports.CatalogRepository
-	queryJobs    ports.JobRepository
-	loadJobs     loadports.JobRepository
-	readSessions readports.SessionStateRepository
-	writeState   writeports.StateRepository
-	close        func() error
+	catalog       ports.CatalogRepository
+	queryJobs     ports.JobRepository
+	loadJobs      loadports.JobRepository
+	loadMutations loadports.MutationJournal
+	readSessions  readports.SessionStateRepository
+	writeState    writeports.StateRepository
+	close         func() error
 }
 
 func composeStateRuntime(ctx context.Context, dsn string) (*stateRuntime, error) {
@@ -30,8 +31,9 @@ func composeStateRuntime(ctx context.Context, dsn string) (*stateRuntime, error)
 	return &stateRuntime{
 		catalog: repositories.Catalog(), queryJobs: repositories.QueryJobs(),
 		loadJobs: repositories.LoadJobs(), readSessions: repositories.ReadSessions(),
-		writeState: repositories.WriteState(),
-		close:      repositories.Close,
+		loadMutations: repositories.LoadMutations(),
+		writeState:    repositories.WriteState(),
+		close:         repositories.Close,
 	}, nil
 }
 

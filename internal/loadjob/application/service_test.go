@@ -163,6 +163,8 @@ type testLoader struct {
 	inferErr       error
 	inferCalls     int
 	inferOptions   ports.ParquetSchemaOptions
+	receipts       map[string]ports.LoadMutationReceipt
+	executeErr     error
 }
 
 type gatedLoader struct {
@@ -308,9 +310,28 @@ func (l *testLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objec
 		<-ctx.Done()
 		return ports.LoadResult{}, ctx.Err()
 	}
-	return ports.LoadResult{
+	result := ports.LoadResult{
 		OutputRows: 3, CreatedDestination: request.CreateDestination, UpdatedDestination: request.UpdateDestination,
-	}, nil
+	}
+	l.mu.Lock()
+	if l.receipts == nil {
+		l.receipts = make(map[string]ports.LoadMutationReceipt)
+	}
+	l.receipts[request.MutationID] = ports.LoadMutationReceipt{PlanFingerprint: plan.Fingerprint(), Result: result}
+	executeErr := l.executeErr
+	l.mu.Unlock()
+	return result, executeErr
+}
+
+func (l *testLoader) InspectLoadMutation(_ context.Context, mutationID string) (ports.LoadMutationReceipt, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	receipt, found := l.receipts[mutationID]
+	return receipt, found, nil
+}
+
+func (l *gatedLoader) InspectLoadMutation(context.Context, string) (ports.LoadMutationReceipt, bool, error) {
+	return ports.LoadMutationReceipt{}, false, nil
 }
 
 func (l *testLoader) InferParquetSchema(
@@ -383,6 +404,145 @@ func TestServiceIsIdempotentAndCleansWorkspace(t *testing.T) {
 	configuration.SourceURIs = []string{"gs://test-bucket/different.parquet"}
 	if _, err := service.Submit(context.Background(), reference, configuration); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("configuration conflict = %v", err)
+	}
+}
+
+func TestServiceRecoverPublishesPhysicalLoadMutationExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	clock := testClock{value: time.Unix(1, 0)}
+	jobs := NewMemoryJobRepository()
+	mutations := NewMemoryMutationJournal()
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US",
+		Schema:    []domain.Field{{Name: "id", Type: "INT64"}},
+	}
+	job, err := domain.NewJob(
+		domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "recover-physical"},
+		testConfiguration(domain.FormatParquet),
+		clock.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := jobs.CreateOrGet(ctx, job); err != nil || !created {
+		t.Fatalf("create load job = %v, created=%v", err, created)
+	}
+	mutationID, err := domain.LoadMutationID(job.Reference, job.ConfigurationDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := domain.MutationRecord{
+		ID:                  mutationID,
+		Job:                 job.Reference,
+		ConfigurationDigest: job.ConfigurationDigest,
+		PlanFingerprint:     strings.Repeat("a", 64),
+		Destination:         table,
+		Publication:         domain.MutationPublishCreate,
+		Phase:               domain.MutationPrepared,
+		InputFiles:          2,
+		InputBytes:          4096,
+	}
+	if err := mutations.Prepare(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	loader := &testLoader{receipts: map[string]ports.LoadMutationReceipt{
+		mutationID: {
+			PlanFingerprint: record.PlanFingerprint,
+			Result:          ports.LoadResult{OutputRows: 3, CreatedDestination: true},
+		},
+	}}
+	published := make([]domain.Table, 0, 1)
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		jobs, &testObjectStore{}, testCatalog{table: table, missing: true, published: &published}, loader,
+		clock, testIDs{}, config, WithMutationJournal(mutations),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := jobs.Get(ctx, job.Reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State != domain.JobDone || recovered.Error != nil || recovered.Statistics.OutputRows != 3 ||
+		recovered.Statistics.InputFiles != 2 || recovered.Statistics.InputBytes != 4096 {
+		t.Fatalf("recovered job = %#v", recovered)
+	}
+	if len(published) != 1 || published[0].Reference != table.Reference || published[0].Location != table.Location ||
+		!schemasEqual(published[0].Schema, table.Schema) {
+		t.Fatalf("published tables = %#v", published)
+	}
+	if err := service.Recover(ctx); err != nil {
+		t.Fatalf("idempotent recovery = %v", err)
+	}
+	if len(published) != 1 {
+		t.Fatalf("recovery republished catalog metadata %d times", len(published))
+	}
+}
+
+func TestServiceRecoverAbortsUncommittedLoadMutation(t *testing.T) {
+	ctx := context.Background()
+	clock := testClock{value: time.Unix(1, 0)}
+	jobs := NewMemoryJobRepository()
+	mutations := NewMemoryMutationJournal()
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US",
+		Schema:    []domain.Field{{Name: "id", Type: "INT64"}},
+	}
+	job, err := domain.NewJob(
+		domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "recover-uncommitted"},
+		testConfiguration(domain.FormatParquet),
+		clock.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := jobs.CreateOrGet(ctx, job); err != nil || !created {
+		t.Fatalf("create load job = %v, created=%v", err, created)
+	}
+	mutationID, err := domain.LoadMutationID(job.Reference, job.ConfigurationDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mutations.Prepare(ctx, domain.MutationRecord{
+		ID:                  mutationID,
+		Job:                 job.Reference,
+		ConfigurationDigest: job.ConfigurationDigest,
+		PlanFingerprint:     strings.Repeat("b", 64),
+		Destination:         table,
+		Publication:         domain.MutationPublishCreate,
+		Phase:               domain.MutationPrepared,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		jobs, &testObjectStore{}, testCatalog{table: table, missing: true}, &testLoader{},
+		clock, testIDs{}, config, WithMutationJournal(mutations),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := jobs.Get(ctx, job.Reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State != domain.JobDone || recovered.Error == nil || recovered.Error.Reason != "backendError" {
+		t.Fatalf("uncommitted recovered job = %#v", recovered)
+	}
+	recoverable, err := mutations.ListRecoverable(ctx)
+	if err != nil || len(recoverable) != 0 {
+		t.Fatalf("uncommitted recovery records = %#v, %v", recoverable, err)
 	}
 }
 

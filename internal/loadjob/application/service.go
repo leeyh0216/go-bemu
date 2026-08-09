@@ -66,13 +66,26 @@ func (c Config) Validate() error {
 }
 
 type Service struct {
-	jobs    ports.JobRepository
-	objects ports.ObjectStore
-	tables  ports.TableCatalog
-	loader  ports.Loader
-	clock   ports.Clock
-	ids     ports.IDGenerator
-	config  Config
+	jobs      ports.JobRepository
+	mutations ports.MutationJournal
+	objects   ports.ObjectStore
+	tables    ports.TableCatalog
+	loader    ports.Loader
+	clock     ports.Clock
+	ids       ports.IDGenerator
+	config    Config
+}
+
+type ServiceOption func(*Service) error
+
+func WithMutationJournal(journal ports.MutationJournal) ServiceOption {
+	return func(service *Service) error {
+		if interfaceNil(journal) {
+			return fmt.Errorf("%w: load mutation journal is required", domain.ErrInvalid)
+		}
+		service.mutations = journal
+		return nil
+	}
 }
 
 type destinationResolution struct {
@@ -84,14 +97,26 @@ type destinationResolution struct {
 	infer        bool
 }
 
-func NewService(jobs ports.JobRepository, objects ports.ObjectStore, tables ports.TableCatalog, loader ports.Loader, clock ports.Clock, ids ports.IDGenerator, config Config) (*Service, error) {
+func NewService(jobs ports.JobRepository, objects ports.ObjectStore, tables ports.TableCatalog, loader ports.Loader, clock ports.Clock, ids ports.IDGenerator, config Config, options ...ServiceOption) (*Service, error) {
 	if jobs == nil || objects == nil || tables == nil || loader == nil || clock == nil || ids == nil {
 		return nil, fmt.Errorf("%w: load service dependencies are required", domain.ErrInvalid)
 	}
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	return &Service{jobs: jobs, objects: objects, tables: tables, loader: loader, clock: clock, ids: ids, config: config}, nil
+	service := &Service{
+		jobs: jobs, mutations: NewMemoryMutationJournal(), objects: objects, tables: tables,
+		loader: loader, clock: clock, ids: ids, config: config,
+	}
+	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("%w: load service option is required", domain.ErrInvalid)
+		}
+		if err := option(service); err != nil {
+			return nil, err
+		}
+	}
+	return service, nil
 }
 
 func (s *Service) Submit(ctx context.Context, reference domain.JobReference, configuration domain.LoadConfiguration) (*domain.Job, error) {
@@ -134,6 +159,131 @@ func (s *Service) List(ctx context.Context, projectID, location string) ([]*doma
 	return s.jobs.List(ctx, projectID, location)
 }
 
+// Recover completes cross-store load mutations before public listeners start.
+// DuckDB receipts prove the physical commit; the journal supplies the exact
+// canonical publication that must follow it.
+func (s *Service) Recover(ctx context.Context) error {
+	records, err := s.mutations.ListRecoverable(ctx)
+	if err != nil {
+		return fmt.Errorf("list recoverable load mutations: %w", err)
+	}
+	for _, record := range records {
+		if err := s.recoverMutation(ctx, record); err != nil {
+			return fmt.Errorf("recover load mutation %s: %w", record.ID, err)
+		}
+	}
+	interrupted, err := s.jobs.ListInterrupted(ctx)
+	if err != nil {
+		return fmt.Errorf("list interrupted load jobs: %w", err)
+	}
+	for _, job := range interrupted {
+		if err := failInterruptedJob(job, s.clock.Now(), "load job was interrupted before a durable physical commit"); err != nil {
+			return err
+		}
+		if err := s.jobs.Update(ctx, job); err != nil {
+			return fmt.Errorf("persist interrupted load job %s: %w", job.Reference.JobID, err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) recoverMutation(ctx context.Context, record domain.MutationRecord) error {
+	if err := record.Validate(); err != nil {
+		return err
+	}
+	job, err := s.jobs.Get(ctx, record.Job)
+	if err != nil {
+		return err
+	}
+	if job.ConfigurationDigest != record.ConfigurationDigest {
+		return fmt.Errorf("%w: load mutation job configuration changed", domain.ErrPrecondition)
+	}
+	if record.Phase == domain.MutationPrepared {
+		receipt, found, inspectErr := s.loader.InspectLoadMutation(ctx, record.ID)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		if !found {
+			if err := s.mutations.MarkAborted(ctx, record.ID); err != nil {
+				return err
+			}
+			if job.State == domain.JobDone {
+				return nil
+			}
+			if err := failInterruptedJob(job, s.clock.Now(), "load job was interrupted before its physical commit"); err != nil {
+				return err
+			}
+			return s.jobs.Update(ctx, job)
+		}
+		if receipt.PlanFingerprint != record.PlanFingerprint {
+			return fmt.Errorf("%w: physical load receipt belongs to a different plan", domain.ErrPrecondition)
+		}
+		if err := s.mutations.MarkPhysical(ctx, record.ID, record.PlanFingerprint, receipt.Result); err != nil {
+			return err
+		}
+		record.Phase = domain.MutationPhysical
+		record.Result = &domain.MutationResult{
+			OutputRows: receipt.Result.OutputRows, CreatedDestination: receipt.Result.CreatedDestination,
+			UpdatedDestination: receipt.Result.UpdatedDestination,
+		}
+	}
+	if record.Phase == domain.MutationPhysical {
+		if err := s.publishMutation(ctx, record); err != nil {
+			return err
+		}
+		if err := s.mutations.MarkApplied(ctx, record.ID); err != nil {
+			return err
+		}
+		record.Phase = domain.MutationApplied
+	}
+	if record.Phase != domain.MutationApplied || record.Result == nil || job.State == domain.JobDone {
+		return nil
+	}
+	if job.State == domain.JobPending {
+		if err := job.Start(s.clock.Now()); err != nil {
+			return err
+		}
+	}
+	statistics := domain.Statistics{
+		InputFiles: record.InputFiles, InputBytes: record.InputBytes,
+		OutputRows: record.Result.OutputRows, OutputBytes: record.InputBytes,
+	}
+	if err := job.Complete(statistics, s.clock.Now()); err != nil {
+		return err
+	}
+	return s.jobs.Update(ctx, job)
+}
+
+func (s *Service) publishMutation(ctx context.Context, record domain.MutationRecord) error {
+	switch record.Publication {
+	case domain.MutationPublishNone:
+		return nil
+	case domain.MutationPublishCreate:
+		return s.tables.PublishTable(ctx, record.Destination)
+	case domain.MutationPublishSchemaUpdate:
+		return s.tables.PublishSchemaUpdate(
+			ctx, record.Destination.Reference, record.BeforeSchema, record.Destination.Schema,
+		)
+	default:
+		return fmt.Errorf("%w: load mutation publication is invalid", domain.ErrInvalid)
+	}
+}
+
+func failInterruptedJob(job *domain.Job, now time.Time, message string) error {
+	if job.State == domain.JobPending {
+		if err := job.Start(now); err != nil {
+			return err
+		}
+	}
+	if job.State == domain.JobDone {
+		return nil
+	}
+	if err := job.Fail("backendError", message, job.Statistics, now); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Service) execute(parent context.Context, job *domain.Job) {
 	ctx, cancel := context.WithTimeout(parent, s.config.OperationTimeout)
 	defer cancel()
@@ -153,6 +303,14 @@ func (s *Service) execute(parent context.Context, job *domain.Job) {
 	}
 
 	statistics, err := s.run(ctx, job)
+	var pending *recoveryPendingError
+	if errors.As(err, &pending) {
+		slog.ErrorContext(ctx, "load job awaits durable recovery", append([]any{
+			"project_id", job.Reference.ProjectID, "location", job.Reference.Location,
+			"job_id", job.Reference.JobID,
+		}, observability.ErrorAttrs(err)...)...)
+		return
+	}
 	if err == nil {
 		_ = job.Complete(statistics, s.clock.Now())
 	} else {
@@ -273,13 +431,33 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		"table_id", destination.table.Reference.TableID, "job_id", job.Reference.JobID,
 		"file_count", len(localObjects), "input_bytes", downloaded,
 		"schema_fingerprint", schemaDigest(destination.table.Schema), "write_disposition", configuration.WriteDisposition)
-	result, err := s.loader.ExecuteLoad(ctx, loadPlan, localObjects)
+	var result ports.LoadResult
+	publication := mutationPublication(destination)
+	record := domain.MutationRecord{
+		ID: mutationID, Job: job.Reference, ConfigurationDigest: job.ConfigurationDigest,
+		PlanFingerprint: loadPlan.Fingerprint(), Destination: domain.CloneTable(destination.table),
+		BeforeSchema: catalogdomain.CloneFields(destination.beforeSchema), Publication: publication,
+		Phase: domain.MutationPrepared, InputFiles: statistics.InputFiles, InputBytes: statistics.InputBytes,
+	}
+	if err := s.mutations.Prepare(ctx, record); err != nil {
+		return statistics, err
+	}
+	result, err = s.executePlannedLoad(ctx, record, loadPlan, localObjects)
 	if err == nil && result.CreatedDestination != destination.create {
-		err = fmt.Errorf("%w: loader destination creation result differs from the plan", domain.ErrPrecondition)
+		err = &recoveryPendingError{cause: fmt.Errorf(
+			"%w: loader destination creation result differs from the plan", domain.ErrPrecondition,
+		)}
 	}
 	updateDestination := len(destination.evolution.Additions) != 0 || len(destination.evolution.Relaxations) != 0
 	if err == nil && result.UpdatedDestination != updateDestination {
-		err = fmt.Errorf("%w: loader destination update result differs from the plan", domain.ErrPrecondition)
+		err = &recoveryPendingError{cause: fmt.Errorf(
+			"%w: loader destination update result differs from the plan", domain.ErrPrecondition,
+		)}
+	}
+	if err == nil {
+		if markErr := s.mutations.MarkPhysical(ctx, mutationID, loadPlan.Fingerprint(), result); markErr != nil {
+			err = &recoveryPendingError{cause: markErr}
+		}
 	}
 	if err == nil && destination.create {
 		if publishErr := s.tables.PublishTable(ctx, destination.table); publishErr != nil {
@@ -287,15 +465,27 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 			cleanupErr := s.loader.DiscardLoadedTable(cleanupCtx, mutationID, destination.table.Reference)
 			cancelCleanup()
 			if cleanupErr != nil {
-				err = errors.Join(publishErr, fmt.Errorf("compensate unpublished load destination: %w", cleanupErr))
+				err = &recoveryPendingError{cause: errors.Join(publishErr, fmt.Errorf("compensate unpublished load destination: %w", cleanupErr))}
 			} else {
-				err = publishErr
+				if abortErr := s.mutations.MarkAborted(context.WithoutCancel(ctx), mutationID); abortErr != nil {
+					err = errors.Join(publishErr, abortErr)
+				} else {
+					err = publishErr
+				}
 			}
 		}
 	} else if err == nil && updateDestination {
-		err = s.tables.PublishSchemaUpdate(
+		publishErr := s.tables.PublishSchemaUpdate(
 			ctx, destination.table.Reference, destination.beforeSchema, destination.table.Schema,
 		)
+		if publishErr != nil {
+			err = &recoveryPendingError{cause: publishErr}
+		}
+	}
+	if err == nil {
+		if markErr := s.mutations.MarkApplied(ctx, mutationID); markErr != nil {
+			err = &recoveryPendingError{cause: markErr}
+		}
 	}
 	observability.LogSideEffectEnd(ctx, "warehouse", "commit_load_job", started, err,
 		"project_id", job.Reference.ProjectID, "dataset_id", destination.table.Reference.DatasetID,
@@ -313,6 +503,65 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		statistics.OutputBytes = downloaded
 	}
 	return statistics, err
+}
+
+func (s *Service) executePlannedLoad(
+	ctx context.Context,
+	record domain.MutationRecord,
+	plan ports.LoadPlan,
+	objects []ports.LocalObject,
+) (ports.LoadResult, error) {
+	result, err := s.loader.ExecuteLoad(ctx, plan, objects)
+	if err == nil {
+		return result, nil
+	}
+	receipt, found, inspectErr := s.loader.InspectLoadMutation(context.WithoutCancel(ctx), record.ID)
+	if inspectErr != nil {
+		return ports.LoadResult{}, &recoveryPendingError{cause: errors.Join(err, inspectErr)}
+	}
+	if found {
+		if receipt.PlanFingerprint != record.PlanFingerprint {
+			return ports.LoadResult{}, &recoveryPendingError{cause: fmt.Errorf(
+				"%w: physical load receipt belongs to a different plan", domain.ErrPrecondition,
+			)}
+		}
+		return receipt.Result, nil
+	}
+	if abortErr := s.mutations.MarkAborted(context.WithoutCancel(ctx), record.ID); abortErr != nil {
+		return ports.LoadResult{}, errors.Join(err, abortErr)
+	}
+	return ports.LoadResult{}, err
+}
+
+func mutationPublication(destination destinationResolution) domain.MutationPublication {
+	if destination.create {
+		return domain.MutationPublishCreate
+	}
+	if len(destination.evolution.Additions) != 0 || len(destination.evolution.Relaxations) != 0 {
+		return domain.MutationPublishSchemaUpdate
+	}
+	return domain.MutationPublishNone
+}
+
+type recoveryPendingError struct{ cause error }
+
+func (err *recoveryPendingError) Error() string {
+	return "load mutation requires startup recovery: " + err.cause.Error()
+}
+
+func (err *recoveryPendingError) Unwrap() error { return err.cause }
+
+func interfaceNil(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 func (s *Service) planDestinationSchema(

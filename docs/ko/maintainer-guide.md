@@ -115,6 +115,21 @@ CI가 도구를 별도로 설치한다면 릴리스 출처 증거와 실제 실�
 구분에 사례가 하나도 없어도 정상입니다. Storage 동작은 [공식 RPC
 레퍼런스](https://cloud.google.com/bigquery/docs/reference/storage/rpc)와 비교합니다.
 
+<!-- section: sqlite-resources -->
+## SQLite SQL 리소스
+
+SQLite 스키마 변경은 `internal/adapters/sqlite/migrations`의 Goose 임베디드 SQL
+마이그레이션으로 관리합니다. 새 파일은 순번을 계속 증가시켜 추가하고, 이미 적용된
+마이그레이션은 수정하지 않습니다. 런타임이 리소스를 프로세스 안에 포함해 적용하므로
+Java 런타임, JDBC 드라이버, 외부 마이그레이션 서비스가 필요하지 않습니다.
+
+정적인 저장소 쿼리는 `internal/adapters/sqlite/queries/*.sql`에 둡니다.
+`make sqlc-generate`로 타입이 지정된 어댑터를 생성합니다. 생성 파일은
+`internal/adapters/sqlite/sqlcgen`에 커밋하며, `make sqlc-check`가 드리프트를
+거부합니다. 새 저장소 코드는 Go에서 정적 쿼리 문자열을 조립하지 말고 이름 있는 SQL
+리소스를 추가해야 합니다. 동적 GoogleSQL 실행은 SQLite 저장소 쿼리가 아니라 별도의
+AST-엔진 lowering 경로입니다.
+
 <!-- section: diagnose-drift -->
 ## 호환성 차이 진단
 

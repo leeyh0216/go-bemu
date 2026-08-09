@@ -532,6 +532,9 @@ func (s *CatalogService) PublishMaterializedTable(ctx context.Context, table dom
 	}
 	if existing, err := s.catalog.GetTable(ctx, table.ProjectID, table.DatasetID, table.ID); err == nil {
 		if !tableExpired(existing, s.clock.Now()) {
+			if samePublishedLoadTable(existing, table) {
+				return nil
+			}
 			return fmt.Errorf("%w: table %s/%s/%s", domain.ErrConflict, table.ProjectID, table.DatasetID, table.ID)
 		}
 		if _, err := s.removeExpiredTableLocked(ctx, table.ProjectID, table.DatasetID, table.ID); err != nil {

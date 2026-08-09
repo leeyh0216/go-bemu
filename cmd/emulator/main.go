@@ -156,9 +156,14 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure query service: %w", err)
 	}
-	loadService, err := composeLoadJobs(cfg, state.loadJobs, catalogService, loader, clock, system.IDGenerator{})
+	loadService, err := composeLoadJobs(
+		cfg, state.loadJobs, state.loadMutations, catalogService, loader, clock, system.IDGenerator{},
+	)
 	if err != nil {
 		return err
+	}
+	if err := loadService.Recover(ctx); err != nil {
+		return fmt.Errorf("recover load mutations: %w", err)
 	}
 	readRuntime, err := composeStorageRead(
 		cfg, readFactory, googleSQLGateway, catalogService, clock, system.IDGenerator{}, logger, state.readSessions,

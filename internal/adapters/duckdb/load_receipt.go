@@ -18,6 +18,37 @@ type loadReceipt struct {
 	Result          loadports.LoadResult
 }
 
+func (w *Warehouse) InspectLoadMutation(
+	ctx context.Context,
+	mutationID string,
+) (loadports.LoadMutationReceipt, bool, error) {
+	if !loadDomain.ValidLoadMutationID(mutationID) {
+		return loadports.LoadMutationReceipt{}, false, fmt.Errorf("%w: invalid load mutation identity", loadDomain.ErrInvalid)
+	}
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return loadports.LoadMutationReceipt{}, false, fmt.Errorf("begin load mutation inspection: %w", err)
+	}
+	defer tx.Rollback()
+	if err := ensureLoadReceiptStore(ctx, tx); err != nil {
+		return loadports.LoadMutationReceipt{}, false, err
+	}
+	receipt, found, err := readLoadReceipt(ctx, tx, mutationID)
+	if err != nil {
+		return loadports.LoadMutationReceipt{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return loadports.LoadMutationReceipt{}, false, fmt.Errorf("commit load mutation inspection: %w", err)
+	}
+	if !found {
+		return loadports.LoadMutationReceipt{}, false, nil
+	}
+	return loadports.LoadMutationReceipt{
+		PlanFingerprint: receipt.PlanFingerprint,
+		Result:          receipt.Result,
+	}, true, nil
+}
+
 func ensureLoadReceiptStore(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoteIdentifier(loadReceiptSchema)); err != nil {
 		return fmt.Errorf("create load receipt schema: %w", err)

@@ -126,7 +126,7 @@ FROM bqemu_query_jobs WHERE job_id = ?`, queryJob.Reference.JobID).Scan(&storedC
 	}
 }
 
-func TestRepositoryStartupTerminatesInterruptedJobs(t *testing.T) {
+func TestRepositoryStartupTerminatesOnlyInterruptedQueryJobs(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
 	repositories, err := Open(ctx, path)
@@ -177,10 +177,11 @@ func TestRepositoryStartupTerminatesInterruptedJobs(t *testing.T) {
 			t.Fatalf("reconciled query job = %#v, %v", job, err)
 		}
 	}
-	for _, reference := range []loaddomain.JobReference{pendingLoad.Reference, runningLoad.Reference} {
-		job, err := restarted.LoadJobs().Get(ctx, reference)
-		if err != nil || job.State != loaddomain.JobDone || job.Error == nil || job.Error.Reason != "backendError" || job.EndedAt == nil {
-			t.Fatalf("reconciled load job = %#v, %v", job, err)
+	for _, want := range []*loaddomain.Job{pendingLoad, runningLoad} {
+		job, err := restarted.LoadJobs().Get(ctx, want.Reference)
+		if err != nil || job.State != want.State || job.Error != nil ||
+			(job.StartedAt == nil) != (want.StartedAt == nil) || job.EndedAt != nil {
+			t.Fatalf("load job changed before mutation recovery = %#v, %v", job, err)
 		}
 	}
 }

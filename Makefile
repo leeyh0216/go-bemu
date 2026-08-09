@@ -28,7 +28,9 @@ IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+SQLC_VERSION ?= v1.31.1
+
+.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -44,6 +46,8 @@ help:
 	  'make contract-check Check API/RPC manifest, annotations, and generated files' \
 	  'make integration-contract-generate Regenerate integration case artifacts' \
 	  'make integration-contract-check Check integration cases and generated files' \
+	  'make sqlc-generate Regenerate typed SQLite query adapters from SQL resources' \
+	  'make sqlc-check Check SQLite generated query adapters for drift' \
 	  'make check        Run formatting, bounded race tests, and vet' \
 	  'make python-test  Run the official Python client real-process contract' \
 	  'make bq-test      Run the exact-version official bq CLI contract' \
@@ -129,6 +133,17 @@ integration-contract-generate:
 integration-contract-check:
 	go run ./tests/integration/cmd/integrationctl check --root .
 
+sqlc-generate:
+	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+
+sqlc-check: sqlc-generate
+	git diff --exit-code -- internal/adapters/sqlite/sqlcgen
+	@untracked="$$(git ls-files --others --exclude-standard -- internal/adapters/sqlite/sqlcgen)"; \
+	  if test -n "$$untracked"; then \
+	    printf '%s\n' "stage=sqlc operation=generate shape=untracked-output status=failed files=$$untracked fix_hint=git-add-generated-output" >&2; \
+	    exit 1; \
+	  fi
+
 consumer-runner-test:
 	"$(PYTHON3)" -m unittest discover -s tests/integration/framework/tests -p 'test_*.py'
 
@@ -182,7 +197,7 @@ vet:
 github-actions-policy:
 	CGO_ENABLED=1 go test ./tests/integration/cipolicy
 
-ci-static: github-actions-policy format-check contract-check integration-contract-check consumer-runner-test auth-runner-test vet config-check
+ci-static: github-actions-policy format-check contract-check integration-contract-check sqlc-check consumer-runner-test auth-runner-test vet config-check
 
 ci-test-all:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...

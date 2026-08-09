@@ -131,6 +131,27 @@ func (r *loadJobRepository) List(ctx context.Context, projectID, location string
 	return jobs, nil
 }
 
+func (r *loadJobRepository) ListInterrupted(ctx context.Context) ([]*loaddomain.Job, error) {
+	rows, err := r.db.QueryContext(ctx, loadJobSelect+` WHERE state IN ('PENDING', 'RUNNING')
+ORDER BY created_at, project_id, location_key, job_id`)
+	if err != nil {
+		return nil, loadJobRepositoryError(ctx, "list interrupted", err)
+	}
+	defer rows.Close()
+	jobs := make([]*loaddomain.Job, 0)
+	for rows.Next() {
+		job, scanErr := scanLoadJob(rows)
+		if scanErr != nil {
+			return nil, loadJobRepositoryError(ctx, "list interrupted", scanErr)
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, loadJobRepositoryError(ctx, "list interrupted", err)
+	}
+	return jobs, nil
+}
+
 func encodeLoadJob(job *loaddomain.Job) ([]any, error) {
 	if job == nil {
 		return nil, fmt.Errorf("%w: load job is required", loaddomain.ErrInvalid)

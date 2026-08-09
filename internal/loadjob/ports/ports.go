@@ -52,7 +52,21 @@ type Loader interface {
 	PlanLoad(context.Context, LoadPlanRequest) (LoadPlan, error)
 	InferParquetSchema(context.Context, []LocalObject, ParquetSchemaOptions) ([]domain.Field, error)
 	ExecuteLoad(context.Context, LoadPlan, []LocalObject) (LoadResult, error)
+	InspectLoadMutation(context.Context, string) (LoadMutationReceipt, bool, error)
 	DiscardLoadedTable(context.Context, string, domain.TableReference) error
+}
+
+type LoadMutationReceipt struct {
+	PlanFingerprint string
+	Result          LoadResult
+}
+
+type MutationJournal interface {
+	Prepare(context.Context, domain.MutationRecord) error
+	MarkPhysical(context.Context, string, string, LoadResult) error
+	MarkApplied(context.Context, string) error
+	MarkAborted(context.Context, string) error
+	ListRecoverable(context.Context) ([]domain.MutationRecord, error)
 }
 
 type JobRepository interface {
@@ -60,6 +74,7 @@ type JobRepository interface {
 	Update(context.Context, *domain.Job) error
 	Get(context.Context, domain.JobReference) (*domain.Job, error)
 	List(context.Context, string, string) ([]*domain.Job, error)
+	ListInterrupted(context.Context) ([]*domain.Job, error)
 }
 
 type Clock interface {

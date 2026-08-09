@@ -115,6 +115,22 @@ requirement. An empty preview or nightly matrix is valid. Storage operations
 remain grounded in the [official RPC
 reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
 
+<!-- section: sqlite-resources -->
+## SQLite SQL Resources
+
+SQLite schema changes are embedded Goose migrations in
+`internal/adapters/sqlite/migrations`. Add a new, monotonically numbered SQL
+file; never edit an applied migration. The runtime embeds and applies those
+resources in process, so no Java runtime, JDBC driver, or external migration
+service is required.
+
+Static repository queries belong in `internal/adapters/sqlite/queries/*.sql`.
+Generate the typed adapter with `make sqlc-generate`; generated files under
+`internal/adapters/sqlite/sqlcgen` are committed and `make sqlc-check` rejects
+drift. New repository code must add a named SQL resource rather than compose a
+new static query string in Go. Dynamic GoogleSQL execution remains a separate
+AST-to-engine lowering path and is not a SQLite repository query.
+
 <!-- section: diagnose-drift -->
 ## Diagnose Drift
 

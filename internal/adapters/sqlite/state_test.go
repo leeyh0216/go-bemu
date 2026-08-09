@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -203,7 +204,7 @@ func TestCatalogUpdatesAndCascadesAreDurable(t *testing.T) {
 	}
 }
 
-func TestMigrationChecksumMismatchStopsOpen(t *testing.T) {
+func TestUnknownGooseMigrationStopsOpen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
 	repositories, err := Open(ctx, path)
@@ -218,8 +219,8 @@ func TestMigrationChecksumMismatchStopsOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE bqemu_schema_migrations
-SET checksum = ? WHERE version = 1`, strings.Repeat("0", 64)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO bqemu_goose_db_version (version_id, is_applied)
+VALUES (?, 1)`, 9_999); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
@@ -228,8 +229,66 @@ SET checksum = ? WHERE version = 1`, strings.Repeat("0", 64)); err != nil {
 	}
 
 	_, err = Open(ctx, path)
-	if err == nil || !strings.Contains(err.Error(), "checksum or identity mismatch") {
-		t.Fatalf("Open() error = %v, want migration checksum rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported migration version") {
+		t.Fatalf("Open() error = %v, want unknown Goose migration rejection", err)
+	}
+}
+
+func TestLegacyMigrationLedgerImportsIntoGooseHistory(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-state.sqlite")
+	repositories, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(driverName, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE bqemu_goose_db_version`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE bqemu_schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+) STRICT`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	for version := 1; version <= 5; version++ {
+		if _, err := db.ExecContext(ctx, `INSERT INTO bqemu_schema_migrations
+    (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)`,
+			version, "legacy", strings.Repeat("0", 64), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	var legacyCount, maximumVersion int
+	if err := restarted.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema
+WHERE type = 'table' AND name = 'bqemu_schema_migrations'`).Scan(&legacyCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.db.QueryRowContext(ctx, `SELECT max(version_id)
+FROM bqemu_goose_db_version WHERE is_applied = 1`).Scan(&maximumVersion); err != nil {
+		t.Fatal(err)
+	}
+	if legacyCount != 0 || maximumVersion != 6 {
+		t.Fatalf("legacy import retained ledger=%d with Goose version=%d", legacyCount, maximumVersion)
 	}
 }
 
@@ -262,21 +321,27 @@ func TestMissingSchemaObjectStopsOpen(t *testing.T) {
 	}
 }
 
-func TestCompiledMigrationChecksumIsImmutable(t *testing.T) {
-	if len(migrations) != 4 {
-		t.Fatalf("migration count = %d, update the prefix contract test", len(migrations))
+func TestEmbeddedGooseMigrationsAreVersionedSQLResources(t *testing.T) {
+	paths, err := fs.Glob(embeddedMigrations, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := checksumMigration(migrations[0]); got != baselineChecksum {
-		t.Fatalf("baseline checksum = %s, want %s", got, baselineChecksum)
+	want := []string{
+		"migrations/00001_catalog_baseline.sql",
+		"migrations/00002_job_metadata.sql",
+		"migrations/00003_storage_read_sessions.sql",
+		"migrations/00004_storage_write_ledger.sql",
+		"migrations/00005_load_mutation_journal.sql",
+		"migrations/00006_drop_legacy_migration_ledger.sql",
 	}
-	if got := checksumMigration(migrations[1]); got != jobMetadataChecksum {
-		t.Fatalf("job metadata checksum = %s, want %s", got, jobMetadataChecksum)
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("migration resource paths = %#v, want %#v", paths, want)
 	}
-	if got := checksumMigration(migrations[2]); got != readSessionChecksum {
-		t.Fatalf("Storage Read checksum = %s, want %s", got, readSessionChecksum)
-	}
-	if got := checksumMigration(migrations[3]); got != writeLedgerChecksum {
-		t.Fatalf("Storage Write checksum = %s, want %s", got, writeLedgerChecksum)
+	for _, path := range paths {
+		contents, err := embeddedMigrations.ReadFile(path)
+		if err != nil || !strings.HasPrefix(string(contents), "-- +goose Up\n") {
+			t.Fatalf("migration resource %s = %q, %v", path, contents, err)
+		}
 	}
 }
 
