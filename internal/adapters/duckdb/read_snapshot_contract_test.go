@@ -483,7 +483,12 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 			t.Errorf("arg %d = %#v, want %#v", index, args[index], wantArgs[index])
 		}
 	}
-	for _, unsupported := range []string{"id IN (1)", "CAST(id AS STRING) = '1'", "id BETWEEN 1 AND 2", "id = 1; SELECT 1"} {
+	for _, supported := range []string{"id IN (1)", "CAST(id AS STRING) = '1'"} {
+		if _, _, err := compileRowRestriction(supported, schema); err != nil {
+			t.Errorf("GoogleSQL AST restriction %q = %v", supported, err)
+		}
+	}
+	for _, unsupported := range []string{"id BETWEEN 1 AND 2", "id = 1; SELECT 1"} {
 		if _, _, err := compileRowRestriction(unsupported, schema); err == nil {
 			t.Errorf("unsupported restriction %q unexpectedly accepted", unsupported)
 		}
