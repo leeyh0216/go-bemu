@@ -123,9 +123,16 @@ Compose에서는 listener 주소는 그대로 두고 `server.http.publicUrl`을 
 | `load.maxTotalBytes` | `4GiB` | 합친 원본 byte의 최대값 |
 | `load.maxMetadataBytes` | `8MiB` | object metadata 응답 최대 크기 |
 | `load.maxListedObjects` | `10000` | URI pattern 확장 중 검사하는 최대 객체 수 |
+| `load.mediaUpload.bucket` | `bqemu-media` | 일반 `gs://` Parquet load 경로를 시작하기 전에 완료된 직접 업로드 객체를 저장하는 bucket |
+| `load.mediaUpload.maxSessions` | `8` | 동시에 유지할 수 있는 프로세스 로컬 resumable upload 세션 최대 수 |
+| `load.mediaUpload.maxBytes` | `256MiB` | 진행 중인 multipart upload와 활성 resumable 세션 전체가 공유하는 in-memory payload 최대 byte 수. 여유가 없으면 한도를 넘겨 할당하지 않고 요청을 거부합니다. |
+| `load.mediaUpload.maxChunkBytes` | `128MiB` | resumable chunk 최대 크기. 양수이고 `maxBytes` 이하여야 하며, 기본값은 100MiB chunk를 받습니다. |
+| `load.mediaUpload.sessionTtl` | `1h` | 완료되지 않은 resumable upload 세션의 idle 유지 시간. 세션은 재시작 뒤 복구되지 않습니다. |
 
 업로더와 BQEMU는 서로 다른 네트워크 위치에 있으므로 각각 도달 가능한 주소를
-설정합니다. 지원 원본과 형식은 `gs://`와 Parquet이며 [현재 지원 범위](compatibility.md)를
+설정합니다. metadata load job은 `gs://` 원본만 받습니다. media-upload endpoint는 완료한
+byte를 이 GCS 호환 서비스에 저장한 뒤 일반 `gs://` Parquet load job을 제출하므로 host-file
+원본 모드를 추가하지 않습니다. 지원 형식은 Parquet이며 [현재 지원 범위](compatibility.md)를
 확인하세요.
 
 <!-- section: full-reference -->

@@ -18,6 +18,10 @@
       "url": "https://developers.google.com/discovery/v1/reference/apis/getRest"
     },
     {
+      "id": "google-api-media-upload",
+      "url": "https://cloud.google.com/bigquery/docs/reference/api-uploads"
+    },
+    {
       "id": "grpc-health-v1",
       "url": "https://grpc.io/docs/guides/health-checking/"
     },
@@ -351,8 +355,8 @@
       "limitations": {
         "policy": "tracked",
         "byDesign": [],
-        "en": "Media upload endpoints are not registered; unsupported load formats end with notImplemented.",
-        "ko": "미디어 업로드 endpoint는 등록하지 않습니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."
+        "en": "This JSON endpoint accepts query jobs and gs:// Parquet load jobs. Multipart and resumable media upload are separate routes. Unsupported load formats end with notImplemented.",
+        "ko": "이 JSON endpoint는 쿼리 작업과 gs:// Parquet 로드 작업을 받습니다. multipart와 resumable 미디어 업로드는 별도 route입니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."
       },
       "issues": [
         "#26",
@@ -365,6 +369,163 @@
         "go:cmd/emulator/state_restart:TestRuntimeJobMetadataSurvivesRestart",
         "go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs",
         "go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery"
+      ]
+    },
+    {
+      "id": "bigquery.jobs.insert.resumable",
+      "protocol": "rest",
+      "component": "public-query",
+      "summary": {
+        "en": "Start a media upload through the discovery resumable URI",
+        "ko": "Discovery resumable URI에서 미디어 업로드를 시작합니다."
+      },
+      "support": "partial",
+      "verification": "transport",
+      "rest": {
+        "method": "POST",
+        "path": "/resumable/upload/bigquery/v2/projects/{projectId}/jobs",
+        "discovery": false
+      },
+      "supportedInput": {
+        "en": "uploadType=resumable with JSON Parquet load metadata creates a bounded upload session.",
+        "ko": "JSON Parquet 로드 메타데이터를 포함한 uploadType=resumable 요청이 제한된 업로드 세션을 생성합니다."
+      },
+      "conditions": [],
+      "limitations": {
+        "policy": "tracked",
+        "byDesign": [],
+        "en": "Sessions are process-local and expire after the configured TTL; only Parquet media is accepted.",
+        "ko": "세션은 프로세스 로컬이며 설정된 TTL 뒤 만료됩니다. Parquet 미디어만 허용합니다."
+      },
+      "issues": [
+        "#26",
+        "#48",
+        "#5"
+      ],
+      "sources": [
+        "bigquery-rest-v2",
+        "google-api-media-upload"
+      ],
+      "tests": [
+        "go:internal/transport/rest/media_upload:TestMediaUploadResumableTracksRangesAndAliases"
+      ]
+    },
+    {
+      "id": "bigquery.jobs.insert.resumable-resume",
+      "protocol": "rest",
+      "component": "public-query",
+      "summary": {
+        "en": "Resume a media upload through the discovery resumable URI",
+        "ko": "Discovery resumable URI에서 미디어 업로드를 재개합니다."
+      },
+      "support": "partial",
+      "verification": "transport",
+      "rest": {
+        "method": "PUT",
+        "path": "/resumable/upload/bigquery/v2/projects/{projectId}/jobs",
+        "discovery": false
+      },
+      "supportedInput": {
+        "en": "Ordered Content-Range chunks and status probes for a bounded Parquet upload session are supported.",
+        "ko": "제한된 Parquet 업로드 세션의 순서 있는 Content-Range 청크와 상태 조회를 지원합니다."
+      },
+      "conditions": [],
+      "limitations": {
+        "policy": "tracked",
+        "byDesign": [],
+        "en": "Sessions are process-local and expire after the configured TTL; only Parquet media is accepted.",
+        "ko": "세션은 프로세스 로컬이며 설정된 TTL 뒤 만료됩니다. Parquet 미디어만 허용합니다."
+      },
+      "issues": [
+        "#26",
+        "#48",
+        "#5"
+      ],
+      "sources": [
+        "bigquery-rest-v2",
+        "google-api-media-upload"
+      ],
+      "tests": [
+        "go:internal/transport/rest/media_upload:TestMediaUploadResumableTracksRangesAndAliases"
+      ]
+    },
+    {
+      "id": "bigquery.jobs.insert.upload",
+      "protocol": "rest",
+      "component": "public-query",
+      "summary": {
+        "en": "Submit a Parquet load job with one multipart media upload",
+        "ko": "단일 multipart 미디어 업로드로 Parquet 로드 작업을 제출합니다."
+      },
+      "support": "partial",
+      "verification": "transport",
+      "rest": {
+        "method": "POST",
+        "path": "/upload/bigquery/v2/projects/{projectId}/jobs",
+        "discovery": false
+      },
+      "supportedInput": {
+        "en": "uploadType=multipart with JSON load metadata followed by one Parquet media part is supported.",
+        "ko": "JSON 로드 메타데이터 뒤에 Parquet 미디어 부분 하나가 오는 uploadType=multipart를 지원합니다."
+      },
+      "conditions": [],
+      "limitations": {
+        "policy": "tracked",
+        "byDesign": [],
+        "en": "Only Parquet media is accepted; other load formats and options remain outside the supported load surface.",
+        "ko": "Parquet 미디어만 허용합니다. 다른 로드 형식과 옵션은 지원 범위 밖입니다."
+      },
+      "issues": [
+        "#48",
+        "#5"
+      ],
+      "sources": [
+        "bigquery-rest-v2",
+        "google-api-media-upload"
+      ],
+      "tests": [
+        "go:internal/transport/rest/media_upload:TestMediaUploadExecutesParquetLoadThroughGCS",
+        "go:internal/transport/rest/media_upload:TestMediaUploadMultipartStoresGCSObjectBeforeSubmittingLoad",
+        "go:internal/transport/rest/media_upload:TestMediaUploadResumableTracksRangesAndAliases"
+      ]
+    },
+    {
+      "id": "bigquery.jobs.insert.upload-resume",
+      "protocol": "rest",
+      "component": "public-query",
+      "summary": {
+        "en": "Resume a media upload through the standard upload URI",
+        "ko": "표준 upload URI에서 미디어 업로드를 재개합니다."
+      },
+      "support": "partial",
+      "verification": "transport",
+      "rest": {
+        "method": "PUT",
+        "path": "/upload/bigquery/v2/projects/{projectId}/jobs",
+        "discovery": false
+      },
+      "supportedInput": {
+        "en": "Ordered Content-Range chunks and status probes for a bounded Parquet upload session are supported.",
+        "ko": "제한된 Parquet 업로드 세션의 순서 있는 Content-Range 청크와 상태 조회를 지원합니다."
+      },
+      "conditions": [],
+      "limitations": {
+        "policy": "tracked",
+        "byDesign": [],
+        "en": "Sessions are process-local and expire after the configured TTL; only Parquet media is accepted.",
+        "ko": "세션은 프로세스 로컬이며 설정된 TTL 뒤 만료됩니다. Parquet 미디어만 허용합니다."
+      },
+      "issues": [
+        "#26",
+        "#48",
+        "#5"
+      ],
+      "sources": [
+        "bigquery-rest-v2",
+        "google-api-media-upload"
+      ],
+      "tests": [
+        "go:internal/transport/rest/media_upload:TestMediaUploadResumableTracksRangesAndAliases"
       ]
     },
     {

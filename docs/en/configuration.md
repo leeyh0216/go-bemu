@@ -124,10 +124,18 @@ local-file source mode.
 | `load.maxTotalBytes` | `4GiB` | Maximum combined source bytes. |
 | `load.maxMetadataBytes` | `8MiB` | Maximum object metadata response size. |
 | `load.maxListedObjects` | `10000` | Maximum objects examined while expanding URI patterns. |
+| `load.mediaUpload.bucket` | `bqemu-media` | Bucket used for completed direct-upload objects before the ordinary `gs://` Parquet load path starts. |
+| `load.mediaUpload.maxSessions` | `8` | Maximum concurrent process-local resumable upload sessions. |
+| `load.mediaUpload.maxBytes` | `256MiB` | Shared in-memory payload budget for a multipart upload in flight and all active resumable sessions. A request without available budget is rejected as retryable rather than allocating beyond it. |
+| `load.mediaUpload.maxChunkBytes` | `128MiB` | Maximum resumable chunk size. It must be positive and no greater than `maxBytes`; the default accepts 100MiB chunks. |
+| `load.mediaUpload.sessionTtl` | `1h` | Idle lifetime of an incomplete resumable upload session. Sessions do not survive a restart. |
 
 The uploader and BQEMU have different network locations, so configure each
-with the address it can reach. The supported source and format are `gs://` and
-Parquet; see [What works today](compatibility.md).
+with the address it can reach. Metadata load jobs accept only `gs://` sources.
+The media-upload endpoints store completed bytes in this same GCS-compatible
+service before submitting the ordinary `gs://` Parquet load job; they do not
+introduce a host-file source mode. The supported format is Parquet; see [What
+works today](compatibility.md).
 
 <!-- section: full-reference -->
 ## Full Default File

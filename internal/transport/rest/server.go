@@ -20,6 +20,8 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
+const mediaUploadMultipartFramingLimit int64 = 128 << 10
+
 type CatalogUseCases interface {
 	CreateProject(context.Context, domain.Project) (domain.Project, error)
 	GetProject(context.Context, string) (domain.Project, error)
@@ -51,6 +53,7 @@ type Server struct {
 	readiness           ports.HealthChecker
 	baseURL             string
 	requestBodyLimits   requestBodyLimits
+	mediaUpload         *MediaUploadSupport
 	operationRoutes     []operationRouteRegistration
 	discoveryExtensions []discoveryExtension
 }
@@ -86,10 +89,28 @@ func (s *Server) Handler() http.Handler {
 	for _, routes := range s.operationRoutes {
 		registerOperationRoutes(mux, routes())
 	}
-	handler := requestBodyMiddleware(s.requestBodyLimits, mux)
+	handler := requestBodyMiddleware(s.requestBodyLimits, s.mediaUploadBodyLimits(), mux)
 	handler = methodOverrideMiddleware(handler)
 	handler = recoverMiddleware(handler)
 	return observability.HTTPMiddleware(handler)
+}
+
+func (s *Server) mediaUploadBodyLimits() *requestBodyLimits {
+	if s.mediaUpload == nil {
+		return nil
+	}
+	// MaxBytes is the media payload budget. Multipart bodies also carry a
+	// bounded JSON metadata part and MIME framing, so applying MaxBytes to the
+	// complete HTTP body would reject a legal payload exactly at that limit.
+	overhead := int64(mediaUploadMetadataLimit) + mediaUploadMultipartFramingLimit
+	maximum := s.mediaUpload.config.MaxBytes
+	if maximum <= int64(^uint64(0)>>1)-overhead {
+		maximum += overhead
+	} else {
+		maximum = int64(^uint64(0) >> 1)
+	}
+	limits := normalizedRequestBodyLimits(maximum, maximum)
+	return &limits
 }
 
 func registerOperationRoutes(mux *http.ServeMux, bindings []routeBinding) {

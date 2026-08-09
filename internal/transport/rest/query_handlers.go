@@ -46,7 +46,9 @@ func withQueryAPI(queries QueryUseCases) Option {
 				handlerBinding("bigquery.jobs.get", handlers.getJob),
 			}
 		})
-		server.discoveryExtensions = append(server.discoveryExtensions, extendQueryDiscovery)
+		server.discoveryExtensions = append(server.discoveryExtensions, func(document map[string]any) {
+			extendQueryDiscovery(document, false)
+		})
 	}
 }
 

@@ -39,7 +39,7 @@ Use [Getting started](getting-started.md) for the endpoint topology and
 | Storage Read | No split RPC, compression, historical snapshot, or restored snapshot bytes after restart. |
 | Storage Write | No ArrowRows, CDC, BUFFERED or explicit COMMITTED streams, or `FlushRows`. |
 | Load source and format | `gs://` and Parquet only. Local paths, Avro, ORC, CSV, and NDJSON are unavailable. |
-| Load behavior | No autodetect, multipart/resumable download, or unsupported schema/layout change. |
+| Load behavior | No autodetect or unsupported schema/layout change. Multipart and resumable media uploads accept Parquet only. Resumable uploads accept unknown-length chunks and final status probes; incomplete sessions are process-local and invalid after restart. Completed media objects remain in the configured GCS-compatible bucket. |
 | Control plane | No IAM authorization, production identity service, copy job, extract job, or job cancellation endpoint. |
 
 When a supported request includes an unsupported option, BQEMU rejects that

@@ -90,8 +90,8 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 	resources := discovery["resources"].(map[string]any)
 	jobMethods := resources["jobs"].(map[string]any)["methods"].(map[string]any)
 	jobInsert := jobMethods["insert"].(map[string]any)
-	if jobInsert["supportsMediaUpload"] != true || jobInsert["mediaUpload"] == nil {
-		t.Fatal("jobs.insert discovery must retain media_body metadata")
+	if jobInsert["supportsMediaUpload"] != nil || jobInsert["mediaUpload"] != nil {
+		t.Fatal("query-only server must not advertise unavailable media upload endpoints")
 	}
 	jobListParameters := jobMethods["list"].(map[string]any)["parameters"].(map[string]any)
 	for _, parameter := range []string{"allUsers", "stateFilter", "projection", "minCreationTime", "maxCreationTime", "parentJobId"} {
@@ -198,7 +198,13 @@ func TestOptionalConsoleSPAHandler(t *testing.T) {
 }
 
 func TestRESTRouteBindingsMatchOperationManifest(t *testing.T) {
-	server := NewServer(nil, nil, nil, "", WithTableDataAPI(nil), WithConsoleDirectory(t.TempDir()))
+	support, err := NewMediaUploadSupport(&mediaUploadStore{}, MediaUploadConfig{
+		Bucket: "bqemu-media", MaxSessions: 1, MaxBytes: 1, MaxChunkBytes: 1, SessionTTL: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithLoadJobs(nil, nil, &mediaUploadLoadJobs{}, nil, "", WithMediaUpload(support), WithTableDataAPI(nil), WithConsoleDirectory(t.TempDir()))
 	actual := make(map[string]bool)
 	for _, operationID := range server.operationIDs() {
 		if actual[operationID] {
@@ -219,7 +225,9 @@ func TestRESTRouteBindingsMatchOperationManifest(t *testing.T) {
 }
 
 func TestDiscoveryMethodsMatchOperationManifest(t *testing.T) {
-	document := discoveryDocument("http://127.0.0.1:9050", extendQueryDiscovery, extendTableDataDiscovery)
+	document := discoveryDocument("http://127.0.0.1:9050", func(document map[string]any) {
+		extendQueryDiscovery(document, true)
+	}, extendTableDataDiscovery)
 	actual := make(map[string]string)
 	resources := document["resources"].(map[string]any)
 	for resourceName, resourceValue := range resources {

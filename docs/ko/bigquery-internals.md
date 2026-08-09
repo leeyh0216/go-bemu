@@ -194,9 +194,11 @@ NULLABLE로의 완화만 처리합니다. 물리 스키마 변경과 추가 행�
 `_PARTITIONTIME`에 지정합니다. 데코레이터를 사용한 `WRITE_EMPTY`와 `WRITE_TRUNCATE`는
 대상 트랜잭션에서 해당 파티션만 검사하거나 교체합니다. 파티션 만료
 정리와 물리 재클러스터링은 아직 구현하지 않았습니다. 별도의 `autodetect` 요청 필드,
-쿼리 작업 스키마 변경, Avro/ORC/CSV/NDJSON,
-멀티파트·재개 가능 다운로드는 지원하지 않습니다. 작업 메타데이터와 멱등성 식별 정보는 SQLite에
-영속화하지만 내려받은 객체와 임시 준비 작업 공간은 영속화하지 않습니다.
+쿼리 작업 스키마 변경, Avro/ORC/CSV/NDJSON은 지원하지 않습니다. multipart와 resumable
+Parquet media upload는 먼저 설정한 GCS 호환 서비스의 불변 객체가 된 뒤 같은 load plan으로
+실행됩니다. 완료되지 않은 resumable 세션은 프로세스 로컬이므로 재시작 뒤 복구되지 않습니다.
+작업 메타데이터와 멱등성 식별 정보는 SQLite에 영속화하지만 내려받은 객체와 임시 준비 작업
+공간은 영속화하지 않습니다.
 
 <!-- section: rest-jobs -->
 ## REST 작업, 상태 확인, 페이지 조회

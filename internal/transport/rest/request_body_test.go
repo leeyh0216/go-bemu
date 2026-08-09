@@ -300,7 +300,7 @@ func newJSONEchoServer(t *testing.T, compressedLimit, decodedLimit int64, calls 
 		}
 		writeJSON(w, http.StatusOK, value)
 	})
-	handler := requestBodyMiddleware(normalizedRequestBodyLimits(compressedLimit, decodedLimit), mux)
+	handler := requestBodyMiddleware(normalizedRequestBodyLimits(compressedLimit, decodedLimit), nil, mux)
 	handler = methodOverrideMiddleware(handler)
 	handler = recoverMiddleware(handler)
 	server := httptest.NewServer(observability.HTTPMiddleware(handler))

@@ -88,8 +88,10 @@ Load job은 `gs://` 원본 URI만 받습니다. BQEMU는 `load.gcsEndpoint`를 �
 | 같은 Compose의 업로더 | `http://fake-gcs:4443` |
 | 호스트 Compose에 접속하는 개발 컨테이너 업로더 | `http://host.docker.internal:4443` |
 
-Parquet만 지원하는 load 형식입니다. 필수 설정과 한도는 [설정](configuration.md#load-jobs)에
-정리되어 있습니다.
+Parquet만 지원하는 load 형식입니다. 호출자는 BigQuery media-upload endpoint도 사용할 수
+있습니다. BQEMU는 완료된 media를 설정한 fake GCS 서비스에 저장한 뒤 같은 `gs://` Parquet
+load 경로를 제출합니다. media 세션은 프로세스 로컬이므로 재시작 뒤에는 유효하지 않습니다.
+필수 설정과 한도는 [설정](configuration.md#load-jobs)에 정리되어 있습니다.
 
 <!-- section: tls -->
 ## 선택형 TLS와 인증 파일

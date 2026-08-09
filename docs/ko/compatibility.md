@@ -38,7 +38,7 @@
 | Storage Read | split RPC, compression, historical snapshot, 재시작 뒤 snapshot byte 복원은 없습니다. |
 | Storage Write | ArrowRows, CDC, BUFFERED/명시적 COMMITTED stream, `FlushRows`는 없습니다. |
 | Load 원본과 형식 | `gs://`와 Parquet만 지원합니다. 로컬 경로, Avro, ORC, CSV, NDJSON은 지원하지 않습니다. |
-| Load 동작 | autodetect, multipart/resumable download, 미지원 schema/layout 변경은 없습니다. |
+| Load 동작 | autodetect와 미지원 schema/layout 변경은 없습니다. multipart와 resumable media upload는 Parquet만 받습니다. resumable upload는 전체 크기를 모르는 청크와 최종 상태 조회를 받으며, 완료되지 않은 세션은 프로세스 로컬이므로 재시작 뒤 유효하지 않습니다. 완료된 media 객체는 설정한 GCS 호환 bucket에 남습니다. |
 | Control plane | IAM authorization, 운영 identity service, copy job, extract job, job cancellation endpoint는 없습니다. |
 
 지원하는 요청에 미지원 옵션이 있으면 BQEMU는 그 옵션을 조용히 무시하지 않고 거부합니다.

@@ -129,6 +129,12 @@ load:
   maxTotalBytes: 4294967296
   maxMetadataBytes: 8388608
   maxListedObjects: 10000
+  mediaUpload:
+    bucket: bqemu-media
+    maxSessions: 8
+    maxBytes: 268435456
+    maxChunkBytes: 134217728
+    sessionTtl: "1h"
 
 logging:
   level: info

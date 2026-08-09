@@ -43,15 +43,27 @@ func withCombinedJobAPI(queries QueryUseCases, loads LoadJobUseCases) Option {
 	return func(server *Server) {
 		handlers := &combinedJobHandlers{query: &queryHandlers{queries: queries}, loads: loads}
 		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
-			return []routeBinding{
+			routes := []routeBinding{
 				handlerBinding("bigquery.jobs.query", handlers.query.query),
 				handlerBinding("bigquery.jobs.getQueryResults", handlers.query.getQueryResults),
 				handlerBinding("bigquery.jobs.insert", handlers.insertJob),
 				handlerBinding("bigquery.jobs.list", handlers.listJobs),
 				handlerBinding("bigquery.jobs.get", handlers.getJob),
 			}
+			if server.mediaUpload == nil {
+				return routes
+			}
+			media := newMediaUploadHandlers(handlers, server.mediaUpload, server.baseURL)
+			return append(routes,
+				handlerBinding("bigquery.jobs.insert.upload", media.start),
+				handlerBinding("bigquery.jobs.insert.upload-resume", media.resume),
+				handlerBinding("bigquery.jobs.insert.resumable", media.start),
+				handlerBinding("bigquery.jobs.insert.resumable-resume", media.resume),
+			)
 		})
-		server.discoveryExtensions = append(server.discoveryExtensions, extendQueryDiscovery)
+		server.discoveryExtensions = append(server.discoveryExtensions, func(document map[string]any) {
+			extendQueryDiscovery(document, server.mediaUpload != nil)
+		})
 	}
 }
 
@@ -103,36 +115,55 @@ func (h *combinedJobHandlers) insertQueryJob(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Request, payload, loadPayload []byte) {
-	var request loadJobRequest
-	if err := json.Unmarshal(payload, &request); err != nil {
-		writeLoadError(w, fmt.Errorf("%w: invalid load job JSON", loadDomain.ErrInvalid))
-		return
-	}
-	projectID := r.PathValue("projectId")
-	if request.JobReference.ProjectID != "" && request.JobReference.ProjectID != projectID {
-		writeLoadError(w, fmt.Errorf("%w: route and jobReference projectId differ", loadDomain.ErrInvalid))
-		return
-	}
-	if request.JobReference.JobID != "" {
-		if _, err := h.query.queries.Get(r.Context(), domain.JobReference{
-			ProjectID: projectID, Location: request.JobReference.Location, JobID: request.JobReference.JobID,
-		}); err == nil {
-			writeLoadError(w, fmt.Errorf("%w: job ID already identifies a query job", loadDomain.ErrConflict))
-			return
-		} else if !errors.Is(err, domain.ErrNotFound) {
-			writeError(w, err)
-			return
-		}
-	}
-	var wire loadConfigurationResource
-	if err := json.Unmarshal(loadPayload, &wire); err != nil {
-		writeLoadError(w, fmt.Errorf("%w: invalid load configuration JSON", loadDomain.ErrInvalid))
-		return
-	}
-	unsupported, err := unsupportedLoadOptions(loadPayload, wire)
+	submission, err := decodeLoadSubmission(r.PathValue("projectId"), payload, loadPayload)
 	if err != nil {
 		writeLoadError(w, err)
 		return
+	}
+	job, err := h.submitLoad(r.Context(), submission)
+	if err != nil {
+		writeLoadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, loadJobFromDomain(job))
+}
+
+type loadSubmission struct {
+	reference     loadDomain.JobReference
+	configuration loadDomain.LoadConfiguration
+}
+
+func decodeLoadSubmission(projectID string, payload, loadPayload []byte) (loadSubmission, error) {
+	var request loadJobRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		return loadSubmission{}, fmt.Errorf("%w: invalid load job JSON", loadDomain.ErrInvalid)
+	}
+	if request.JobReference.ProjectID != "" && request.JobReference.ProjectID != projectID {
+		return loadSubmission{}, fmt.Errorf("%w: route and jobReference projectId differ", loadDomain.ErrInvalid)
+	}
+	configuration, err := decodeLoadConfiguration(loadPayload)
+	if err != nil {
+		return loadSubmission{}, err
+	}
+	if configuration.Destination.ProjectID == "" {
+		configuration.Destination.ProjectID = projectID
+	}
+	return loadSubmission{
+		reference: loadDomain.JobReference{
+			ProjectID: projectID, Location: request.JobReference.Location, JobID: request.JobReference.JobID,
+		},
+		configuration: configuration,
+	}, nil
+}
+
+func decodeLoadConfiguration(loadPayload []byte) (loadDomain.LoadConfiguration, error) {
+	var wire loadConfigurationResource
+	if err := json.Unmarshal(loadPayload, &wire); err != nil {
+		return loadDomain.LoadConfiguration{}, fmt.Errorf("%w: invalid load configuration JSON", loadDomain.ErrInvalid)
+	}
+	unsupported, err := unsupportedLoadOptions(loadPayload, wire)
+	if err != nil {
+		return loadDomain.LoadConfiguration{}, err
 	}
 	configuration := loadDomain.LoadConfiguration{
 		SourceURIs: append([]string(nil), wire.SourceURIs...),
@@ -152,8 +183,7 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		if wire.TimePartitioning.ExpirationMs != nil {
 			parsed, parseErr := parseLoadRequiredInt64(*wire.TimePartitioning.ExpirationMs, "timePartitioning.expirationMs")
 			if parseErr != nil {
-				writeLoadError(w, parseErr)
-				return
+				return loadDomain.LoadConfiguration{}, parseErr
 			}
 			expiration = &parsed
 		}
@@ -164,18 +194,15 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 	if wire.RangePartitioning != nil {
 		start, parseErr := parseLoadRequiredInt64(wire.RangePartitioning.Range.Start, "rangePartitioning.range.start")
 		if parseErr != nil {
-			writeLoadError(w, parseErr)
-			return
+			return loadDomain.LoadConfiguration{}, parseErr
 		}
 		end, parseErr := parseLoadRequiredInt64(wire.RangePartitioning.Range.End, "rangePartitioning.range.end")
 		if parseErr != nil {
-			writeLoadError(w, parseErr)
-			return
+			return loadDomain.LoadConfiguration{}, parseErr
 		}
 		interval, parseErr := parseLoadRequiredInt64(wire.RangePartitioning.Range.Interval, "rangePartitioning.range.interval")
 		if parseErr != nil {
-			writeLoadError(w, parseErr)
-			return
+			return loadDomain.LoadConfiguration{}, parseErr
 		}
 		configuration.RangePartitioning = &loadDomain.RangePartitioning{
 			Field: wire.RangePartitioning.Field,
@@ -188,14 +215,20 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 	if wire.Schema != nil {
 		configuration.Schema = loadFieldsFromWire(wire.Schema.Fields)
 	}
-	job, err := h.loads.Submit(r.Context(), loadDomain.JobReference{
-		ProjectID: projectID, Location: request.JobReference.Location, JobID: request.JobReference.JobID,
-	}, configuration)
-	if err != nil {
-		writeLoadError(w, err)
-		return
+	return configuration, nil
+}
+
+func (h *combinedJobHandlers) submitLoad(ctx context.Context, submission loadSubmission) (*loadDomain.Job, error) {
+	if submission.reference.JobID != "" {
+		if _, err := h.query.queries.Get(ctx, domain.JobReference{
+			ProjectID: submission.reference.ProjectID, Location: submission.reference.Location, JobID: submission.reference.JobID,
+		}); err == nil {
+			return nil, fmt.Errorf("%w: job ID already identifies a query job", loadDomain.ErrConflict)
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return nil, err
+		}
 	}
-	writeJSON(w, http.StatusOK, loadJobFromDomain(job))
+	return h.loads.Submit(ctx, submission.reference, submission.configuration)
 }
 
 func loadSchemaUpdateOptions(options []string) []loadDomain.SchemaUpdateOption {

@@ -283,13 +283,25 @@ type StorageWriteConfig struct {
 //   - https://cloud.google.com/storage/docs/json_api/v1/objects/get
 //   - https://cloud.google.com/storage/docs/json_api/v1/objects/list
 type LoadConfig struct {
-	GCSEndpoint      string   `yaml:"gcsEndpoint" json:"gcsEndpoint"`
-	OperationTimeout Duration `yaml:"operationTimeout" json:"operationTimeout"`
-	MaxObjects       int      `yaml:"maxObjects" json:"maxObjects"`
-	MaxObjectBytes   int64    `yaml:"maxObjectBytes" json:"maxObjectBytes"`
-	MaxTotalBytes    int64    `yaml:"maxTotalBytes" json:"maxTotalBytes"`
-	MaxMetadataBytes int64    `yaml:"maxMetadataBytes" json:"maxMetadataBytes"`
-	MaxListedObjects int      `yaml:"maxListedObjects" json:"maxListedObjects"`
+	GCSEndpoint      string                `yaml:"gcsEndpoint" json:"gcsEndpoint"`
+	OperationTimeout Duration              `yaml:"operationTimeout" json:"operationTimeout"`
+	MaxObjects       int                   `yaml:"maxObjects" json:"maxObjects"`
+	MaxObjectBytes   int64                 `yaml:"maxObjectBytes" json:"maxObjectBytes"`
+	MaxTotalBytes    int64                 `yaml:"maxTotalBytes" json:"maxTotalBytes"`
+	MaxMetadataBytes int64                 `yaml:"maxMetadataBytes" json:"maxMetadataBytes"`
+	MaxListedObjects int                   `yaml:"maxListedObjects" json:"maxListedObjects"`
+	MediaUpload      LoadMediaUploadConfig `yaml:"mediaUpload" json:"mediaUpload"`
+}
+
+// LoadMediaUploadConfig bounds HTTP media upload sessions. The bytes are
+// promoted to an immutable object in the required GCS-compatible service
+// before the normal gs:// load path begins.
+type LoadMediaUploadConfig struct {
+	Bucket        string   `yaml:"bucket" json:"bucket"`
+	MaxSessions   int      `yaml:"maxSessions" json:"maxSessions"`
+	MaxBytes      int64    `yaml:"maxBytes" json:"maxBytes"`
+	MaxChunkBytes int64    `yaml:"maxChunkBytes" json:"maxChunkBytes"`
+	SessionTTL    Duration `yaml:"sessionTtl" json:"sessionTtl"`
 }
 
 type LoggingConfig struct {
@@ -391,6 +403,10 @@ func Defaults() Config {
 			OperationTimeout: Duration(2 * time.Minute), MaxObjects: 1_000,
 			MaxObjectBytes: 1 << 30, MaxTotalBytes: 4 << 30,
 			MaxMetadataBytes: 8 << 20, MaxListedObjects: 10_000,
+			MediaUpload: LoadMediaUploadConfig{
+				Bucket: "bqemu-media", MaxSessions: 8, MaxBytes: 256 << 20,
+				MaxChunkBytes: 128 << 20, SessionTTL: Duration(time.Hour),
+			},
 		},
 		Logging: LoggingConfig{Level: "info", Format: "json"},
 		Admin: AdminConfig{
@@ -532,6 +548,11 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_LOAD_OPERATION_TIMEOUT", "load.operationTimeout"}, {"BQEMU_LOAD_MAX_OBJECTS", "load.maxObjects"},
 	{"BQEMU_LOAD_MAX_OBJECT_BYTES", "load.maxObjectBytes"}, {"BQEMU_LOAD_MAX_TOTAL_BYTES", "load.maxTotalBytes"},
 	{"BQEMU_LOAD_MAX_METADATA_BYTES", "load.maxMetadataBytes"}, {"BQEMU_LOAD_MAX_LISTED_OBJECTS", "load.maxListedObjects"},
+	{"BQEMU_LOAD_MEDIA_UPLOAD_BUCKET", "load.mediaUpload.bucket"},
+	{"BQEMU_LOAD_MEDIA_UPLOAD_MAX_SESSIONS", "load.mediaUpload.maxSessions"},
+	{"BQEMU_LOAD_MEDIA_UPLOAD_MAX_BYTES", "load.mediaUpload.maxBytes"},
+	{"BQEMU_LOAD_MEDIA_UPLOAD_MAX_CHUNK_BYTES", "load.mediaUpload.maxChunkBytes"},
+	{"BQEMU_LOAD_MEDIA_UPLOAD_SESSION_TTL", "load.mediaUpload.sessionTtl"},
 	{"BQEMU_STORAGE_READ_ENABLED", "storage.read.enabled"},
 	{"BQEMU_STORAGE_READ_MAX_STREAMS", "storage.read.maxStreams"},
 	{"BQEMU_STORAGE_READ_DEFAULT_STREAM_COUNT", "storage.read.defaultStreamCount"},
@@ -743,6 +764,16 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt64(&cfg.Load.MaxMetadataBytes)
 	case "load.maxListedObjects":
 		return setInt(&cfg.Load.MaxListedObjects)
+	case "load.mediaUpload.bucket":
+		return setString(&cfg.Load.MediaUpload.Bucket)
+	case "load.mediaUpload.maxSessions":
+		return setInt(&cfg.Load.MediaUpload.MaxSessions)
+	case "load.mediaUpload.maxBytes":
+		return setInt64(&cfg.Load.MediaUpload.MaxBytes)
+	case "load.mediaUpload.maxChunkBytes":
+		return setInt64(&cfg.Load.MediaUpload.MaxChunkBytes)
+	case "load.mediaUpload.sessionTtl":
+		return setDuration(&cfg.Load.MediaUpload.SessionTTL)
 	case "logging.level":
 		return setString(&cfg.Logging.Level)
 	case "logging.format":
@@ -923,6 +954,11 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.Load.MaxObjectBytes > cfg.Load.MaxTotalBytes {
 		return errors.New("load.maxObjectBytes must not exceed load.maxTotalBytes")
+	}
+	if strings.TrimSpace(cfg.Load.MediaUpload.Bucket) == "" || cfg.Load.MediaUpload.MaxSessions < 1 ||
+		cfg.Load.MediaUpload.MaxBytes < 1 || cfg.Load.MediaUpload.MaxChunkBytes < 1 ||
+		cfg.Load.MediaUpload.MaxChunkBytes > cfg.Load.MediaUpload.MaxBytes || cfg.Load.MediaUpload.SessionTTL.Value() <= 0 {
+		return errors.New("load.mediaUpload requires bucket, positive session and byte limits, maxChunkBytes <= maxBytes, and positive sessionTtl")
 	}
 	endpoint, err := url.Parse(cfg.Load.GCSEndpoint)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {

@@ -2,7 +2,7 @@ package rest
 
 // Official jobs discovery source: https://bigquery.googleapis.com/$discovery/rest?version=v2
 
-func extendQueryDiscovery(document map[string]any) {
+func extendQueryDiscovery(document map[string]any, mediaUpload bool) {
 	schemas := document["schemas"].(map[string]any)
 	for _, name := range []string{"Job", "JobList", "QueryRequest", "QueryResponse", "GetQueryResultsResponse"} {
 		schemas[name] = discoveryObjectSchema(name)
@@ -13,21 +13,19 @@ func extendQueryDiscovery(document map[string]any) {
 		"location": discoveryQueryParameter("string"),
 	}
 	jobInsert := discoveryMethod("bigquery.jobs.insert", "POST", "projects/{projectId}/jobs", "Job", "Job", project, "projectId")
-	// Media-upload callers can supply the generated media_body argument,
-	// including nil for ordinary query jobs. Generated callers expose that
-	// argument only when Discovery contains mediaUpload metadata. The upload
-	// endpoints remain deliberately unregistered and are documented as a gap.
-	jobInsert["supportsMediaUpload"] = true
-	jobInsert["mediaUpload"] = map[string]any{
-		"accept": []string{"*/*"},
-		"protocols": map[string]any{
-			"simple": map[string]any{
-				"multipart": true, "path": "/upload/bigquery/v2/projects/{projectId}/jobs",
+	if mediaUpload {
+		jobInsert["supportsMediaUpload"] = true
+		jobInsert["mediaUpload"] = map[string]any{
+			"accept": []string{"*/*"},
+			"protocols": map[string]any{
+				"simple": map[string]any{
+					"multipart": true, "path": "/upload/bigquery/v2/projects/{projectId}/jobs",
+				},
+				"resumable": map[string]any{
+					"multipart": true, "path": "/resumable/upload/bigquery/v2/projects/{projectId}/jobs",
+				},
 			},
-			"resumable": map[string]any{
-				"multipart": true, "path": "/resumable/upload/bigquery/v2/projects/{projectId}/jobs",
-			},
-		},
+		}
 	}
 	document["resources"].(map[string]any)["jobs"] = map[string]any{"methods": map[string]any{
 		"query":  discoveryMethod("bigquery.jobs.query", "POST", "projects/{projectId}/queries", "QueryRequest", "QueryResponse", project, "projectId"),

@@ -111,7 +111,9 @@ to fit the configured payload plus the file-configured
 bidi streams before weighted coordinator admission begins.
 `load.gcsEndpoint` must be an absolute HTTP(S) URL, and object/list/download
 limits are enforced. Load source URIs must use `gs://`; local paths and other
-schemes are rejected before job persistence. Runtime contract-profile
+schemes are rejected before job persistence. Multipart and resumable media
+uploads are first persisted as immutable objects in the configured
+GCS-compatible service, then use the same `gs://` Parquet load path. Runtime contract-profile
 negotiation remains uncomposed. A valid setting is not a claim beyond each
 Partial capability.
 

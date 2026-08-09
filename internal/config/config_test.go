@@ -264,6 +264,9 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"load.gcsEndpoint=http://fake-gcs:4443",
 		"load.operationTimeout=30s", "load.maxObjects=20", "load.maxObjectBytes=1048576",
 		"load.maxTotalBytes=2097152", "load.maxMetadataBytes=65536", "load.maxListedObjects=30",
+		"load.mediaUpload.bucket=media-bucket", "load.mediaUpload.maxSessions=2",
+		"load.mediaUpload.maxBytes=209715200", "load.mediaUpload.maxChunkBytes=104857600",
+		"load.mediaUpload.sessionTtl=30m",
 		"logging.level=debug", "logging.format=text",
 		"admin.enabled=true", "admin.address=0.0.0.0:19051", "admin.tokenFile=admin-token", "admin.readHeaderTimeout=2s", "admin.maxStackBytes=65536",
 		"ui.enabled=true", "ui.directory=web/dist",
@@ -492,6 +495,10 @@ func TestLoadConfigurationRequiresGCSCompatibleEndpointAndPositiveBounds(t *test
 			"--set", "load.maxObjectBytes=2048", "--set", "load.maxTotalBytes=1024",
 		},
 		"zero-list-limit": {"--set", "load.maxListedObjects=0"},
+		"media-chunk-over-total": {
+			"--set", "load.mediaUpload.maxBytes=104857600", "--set", "load.mediaUpload.maxChunkBytes=134217728",
+		},
+		"zero-media-session-ttl": {"--set", "load.mediaUpload.sessionTtl=0s"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(overrides, lookup(nil)); err == nil {

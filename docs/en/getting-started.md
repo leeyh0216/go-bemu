@@ -88,8 +88,11 @@ uploader uses its own endpoint for the same fake GCS service.
 | Sibling Compose uploader | `http://fake-gcs:4443` |
 | Development-container uploader to host Compose | `http://host.docker.internal:4443` |
 
-Parquet is the only supported load format. The required configuration and
-limits are in [Configuration](configuration.md#load-jobs).
+Parquet is the only supported load format. A caller can also use the BigQuery
+media-upload endpoints; BQEMU stores completed media in the configured fake
+GCS service and then submits the same `gs://` Parquet load path. Media sessions
+are process-local and restart-invalid. The required configuration and limits
+are in [Configuration](configuration.md#load-jobs).
 
 <!-- section: tls -->
 ## Optional TLS And Credentials

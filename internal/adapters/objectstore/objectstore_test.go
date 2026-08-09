@@ -144,3 +144,52 @@ func TestGCSJSONRejectsNonGCSURIWithoutHTTPRequest(t *testing.T) {
 		t.Fatalf("invalid source made %d HTTP requests", requests)
 	}
 }
+
+func TestGCSJSONUploadsImmutableMediaAndCreatesBucket(t *testing.T) {
+	requests := make([]string, 0, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.RequestURI())
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/storage/v1/b/media-bucket":
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/storage/v1/b":
+			if contentType := r.Header.Get("Content-Type"); contentType != "application/json" {
+				t.Errorf("bucket Content-Type = %q", contentType)
+			}
+			_, _ = io.WriteString(w, `{"name":"media-bucket"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/upload/storage/v1/b/media-bucket/o":
+			if r.URL.Query().Get("uploadType") != "media" || r.URL.Query().Get("name") != "private/input.parquet" || r.URL.Query().Get("ifGenerationMatch") != "0" {
+				t.Errorf("upload query = %s", r.URL.RawQuery)
+			}
+			if payload, _ := io.ReadAll(r.Body); string(payload) != "parquet" {
+				t.Errorf("upload payload = %q", payload)
+			}
+			_, _ = io.WriteString(w, `{"name":"private/input.parquet","size":"7","generation":"12","etag":"tag"}`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/storage/v1/b/media-bucket/o/private/input.parquet":
+			if r.URL.Query().Get("generation") != "12" {
+				t.Errorf("delete generation = %q", r.URL.Query().Get("generation"))
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	store, err := NewGCSJSON(GCSJSONConfig{Endpoint: server.URL, Client: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := store.Upload(context.Background(), "media-bucket", "private/input.parquet", "application/octet-stream", strings.NewReader("parquet"), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object.URI != "gs://media-bucket/private/input.parquet" || object.Generation != "12" || object.Size != 7 {
+		t.Fatalf("uploaded object = %#v", object)
+	}
+	if err := store.Delete(context.Background(), object); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 {
+		t.Fatalf("requests = %#v", requests)
+	}
+}
