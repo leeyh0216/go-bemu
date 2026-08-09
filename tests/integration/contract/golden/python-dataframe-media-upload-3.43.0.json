@@ -1,0 +1,59 @@
+{
+  "profileId": "google-cloud-bigquery-python-3.43.0",
+  "consumerKind": "client",
+  "consumerName": "google-cloud-bigquery-python",
+  "consumerVersion": "3.43.0",
+  "fixtureKind": "source-derived",
+  "sourceRefs": [
+    "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert",
+    "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/_job_helpers.py#L420-L641",
+    "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/client.py#L4118-L4237",
+    "https://github.com/googleapis/python-bigquery-pandas/blob/v0.35.1/pandas_gbq/gbq.py"
+  ],
+  "flow": "python-dataframe-media-upload",
+  "events": [
+    {
+      "stage": "multipart_upload",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/upload/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.uploadType=multipart": "multipart",
+        "request.configuration.load.sourceFormat=PARQUET": "PARQUET",
+        "response.jobReference": "load-job-reference"
+      }
+    },
+    {
+      "stage": "resumable_initiate",
+      "protocol": "REST",
+      "method": "POST",
+      "target": "/upload/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.uploadType=resumable": "resumable",
+        "request.configuration.load.sourceFormat=PARQUET": "PARQUET",
+        "response.Location": "absolute-session-location"
+      }
+    },
+    {
+      "stage": "resumable_chunk",
+      "protocol": "REST",
+      "method": "PUT",
+      "target": "/upload/bigquery/v2/projects/{project}/jobs",
+      "fields": {
+        "request.Content-Range": "ordered-byte-range-or-status-probe",
+        "response.Range|response.jobReference": "308-range-or-completed-job"
+      }
+    },
+    {
+      "stage": "poll_load_job",
+      "protocol": "REST",
+      "method": "GET",
+      "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+      "fields": {
+        "request.location": "job-location",
+        "response.status.state": "DONE",
+        "response.statistics.load": "load-statistics"
+      }
+    }
+  ]
+}
