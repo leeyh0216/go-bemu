@@ -8,7 +8,7 @@
     "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert",
     "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/_job_helpers.py#L420-L641",
     "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/client.py#L4118-L4237",
-    "https://github.com/googleapis/python-bigquery-pandas/blob/v0.35.1/pandas_gbq/gbq.py"
+    "https://github.com/googleapis/google-cloud-python/blob/pandas-gbq-v0.35.1/packages/pandas-gbq/pandas_gbq/gbq.py"
   ],
   "flow": "python-dataframe-media-upload",
   "events": [
