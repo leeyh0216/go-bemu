@@ -143,7 +143,6 @@
           "x-bqemu-secret": false
         },
         "tempDirectory": {
-          "default": "/var/folders/y1/gfgjv8zj36b17h89m_k5_m6h0000gn/T/",
           "type": "string",
           "x-bqemu-env": "BQEMU_DATABASE_TEMP_DIRECTORY",
           "x-bqemu-secret": false

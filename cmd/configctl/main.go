@@ -4,6 +4,10 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -43,9 +47,36 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		if string(got) != string(append(want, '\n')) {
-			return fmt.Errorf("generated configuration artifact is stale: %s (run go run ./cmd/configctl generate)", path)
+		expected := append(want, '\n')
+		if generatedArtifactEqual(path, got, expected) {
+			continue
 		}
+		return fmt.Errorf(
+			"generated configuration artifact is stale: %s (got sha256:%s, want sha256:%s; run go run ./cmd/configctl generate)",
+			path, digest(got), digest(expected),
+		)
 	}
 	return nil
+}
+
+// JSON schema is a semantic contract. Go releases may make harmless choices
+// about indentation or escaped characters, so schema verification compares the
+// decoded JSON value while the human-authored Markdown references remain byte
+// exact. A semantic change still fails with content digests for diagnosis.
+func generatedArtifactEqual(path string, got, want []byte) bool {
+	if filepath.Ext(path) != ".json" {
+		return bytes.Equal(got, want)
+	}
+	var gotValue, wantValue any
+	if json.Unmarshal(got, &gotValue) != nil || json.Unmarshal(want, &wantValue) != nil {
+		return bytes.Equal(got, want)
+	}
+	gotCanonical, gotErr := json.Marshal(gotValue)
+	wantCanonical, wantErr := json.Marshal(wantValue)
+	return gotErr == nil && wantErr == nil && bytes.Equal(gotCanonical, wantCanonical)
+}
+
+func digest(value []byte) string {
+	sum := sha256.Sum256(value)
+	return hex.EncodeToString(sum[:])
 }

@@ -576,11 +576,12 @@ func collectLeaves(typeOfValue reflect.Type, defaultValue reflect.Value, prefix 
 			continue
 		}
 		if field.Type.Kind() == reflect.Slice || field.Type.Kind() == reflect.Map || field.Type.Kind() == reflect.Ptr {
-			*leaves = append(*leaves, LeafDescriptor{Path: strings.Join(path, "."), Type: collectionType(field.Type), Default: leafDefault(fieldDefault)})
+			joined := strings.Join(path, ".")
+			*leaves = append(*leaves, LeafDescriptor{Path: joined, Type: collectionType(field.Type), Default: leafDefault(joined, fieldDefault)})
 			continue
 		}
 		joined := strings.Join(path, ".")
-		*leaves = append(*leaves, LeafDescriptor{Path: joined, Environment: "BQEMU_" + envName(joined), Type: leafType(field.Type), Default: leafDefault(fieldDefault), Secret: secretLeaf(joined)})
+		*leaves = append(*leaves, LeafDescriptor{Path: joined, Environment: "BQEMU_" + envName(joined), Type: leafType(field.Type), Default: leafDefault(joined, fieldDefault), Secret: secretLeaf(joined)})
 	}
 }
 
@@ -610,7 +611,10 @@ func leafType(typeOfValue reflect.Type) string {
 	}
 }
 
-func leafDefault(value reflect.Value) string {
+func leafDefault(path string, value reflect.Value) string {
+	if path == "database.tempDirectory" {
+		return "system temporary directory"
+	}
 	if value.Type() == reflect.TypeOf(Duration(0)) {
 		return Duration(value.Int()).Value().String()
 	}
@@ -650,7 +654,9 @@ func schemaValue(typeOfValue reflect.Type, defaultValue reflect.Value, path []st
 	}
 	item := map[string]any{"type": leafType(typeOfValue), "x-bqemu-secret": secretLeaf(strings.Join(path, "."))}
 	if typeOfValue.Kind() != reflect.Ptr {
-		item["default"] = schemaDefault(defaultValue)
+		if defaultValue, present := schemaDefault(strings.Join(path, "."), defaultValue); present {
+			item["default"] = defaultValue
+		}
 	}
 	if len(path) > 0 && typeOfValue.Kind() != reflect.Ptr {
 		item["x-bqemu-env"] = "BQEMU_" + envName(strings.Join(path, "."))
@@ -658,11 +664,14 @@ func schemaValue(typeOfValue reflect.Type, defaultValue reflect.Value, path []st
 	return item
 }
 
-func schemaDefault(value reflect.Value) any {
-	if value.Type() == reflect.TypeOf(Duration(0)) {
-		return Duration(value.Int()).Value().String()
+func schemaDefault(path string, value reflect.Value) (any, bool) {
+	if path == "database.tempDirectory" {
+		return nil, false
 	}
-	return value.Interface()
+	if value.Type() == reflect.TypeOf(Duration(0)) {
+		return Duration(value.Int()).Value().String(), true
+	}
+	return value.Interface(), true
 }
 
 func envName(path string) string {
