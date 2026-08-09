@@ -411,7 +411,7 @@
                 "operationExpectations": [
                   {
                     "operationId": "bigquery.jobs.get",
-                    "min": 3,
+                    "min": 5,
                     "max": 0,
                     "after": [
                       "bigquery.jobs.insert.upload"
@@ -419,7 +419,7 @@
                   },
                   {
                     "operationId": "bigquery.jobs.insert.upload",
-                    "min": 3,
+                    "min": 5,
                     "max": 0,
                     "after": []
                   },

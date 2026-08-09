@@ -127,6 +127,8 @@ dataframe media upload는 `runner-evidence` 예외가 아니라 선택된 Python
 upload를 모두 확인합니다. dataframe helper를 검증할 때는 호출 전에 같은 endpoint-aware
 client로 destination table을 만들어야 합니다. 누락된 table을 생성하는 과정에서 helper가
 기본 endpoint client를 새로 만들 수 있기 때문입니다.
+계약은 공개 client의 생성과, 미리 만든 destination에 대한 helper append/replace를
+검증합니다.
 
 REST setup 또는 assertion query에는 phase-aware harness helper를 사용합니다. helper가
 request log에 `setup` 또는 `assertion`을 기록하고 runner는 그 응답을 호출자 wire

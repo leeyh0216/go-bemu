@@ -75,6 +75,9 @@ For dataframe media uploads, keep the actual caller test under
 not a `runner-evidence` shortcut. Seed the destination through the same
 endpoint-aware client before invoking a dataframe helper so an absent table
 does not cause it to build a default-endpoint client.
+The contract covers creation through the public client plus append and replace
+against an endpoint-aware pre-created table. The helper's absent-table path is
+an upstream endpoint propagation limitation, not a product runtime fallback.
 
 ## Generated Outputs
 

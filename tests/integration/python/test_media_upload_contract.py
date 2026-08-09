@@ -27,9 +27,16 @@ def _schema() -> list[bigquery.SchemaField]:
     ]
 
 
-def _load_config() -> bigquery.LoadJobConfig:
+def _load_config(
+    *,
+    create_disposition: str,
+    write_disposition: str,
+) -> bigquery.LoadJobConfig:
     return bigquery.LoadJobConfig(
-        schema=_schema(), source_format=bigquery.SourceFormat.PARQUET
+        schema=_schema(),
+        source_format=bigquery.SourceFormat.PARQUET,
+        create_disposition=create_disposition,
+        write_disposition=write_disposition,
     )
 
 
@@ -78,7 +85,10 @@ def test_dataframe_writers_use_bounded_parquet_media_upload(
     small_job = media_runtime.client.load_table_from_dataframe(
         small,
         destination,
-        job_config=_load_config(),
+        job_config=_load_config(
+            create_disposition=bigquery.CreateDisposition.CREATE_NEVER,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        ),
         location=media_runtime.location,
         timeout=media_runtime.timeout,
     )
@@ -89,7 +99,10 @@ def test_dataframe_writers_use_bounded_parquet_media_upload(
     large_job = media_runtime.client.load_table_from_dataframe(
         large,
         destination,
-        job_config=_load_config(),
+        job_config=_load_config(
+            create_disposition=bigquery.CreateDisposition.CREATE_NEVER,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        ),
         location=media_runtime.location,
         timeout=media_runtime.timeout,
     )
@@ -103,8 +116,37 @@ def test_dataframe_writers_use_bounded_parquet_media_upload(
         api_method="load_parquet",
         bigquery_client=media_runtime.client,
         table_schema=_pandas_schema(),
+        location=media_runtime.location,
         progress_bar=False,
     )
+
+    pandas_gbq.to_gbq(
+        small,
+        f"{media_runtime.dataset_id}.{media_runtime.table_id}",
+        project_id=media_runtime.project_id,
+        if_exists="replace",
+        api_method="load_parquet",
+        bigquery_client=media_runtime.client,
+        table_schema=_pandas_schema(),
+        location=media_runtime.location,
+        progress_bar=False,
+    )
+
+    created_table_id = "created_events"
+    created_destination = (
+        f"{media_runtime.project_id}.{media_runtime.dataset_id}.{created_table_id}"
+    )
+    created_job = media_runtime.client.load_table_from_dataframe(
+        small,
+        created_destination,
+        job_config=_load_config(
+            create_disposition=bigquery.CreateDisposition.CREATE_IF_NEEDED,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        ),
+        location=media_runtime.location,
+        timeout=media_runtime.timeout,
+    )
+    created_job.result(timeout=media_runtime.timeout)
 
     rows = _phase_json_request(
         media_runtime.endpoint,
@@ -117,4 +159,17 @@ def test_dataframe_writers_use_bounded_parquet_media_upload(
         phase="assertion",
     )
     assert isinstance(rows, dict)
-    assert rows["totalRows"] == str(len(small) * 2 + len(large))
+    assert rows["totalRows"] == str(len(small))
+
+    created_rows = _phase_json_request(
+        media_runtime.endpoint,
+        "GET",
+        (
+            f"/bigquery/v2/projects/{media_runtime.project_id}/datasets/"
+            f"{media_runtime.dataset_id}/tables/{created_table_id}/data?maxResults=100"
+        ),
+        media_runtime.timeout,
+        phase="assertion",
+    )
+    assert isinstance(created_rows, dict)
+    assert created_rows["totalRows"] == str(len(small))

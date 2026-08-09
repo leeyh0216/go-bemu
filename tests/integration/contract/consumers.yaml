@@ -161,7 +161,7 @@ scenarios:
         max: 0
         after: []
       - operationId: bigquery.jobs.insert.upload
-        min: 3
+        min: 5
         max: 0
         after: []
       - operationId: bigquery.jobs.insert.upload-resume
@@ -169,7 +169,7 @@ scenarios:
         max: 0
         after: [bigquery.jobs.insert.upload]
       - operationId: bigquery.jobs.get
-        min: 3
+        min: 5
         max: 0
         after: [bigquery.jobs.insert.upload]
   - id: bq-indirect-load

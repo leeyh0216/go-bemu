@@ -136,6 +136,8 @@ endpoint, and verifies both multipart and resumable Parquet uploads. When
 testing the dataframe helper, create the destination table through the same
 endpoint-aware client before calling it: otherwise that helper may construct a
 new default-endpoint client while creating a missing table.
+The contract covers public-client creation and helper append/replace on that
+pre-created destination.
 
 Use the phase-aware harness helper for REST setup or assertion queries. It
 marks the request log as `setup` or `assertion`, and the runner excludes those
