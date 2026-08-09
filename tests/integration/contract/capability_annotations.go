@@ -67,6 +67,24 @@ type capabilityAnnotation struct {
 	Test string `json:"test"`
 }
 
+// integrationAnnotation is the one literal AST projection for Python, Spark,
+// and bq integration sources. Capability claims are the Spark-only subset.
+type integrationAnnotation struct {
+	Family       string              `json:"family"`
+	Test         string              `json:"test"`
+	OperationIDs []string            `json:"operationIds"`
+	Scenario     string              `json:"scenario"`
+	CapabilityID string              `json:"capabilityId"`
+	State        CapabilityCaseState `json:"state"`
+	Category     string              `json:"category"`
+	Summary      string              `json:"summary"`
+	Profile      string              `json:"profile"`
+	WireFlow     string              `json:"wireFlow"`
+	Issue        string              `json:"issue"`
+	Limitation   string              `json:"limitation"`
+	StrictXFail  bool                `json:"strictXfail"`
+}
+
 // CompileCapabilityIndex derives the capability index and public operation
 // coverage from test-local literal annotations. It never reads the retired
 // matrix or committed runtime trace output.
@@ -83,7 +101,36 @@ func CompileCapabilityIndex(repositoryRoot string) (CapabilityIndex, error) {
 }
 
 func collectCapabilityAnnotations(repositoryRoot string) ([]capabilityAnnotation, error) {
-	script := filepath.Join(repositoryRoot, "tests", "integration", "contract", "extract_capability_annotations.py")
+	annotations, err := collectIntegrationAnnotations(repositoryRoot)
+	if err != nil {
+		return nil, err
+	}
+	capabilities := make([]capabilityAnnotation, 0, len(annotations))
+	for _, annotation := range annotations {
+		if annotation.Family != "spark" || annotation.CapabilityID == "" {
+			continue
+		}
+		capabilities = append(capabilities, capabilityAnnotation{
+			CapabilityCase: CapabilityCase{
+				ID:           annotation.CapabilityID,
+				State:        annotation.State,
+				Category:     annotation.Category,
+				Summary:      annotation.Summary,
+				Profile:      annotation.Profile,
+				WireFlow:     annotation.WireFlow,
+				OperationIDs: annotation.OperationIDs,
+				Issue:        annotation.Issue,
+				Limitation:   annotation.Limitation,
+				StrictXFail:  annotation.StrictXFail,
+			},
+			Test: annotation.Test,
+		})
+	}
+	return capabilities, nil
+}
+
+func collectIntegrationAnnotations(repositoryRoot string) ([]integrationAnnotation, error) {
+	script := filepath.Join(repositoryRoot, "tests", "integration", "contract", "extract_integration_annotations.py")
 	command := exec.Command("python3", script, "--root", repositoryRoot)
 	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 	output, err := command.CombinedOutput()
@@ -92,7 +139,7 @@ func collectCapabilityAnnotations(repositoryRoot string) ([]capabilityAnnotation
 	}
 	decoder := json.NewDecoder(bytes.NewReader(output))
 	decoder.DisallowUnknownFields()
-	var annotations []capabilityAnnotation
+	var annotations []integrationAnnotation
 	if err := decoder.Decode(&annotations); err != nil {
 		return nil, fmt.Errorf("decode capability annotations: %w", err)
 	}

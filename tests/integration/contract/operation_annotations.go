@@ -1,215 +1,192 @@
 package integrationcontract
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
+	"sort"
 	"strings"
 )
 
-var (
-	pytestOperationMarker    = regexp.MustCompile(`^\s*@pytest\.mark\.operation\(["']([^"']+)["']\)\s*$`)
-	commandOperationMarker   = regexp.MustCompile(`^\s*@operation\(["']([^"']+)["']\)\s*$`)
-	integrationTestIDPattern = regexp.MustCompile(`^(python|spark|bq):tests/integration/(python|spark|bqcli)/[^:]+:[A-Za-z_][A-Za-z0-9_]*$`)
+const (
+	trafficSourceAnnotations    = "annotations"
+	trafficSourceRunnerEvidence = "runner-evidence"
 )
 
-func ValidateIntegrationOperationAnnotations(repositoryRoot string, manifest ConsumerManifest, operationIDs map[string]bool) error {
-	annotations, err := collectIntegrationOperationAnnotations(repositoryRoot)
+// DeriveIntegrationScenarioEvidence resolves authored selectors and literal
+// AST annotations into the operationIds/testEvidence fields consumed by the
+// normalized runtime manifest. Those fields are never authored in YAML.
+func DeriveIntegrationScenarioEvidence(repositoryRoot string, manifest ConsumerManifest, operationIDs map[string]bool) (ConsumerManifest, error) {
+	annotations, err := collectIntegrationAnnotations(repositoryRoot)
 	if err != nil {
-		return err
+		return ConsumerManifest{}, err
 	}
-	declared := make(map[string]map[string]bool)
-	for _, scenario := range manifest.Scenarios {
-		operations := sliceSet(scenario.OperationIDs)
-		for _, testID := range scenario.TestEvidence {
-			if !integrationTestIDPattern.MatchString(testID) {
-				return fmt.Errorf("scenario %s has invalid integration test evidence %q", scenario.ID, testID)
-			}
-			if declared[testID] == nil {
-				declared[testID] = make(map[string]bool)
-			}
-			for operationID := range operations {
-				declared[testID][operationID] = true
+	for _, annotation := range annotations {
+		if !validAnnotationFamily(annotation.Family) || annotation.Test == "" || len(annotation.OperationIDs) == 0 {
+			return ConsumerManifest{}, fmt.Errorf("integration annotation is incomplete: %#v", annotation)
+		}
+		if annotation.Family != "bq" && annotation.Scenario != "" {
+			return ConsumerManifest{}, fmt.Errorf("integration annotation %s cannot declare a scenario label", annotation.Test)
+		}
+		for _, operationID := range annotation.OperationIDs {
+			if !operationIDs[operationID] {
+				return ConsumerManifest{}, fmt.Errorf("integration operation annotation references unknown operation %q", operationID)
 			}
 		}
 	}
-	for operationID, tests := range annotations {
-		if !operationIDs[operationID] {
-			return fmt.Errorf("integration operation annotation references unknown operation %q", operationID)
-		}
-		for testID := range tests {
-			if !declared[testID][operationID] && !sparkSelectorDeclaresOperation(manifest, testID, operationID) {
-				return fmt.Errorf("integration operation %s annotation in %s is absent from scenario evidence", operationID, testID)
-			}
-		}
-	}
-	for testID, operations := range declared {
-		matched := false
-		for operationID := range operations {
-			if annotations[operationID][testID] {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("integration test evidence %s has no matching operation annotation", testID)
-		}
-	}
-	return nil
-}
 
-// sparkSelectorDeclaresOperation allows a literal contract_case annotation to
-// own the operation list for a Spark test. The scenario selector remains the
-// reviewed boundary that says which public integration workflow exercises it.
-func sparkSelectorDeclaresOperation(manifest ConsumerManifest, testID, operationID string) bool {
-	if !strings.HasPrefix(testID, "spark:") {
-		return false
-	}
-	value := strings.TrimPrefix(testID, "spark:")
-	path, _, found := strings.Cut(value, ":")
-	if !found {
-		return false
-	}
-	for _, scenario := range manifest.Scenarios {
-		for _, selector := range scenario.Selectors {
-			prefix, selectorPath, found := strings.Cut(selector, ":")
-			if !found || prefix != "pytest" || selectorPath != path {
-				continue
+	scenarios := make(map[string]*ConsumerScenario, len(manifest.Scenarios))
+	for index := range manifest.Scenarios {
+		scenario := &manifest.Scenarios[index]
+		if scenario.ID == "" {
+			return ConsumerManifest{}, fmt.Errorf("scenario ID must not be empty")
+		}
+		if scenarios[scenario.ID] != nil {
+			return ConsumerManifest{}, fmt.Errorf("duplicate scenario ID %s", scenario.ID)
+		}
+		if len(scenario.Selectors) == 0 || firstDuplicate(scenario.Selectors) != "" {
+			return ConsumerManifest{}, fmt.Errorf("scenario %s must define unique test selectors", scenario.ID)
+		}
+		scenario.OperationIDs = nil
+		scenario.TestEvidence = nil
+		switch scenario.TrafficSource.Kind {
+		case trafficSourceAnnotations:
+			if scenario.TrafficSource.Reason != "" || len(scenario.TrafficSource.OperationIDs) != 0 {
+				return ConsumerManifest{}, fmt.Errorf("annotation scenario %s cannot declare a manual reason or operation list", scenario.ID)
 			}
-			for _, declaredOperation := range scenario.OperationIDs {
-				if declaredOperation == operationID {
-					return true
+		case trafficSourceRunnerEvidence:
+			if strings.TrimSpace(scenario.TrafficSource.Reason) == "" {
+				return ConsumerManifest{}, fmt.Errorf("runner-evidence scenario %s must declare a reason", scenario.ID)
+			}
+			if len(scenario.TrafficSource.OperationIDs) != 0 {
+				return ConsumerManifest{}, fmt.Errorf("runner-evidence scenario %s derives operations from operationExpectations", scenario.ID)
+			}
+			for _, selector := range scenario.Selectors {
+				prefix, _, found := strings.Cut(selector, ":")
+				if !found || prefix != "load" {
+					return ConsumerManifest{}, fmt.Errorf("runner-evidence scenario %s is reserved for load selectors", scenario.ID)
 				}
 			}
+			if len(scenario.OperationExpectations) == 0 {
+				return ConsumerManifest{}, fmt.Errorf("runner-evidence scenario %s must declare operationExpectations", scenario.ID)
+			}
+			for _, expectation := range scenario.OperationExpectations {
+				if expectation.OperationID == "" {
+					return ConsumerManifest{}, fmt.Errorf("runner-evidence scenario %s has an empty expectation operation", scenario.ID)
+				}
+				scenario.OperationIDs = appendUnique(scenario.OperationIDs, expectation.OperationID)
+			}
+			sort.Strings(scenario.OperationIDs)
+		default:
+			return ConsumerManifest{}, fmt.Errorf("scenario %s has unknown trafficSource kind %q", scenario.ID, scenario.TrafficSource.Kind)
+		}
+		scenarios[scenario.ID] = scenario
+	}
+
+	derivedTests := make(map[string]map[string]bool, len(manifest.Scenarios))
+	for _, annotation := range annotations {
+		scenario, err := annotationScenario(annotation, scenarios)
+		if err != nil {
+			return ConsumerManifest{}, err
+		}
+		if scenario == nil {
+			continue
+		}
+		if derivedTests[scenario.ID] == nil {
+			derivedTests[scenario.ID] = make(map[string]bool)
+		}
+		derivedTests[scenario.ID][annotation.Test] = true
+		for _, operationID := range annotation.OperationIDs {
+			scenario.OperationIDs = appendUnique(scenario.OperationIDs, operationID)
+		}
+	}
+	for index := range manifest.Scenarios {
+		scenario := &manifest.Scenarios[index]
+		if scenario.TrafficSource.Kind == trafficSourceRunnerEvidence {
+			continue
+		}
+		tests := derivedTests[scenario.ID]
+		if len(tests) == 0 || len(scenario.OperationIDs) == 0 {
+			return ConsumerManifest{}, fmt.Errorf("annotation scenario %s has no matching test annotations", scenario.ID)
+		}
+		for testID := range tests {
+			scenario.TestEvidence = append(scenario.TestEvidence, testID)
+		}
+		sort.Strings(scenario.OperationIDs)
+		sort.Strings(scenario.TestEvidence)
+	}
+	return manifest, nil
+}
+
+// ValidateIntegrationOperationAnnotations remains a focused test hook for the
+// source-to-scenario projection used by CompileConsumerManifest.
+func ValidateIntegrationOperationAnnotations(repositoryRoot string, manifest ConsumerManifest, operationIDs map[string]bool) error {
+	_, err := DeriveIntegrationScenarioEvidence(repositoryRoot, manifest, operationIDs)
+	return err
+}
+
+func validAnnotationFamily(family string) bool {
+	return family == "python" || family == "spark" || family == "bq"
+}
+
+func annotationScenario(annotation integrationAnnotation, scenarios map[string]*ConsumerScenario) (*ConsumerScenario, error) {
+	if annotation.Scenario != "" {
+		scenario := scenarios[annotation.Scenario]
+		if scenario == nil {
+			return nil, fmt.Errorf("integration annotation %s references unknown scenario %s", annotation.Test, annotation.Scenario)
+		}
+		if annotation.Family != "bq" || scenario.TrafficSource.Kind != trafficSourceAnnotations || !scenarioHasSelectorPrefix(*scenario, "bq") {
+			return nil, fmt.Errorf("integration annotation %s has an incompatible scenario label %s", annotation.Test, annotation.Scenario)
+		}
+		return scenario, nil
+	}
+	var matched *ConsumerScenario
+	for _, scenario := range scenarios {
+		if scenario.TrafficSource.Kind != trafficSourceAnnotations || !annotationMatchesScenario(annotation, *scenario) {
+			continue
+		}
+		if matched != nil {
+			return nil, fmt.Errorf("integration annotation %s is selected by both %s and %s", annotation.Test, matched.ID, scenario.ID)
+		}
+		matched = scenario
+	}
+	if matched == nil {
+		return nil, fmt.Errorf("integration annotation %s is not selected by an annotation scenario", annotation.Test)
+	}
+	return matched, nil
+}
+
+func annotationMatchesScenario(annotation integrationAnnotation, scenario ConsumerScenario) bool {
+	for _, selector := range scenario.Selectors {
+		prefix, value, found := strings.Cut(selector, ":")
+		if !found || prefix != annotationSelectorPrefix(annotation.Family) {
+			continue
+		}
+		if annotation.Family == "bq" {
+			if value == strings.TrimPrefix(annotation.Test, "bq:") {
+				return true
+			}
+			continue
+		}
+		path, _, found := strings.Cut(strings.TrimPrefix(annotation.Test, annotation.Family+":"), ":")
+		if found && value == path {
+			return true
 		}
 	}
 	return false
 }
 
-func collectIntegrationOperationAnnotations(repositoryRoot string) (map[string]map[string]bool, error) {
-	annotations := make(map[string]map[string]bool)
-	directories := []struct {
-		path string
-		kind string
-	}{
-		{path: "tests/integration/python", kind: "python"},
-		{path: "tests/integration/bqcli", kind: "bq"},
+func annotationSelectorPrefix(family string) string {
+	if family == "bq" {
+		return "bq"
 	}
-	for _, directory := range directories {
-		root := filepath.Join(repositoryRoot, filepath.FromSlash(directory.path))
-		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() {
-				if path != root && (entry.Name() == "__pycache__" || strings.HasPrefix(entry.Name(), ".")) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if filepath.Ext(path) != ".py" {
-				return nil
-			}
-			relative, err := filepath.Rel(repositoryRoot, path)
-			if err != nil {
-				return err
-			}
-			return collectIntegrationPythonAnnotations(path, filepath.ToSlash(relative), directory.kind, annotations)
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	sparkAnnotations, err := collectSparkCapabilityOperationAnnotations(repositoryRoot)
-	if err != nil {
-		return nil, err
-	}
-	for operationID, tests := range sparkAnnotations {
-		if annotations[operationID] == nil {
-			annotations[operationID] = make(map[string]bool)
-		}
-		for testID := range tests {
-			annotations[operationID][testID] = true
-		}
-	}
-	return annotations, nil
+	return "pytest"
 }
 
-func collectSparkCapabilityOperationAnnotations(repositoryRoot string) (map[string]map[string]bool, error) {
-	paths, err := filepath.Glob(filepath.Join(repositoryRoot, "tests", "integration", "spark", "test_*.py"))
-	if err != nil {
-		return nil, err
-	}
-	if len(paths) == 0 {
-		return map[string]map[string]bool{}, nil
-	}
-	capabilities, err := collectCapabilityAnnotations(repositoryRoot)
-	if err != nil {
-		return nil, err
-	}
-	annotations := make(map[string]map[string]bool)
-	for _, capability := range capabilities {
-		for _, operationID := range capability.OperationIDs {
-			if annotations[operationID] == nil {
-				annotations[operationID] = make(map[string]bool)
-			}
-			annotations[operationID][capability.Test] = true
+func scenarioHasSelectorPrefix(scenario ConsumerScenario, prefix string) bool {
+	for _, selector := range scenario.Selectors {
+		selectorPrefix, _, found := strings.Cut(selector, ":")
+		if found && selectorPrefix == prefix {
+			return true
 		}
 	}
-	return annotations, nil
-}
-
-func collectIntegrationPythonAnnotations(path, relative, kind string, annotations map[string]map[string]bool) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	marker := pytestOperationMarker
-	if kind == "bq" {
-		marker = commandOperationMarker
-	}
-	var pending []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if match := marker.FindStringSubmatch(line); match != nil {
-			pending = append(pending, match[1])
-			continue
-		}
-		trimmed := strings.TrimSpace(line)
-		if (kind == "bq" && strings.HasPrefix(trimmed, "@operation(")) ||
-			(kind != "bq" && strings.HasPrefix(trimmed, "@pytest.mark.operation(")) {
-			return fmt.Errorf("%s: operation marker must contain one literal operation ID", relative)
-		}
-		if strings.HasPrefix(trimmed, "@") || trimmed == "" {
-			continue
-		}
-		if len(pending) == 0 {
-			continue
-		}
-		if (kind == "bq" && !strings.HasPrefix(trimmed, "def ")) ||
-			(kind != "bq" && !strings.HasPrefix(trimmed, "def test_")) {
-			return fmt.Errorf("%s: operation marker must immediately decorate a test function", relative)
-		}
-		name := strings.TrimPrefix(trimmed, "def ")
-		name, _, _ = strings.Cut(name, "(")
-		testID := kind + ":" + relative + ":" + name
-		for _, operationID := range pending {
-			if annotations[operationID] == nil {
-				annotations[operationID] = make(map[string]bool)
-			}
-			annotations[operationID][testID] = true
-		}
-		pending = nil
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	if len(pending) != 0 {
-		return fmt.Errorf("%s: operation marker has no following test function", relative)
-	}
-	return nil
+	return false
 }

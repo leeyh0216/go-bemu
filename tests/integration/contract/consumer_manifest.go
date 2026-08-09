@@ -20,16 +20,18 @@ import (
 )
 
 const (
-	consumerManifestPath   = "tests/integration/contract/consumers.yaml"
-	consumerCasesDirectory = "tests/integration/contract/cases"
-	consumerNormalizedPath = "tests/integration/contract/consumers.normalized.json"
-	consumerSchemaVersion  = "2"
+	consumerManifestPath          = "tests/integration/contract/consumers.yaml"
+	consumerCasesDirectory        = "tests/integration/contract/cases"
+	consumerNormalizedPath        = "tests/integration/contract/consumers.normalized.json"
+	consumerManifestSchemaVersion = "3"
+	consumerSchemaVersion         = "2"
 )
 
 var (
 	consumerCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	consumerDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	consumerCaseIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	integrationTestIDPattern = regexp.MustCompile(`^(python|spark|bq):tests/integration/(python|spark|bqcli)/[^:]+:[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 type ConsumerManifest struct {
@@ -79,10 +81,20 @@ type ConsumerSourceReference struct {
 
 type ConsumerScenario struct {
 	ID                    string                         `yaml:"id" json:"id"`
-	OperationIDs          []string                       `yaml:"operationIds" json:"operationIds"`
+	TrafficSource         ScenarioTrafficSource          `yaml:"trafficSource" json:"trafficSource"`
+	OperationIDs          []string                       `yaml:"-" json:"operationIds"`
 	Selectors             []string                       `yaml:"selectors" json:"selectors"`
-	TestEvidence          []string                       `yaml:"testEvidence" json:"testEvidence"`
+	TestEvidence          []string                       `yaml:"-" json:"testEvidence"`
 	OperationExpectations []ConsumerOperationExpectation `yaml:"operationExpectations" json:"operationExpectations"`
+}
+
+// ScenarioTrafficSource is the reviewed origin of scenario operation IDs.
+// Annotation scenarios derive their operation IDs and evidence from source;
+// runner-evidence is reserved for load runners that do not select test code.
+type ScenarioTrafficSource struct {
+	Kind         string   `yaml:"kind" json:"kind"`
+	Reason       string   `yaml:"reason" json:"reason"`
+	OperationIDs []string `yaml:"operationIds,omitempty" json:"-"`
 }
 
 type ConsumerOperationExpectation struct {
@@ -216,7 +228,8 @@ func compileConsumerManifest(repositoryRoot string, operationIDs map[string]bool
 	if err != nil {
 		return NormalizedConsumerManifest{}, err
 	}
-	if err := ValidateIntegrationOperationAnnotations(repositoryRoot, manifest, operationIDs); err != nil {
+	manifest, err = DeriveIntegrationScenarioEvidence(repositoryRoot, manifest, operationIDs)
+	if err != nil {
 		return NormalizedConsumerManifest{}, err
 	}
 	cases, err := loadConsumerCases(repositoryRoot)
@@ -267,8 +280,8 @@ func loadNormalizedOperationIDs(repositoryRoot string) (map[string]bool, error) 
 }
 
 func NormalizeConsumerManifest(manifest ConsumerManifest, cases []ConsumerCase, operationIDs map[string]bool) (NormalizedConsumerManifest, error) {
-	if manifest.SchemaVersion != consumerSchemaVersion {
-		return NormalizedConsumerManifest{}, fmt.Errorf("consumer manifest schemaVersion = %q, want %s", manifest.SchemaVersion, consumerSchemaVersion)
+	if manifest.SchemaVersion != consumerManifestSchemaVersion {
+		return NormalizedConsumerManifest{}, fmt.Errorf("consumer manifest schemaVersion = %q, want %s", manifest.SchemaVersion, consumerManifestSchemaVersion)
 	}
 	for index := range manifest.RunnerAdapters {
 		adapter := &manifest.RunnerAdapters[index]

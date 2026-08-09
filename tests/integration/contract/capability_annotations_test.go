@@ -171,11 +171,11 @@ func capabilityAnnotationRoot(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(root, "tests", "integration", "spark"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	extractor, err := os.ReadFile("extract_capability_annotations.py")
+	extractor, err := os.ReadFile("extract_integration_annotations.py")
 	if err != nil {
 		t.Fatal(err)
 	}
-	extractorPath := filepath.Join(root, "tests", "integration", "contract", "extract_capability_annotations.py")
+	extractorPath := filepath.Join(root, "tests", "integration", "contract", "extract_integration_annotations.py")
 	if err := os.MkdirAll(filepath.Dir(extractorPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
