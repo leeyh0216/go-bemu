@@ -322,6 +322,26 @@ func TestLeafDescriptorsDriveGeneratedEnvironmentAndSetPaths(t *testing.T) {
 	}
 }
 
+func TestGeneratedArtifactsDoNotEmbedHostTemporaryDirectory(t *testing.T) {
+	schema, err := JSONSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(schema), os.TempDir()) {
+		t.Fatalf("schema embeds host temporary directory %q", os.TempDir())
+	}
+	var tempLeaf LeafDescriptor
+	for _, leaf := range LeafDescriptors() {
+		if leaf.Path == "database.tempDirectory" {
+			tempLeaf = leaf
+			break
+		}
+	}
+	if tempLeaf.Default != "system temporary directory" {
+		t.Fatalf("temporary-directory documentation default = %q", tempLeaf.Default)
+	}
+}
+
 func TestStateDSNLoadsIndependentlyFromEngineDatabase(t *testing.T) {
 	result, err := load(nil, lookup(map[string]string{
 		"BQEMU_DATABASE_DSN": ":memory:",

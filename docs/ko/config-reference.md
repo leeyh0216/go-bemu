@@ -31,7 +31,7 @@
 | `server.tls.keyFile` | `string` | `` | `BQEMU_SERVER_TLS_KEY_FILE` |
 | `database.adapter` | `string` | `duckdb` | `BQEMU_DATABASE_ADAPTER` |
 | `database.dsn` | `string` | `:memory:` | `BQEMU_DATABASE_DSN` |
-| `database.tempDirectory` | `string` | `/var/folders/y1/gfgjv8zj36b17h89m_k5_m6h0000gn/T/` | `BQEMU_DATABASE_TEMP_DIRECTORY` |
+| `database.tempDirectory` | `string` | `system temporary directory` | `BQEMU_DATABASE_TEMP_DIRECTORY` |
 | `state.dsn` | `string` | `:memory:` | `BQEMU_STATE_DSN` |
 | `runtime.shutdownTimeout` | `duration` | `10s` | `BQEMU_RUNTIME_SHUTDOWN_TIMEOUT` |
 | `runtime.serverDrainTimeout` | `duration` | `5s` | `BQEMU_RUNTIME_SERVER_DRAIN_TIMEOUT` |
