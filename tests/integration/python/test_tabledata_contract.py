@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+from decimal import Decimal
 import json
 import os
 from typing import Any
@@ -69,6 +70,8 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
                 ),
                 bigquery.SchemaField("tags", "STRING", mode="REPEATED"),
                 bigquery.SchemaField("event_time", "TIMESTAMP"),
+                bigquery.SchemaField("numeric_value", "NUMERIC"),
+                bigquery.SchemaField("bignumeric_value", "BIGNUMERIC"),
             ],
         )
         table = bq_client.create_table(table, timeout=test_timeout)
@@ -76,11 +79,13 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
             f"""
             INSERT INTO `{table_ref}` VALUES
             (1, 'first', STRUCT(3 AS score, 'nested-one' AS name), ['alpha', 'beta'],
-             TIMESTAMP '2026-08-08 01:02:03.123456+00'),
+             TIMESTAMP '2026-08-08 01:02:03.123456+00', NUMERIC '-1.23456789',
+             BIGNUMERIC '-123456789.987654321'),
             (2, NULL, STRUCT(NULL AS score, 'nested-two' AS name), ARRAY<STRING>[],
-             TIMESTAMP '1969-12-31 23:59:59.000001+00'),
+             TIMESTAMP '1969-12-31 23:59:59.000001+00', NULL,
+             BIGNUMERIC '123456789.987654321'),
             (3, 'third', STRUCT(9 AS score, 'nested-three' AS name), ['omega'],
-             TIMESTAMP '2000-01-01 00:00:00+00')
+             TIMESTAMP '2000-01-01 00:00:00+00', NUMERIC '0', NULL)
             """,
             location="US",
             retry=None,
@@ -171,6 +176,12 @@ def test_list_rows_decodes_nested_repeated_values_and_pages(
         assert rows[1]["event_time"] == datetime(
             1969, 12, 31, 23, 59, 59, 1, tzinfo=timezone.utc
         ), _diagnostic("timestamp-before-epoch", "compare-signed-epoch-microseconds")
+        # Matches the official 3.43.0 client's list_rows NUMERIC/BIGNUMERIC
+        # decoding contract, including null values and signed decimals.
+        assert rows[0]["numeric_value"] == Decimal("-1.23456789")
+        assert rows[0]["bignumeric_value"] == Decimal("-123456789.987654321")
+        assert rows[1]["numeric_value"] is None
+        assert rows[1]["bignumeric_value"] == Decimal("123456789.987654321")
         assert (
             len(start_rows) == 1
             and start_rows[0]["ordinal"] == 2
