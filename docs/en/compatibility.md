@@ -33,9 +33,9 @@ service](https://cloud.google.com/bigquery/docs/introduction).
 | emulator project lifecycle | Verified | emulator-only namespace |
 | `projects.list` | Verified basic | emulator projects plus opaque page token |
 | dataset insert/get | Verified basic | location/labels/default expirations retained |
-| dataset list/delete | Verified basic | paging and `deleteContents`; filter/all remain unsupported |
+| dataset list/delete | Verified basic | paging, `deleteContents`, hidden-dataset `all`, and ANDed `labels.<name>[:<value>]` filters |
 | dataset patch/update | Verified | metadata fields plus ETag/HTTP 412 precondition |
-| table insert/get/delete | Verified basic | standard table and canonical schema metadata |
+| table insert/get/delete | Verified basic | standard table and canonical schema metadata; `tables.get` supports `BASIC` and top-level `selectedFields` while storage-statistics views are unsupported |
 | table list | Verified basic | paging; no view/storage statistics |
 | table patch/update | Verified narrow | metadata plus additive schema and ETag precondition |
 | `tabledata.list` | Partial | scalar/nested/repeated `f/v` rows, exact non-finite FLOAT64 tokens, `startIndex`, row/exact-byte bounded pages, scoped opaque tokens, ETag precondition, exact `totalRows`, and `useInt64Timestamp`; selected fields, ISO-8601 picosecond output, and mutation-aware page invalidation remain gaps |
