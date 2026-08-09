@@ -56,8 +56,6 @@ def _literal_operation_ids(node: ast.AST, label: str) -> list[str]:
     if not isinstance(node, (ast.List, ast.Tuple)):
         raise ExtractionError(f"{label} must be a literal tuple or list of operation IDs")
     operation_ids = [_literal_string(value, label) for value in node.elts]
-    if not operation_ids:
-        raise ExtractionError(f"{label} must not be empty")
     if len(operation_ids) != len(set(operation_ids)):
         raise ExtractionError(f"{label} repeats an operation ID")
     return sorted(operation_ids)

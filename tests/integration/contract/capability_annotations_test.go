@@ -74,7 +74,7 @@ func TestCapabilityAnnotationsFailClosed(t *testing.T) {
 			want:   "unknown profile wire_flow",
 		},
 		"supported case needs operation annotation": {
-			source: capabilityAnnotationSource("", `state="verified"`),
+			source: capabilityAnnotationSource("", `state="verified", operations=()`),
 			want:   "must declare at least one literal public operation",
 		},
 		"legacy marker is rejected": {
@@ -205,7 +205,7 @@ func writeCapabilityAnnotationSource(t *testing.T, root, name, source string) {
 }
 
 func capabilityAnnotationSource(operationDecorator, metadata string) string {
-	wireFlow := "wire_flow=\"read-arrow\""
+	wireFlow := "wire_flow=\"read-arrow\","
 	if strings.Contains(metadata, "wire_flow=") {
 		wireFlow = ""
 	}
