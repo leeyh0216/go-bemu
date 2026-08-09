@@ -32,6 +32,11 @@ type stagingColumn struct {
 	typeName string
 }
 
+type stagingValueCheck struct {
+	predicate string
+	decimal   bool
+}
+
 func (w *Warehouse) PlanLoad(ctx context.Context, request loadports.LoadPlanRequest) (loadports.LoadPlan, error) {
 	if w == nil || w.loadPlanner == nil {
 		return loadports.LoadPlan{}, fmt.Errorf("%w: DuckDB load planner is not configured", loadDomain.ErrPrecondition)
@@ -90,24 +95,24 @@ func (w *Warehouse) ExecuteLoad(
 	if err != nil {
 		return result, err
 	}
-	selectExpressions, destinationColumns, err := validateLoadShape(request.Destination.Schema, columns)
+	selectExpressions, destinationColumns, valueChecks, err := validateLoadShape(request.Destination.Schema, columns)
 	if err != nil {
 		return result, err
 	}
-	for _, field := range request.Destination.Schema {
-		if !strings.EqualFold(normalizeMode(field.Mode), "REQUIRED") {
-			continue
-		}
-		var nullRows int64
-		statement := fmt.Sprintf("SELECT count(*) FROM %s WHERE %s IS NULL", quoteIdentifier(staging), quoteIdentifier(field.Name))
-		if err := tx.QueryRowContext(ctx, statement).Scan(&nullRows); err != nil {
-			return result, fmt.Errorf("validate required load field: %w", err)
-		}
-		if nullRows != 0 {
-			return result, fmt.Errorf("%w: REQUIRED destination field %q contains NULL source values", loadDomain.ErrInvalid, field.Name)
-		}
+	validatedStaging := staging + "_validated"
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(
+		"CREATE TEMP TABLE %s AS SELECT %s FROM %s",
+		quoteIdentifier(validatedStaging), strings.Join(selectExpressions, ", "), quoteIdentifier(staging),
+	)); err != nil {
+		return result, fmt.Errorf("cast Parquet staging data to the destination schema: %w", err)
 	}
-	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM "+quoteIdentifier(staging)).Scan(&result.OutputRows); err != nil {
+	if err := validateLosslessLoadValues(ctx, tx, staging, valueChecks); err != nil {
+		return result, err
+	}
+	if err := validateRequiredLoadValues(ctx, tx, validatedStaging, request.Destination.Schema); err != nil {
+		return result, err
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM "+quoteIdentifier(validatedStaging)).Scan(&result.OutputRows); err != nil {
 		return result, fmt.Errorf("count Parquet staging rows: %w", err)
 	}
 
@@ -141,9 +146,12 @@ func (w *Warehouse) ExecuteLoad(
 	}
 
 	insert := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s", destination,
-		strings.Join(destinationColumns, ", "), strings.Join(selectExpressions, ", "), quoteIdentifier(staging))
+		strings.Join(destinationColumns, ", "), strings.Join(destinationColumns, ", "), quoteIdentifier(validatedStaging))
 	if _, err := tx.ExecContext(ctx, insert); err != nil {
 		return result, fmt.Errorf("insert validated Parquet rows: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DROP TABLE "+quoteIdentifier(validatedStaging)); err != nil {
+		return result, fmt.Errorf("drop validated load staging table: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "DROP TABLE "+quoteIdentifier(staging)); err != nil {
 		return result, fmt.Errorf("drop load staging table: %w", err)
@@ -153,6 +161,97 @@ func (w *Warehouse) ExecuteLoad(
 	}
 	committed = true
 	return result, nil
+}
+
+func validateRequiredLoadValues(ctx context.Context, tx *sql.Tx, staging string, schema []loadDomain.Field) error {
+	predicates := make([]string, 0)
+	for index, field := range schema {
+		predicate := requiredLoadViolation(field, quoteIdentifier(field.Name), index)
+		if predicate != "" {
+			predicates = append(predicates, predicate)
+		}
+	}
+	if len(predicates) == 0 {
+		return nil
+	}
+	var invalidRows int64
+	statement := "SELECT count(*) FROM " + quoteIdentifier(staging) + " WHERE " + strings.Join(predicates, " OR ")
+	if err := tx.QueryRowContext(ctx, statement).Scan(&invalidRows); err != nil {
+		return fmt.Errorf("validate required load fields: %w", err)
+	}
+	if invalidRows != 0 {
+		return fmt.Errorf("%w: Parquet values violate destination REQUIRED or REPEATED modes", loadDomain.ErrInvalid)
+	}
+	return nil
+}
+
+func validateLosslessLoadValues(ctx context.Context, tx *sql.Tx, staging string, checks []stagingValueCheck) error {
+	for _, decimal := range []bool{true, false} {
+		predicates := make([]string, 0)
+		for _, check := range checks {
+			if check.decimal == decimal {
+				predicates = append(predicates, check.predicate)
+			}
+		}
+		if len(predicates) == 0 {
+			continue
+		}
+		var changedRows int64
+		statement := "SELECT count(*) FROM " + quoteIdentifier(staging) + " WHERE " + strings.Join(predicates, " OR ")
+		if err := tx.QueryRowContext(ctx, statement).Scan(&changedRows); err != nil {
+			return fmt.Errorf("validate lossless nested Parquet conversion: %w", err)
+		}
+		if changedRows == 0 {
+			continue
+		}
+		if decimal {
+			return fmt.Errorf("%w: capability=%s nested Parquet decimal values require narrowing or rounding", loadDomain.ErrUnsupported, loadDomain.CapabilityDecimalRoundingV1)
+		}
+		return fmt.Errorf("%w: nested Parquet values cannot be converted losslessly", loadDomain.ErrInvalid)
+	}
+	return nil
+}
+
+func requiredLoadViolation(field loadDomain.Field, source string, depth int) string {
+	if strings.EqualFold(field.Mode, "REPEATED") {
+		item := fmt.Sprintf("__bqemu_load_item_%d", depth)
+		itemViolation := item + " IS NULL"
+		if isLoadRecord(field) {
+			children := requiredLoadChildren(field.Fields, item, depth+1)
+			if children != "" {
+				itemViolation += " OR " + children
+			}
+		}
+		return "(CASE WHEN " + source + " IS NULL THEN TRUE ELSE " +
+			"len(list_filter(" + source + ", " + item + " -> " + itemViolation + ")) > 0 END)"
+	}
+	parts := make([]string, 0, 2)
+	if strings.EqualFold(normalizeMode(field.Mode), "REQUIRED") {
+		parts = append(parts, source+" IS NULL")
+	}
+	if isLoadRecord(field) {
+		children := requiredLoadChildren(field.Fields, source, depth+1)
+		if children != "" {
+			parts = append(parts, "("+source+" IS NOT NULL AND ("+children+"))")
+		}
+	}
+	return strings.Join(parts, " OR ")
+}
+
+func requiredLoadChildren(fields []loadDomain.Field, source string, depth int) string {
+	predicates := make([]string, 0)
+	for index, field := range fields {
+		name := quoteIdentifier(field.Name)
+		predicate := requiredLoadViolation(field, source+"."+name, depth+index)
+		if predicate != "" {
+			predicates = append(predicates, predicate)
+		}
+	}
+	return strings.Join(predicates, " OR ")
+}
+
+func isLoadRecord(field loadDomain.Field) bool {
+	return strings.EqualFold(field.Type, "RECORD") || strings.EqualFold(field.Type, "STRUCT")
 }
 
 func (w *Warehouse) DiscardLoadedTable(ctx context.Context, table loadDomain.TableReference) error {
@@ -216,38 +315,78 @@ func describeStaging(ctx context.Context, tx *sql.Tx, staging string) ([]staging
 	return result, nil
 }
 
-func validateLoadShape(schema []loadDomain.Field, columns []stagingColumn) ([]string, []string, error) {
+func validateLoadShape(schema []loadDomain.Field, columns []stagingColumn) ([]string, []string, []stagingValueCheck, error) {
 	if len(schema) != len(columns) {
-		return nil, nil, fmt.Errorf("%w: Parquet field count does not match the destination schema", loadDomain.ErrInvalid)
+		return nil, nil, nil, fmt.Errorf("%w: Parquet field count does not match the destination schema", loadDomain.ErrInvalid)
 	}
 	byName := make(map[string]stagingColumn, len(columns))
 	for _, column := range columns {
 		key := strings.ToLower(column.name)
 		if _, duplicate := byName[key]; duplicate {
-			return nil, nil, fmt.Errorf("%w: duplicate Parquet field %q", loadDomain.ErrInvalid, column.name)
+			return nil, nil, nil, fmt.Errorf("%w: duplicate Parquet field %q", loadDomain.ErrInvalid, column.name)
 		}
 		byName[key] = column
 	}
 	selectExpressions := make([]string, len(schema))
 	destinationColumns := make([]string, len(schema))
+	valueChecks := make([]stagingValueCheck, 0)
 	for index, field := range schema {
 		column, ok := byName[strings.ToLower(field.Name)]
 		if !ok {
-			return nil, nil, fmt.Errorf("%w: Parquet field %q is missing", loadDomain.ErrInvalid, field.Name)
+			return nil, nil, nil, fmt.Errorf("%w: Parquet field %q is missing", loadDomain.ErrInvalid, field.Name)
 		}
 		targetType, err := validatedTargetType(field, column.typeName)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		selectExpressions[index] = "CAST(" + quoteIdentifier(column.name) + " AS " + targetType + ")"
+		source := quoteIdentifier(column.name)
+		selectExpressions[index] = "CAST(" + source + " AS " + targetType + ") AS " + quoteIdentifier(field.Name)
 		destinationColumns[index] = quoteIdentifier(field.Name)
+		if isLoadRecord(field) || strings.EqualFold(field.Mode, "REPEATED") {
+			valueChecks = append(valueChecks, stagingValueCheck{
+				predicate: source + " IS DISTINCT FROM CAST(CAST(" + source + " AS " + targetType + ") AS " + column.typeName + ")",
+				decimal:   loadFieldContainsDecimal(field),
+			})
+		}
 	}
-	return selectExpressions, destinationColumns, nil
+	return selectExpressions, destinationColumns, valueChecks, nil
+}
+
+func loadFieldContainsDecimal(field loadDomain.Field) bool {
+	if strings.EqualFold(field.Type, "NUMERIC") || strings.EqualFold(field.Type, "BIGNUMERIC") {
+		return true
+	}
+	for _, child := range field.Fields {
+		if loadFieldContainsDecimal(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func validatedTargetType(field loadDomain.Field, sourceType string) (string, error) {
 	target := strings.ToUpper(field.Type)
 	source := strings.ToUpper(strings.TrimSpace(sourceType))
+	if strings.EqualFold(field.Mode, "REPEATED") {
+		if !strings.HasSuffix(source, "[]") {
+			return "", fmt.Errorf("%w: Parquet field %q is not a LIST", loadDomain.ErrInvalid, field.Name)
+		}
+		physicalType, err := duckDBType(field)
+		if err != nil {
+			return "", err
+		}
+		return physicalType, nil
+	}
+	if target == "RECORD" || target == "STRUCT" {
+		if !strings.HasPrefix(source, "STRUCT(") {
+			return "", fmt.Errorf("%w: Parquet field %q is not a STRUCT", loadDomain.ErrInvalid, field.Name)
+		}
+		physicalType, err := duckDBType(field)
+		if err != nil {
+			return "", err
+		}
+		return physicalType, nil
+	}
 	isInteger := source == "TINYINT" || source == "SMALLINT" || source == "INTEGER" || source == "BIGINT"
 	switch target {
 	case "BOOL", "BOOLEAN":
@@ -308,7 +447,7 @@ func validatedTargetType(field loadDomain.Field, sourceType string) (string, err
 		if strings.HasPrefix(source, "TIMESTAMP") {
 			return "TIMESTAMPTZ", nil
 		}
-	case "GEOGRAPHY", "JSON", "RECORD", "STRUCT":
+	case "GEOGRAPHY", "JSON":
 		return "", fmt.Errorf("%w: BigQuery type %s in Parquet loads", loadDomain.ErrUnsupported, target)
 	default:
 		return "", fmt.Errorf("%w: BigQuery type %s", loadDomain.ErrInvalid, target)

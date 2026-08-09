@@ -256,8 +256,9 @@ Parquet 로드는 대상 스키마에 자릿수를 줄이지 않고 넣을 수 �
 
 NUMERIC과 지원 범위 안의 BIGNUMERIC은 REST 테이블, 쿼리, `tabledata` 셀에서
 동작합니다. Storage Read의 Arrow/Avro 스키마와 값도 지원합니다. 직접 ProtoRows
-쓰기와 스칼라 Parquet 로드도 지원합니다. REST, Storage Read, Storage Write에서는
-STRUCT 내부와 REPEATED 필드의 10진수 메타데이터를 재귀적으로 유지합니다.
+쓰기와 스칼라, 중첩 STRUCT, REPEATED Parquet 로드도 지원합니다. REST, Storage Read,
+Storage Write, Parquet 로드에서는 STRUCT 내부와 REPEATED 필드의 10진수 메타데이터와
+값을 재귀적으로 유지합니다.
 
 매개변수를 생략한 BIGNUMERIC은 물리 및 전송 경계에서 정밀도 38과 소수부 자릿수
 18을 적용합니다.
@@ -330,7 +331,7 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 | 허용하는 로드 원본 URI | `gs://`만 허용합니다. 로컬 경로와 다른 scheme은 작업을 저장하기 전에 거부합니다. |
 | fake GCS 서비스 | 기본 Compose 프로젝트의 필수 서비스입니다. 바이너리는 설정한 GCS 호환 JSON endpoint에 연결합니다. |
 | GCS 및 fake GCS JSON 어댑터 | 목록, 조회, 미디어 요청의 크기에 상한을 둡니다. URI 글로브 확장은 부분 지원입니다. |
-| 테이블로 Parquet 로드 | 기존 대상과 명시적 스키마를 지정한 `CREATE_IF_NEEDED` 새 대상을 스칼라 필드에 한해 지원합니다. 새 물리 테이블과 행은 트랜잭션 하나에서 커밋한 뒤 메타데이터를 공개합니다. 중첩 또는 반복 필드는 객체를 읽기 전에 `load.parquet.nested-repeated.unsupported-v1`로 거부하며, 10진수 자릿수 축소는 대상을 변경하기 전에 `load.decimal-rounding.unsupported-v1`로 거부합니다. |
+| 테이블로 Parquet 로드 | 기존 대상과 명시적 스키마를 지정한 `CREATE_IF_NEEDED` 새 대상에서 스칼라, 중첩 `STRUCT`, 반복 `ARRAY` 값을 지원합니다. 타입 검증을 마친 준비 테이블을 먼저 완성한 뒤 새 대상 생성이나 쓰기 방식을 적용합니다. 10진수 자릿수 축소는 대상을 변경하기 전에 `load.decimal-rounding.unsupported-v1`로 거부합니다. |
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
 | 스키마 추론 및 자동 감지, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |

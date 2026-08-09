@@ -51,9 +51,6 @@ func (planner duckDBLoadAdapterPlanner) ValidateLoadRequest(
 	}
 	physicalTypes := make([]string, 0, len(request.Destination.Schema))
 	for _, field := range request.Destination.Schema {
-		if len(field.Fields) != 0 || strings.EqualFold(field.Mode, "REPEATED") {
-			return "", loadports.UnsupportedLoadPlan(loadDomain.CapabilityParquetNestedRepeatedV1)
-		}
 		physicalType, err := duckDBType(field)
 		if err != nil {
 			return "", classifyLoadSchemaPlanningError(err)

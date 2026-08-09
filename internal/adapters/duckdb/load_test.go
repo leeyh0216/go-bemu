@@ -92,6 +92,137 @@ func TestParquetLoadCreatesMissingDestinationInOneTransaction(t *testing.T) {
 	}
 }
 
+func TestParquetLoadPreservesNestedAndRepeatedValues(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	precision, scale := int64(20), int64(4)
+	fields := []loadDomain.Field{
+		{Name: "payload", Type: "STRUCT", Fields: []loadDomain.Field{
+			{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+			{Name: "tags", Type: "STRING", Mode: "REPEATED"},
+		}},
+		{Name: "events", Type: "RECORD", Mode: "REPEATED", Fields: []loadDomain.Field{
+			{Name: "at", Type: "TIMESTAMP", Mode: "REQUIRED"},
+			{Name: "amount", Type: "NUMERIC", Precision: &precision, Scale: &scale},
+		}},
+		{Name: "scores", Type: "INT64", Mode: "REPEATED"},
+	}
+	parquet := createLoadParquet(t, warehouse, `SELECT
+		{'id': 7::BIGINT, 'tags': ['alpha'::VARCHAR, 'beta'::VARCHAR]} AS payload,
+		[{'at': TIMESTAMPTZ '2026-08-09 01:02:03+00', 'amount': 12.3400::DECIMAL(20,4)}] AS events,
+		[10::BIGINT, 20::BIGINT] AS scores`)
+	result, err := executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "nested_items"},
+			Schema:    fields,
+		},
+		CreateDestination: true,
+		Schema:            fields, Objects: []loadports.LocalObject{{Path: parquet}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.CreatedDestination || result.OutputRows != 1 {
+		t.Fatalf("load result = %+v", result)
+	}
+	var id, score int64
+	var tag, amount string
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT payload.id, payload.tags[2], events[1].amount::VARCHAR, scores[1]
+		FROM "bq_746573742d70726f6a656374_64617461736574"."nested_items"`).Scan(&id, &tag, &amount, &score); err != nil {
+		t.Fatal(err)
+	}
+	if id != 7 || tag != "beta" || amount != "12.3400" || score != 10 {
+		t.Fatalf("nested values = id=%d tag=%q amount=%q score=%d", id, tag, amount, score)
+	}
+
+	invalid := createLoadParquet(t, warehouse, `SELECT
+		{'id': NULL::BIGINT, 'tags': ['valid'::VARCHAR]} AS payload,
+		[]::STRUCT("at" TIMESTAMPTZ, "amount" DECIMAL(20,4))[] AS events,
+		[1::BIGINT] AS scores`)
+	_, err = executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "invalid_nested_items"},
+			Schema:    fields,
+		},
+		CreateDestination: true,
+		Schema:            fields, Objects: []loadports.LocalObject{{Path: invalid}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+	})
+	if !errors.Is(err, loadDomain.ErrInvalid) {
+		t.Fatalf("nested REQUIRED error = %v", err)
+	}
+	var exists bool
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM duckdb_tables() WHERE schema_name = 'bq_746573742d70726f6a656374_64617461736574'
+		AND table_name = 'invalid_nested_items'
+	)`).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("invalid nested values created a destination")
+	}
+
+	nullList := createLoadParquet(t, warehouse, `SELECT
+		{'id': 1::BIGINT, 'tags': ['valid'::VARCHAR]} AS payload,
+		[]::STRUCT("at" TIMESTAMPTZ, "amount" DECIMAL(20,4))[] AS events,
+		[NULL::BIGINT] AS scores`)
+	_, err = executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "invalid_repeated_items"},
+			Schema:    fields,
+		},
+		CreateDestination: true,
+		Schema:            fields, Objects: []loadports.LocalObject{{Path: nullList}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+	})
+	if !errors.Is(err, loadDomain.ErrInvalid) {
+		t.Fatalf("REPEATED null element error = %v", err)
+	}
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM duckdb_tables() WHERE schema_name = 'bq_746573742d70726f6a656374_64617461736574'
+		AND table_name = 'invalid_repeated_items'
+	)`).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("invalid repeated values created a destination")
+	}
+
+	narrowing := createLoadParquet(t, warehouse, `SELECT
+		{'id': 1::BIGINT, 'tags': ['valid'::VARCHAR]} AS payload,
+		[{'at': TIMESTAMPTZ '2026-08-09 01:02:03+00', 'amount': 1.23456::DECIMAL(21,5)}] AS events,
+		[1::BIGINT] AS scores`)
+	_, err = executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "narrowed_nested_items"},
+			Schema:    fields,
+		},
+		CreateDestination: true,
+		Schema:            fields, Objects: []loadports.LocalObject{{Path: narrowing}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+	})
+	if !errors.Is(err, loadDomain.ErrUnsupported) || !strings.Contains(err.Error(), loadDomain.CapabilityDecimalRoundingV1) {
+		t.Fatalf("nested decimal narrowing error = %v", err)
+	}
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM duckdb_tables() WHERE schema_name = 'bq_746573742d70726f6a656374_64617461736574'
+		AND table_name = 'narrowed_nested_items'
+	)`).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("narrowed nested decimal created a destination")
+	}
+}
+
 func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 	ctx := context.Background()
 	warehouse, err := New("")
@@ -273,7 +404,6 @@ func TestParquetLoadRejectsUnsupportedSchemaBeforeReadingObjects(t *testing.T) {
 	for _, field := range []loadDomain.Field{
 		{Name: "amount", Type: "BIGNUMERIC", Precision: &precision},
 		{Name: "location", Type: "GEOGRAPHY"},
-		{Name: "amounts", Type: "NUMERIC", Mode: "REPEATED"},
 	} {
 		_, err := executeTestLoad(context.Background(), warehouse, testLoadRequest{
 			Destination: loadDomain.Table{Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}},
@@ -282,9 +412,6 @@ func TestParquetLoadRejectsUnsupportedSchemaBeforeReadingObjects(t *testing.T) {
 		})
 		if !errors.Is(err, loadDomain.ErrUnsupported) {
 			t.Fatalf("field %s error = %v, want ErrUnsupported before object read", field.Type, err)
-		}
-		if strings.EqualFold(field.Mode, "REPEATED") && !strings.Contains(err.Error(), loadDomain.CapabilityParquetNestedRepeatedV1) {
-			t.Fatalf("repeated Parquet error = %v, want stable capability", err)
 		}
 	}
 }

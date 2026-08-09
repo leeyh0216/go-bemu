@@ -455,9 +455,6 @@ func (s *Service) download(ctx context.Context, job *domain.Job, objects []ports
 func terminalError(err error) (string, string) {
 	switch {
 	case errors.Is(err, domain.ErrUnsupported):
-		if strings.Contains(err.Error(), domain.CapabilityParquetNestedRepeatedV1) {
-			return "notImplemented", "the requested load-job feature is not implemented; capability=" + domain.CapabilityParquetNestedRepeatedV1
-		}
 		if strings.Contains(err.Error(), domain.CapabilityDecimalRoundingV1) {
 			return "notImplemented", "the requested load-job feature is not implemented; capability=" + domain.CapabilityDecimalRoundingV1
 		}

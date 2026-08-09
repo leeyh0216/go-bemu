@@ -711,40 +711,6 @@ func TestServiceRejectsRecursiveSchemaDuplicatesBeforeJobPublication(t *testing.
 	}
 }
 
-func TestServiceReportsStableNestedRepeatedParquetCapabilityBeforeObjectAccess(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
-	loader := &testLoader{testLoadPlanner: testLoadPlanner{
-		loadPlanErr: ports.UnsupportedLoadPlan(domain.CapabilityParquetNestedRepeatedV1),
-	}}
-	table := domain.Table{
-		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Location: "US",
-		Schema: []domain.Field{{Name: "amounts", Type: "NUMERIC", Mode: "REPEATED"}},
-	}
-	config := DefaultConfig()
-	config.TempDirectory = t.TempDir()
-	service, err := NewService(
-		NewMemoryJobRepository(), objects, testCatalog{table: table}, loader,
-		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "nested-parquet"}
-	if _, err := service.Submit(context.Background(), reference, testConfiguration(domain.FormatParquet)); err != nil {
-		t.Fatal(err)
-	}
-	job := waitForDone(t, service, reference)
-	if job.Error == nil || job.Error.Reason != "notImplemented" || !strings.Contains(job.Error.Message, domain.CapabilityParquetNestedRepeatedV1) {
-		t.Fatalf("job = %+v", job)
-	}
-	objects.mu.Lock()
-	opens := objects.opens
-	objects.mu.Unlock()
-	if opens != 0 || loader.calls != 0 {
-		t.Fatalf("nested Parquet rejection crossed a side-effect boundary: opens=%d loads=%d", opens, loader.calls)
-	}
-}
-
 func TestLoadSchemaIdentityIncludesDecimalPresenceValuesAndRoundingRecursively(t *testing.T) {
 	precision38, precision20, precision19, scale0, scale2 := int64(38), int64(20), int64(19), int64(0), int64(2)
 	base := []domain.Field{{Name: "items", Type: "STRUCT", Mode: "REPEATED", Fields: []domain.Field{{

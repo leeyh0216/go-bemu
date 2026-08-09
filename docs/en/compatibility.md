@@ -228,8 +228,9 @@ table default and using explicit field modes remains supported.
 
 NUMERIC and the supported BIGNUMERIC subset are covered by REST table/query and
 tabledata cells, Arrow/Avro Storage Read schemas and values, direct ProtoRows,
-and scalar Parquet loads. Recursive STRUCT and REPEATED decimal metadata is
-covered for REST, Storage Read, and Storage Write. Omitted BIGNUMERIC parameters
+and scalar, nested STRUCT, and REPEATED Parquet loads. Recursive STRUCT and
+REPEATED decimal metadata and values are covered for REST, Storage Read,
+Storage Write, and Parquet load. Omitted BIGNUMERIC parameters
 use the emulator default of precision 38 and scale 18 at physical and wire
 boundaries.
 
@@ -304,7 +305,7 @@ service.
 | accepted load source URI | `gs://` only; local paths and other schemes fail before job persistence |
 | fake GCS service | Required by the default Compose project; the binary connects to the configured GCS-compatible JSON endpoint |
 | GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
-| Parquet load into a table | Partial; existing destinations and `CREATE_IF_NEEDED` with an explicit schema are supported for scalar fields. A new physical table and its rows commit in one transaction before metadata publication. Nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1`, and decimal narrowing fails before destination mutation with `load.decimal-rounding.unsupported-v1`. |
+| Parquet load into a table | Partial; existing destinations and `CREATE_IF_NEEDED` with an explicit schema support scalar, nested `STRUCT`, and repeated `ARRAY` values. A validated typed staging table is completed before a new destination or write disposition mutates storage. Decimal narrowing still fails before destination mutation with `load.decimal-rounding.unsupported-v1`. |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | schema inference/autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |

@@ -27,8 +27,12 @@ func (adapter fakeLoadAdapter) ValidateLoadRequest(
 	_ context.Context,
 	request loadports.LoadPlanRequest,
 ) (string, error) {
+	operation := engine.SchemaOperationValidate
+	if request.CreateDestination {
+		operation = engine.SchemaOperationCreate
+	}
 	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
-		Operation: engine.SchemaOperationValidate,
+		Operation: operation,
 		Target: catalogdomain.TableReference{
 			ProjectID: request.Destination.Reference.ProjectID,
 			DatasetID: request.Destination.Reference.DatasetID,
@@ -44,11 +48,6 @@ func (adapter fakeLoadAdapter) ValidateLoadRequest(
 	}
 	if request.SourceFormat != loadDomain.FormatParquet {
 		return "", loadports.UnsupportedLoadPlan("LOAD_SOURCE_PARQUET")
-	}
-	for _, field := range request.Destination.Schema {
-		if len(field.Fields) != 0 || strings.EqualFold(field.Mode, "REPEATED") {
-			return "", loadports.UnsupportedLoadPlan(loadDomain.CapabilityParquetNestedRepeatedV1)
-		}
 	}
 	return strings.Repeat("f", 64), nil
 }
@@ -66,6 +65,9 @@ func NewFakeEngine() *FakeEngine {
 		Composite:          engine.CompositeCapabilities{MaxStructDepth: 15, MaxListDepth: 15},
 		Transactions:       map[engine.TransactionScope]bool{engine.TransactionScopeSingleTable: true},
 		AtomicReplacements: map[engine.AtomicReplacementScope]bool{engine.AtomicReplacementTable: true},
+		DDL: map[engine.DDLOperation]engine.DDLCapability{
+			engine.DDLCreateTable: {Guarantee: engine.DDLGuaranteeAtomicPhysicalTable},
+		},
 	})
 	if err != nil {
 		panic(err)
