@@ -3,7 +3,7 @@
   "capabilityIds": [
     "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1"
   ],
-  "observedOn": "2026-08-08",
+  "observedOn": "2026-08-09",
   "consumer": {
     "connector": "spark-bigquery-connector-0.44.2",
     "spark": "3.5.8",
@@ -27,9 +27,9 @@
       "status": "DONE"
     },
     {
-      "stage": "expiration_update",
-      "operation": "tables.get+tables.patch+tables.get",
-      "shape": "calls:1+1+1 method-override:PATCH content-encoding:gzip mutation:expiration-time raw-body:omitted",
+      "stage": "explicit_destination_metadata",
+      "operation": "tables.get",
+      "shape": "calls:1 patch-calls:0 destination-metadata:reused",
       "status": "200"
     },
     {

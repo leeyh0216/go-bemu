@@ -581,7 +581,7 @@ def test_query_source_filter_pushdown(
 
 
 @pytest.mark.capability("SBQ-READ-ARROW-QUERY-MATERIALIZED-V1")
-def test_query_source_explicit_materialization_patches_expiration(
+def test_query_source_explicit_materialization_reuses_destination_metadata(
     spark_session,
     public_edge: PublicEdge,
     seeded_table: str,
@@ -614,8 +614,6 @@ def test_query_source_explicit_materialization_patches_expiration(
             "jobs.getQueryResults",
             "jobs.get",
             "tables.get",
-            "tables.patch",
-            "tables.get",
             "CreateReadSession",
             "ReadRows",
         ),
@@ -625,8 +623,8 @@ def test_query_source_explicit_materialization_patches_expiration(
         exact={
             "jobs.insert": 1,
             "jobs.get": 1,
-            "tables.get": 2,
-            "tables.patch": 1,
+            "tables.get": 1,
+            "tables.patch": 0,
             "jobs.query": 0,
             "tabledata.list": 0,
             "CreateReadSession": 1,
@@ -645,7 +643,7 @@ def test_query_source_explicit_materialization_patches_expiration(
     record_capability(
         "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
         (
-            "arrow-query explicit-destination patch-calls:1 rows:2 "
+            "arrow-query explicit-destination patch-calls:0 rows:2 "
             f"storage-read:observed row-fingerprint:sha256:{_row_fingerprint(actual)}"
         ),
     )
