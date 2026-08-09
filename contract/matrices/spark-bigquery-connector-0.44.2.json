@@ -467,7 +467,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/spark/evidence/query-materialization-0.44.2.json",
-          "fingerprint": "sha256:5206f3c8e6f3bb58916ec01499429ba08b8ce11055ef3cbb469ce345c369ca08"
+          "fingerprint": "sha256:3805fc92043b5f928d1e8024d1c56eb39d475afb69fb85c4f561843bdf3c95f7"
         },
         {
           "kind": "artifact-lock",
