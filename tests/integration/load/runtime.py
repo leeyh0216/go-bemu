@@ -1323,7 +1323,7 @@ class EmulatorRuntime:
                     )
                 )
             elif (
-                event_name in {"side_effect.pre", "side_effect.post"}
+                event_name in {"side_effect.before", "side_effect.after", "side_effect.error"}
                 and record.get("operation") in internal_operations
             ):
                 events.append(
@@ -1331,7 +1331,7 @@ class EmulatorRuntime:
                         time_unix_nanos=timestamp,
                         actor="bqemu",
                         protocol="internal",
-                        phase="before" if event_name == "side_effect.pre" else "after",
+                        phase="before" if event_name == "side_effect.before" else "after",
                         operation="internal." + str(record["operation"]),
                         status=record.get("tx_state"),
                     )
