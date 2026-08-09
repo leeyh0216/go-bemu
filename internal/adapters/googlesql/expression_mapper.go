@@ -112,11 +112,49 @@ func (mapper *statementMapper) mapExpressionNode(statementKind queryast.Statemen
 		return mapper.mapCastExpression(statementKind, expression)
 	case *gsql.ASTInExpression:
 		return mapper.mapInExpression(statementKind, expression)
+	case *gsql.ASTBetweenExpression:
+		return mapper.mapBetweenExpression(statementKind, expression)
 	case *gsql.ASTExpressionSubquery:
 		return mapper.mapSubqueryExpression(statementKind, expression)
 	default:
 		return nil, unsupportedNode(statementKind, "expression", node)
 	}
+}
+
+func (mapper *statementMapper) mapBetweenExpression(statementKind queryast.StatementKind, node *gsql.ASTBetweenExpression) (queryast.Expression, error) {
+	valueNode, err := node.Lhs()
+	if err != nil || valueNode == nil {
+		return nil, parserFailure()
+	}
+	lowNode, err := node.Low()
+	if err != nil || lowNode == nil {
+		return nil, parserFailure()
+	}
+	highNode, err := node.High()
+	if err != nil || highNode == nil {
+		return nil, parserFailure()
+	}
+	value, err := mapper.mapExpression(statementKind, valueNode)
+	if err != nil {
+		return nil, err
+	}
+	low, err := mapper.mapExpression(statementKind, lowNode)
+	if err != nil {
+		return nil, err
+	}
+	high, err := mapper.mapExpression(statementKind, highNode)
+	if err != nil {
+		return nil, err
+	}
+	not, err := node.IsNot()
+	if err != nil {
+		return nil, parserFailure()
+	}
+	key, err := mapper.key(node, "between-expression")
+	if err != nil {
+		return nil, err
+	}
+	return queryast.NewBetweenExpression(key, value, low, high, not)
 }
 
 func (mapper *statementMapper) mapDecimalLiteral(

@@ -85,6 +85,14 @@ func (lowerer restrictionLowerer) validate(expression queryast.Expression) error
 			}
 		}
 		return nil
+	case *queryast.BetweenExpression:
+		if err := lowerer.validate(value.Value()); err != nil {
+			return err
+		}
+		if err := lowerer.validate(value.Low()); err != nil {
+			return err
+		}
+		return lowerer.validate(value.High())
 	case *queryast.CastExpression:
 		if value.Safe() {
 			return fmt.Errorf("SAFE_CAST is not supported in row restrictions")

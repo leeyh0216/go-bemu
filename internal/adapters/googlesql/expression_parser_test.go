@@ -48,7 +48,6 @@ func TestExpressionParserFailsClosedAndRetainsInvalidPredicate(t *testing.T) {
 		input string
 		kind  error
 	}{
-		{input: "customer_secret BETWEEN 1 AND 2", kind: domain.ErrUnsupported},
 		{input: "customer_secret ->> 'name'", kind: domain.ErrInvalid},
 		{input: "customer_secret = 1; DELETE FROM dataset.table", kind: domain.ErrInvalid},
 	}
@@ -60,5 +59,17 @@ func TestExpressionParserFailsClosedAndRetainsInvalidPredicate(t *testing.T) {
 		if tt.kind == domain.ErrInvalid && (!strings.Contains(err.Error(), "customer_secret") || !strings.Contains(err.Error(), tt.input)) {
 			t.Fatalf("error omitted predicate: %v", err)
 		}
+	}
+}
+
+func TestExpressionParserMapsBetweenPredicate(t *testing.T) {
+	parser := newParser(t)
+	expression, err := parser.ParseExpression(context.Background(), "id NOT BETWEEN 1 AND 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	between, ok := expression.(*queryast.BetweenExpression)
+	if !ok || !between.Not() {
+		t.Fatalf("expression = %#v", expression)
 	}
 }

@@ -26,6 +26,7 @@ const (
 	ExpressionBinary        ExpressionKind = "BINARY"
 	ExpressionCast          ExpressionKind = "CAST"
 	ExpressionIn            ExpressionKind = "IN"
+	ExpressionBetween       ExpressionKind = "BETWEEN"
 	ExpressionParenthesized ExpressionKind = "PARENTHESIZED"
 	ExpressionSubquery      ExpressionKind = "SUBQUERY"
 )
@@ -56,6 +57,7 @@ type ExpressionVisitor interface {
 	VisitBinaryExpression(*BinaryExpression) error
 	VisitCastExpression(*CastExpression) error
 	VisitInExpression(*InExpression) error
+	VisitBetweenExpression(*BetweenExpression) error
 	VisitParenthesizedExpression(*ParenthesizedExpression) error
 	VisitSubqueryExpression(*SubqueryExpression) error
 }
@@ -632,6 +634,40 @@ type InExpression struct {
 	options  []Expression
 	subquery *Query
 	unnest   Expression
+}
+
+// BetweenExpression is the immutable canonical form of GoogleSQL BETWEEN.
+// It deliberately retains only the parsed operands and negation state, never
+// the submitted SQL text.
+type BetweenExpression struct {
+	expressionBase
+	value Expression
+	low   Expression
+	high  Expression
+	not   bool
+}
+
+func NewBetweenExpression(key NodeKey, value, low, high Expression, not bool) (*BetweenExpression, error) {
+	if !validNodeKey(key) || expressionIsNil(value) || expressionIsNil(low) || expressionIsNil(high) {
+		return nil, fmt.Errorf("invalid BETWEEN expression")
+	}
+	return &BetweenExpression{expressionBase: expressionBase{key: key}, value: value, low: low, high: high, not: not}, nil
+}
+func (*BetweenExpression) expressionNode()              {}
+func (*BetweenExpression) Kind() ExpressionKind         { return ExpressionBetween }
+func (expression *BetweenExpression) Value() Expression { return expression.value }
+func (expression *BetweenExpression) Low() Expression   { return expression.low }
+func (expression *BetweenExpression) High() Expression  { return expression.high }
+func (expression *BetweenExpression) Not() bool         { return expression.not }
+func (expression *BetweenExpression) Accept(visitor ExpressionVisitor) error {
+	return visitor.VisitBetweenExpression(expression)
+}
+func (expression *BetweenExpression) writeSemantic(builder *fingerprintBuilder) {
+	builder.token("between")
+	builder.boolean(expression.not)
+	expression.value.writeSemantic(builder)
+	expression.low.writeSemantic(builder)
+	expression.high.writeSemantic(builder)
 }
 
 func NewInListExpression(key NodeKey, value Expression, not bool, options []Expression) (*InExpression, error) {
