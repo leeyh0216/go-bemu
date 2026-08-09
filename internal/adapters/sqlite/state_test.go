@@ -173,7 +173,7 @@ func TestCatalogUpdatesAndCascadesAreDurable(t *testing.T) {
 	}
 	table.TimePartitioning = nil
 	table.Labels = nil
-	table.ClusteringFields = []string{}
+	table.ClusteringFields = nil
 	table.UpdatedAt = table.UpdatedAt.Add(2 * time.Hour)
 	if err := catalog.UpdateTable(ctx, table); err != nil {
 		t.Fatal(err)
@@ -306,7 +306,7 @@ func completeCatalogMetadata() (domain.Project, domain.Dataset, domain.Table) {
 		Labels: map[string]string{"kind": "fixture"}, Type: "TABLE", Location: dataset.Location,
 		ExpirationTime:   &expires,
 		TimePartitioning: &domain.TimePartitioning{Type: "DAY", Field: "event_time", ExpirationMs: 3_600_000},
-		ClusteringFields: []string{"payload.category", "event_time"},
+		ClusteringFields: []string{"bucket", "event_time"},
 		CreatedAt:        created, UpdatedAt: updated,
 		Schema: []domain.Field{
 			{Name: "event_time", Type: "TIMESTAMP", Mode: "REQUIRED", Description: "event timestamp"},
