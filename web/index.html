@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BQEMU diagnostics timeline</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:#101216; color:#e8edf2; }
+    body { margin:0; max-width:1100px; padding:1rem; margin-inline:auto; } header, form { display:flex; flex-wrap:wrap; gap:.6rem; align-items:center; } input, button { background:#1e2530; color:inherit; border:1px solid #46576a; border-radius:.3rem; padding:.45rem; } button { cursor:pointer; } #stats { margin:.8rem 0; color:#a9bbcb; } ol { padding:0; list-style:none; display:grid; gap:.5rem; } li { border:1px solid #33404d; border-left:5px solid #4da3ff; border-radius:.3rem; padding:.7rem; overflow-wrap:anywhere; } li.error { border-left-color:#ff6b6b; } summary { cursor:pointer; } pre { white-space:pre-wrap; max-height:22rem; overflow:auto; } @media (max-width:600px) { body { padding:.6rem; } input { min-width:42%; flex:1; } li { font-size:.8rem; } }
+  </style>
+</head>
+<body>
+  <header><strong>BQEMU transport timeline</strong><button id="pause">Pause</button><button id="clear">Clear</button></header>
+  <form id="filters"><input name="protocol" placeholder="protocol"><input name="operationId" placeholder="operation ID"><input name="requestId" placeholder="request ID"><input name="status" placeholder="status"><button>Filter</button></form>
+  <div id="stats">Loading…</div><ol id="events"></ol>
+  <script>
+    const filters=document.querySelector('#filters'), events=document.querySelector('#events'), stats=document.querySelector('#stats');
+    let paused=false, cursor=0;
+    function text(value){ return document.createTextNode(value ?? ''); }
+    function eventNode(event){ const item=document.createElement('li'); if(event.error || (event.status && event.status!=='OK' && event.status!=='200')) item.className='error'; const line=document.createElement('div'); line.append(text(`#${event.sequence} ${event.wallTime} ${event.protocol}/${event.phase} ${event.operationId||event.method||''} ${event.status||''}`)); item.append(line); const detail=document.createElement('details'); const summary=document.createElement('summary'); summary.textContent=`request=${event.requestId||'-'} bytes=${event.originalBytes}${event.truncated?' (truncated)':''}`; detail.append(summary); const raw=document.createElement('pre'); raw.textContent=JSON.stringify(event,null,2); detail.append(raw); item.append(detail); return item; }
+    async function refresh(){ if(paused) return; const query=new URLSearchParams(new FormData(filters)); query.set('cursor',cursor); const response=await fetch(`/bqemu/v1/diagnostics/timeline?${query}`); if(!response.ok) throw new Error(`timeline ${response.status}`); const snapshot=await response.json(); for(const event of snapshot.events){ cursor=Math.max(cursor,event.sequence); events.prepend(eventNode(event)); } stats.textContent=`retained ${snapshot.stats.events} events / ${snapshot.stats.bytes} bytes · dropped ${snapshot.stats.droppedEvents} events`; }
+    document.querySelector('#pause').onclick=()=>{ paused=!paused; document.querySelector('#pause').textContent=paused?'Resume':'Pause'; };
+    document.querySelector('#clear').onclick=async()=>{ await fetch('/bqemu/v1/diagnostics/timeline:clear',{method:'POST'}); cursor=0; events.textContent=''; await refresh(); };
+    filters.onsubmit=event=>{ event.preventDefault(); cursor=0; events.textContent=''; refresh().catch(error=>stats.textContent=error.message); };
+    setInterval(()=>refresh().catch(error=>stats.textContent=error.message),1000); refresh().catch(error=>stats.textContent=error.message);
+  </script>
+</body>
+</html>

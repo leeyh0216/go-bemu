@@ -53,6 +53,8 @@ var generatedRESTRouteSpecs = []RESTRouteSpec{
 	{OperationID: "bqemu.console.assets", Component: "public-console", Method: "GET", Path: "/console/", Discovery: false},
 	{OperationID: "bqemu.console.get", Component: "public-query", Method: "GET", Path: "/bqemu/v1/console", Discovery: false},
 	{OperationID: "bqemu.console.redirect", Component: "public-console", Method: "GET", Path: "/", Discovery: false},
+	{OperationID: "bqemu.diagnostics.timeline.clear", Component: "public-query", Method: "POST", Path: "/bqemu/v1/diagnostics/timeline:clear", Discovery: false},
+	{OperationID: "bqemu.diagnostics.timeline.get", Component: "public-query", Method: "GET", Path: "/bqemu/v1/diagnostics/timeline", Discovery: false},
 	{OperationID: "bqemu.discovery.get", Component: "public-core", Method: "GET", Path: "/$discovery/rest", Discovery: false},
 	{OperationID: "bqemu.discovery.googleapis.get", Component: "public-core", Method: "GET", Path: "/discovery/v1/apis/bigquery/v2/rest", Discovery: false},
 	{OperationID: "bqemu.health.live", Component: "public-core", Method: "GET", Path: "/healthz", Discovery: false},

@@ -1,12 +1,16 @@
 package rest
 
 import (
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/leeyh0216/go-bemu/internal/observability"
 )
 
 type ConsoleAPI struct {
@@ -46,6 +50,73 @@ func withConsoleAPI() Option {
 			})}
 		})
 	}
+}
+
+func withDiagnosticsAPI() Option {
+	return func(server *Server) {
+		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
+			return []routeBinding{
+				handlerBinding("bqemu.diagnostics.timeline.get", func(w http.ResponseWriter, r *http.Request) {
+					cursor, err := timelineCursor(r)
+					if err != nil {
+						writeError(w, err)
+						return
+					}
+					limit, err := timelineLimit(r)
+					if err != nil {
+						writeError(w, err)
+						return
+					}
+					snapshot := observability.ProcessTimeline().Snapshot(cursor, limit)
+					snapshot.Events = filterTimelineEvents(snapshot.Events, r)
+					writeJSON(w, http.StatusOK, snapshot)
+				}),
+				handlerBinding("bqemu.diagnostics.timeline.clear", func(w http.ResponseWriter, _ *http.Request) {
+					observability.ProcessTimeline().Clear()
+					w.WriteHeader(http.StatusNoContent)
+				}),
+			}
+		})
+	}
+}
+
+func timelineCursor(r *http.Request) (uint64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid diagnostic cursor: %w", err)
+	}
+	return value, nil
+}
+
+func timelineLimit(r *http.Request) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("invalid diagnostic limit")
+	}
+	return value, nil
+}
+
+func filterTimelineEvents(events []observability.DiagnosticEvent, r *http.Request) []observability.DiagnosticEvent {
+	query := r.URL.Query()
+	protocol, status := query.Get("protocol"), query.Get("status")
+	operation, requestID := query.Get("operationId"), query.Get("requestId")
+	filtered := events[:0]
+	for _, event := range events {
+		if (protocol != "" && event.Protocol != protocol) || (status != "" && event.Status != status) ||
+			(operation != "" && event.OperationID != operation) || (requestID != "" && event.RequestID != requestID) {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	return filtered
 }
 
 func WithConsoleDirectory(directory string) Option {

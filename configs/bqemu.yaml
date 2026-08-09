@@ -140,6 +140,14 @@ logging:
   level: info
   format: json
 
+# Local, bounded request/response inspection for the optional console. Raw
+# payload prefixes are retained as base64 and are never written to durable state.
+diagnostics:
+  timeline:
+    maxEvents: 5000
+    maxBytes: 67108864
+    maxPayloadBytes: 4194304
+
 admin:
   enabled: false
   address: 127.0.0.1:9051

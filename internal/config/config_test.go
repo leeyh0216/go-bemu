@@ -508,6 +508,24 @@ func TestLoadConfigurationRequiresGCSCompatibleEndpointAndPositiveBounds(t *test
 	}
 }
 
+func TestDiagnosticTimelineConfigurationLoadsAndBoundsPayload(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_DIAGNOSTICS_TIMELINE_MAX_EVENTS":        "12",
+		"BQEMU_DIAGNOSTICS_TIMELINE_MAX_BYTES":         "4096",
+		"BQEMU_DIAGNOSTICS_TIMELINE_MAX_PAYLOAD_BYTES": "256",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeline := result.Config.Diagnostics.Timeline
+	if timeline.MaxEvents != 12 || timeline.MaxBytes != 4096 || timeline.MaxPayloadBytes != 256 {
+		t.Fatalf("timeline = %#v", timeline)
+	}
+	if _, err := load([]string{"--set", "diagnostics.timeline.maxBytes=255", "--set", "diagnostics.timeline.maxPayloadBytes=256"}, lookup(nil)); err == nil {
+		t.Fatal("expected diagnostics payload bound validation error")
+	}
+}
+
 func TestStorageReadConfigurationRejectsUnsafeOrInconsistentLimits(t *testing.T) {
 	for name, overrides := range map[string][]string{
 		"default-over-max": {

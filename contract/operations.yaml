@@ -451,6 +451,32 @@ operations:
     sources: [bqemu-public-api]
     tests: [go:internal/transport/rest/server:TestBigQueryRESTMetadataAndSynchronousQuery]
 
+  - id: bqemu.diagnostics.timeline.get
+    protocol: rest
+    component: public-query
+    summary: {en: Read a bounded snapshot of transport diagnostic events, ko: transport 진단 이벤트의 제한된 스냅샷을 읽습니다.}
+    support: implemented
+    verification: transport
+    rest: {method: GET, path: /bqemu/v1/diagnostics/timeline, discovery: false}
+    supportedInput: {en: "cursor, limit, protocol, status, operationId, and requestId filters are supported.", ko: "cursor, limit, protocol, status, operationId, requestId 필터를 지원합니다."}
+    limitations: {policy: tracked, byDesign: [], en: "The snapshot is local, lossy under configured pressure, and never blocks transport execution.", ko: "스냅샷은 로컬이며 설정 한도에서 손실될 수 있고 transport 실행을 막지 않습니다."}
+    issues: ['#45']
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/diagnostics:TestDiagnosticTimelineAPI]
+
+  - id: bqemu.diagnostics.timeline.clear
+    protocol: rest
+    component: public-query
+    summary: {en: Clear retained transport diagnostic events, ko: 보관 중인 transport 진단 이벤트를 삭제합니다.}
+    support: implemented
+    verification: transport
+    rest: {method: POST, path: /bqemu/v1/diagnostics/timeline:clear, discovery: false}
+    supportedInput: {en: No request body is accepted., ko: 요청 본문을 받지 않습니다.}
+    limitations: {policy: tracked, byDesign: [], en: Clearing only affects the local in-memory snapshot., ko: 삭제는 로컬 in-memory 스냅샷에만 적용됩니다.}
+    issues: ['#45']
+    sources: [bqemu-public-api]
+    tests: [go:internal/transport/rest/diagnostics:TestDiagnosticTimelineAPI]
+
   - id: bqemu.console.assets
     protocol: rest
     component: public-console

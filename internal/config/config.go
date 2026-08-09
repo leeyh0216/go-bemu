@@ -67,21 +67,22 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type Config struct {
-	APIVersion string          `yaml:"apiVersion" json:"apiVersion"`
-	Kind       string          `yaml:"kind" json:"kind"`
-	Defaults   DefaultsConfig  `yaml:"defaults" json:"defaults"`
-	Bootstrap  BootstrapConfig `yaml:"bootstrap" json:"bootstrap"`
-	Server     ServerConfig    `yaml:"server" json:"server"`
-	Database   DatabaseConfig  `yaml:"database" json:"database"`
-	State      StateConfig     `yaml:"state" json:"state"`
-	Runtime    RuntimeConfig   `yaml:"runtime" json:"runtime"`
-	Query      QueryConfig     `yaml:"query" json:"query"`
-	TableData  TableDataConfig `yaml:"tableData" json:"tableData"`
-	Storage    StorageConfig   `yaml:"storage" json:"storage"`
-	Load       LoadConfig      `yaml:"load" json:"load"`
-	Logging    LoggingConfig   `yaml:"logging" json:"logging"`
-	Admin      AdminConfig     `yaml:"admin" json:"admin"`
-	UI         UIConfig        `yaml:"ui" json:"ui"`
+	APIVersion  string            `yaml:"apiVersion" json:"apiVersion"`
+	Kind        string            `yaml:"kind" json:"kind"`
+	Defaults    DefaultsConfig    `yaml:"defaults" json:"defaults"`
+	Bootstrap   BootstrapConfig   `yaml:"bootstrap" json:"bootstrap"`
+	Server      ServerConfig      `yaml:"server" json:"server"`
+	Database    DatabaseConfig    `yaml:"database" json:"database"`
+	State       StateConfig       `yaml:"state" json:"state"`
+	Runtime     RuntimeConfig     `yaml:"runtime" json:"runtime"`
+	Query       QueryConfig       `yaml:"query" json:"query"`
+	TableData   TableDataConfig   `yaml:"tableData" json:"tableData"`
+	Storage     StorageConfig     `yaml:"storage" json:"storage"`
+	Load        LoadConfig        `yaml:"load" json:"load"`
+	Diagnostics DiagnosticsConfig `yaml:"diagnostics" json:"diagnostics"`
+	Logging     LoggingConfig     `yaml:"logging" json:"logging"`
+	Admin       AdminConfig       `yaml:"admin" json:"admin"`
+	UI          UIConfig          `yaml:"ui" json:"ui"`
 }
 
 type DefaultsConfig struct {
@@ -309,6 +310,18 @@ type LoggingConfig struct {
 	Format string `yaml:"format" json:"format"`
 }
 
+// DiagnosticsConfig bounds the local in-memory transport timeline separately
+// from exportable process logs.
+type DiagnosticsConfig struct {
+	Timeline TimelineConfig `yaml:"timeline" json:"timeline"`
+}
+
+type TimelineConfig struct {
+	MaxEvents       int   `yaml:"maxEvents" json:"maxEvents"`
+	MaxBytes        int64 `yaml:"maxBytes" json:"maxBytes"`
+	MaxPayloadBytes int64 `yaml:"maxPayloadBytes" json:"maxPayloadBytes"`
+}
+
 type AdminConfig struct {
 	Enabled           bool     `yaml:"enabled" json:"enabled"`
 	Address           string   `yaml:"address" json:"address"`
@@ -408,7 +421,8 @@ func Defaults() Config {
 				MaxChunkBytes: 128 << 20, SessionTTL: Duration(time.Hour),
 			},
 		},
-		Logging: LoggingConfig{Level: "info", Format: "json"},
+		Diagnostics: DiagnosticsConfig{Timeline: TimelineConfig{MaxEvents: 5_000, MaxBytes: 64 << 20, MaxPayloadBytes: 4 << 20}},
+		Logging:     LoggingConfig{Level: "info", Format: "json"},
 		Admin: AdminConfig{
 			Address: "127.0.0.1:9051", ReadHeaderTimeout: Duration(5 * time.Second), MaxStackBytes: 4 << 20,
 		},
@@ -582,6 +596,9 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_STORAGE_WRITE_ORPHAN_TTL", "storage.write.orphanTtl"},
 	{"BQEMU_STORAGE_WRITE_CLEANUP_INTERVAL", "storage.write.cleanupInterval"},
 	{"BQEMU_STORAGE_WRITE_PROTOCOL_MODEL_VERSION", "storage.write.protocolModelVersion"},
+	{"BQEMU_DIAGNOSTICS_TIMELINE_MAX_EVENTS", "diagnostics.timeline.maxEvents"},
+	{"BQEMU_DIAGNOSTICS_TIMELINE_MAX_BYTES", "diagnostics.timeline.maxBytes"},
+	{"BQEMU_DIAGNOSTICS_TIMELINE_MAX_PAYLOAD_BYTES", "diagnostics.timeline.maxPayloadBytes"},
 	{"BQEMU_LOG_LEVEL", "logging.level"}, {"BQEMU_LOG_FORMAT", "logging.format"},
 	{"BQEMU_ADMIN_ENABLED", "admin.enabled"},
 	{"BQEMU_ADMIN_ADDRESS", "admin.address"}, {"BQEMU_ADMIN_TOKEN_FILE", "admin.tokenFile"},
@@ -774,6 +791,12 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt64(&cfg.Load.MediaUpload.MaxChunkBytes)
 	case "load.mediaUpload.sessionTtl":
 		return setDuration(&cfg.Load.MediaUpload.SessionTTL)
+	case "diagnostics.timeline.maxEvents":
+		return setInt(&cfg.Diagnostics.Timeline.MaxEvents)
+	case "diagnostics.timeline.maxBytes":
+		return setInt64(&cfg.Diagnostics.Timeline.MaxBytes)
+	case "diagnostics.timeline.maxPayloadBytes":
+		return setInt64(&cfg.Diagnostics.Timeline.MaxPayloadBytes)
 	case "logging.level":
 		return setString(&cfg.Logging.Level)
 	case "logging.format":
@@ -963,6 +986,10 @@ func (cfg Config) Validate() error {
 	endpoint, err := url.Parse(cfg.Load.GCSEndpoint)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return errors.New("load.gcsEndpoint must be an absolute HTTP(S) URL")
+	}
+	if cfg.Diagnostics.Timeline.MaxEvents < 1 || cfg.Diagnostics.Timeline.MaxBytes < 1 ||
+		cfg.Diagnostics.Timeline.MaxPayloadBytes < 1 || cfg.Diagnostics.Timeline.MaxPayloadBytes > cfg.Diagnostics.Timeline.MaxBytes {
+		return errors.New("diagnostics.timeline requires positive limits and maxPayloadBytes <= maxBytes")
 	}
 	if !oneOf(cfg.Logging.Level, "debug", "info", "warn", "error") {
 		return fmt.Errorf("unsupported logging.level %q", cfg.Logging.Level)

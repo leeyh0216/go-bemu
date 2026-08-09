@@ -6,6 +6,7 @@ package observability
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 func UnaryServerInterceptor(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
@@ -23,6 +26,8 @@ func UnaryServerInterceptor(ctx context.Context, request any, info *grpc.UnarySe
 	attrs = append(attrs, grpcMetadataAttrs(ctx)...)
 	attrs = append(attrs, ProtoAttrs(request)...)
 	slog.InfoContext(ctx, "grpc request", attrs...)
+	timeline := ProcessTimeline()
+	recordProtobuf(timeline, grpcEvent(ctx, "grpc", info.FullMethod, "request", "", 0), request)
 	response, err := handler(ctx, request)
 	exitAttrs := append(ContextAttrs(ctx),
 		"event", "boundary.exit", "boundary", "grpc.unary", "rpc", info.FullMethod,
@@ -33,6 +38,7 @@ func UnaryServerInterceptor(ctx context.Context, request any, info *grpc.UnarySe
 		exitAttrs = append(exitAttrs, ErrorAttrs(err)...)
 	}
 	slog.InfoContext(ctx, "grpc response", exitAttrs...)
+	recordProtobuf(timeline, grpcEvent(ctx, "grpc", info.FullMethod, "response", status.Code(err).String(), time.Since(started).Nanoseconds(), ErrorAttrs(err)...), response)
 	return response, err
 }
 
@@ -46,6 +52,7 @@ func StreamServerInterceptor(service any, stream grpc.ServerStream, info *grpc.S
 	)
 	attrs = append(attrs, grpcMetadataAttrs(ctx)...)
 	slog.InfoContext(ctx, "grpc stream", attrs...)
+	ProcessTimeline().Record(grpcEvent(ctx, "grpc.stream", info.FullMethod, "open", "", 0), nil)
 	err := handler(service, wrapper)
 	exitAttrs := append(ContextAttrs(ctx),
 		"event", "boundary.exit", "boundary", "grpc.stream", "rpc", info.FullMethod,
@@ -57,6 +64,7 @@ func StreamServerInterceptor(service any, stream grpc.ServerStream, info *grpc.S
 		exitAttrs = append(exitAttrs, ErrorAttrs(err)...)
 	}
 	slog.InfoContext(ctx, "grpc stream", exitAttrs...)
+	ProcessTimeline().Record(grpcEvent(ctx, "grpc.stream", info.FullMethod, "close", status.Code(err).String(), time.Since(started).Nanoseconds(), ErrorAttrs(err)...), nil)
 	return err
 }
 
@@ -88,6 +96,11 @@ func (s *loggingServerStream) RecvMsg(message any) error {
 	logAttrs := append(ContextAttrs(s.ctx), "event", "grpc.stream.recv", "rpc", s.rpc, "success", err == nil)
 	logAttrs = append(logAttrs, attrs...)
 	slog.DebugContext(s.ctx, "grpc stream message", logAttrs...)
+	phase := "recv"
+	if err == io.EOF {
+		phase = "half_close"
+	}
+	recordProtobuf(ProcessTimeline(), grpcEvent(s.ctx, "grpc.stream", s.rpc, phase, status.Code(err).String(), 0, ErrorAttrs(err)...), message)
 	return err
 }
 
@@ -107,7 +120,49 @@ func (s *loggingServerStream) SendMsg(message any) error {
 	logAttrs := append(ContextAttrs(s.ctx), "event", "grpc.stream.send", "rpc", s.rpc, "success", err == nil)
 	logAttrs = append(logAttrs, attrs...)
 	slog.DebugContext(s.ctx, "grpc stream message", logAttrs...)
+	recordProtobuf(ProcessTimeline(), grpcEvent(s.ctx, "grpc.stream", s.rpc, "send", status.Code(err).String(), 0, ErrorAttrs(err)...), message)
 	return err
+}
+
+func grpcEvent(ctx context.Context, protocol, rpc, phase, outcome string, duration int64, errorAttrs ...any) DiagnosticEvent {
+	event := DiagnosticEvent{RequestID: valueFromContext(ctx, requestIDKey), TraceID: valueFromContext(ctx, traceIDKey), Protocol: protocol, OperationID: rpc, RPCMethod: rpc, Phase: phase, Status: outcome, DurationNanos: duration}
+	if incoming, ok := metadata.FromIncomingContext(ctx); ok {
+		event.Headers = make(map[string][]string, len(incoming))
+		for key, values := range incoming {
+			event.Headers[key] = append([]string(nil), values...)
+		}
+	}
+	if remote, ok := peer.FromContext(ctx); ok && remote.Addr != nil {
+		event.Peer = remote.Addr.String()
+	}
+	for index := 0; index+1 < len(errorAttrs); index += 2 {
+		if errorAttrs[index] == "error" {
+			event.Error, _ = errorAttrs[index+1].(string)
+		}
+	}
+	return event
+}
+
+func protobufPayload(message any) []byte {
+	protobuf, ok := message.(proto.Message)
+	if !ok || protobuf == nil {
+		return nil
+	}
+	payload, err := proto.Marshal(protobuf)
+	if err != nil {
+		return nil
+	}
+	return payload
+}
+
+func recordProtobuf(timeline *Timeline, event DiagnosticEvent, message any) {
+	protobuf, ok := message.(proto.Message)
+	if ok && protobuf != nil {
+		if jsonPayload, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(protobuf); err == nil {
+			event.PayloadJSON = string(jsonPayload)
+		}
+	}
+	timeline.Record(event, protobufPayload(message))
 }
 
 func grpcContext(ctx context.Context) context.Context {

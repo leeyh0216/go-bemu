@@ -68,6 +68,11 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	cfg := loaded.Config
+	observability.ConfigureTimeline(observability.TimelineConfig{
+		MaxEvents:       cfg.Diagnostics.Timeline.MaxEvents,
+		MaxBytes:        cfg.Diagnostics.Timeline.MaxBytes,
+		MaxPayloadBytes: cfg.Diagnostics.Timeline.MaxPayloadBytes,
+	})
 	logger, err := configureLogger(cfg.Logging, os.Stderr)
 	if err != nil {
 		return err

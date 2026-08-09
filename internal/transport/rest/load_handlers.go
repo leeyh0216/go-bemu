@@ -35,7 +35,7 @@ type combinedJobHandlers struct {
 // NewServerWithLoadJobs installs one jobs.insert dispatcher for query and load
 // configurations. NewServer remains the query-only compatibility constructor.
 func NewServerWithLoadJobs(catalog CatalogUseCases, queries QueryUseCases, loads LoadJobUseCases, readiness ports.HealthChecker, baseURL string, options ...Option) *Server {
-	defaults := []Option{withCombinedJobAPI(queries, loads), withCapabilitiesAPI(), withConsoleAPI()}
+	defaults := []Option{withCombinedJobAPI(queries, loads), withCapabilitiesAPI(), withConsoleAPI(), withDiagnosticsAPI()}
 	return NewCatalogServer(catalog, readiness, baseURL, append(defaults, options...)...)
 }
 

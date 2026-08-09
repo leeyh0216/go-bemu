@@ -119,7 +119,12 @@ func registerOperationRoutes(mux *http.ServeMux, bindings []routeBinding) {
 		if !ok {
 			panic("REST route has no generated operation specification: " + binding.operationID)
 		}
-		mux.Handle(spec.Pattern(), binding.handler)
+		operationID := binding.operationID
+		handler := binding.handler
+		mux.Handle(spec.Pattern(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			observability.SetHTTPOperation(w, operationID)
+			handler.ServeHTTP(w, r)
+		}))
 	}
 }
 

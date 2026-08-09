@@ -30,7 +30,7 @@ type queryHandlers struct {
 }
 
 func NewServer(catalog CatalogUseCases, queries QueryUseCases, readiness ports.HealthChecker, baseURL string, options ...Option) *Server {
-	defaults := []Option{withQueryAPI(queries), withCapabilitiesAPI(), withConsoleAPI()}
+	defaults := []Option{withQueryAPI(queries), withCapabilitiesAPI(), withConsoleAPI(), withDiagnosticsAPI()}
 	return NewCatalogServer(catalog, readiness, baseURL, append(defaults, options...)...)
 }
 
