@@ -406,12 +406,13 @@
                   "pytest:tests/integration/python/test_media_upload_contract.py"
                 ],
                 "testEvidence": [
+                  "python:tests/integration/python/test_media_upload_contract.py:test_dataframe_media_upload_preserves_explicit_parquet_schema",
                   "python:tests/integration/python/test_media_upload_contract.py:test_dataframe_writers_use_bounded_parquet_media_upload"
                 ],
                 "operationExpectations": [
                   {
                     "operationId": "bigquery.jobs.get",
-                    "min": 5,
+                    "min": 6,
                     "max": 0,
                     "after": [
                       "bigquery.jobs.insert.upload"
@@ -419,7 +420,7 @@
                   },
                   {
                     "operationId": "bigquery.jobs.insert.upload",
-                    "min": 5,
+                    "min": 6,
                     "max": 0,
                     "after": []
                   },
