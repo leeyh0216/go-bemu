@@ -148,7 +148,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	server := httptest.NewServer(NewServerWithLoadJobs(catalog, queries, loads, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 
-	body := `{"jobReference":{"jobId":"avro-gap","location":"US"},"configuration":{"load":{"sourceUris":["file:///does-not-exist.avro"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"AVRO"}}}`
+	body := `{"jobReference":{"jobId":"avro-gap","location":"US"},"configuration":{"load":{"sourceUris":["gs://test-bucket/does-not-exist.avro"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"AVRO"}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", body, http.StatusOK)
 	job := waitForRESTLoad(t, server.URL, "avro-gap")
 	errorResult := job["status"].(map[string]any)["errorResult"].(map[string]any)
@@ -159,7 +159,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 		t.Fatalf("failed load exposed successful outputBytes: %#v", job)
 	}
 
-	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["file:///does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enableListInference":true}}}}`
+	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["gs://test-bucket/does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enableListInference":true}}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", activeOption, http.StatusOK)
 	job = waitForRESTLoad(t, server.URL, "parquet-option-gap")
 	errorResult = job["status"].(map[string]any)["errorResult"].(map[string]any)
@@ -167,17 +167,17 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 		t.Fatalf("active Parquet option did not remain an explicit gap: %#v", job)
 	}
 
-	malformedOption := `{"configuration":{"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":[]}}}`
+	malformedOption := `{"configuration":{"load":{"sourceUris":["gs://test-bucket/x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":[]}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", malformedOption, http.StatusBadRequest)
 
-	both := `{"configuration":{"query":{"query":"SELECT 1"},"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
+	both := `{"configuration":{"query":{"query":"SELECT 1"},"load":{"sourceUris":["gs://test-bucket/x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", both, http.StatusBadRequest)
 
 	for _, schema := range []string{
 		`{"fields":[{"name":"location","type":"GEOGRAPHY"}]}`,
 		`{"fields":[{"name":"amount","type":"BIGNUMERIC","precision":"39","scale":"1"}]}`,
 	} {
-		unsupportedSchema := `{"jobReference":{"jobId":"unsupported-schema","location":"US"},"configuration":{"load":{"sourceUris":["file:///must-not-be-read.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","schema":` + schema + `}}}`
+		unsupportedSchema := `{"jobReference":{"jobId":"unsupported-schema","location":"US"},"configuration":{"load":{"sourceUris":["gs://test-bucket/must-not-be-read.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","schema":` + schema + `}}}`
 		restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", unsupportedSchema, http.StatusNotImplemented)
 	}
 }
