@@ -166,7 +166,10 @@ The public load path resolves bounded `gs://` list/get/media requests through
 a fake-GCS-compatible JSON adapter, downloads objects to a private temporary
 workspace, validates Parquet columns and casts against an existing table, and
 applies `WRITE_APPEND`, `WRITE_EMPTY`, or `WRITE_TRUNCATE` in one DuckDB
-transaction. With `CREATE_IF_NEEDED`, an explicit request schema creates the
+transaction. Multiple URI and wildcard results are sorted by URI and
+deduplicated. Every immutable plan binds the numeric GCS generation, optional
+ETag, and byte size; conflicting overlap metadata and generation drift fail
+before the loader runs. With `CREATE_IF_NEEDED`, an explicit request schema creates the
 physical destination and inserts its rows in that same transaction; catalog
 metadata is published only after commit, with physical compensation on a
 publication failure. When the request omits a schema, scalar and STRUCT fields

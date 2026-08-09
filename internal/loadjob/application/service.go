@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -585,17 +586,22 @@ func (s *Service) resolveObjects(ctx context.Context, patterns []string) ([]port
 			return nil, finalErr
 		}
 		for _, object := range matches {
-			if object.Size < 0 {
-				finalErr = fmt.Errorf("%w: object metadata has a negative size", domain.ErrInvalid)
+			if err := validateResolvedObject(pattern, object); err != nil {
+				finalErr = err
 				return nil, finalErr
 			}
 			if object.Size > s.config.MaxObjectBytes {
 				finalErr = fmt.Errorf("%w: an object exceeds the configured size limit", domain.ErrPrecondition)
 				return nil, finalErr
 			}
-			if existing, ok := seen[object.URI]; ok && objectIdentityChanged(existing, object) {
-				finalErr = fmt.Errorf("%w: overlapping source patterns resolved different object generations", domain.ErrPrecondition)
-				return nil, finalErr
+			if existing, ok := seen[object.URI]; ok {
+				if objectIdentityChanged(existing, object) {
+					finalErr = fmt.Errorf("%w: overlapping source patterns resolved different immutable object metadata", domain.ErrPrecondition)
+					return nil, finalErr
+				}
+				if existing.ETag != "" || object.ETag == "" {
+					continue
+				}
 			}
 			seen[object.URI] = object
 			if len(seen) > s.config.MaxObjects {
@@ -616,6 +622,31 @@ func (s *Service) resolveObjects(ctx context.Context, patterns []string) ([]port
 	}
 	sort.Slice(objects, func(i, j int) bool { return objects[i].URI < objects[j].URI })
 	return objects, nil
+}
+
+func validateResolvedObject(pattern string, object ports.ObjectInfo) error {
+	requested, err := domain.ParseGCSObjectURI(pattern)
+	if err != nil {
+		return err
+	}
+	resolved, err := domain.ParseGCSObjectURI(object.URI)
+	if err != nil {
+		return fmt.Errorf("%w: object store returned an invalid source URI", domain.ErrPrecondition)
+	}
+	if requested.Bucket() != resolved.Bucket() {
+		return fmt.Errorf("%w: object store returned an object from a different bucket", domain.ErrPrecondition)
+	}
+	matched, err := pathpkg.Match(requested.ObjectName(), resolved.ObjectName())
+	if err != nil || !matched {
+		return fmt.Errorf("%w: object store returned an object outside the source pattern", domain.ErrPrecondition)
+	}
+	if object.Size < 0 {
+		return fmt.Errorf("%w: object metadata has a negative size", domain.ErrInvalid)
+	}
+	if _, err := strconv.ParseUint(object.Generation, 10, 64); err != nil {
+		return fmt.Errorf("%w: immutable object generation is required", domain.ErrPrecondition)
+	}
+	return nil
 }
 
 func (s *Service) download(ctx context.Context, job *domain.Job, objects []ports.ObjectInfo, workspace, objectSetFingerprint string) ([]ports.LocalObject, int64, error) {
@@ -774,7 +805,7 @@ func objectFingerprint(object ports.ObjectInfo) string {
 }
 
 func objectIdentityChanged(left, right ports.ObjectInfo) bool {
-	if left.Generation != "" && right.Generation != "" && left.Generation != right.Generation {
+	if left.Generation != right.Generation || left.Size != right.Size {
 		return true
 	}
 	return left.ETag != "" && right.ETag != "" && left.ETag != right.ETag

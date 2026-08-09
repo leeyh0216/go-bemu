@@ -94,6 +94,8 @@ func (g *GCSJSON) Get(ctx context.Context, rawURI string) (loadports.ObjectInfo,
 	}
 	if resource.Name == "" {
 		resource.Name = object
+	} else if resource.Name != object {
+		return loadports.ObjectInfo{}, fmt.Errorf("%w: object metadata name differs from the requested object", domain.ErrPrecondition)
 	}
 	return objectInfo(bucket, resource)
 }
@@ -179,6 +181,10 @@ func (g *GCSJSON) Open(ctx context.Context, object loadports.ObjectInfo) (io.Rea
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, g.readHTTPStatusError(response)
+	}
+	if servedGeneration := response.Header.Get("x-goog-generation"); servedGeneration != "" && servedGeneration != object.Generation {
+		_ = response.Body.Close()
+		return nil, fmt.Errorf("%w: downloaded object generation differs from resolved metadata", domain.ErrPrecondition)
 	}
 	return response.Body, nil
 }
@@ -270,6 +276,12 @@ func objectInfo(bucket string, resource gcsObjectResource) (loadports.ObjectInfo
 	size, err := strconv.ParseInt(resource.Size, 10, 64)
 	if err != nil || size < 0 {
 		return loadports.ObjectInfo{}, fmt.Errorf("%w: object metadata size is invalid", domain.ErrInvalid)
+	}
+	if resource.Name == "" {
+		return loadports.ObjectInfo{}, fmt.Errorf("%w: object metadata name is required", domain.ErrPrecondition)
+	}
+	if _, err := strconv.ParseUint(resource.Generation, 10, 64); err != nil {
+		return loadports.ObjectInfo{}, fmt.Errorf("%w: object metadata generation is required", domain.ErrPrecondition)
 	}
 	return loadports.ObjectInfo{
 		URI:  (&url.URL{Scheme: "gs", Host: bucket, Path: "/" + resource.Name}).String(),

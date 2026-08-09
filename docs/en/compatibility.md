@@ -304,7 +304,7 @@ service.
 | --- | --- |
 | accepted load source URI | `gs://` only; local paths and other schemes fail before job persistence |
 | fake GCS service | Required by the default Compose project; the binary connects to the configured GCS-compatible JSON endpoint |
-| GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
+| GCS/fake-GCS JSON adapter | Bounded list/get/media, multiple source URIs, and non-recursive URI glob expansion. Resolved objects require a numeric generation; overlapping patterns are deduplicated by URI and conflicting generation/size metadata fails before download. Media reads select and verify the planned generation. |
 | Parquet load into a table | Partial; existing destinations and `CREATE_IF_NEEDED` with either an explicit or inferred schema support scalar, nested `STRUCT`, and repeated `ARRAY` values. LIST inference requires `parquetOptions.enableListInference=true`. A validated typed staging table is completed before a new destination or write disposition mutates storage. Decimal narrowing still fails before destination mutation with `load.decimal-rounding.unsupported-v1`. |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |

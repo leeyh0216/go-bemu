@@ -39,10 +39,15 @@ func (r *trackingJobRepository) CreateOrGet(ctx context.Context, job *domain.Job
 }
 
 type testObjectStore struct {
-	mu         sync.Mutex
-	objects    map[string][]byte
-	sizeOffset int64
-	opens      int
+	mu             sync.Mutex
+	objects        map[string][]byte
+	sizeOffset     int64
+	generation     string
+	listGeneration string
+	etag           string
+	listETag       string
+	opens          int
+	opened         []ports.ObjectInfo
 }
 
 func (s *testObjectStore) Get(_ context.Context, uri string) (ports.ObjectInfo, error) {
@@ -50,14 +55,21 @@ func (s *testObjectStore) Get(_ context.Context, uri string) (ports.ObjectInfo, 
 	if !ok {
 		return ports.ObjectInfo{}, domain.ErrNotFound
 	}
-	return ports.ObjectInfo{URI: uri, Size: int64(len(payload)) + s.sizeOffset}, nil
+	return ports.ObjectInfo{
+		URI: uri, Size: int64(len(payload)) + s.sizeOffset,
+		Generation: defaultString(s.generation, "1"), ETag: s.etag,
+	}, nil
 }
 func (s *testObjectStore) List(_ context.Context, pattern string) ([]ports.ObjectInfo, error) {
 	result := make([]ports.ObjectInfo, 0)
 	for uri, payload := range s.objects {
 		matched, _ := filepath.Match(pattern, uri)
 		if matched {
-			result = append(result, ports.ObjectInfo{URI: uri, Size: int64(len(payload)) + s.sizeOffset})
+			result = append(result, ports.ObjectInfo{
+				URI: uri, Size: int64(len(payload)) + s.sizeOffset,
+				Generation: defaultString(s.listGeneration, defaultString(s.generation, "1")),
+				ETag:       defaultString(s.listETag, s.etag),
+			})
 		}
 	}
 	return result, nil
@@ -65,8 +77,16 @@ func (s *testObjectStore) List(_ context.Context, pattern string) ([]ports.Objec
 func (s *testObjectStore) Open(_ context.Context, object ports.ObjectInfo) (io.ReadCloser, error) {
 	s.mu.Lock()
 	s.opens++
+	s.opened = append(s.opened, object)
 	s.mu.Unlock()
 	return io.NopCloser(bytes.NewReader(s.objects[object.URI])), nil
+}
+
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 type testCatalog struct {
@@ -886,6 +906,57 @@ func TestServiceRejectsDownloadedSizeDriftBeforeLoaderExecution(t *testing.T) {
 	loader.mu.Unlock()
 	if opens != 1 || executions != 0 {
 		t.Fatalf("size drift boundary: opens=%d executions=%d", opens, executions)
+	}
+}
+
+func TestServiceDeduplicatesOverlappingSourcesAndBindsGenerations(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{
+		"gs://test-bucket/a.parquet": []byte("a"),
+		"gs://test-bucket/b.parquet": []byte("bb"),
+	}, generation: "7", etag: "stable"}
+	loader := &testLoader{}
+	service := newTestService(t, objects, loader, time.Second)
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.SourceURIs = []string{"gs://test-bucket/a.parquet", "gs://test-bucket/*.parquet"}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-overlap"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error != nil || job.Statistics.InputFiles != 2 || job.Statistics.InputBytes != 3 {
+		t.Fatalf("job = %+v", job)
+	}
+	objects.mu.Lock()
+	opened := append([]ports.ObjectInfo(nil), objects.opened...)
+	objects.mu.Unlock()
+	if len(opened) != 2 || opened[0].URI != "gs://test-bucket/a.parquet" ||
+		opened[1].URI != "gs://test-bucket/b.parquet" || opened[0].Generation != "7" || opened[1].Generation != "7" {
+		t.Fatalf("opened immutable objects = %#v", opened)
+	}
+}
+
+func TestServiceRejectsOverlappingGenerationDriftBeforeDownload(t *testing.T) {
+	objects := &testObjectStore{
+		objects:    map[string][]byte{"gs://test-bucket/a.parquet": []byte("a")},
+		generation: "7", listGeneration: "8",
+	}
+	loader := &testLoader{}
+	service := newTestService(t, objects, loader, time.Second)
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.SourceURIs = []string{"gs://test-bucket/a.parquet", "gs://test-bucket/*.parquet"}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-generation-drift"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "conditionNotMet" {
+		t.Fatalf("job = %+v", job)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	if opens != 0 || loader.calls != 0 || loader.loadPlanCalls != 0 {
+		t.Fatalf("generation drift crossed download/engine boundary: opens=%d loads=%d plans=%d", opens, loader.calls, loader.loadPlanCalls)
 	}
 }
 
