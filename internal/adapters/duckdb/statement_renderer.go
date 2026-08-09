@@ -440,6 +440,14 @@ func (visitor *duckDBTopLevelVisitor) VisitDropTable(*queryast.DropTableStatemen
 	return unsupportedDuckDBLowering("statement", queryast.StatementDropTable)
 }
 
+func (visitor *duckDBTopLevelVisitor) VisitCreateView(*queryast.CreateViewStatement) error {
+	return unsupportedDuckDBLowering("statement", queryast.StatementCreateView)
+}
+
+func (visitor *duckDBTopLevelVisitor) VisitDropView(*queryast.DropViewStatement) error {
+	return unsupportedDuckDBLowering("statement", queryast.StatementDropView)
+}
+
 func (visitor *duckDBTopLevelVisitor) VisitAlterTable(*queryast.AlterTableStatement) error {
 	return unsupportedDuckDBLowering("statement", queryast.StatementAlterTable)
 }

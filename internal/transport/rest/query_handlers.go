@@ -36,6 +36,7 @@ func NewServer(catalog CatalogUseCases, queries QueryUseCases, readiness ports.H
 
 func withQueryAPI(queries QueryUseCases) Option {
 	return func(server *Server) {
+		server.queries = queries
 		handlers := &queryHandlers{queries: queries}
 		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
 			return []routeBinding{

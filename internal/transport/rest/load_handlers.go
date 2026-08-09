@@ -41,6 +41,7 @@ func NewServerWithLoadJobs(catalog CatalogUseCases, queries QueryUseCases, loads
 
 func withCombinedJobAPI(queries QueryUseCases, loads LoadJobUseCases) Option {
 	return func(server *Server) {
+		server.queries = queries
 		handlers := &combinedJobHandlers{query: &queryHandlers{queries: queries}, loads: loads}
 		server.operationRoutes = append(server.operationRoutes, func() []routeBinding {
 			routes := []routeBinding{

@@ -77,6 +77,7 @@ type preparedQuery struct {
 	analysis      ports.QueryAnalysis
 	analysisError error
 	statementKind string
+	sourceSQL     string
 }
 
 // WithQueryDefaultLocation supplies the configured location when callers omit
@@ -514,7 +515,7 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job, prepar
 	}
 	configuration := job.Configuration
 	if configuration.Destination == nil {
-		return s.executeAnalyzedStatement(ctx, prepared.statement, job.Reference.JobID)
+		return s.executeAnalyzedStatement(ctx, prepared.statement, prepared.sourceSQL, job.Reference.JobID)
 	}
 	if s.statementMaterializer == nil || s.destinations == nil {
 		return domain.QueryResult{}, fmt.Errorf("%w: query destination requires analyzed statement materializer and destination catalog ports", domain.ErrPrecondition)
@@ -541,6 +542,9 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job, prepar
 	}
 	if !destinationExists && configuration.CreateDisposition == domain.CreateNever {
 		return domain.QueryResult{}, fmt.Errorf("%w: destination table does not exist and createDisposition is CREATE_NEVER", domain.ErrNotFound)
+	}
+	if destinationExists && existing.Type != "TABLE" {
+		return domain.QueryResult{}, fmt.Errorf("%w: destination must be a physical table", domain.ErrInvalid)
 	}
 
 	materialized, err := s.statementMaterializer.MaterializeAnalyzedStatement(ctx, prepared.statement, ports.StatementMaterializationRequest{

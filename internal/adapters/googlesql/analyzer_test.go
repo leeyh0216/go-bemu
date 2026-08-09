@@ -123,6 +123,8 @@ func TestGatewayUsesOneEntrypointForInsertAndDDL(t *testing.T) {
 		{name: "alter", sql: "ALTER TABLE analytics.events ADD COLUMN extra STRING", kind: queryast.StatementAlterTable, target: true},
 		{name: "alter type", sql: "ALTER TABLE analytics.events ALTER COLUMN id SET DATA TYPE STRING", kind: queryast.StatementAlterTable, target: true},
 		{name: "drop", sql: "DROP TABLE analytics.events", kind: queryast.StatementDropTable, target: true},
+		{name: "create view", sql: "CREATE VIEW analytics.event_ids AS SELECT id FROM analytics.events", kind: queryast.StatementCreateView, target: true},
+		{name: "drop view", sql: "DROP VIEW analytics.events", kind: queryast.StatementDropView, target: true},
 		{name: "truncate", sql: "TRUNCATE TABLE analytics.events", kind: queryast.StatementTruncateTable, target: true},
 	}
 	for _, test := range tests {

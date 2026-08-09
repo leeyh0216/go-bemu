@@ -29,6 +29,7 @@ var requiredSchemaObjects = map[string]string{
 	"bqemu_table_fields":                      "table",
 	"bqemu_table_fields_sibling_ordinal":      "index",
 	"bqemu_table_fields_parent_insert":        "trigger",
+	"bqemu_views":                             "table",
 	"bqemu_query_jobs":                        "table",
 	"bqemu_query_jobs_list":                   "index",
 	"bqemu_load_jobs":                         "table",

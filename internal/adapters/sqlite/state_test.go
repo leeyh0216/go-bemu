@@ -2,8 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"reflect"
@@ -29,6 +31,7 @@ func TestCatalogMetadataSurvivesRepositoryRestart(t *testing.T) {
 	var _ ports.ProjectRepository = catalog
 	var _ ports.DatasetRepository = catalog
 	var _ ports.TableRepository = catalog
+	var _ ports.ViewRepository = catalog.(ports.ViewRepository)
 
 	project, dataset, table := completeCatalogMetadata()
 	if err := catalog.CreateProject(ctx, project); err != nil {
@@ -38,6 +41,18 @@ func TestCatalogMetadataSurvivesRepositoryRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := catalog.CreateTable(ctx, table); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := sha256.Sum256([]byte("SELECT id FROM event_log"))
+	view := domain.View{
+		ProjectID: project.ID, DatasetID: dataset.ID, ID: "event_ids",
+		Query: "SELECT id FROM event_log", Schema: []domain.Field{{Name: "id", Type: "INT64", Mode: "NULLABLE"}},
+		Dependencies:        []domain.TableReference{{ProjectID: project.ID, DatasetID: dataset.ID, TableID: table.ID}},
+		AnalysisFingerprint: fmt.Sprintf("%x", fingerprint), Location: dataset.Location,
+		CreatedAt: table.CreatedAt, UpdatedAt: table.UpdatedAt,
+	}
+	view = domain.CloneView(view)
+	if err := catalog.(ports.ViewRepository).CreateView(ctx, view); err != nil {
 		t.Fatal(err)
 	}
 	if err := repositories.Check(ctx); err != nil {
@@ -66,6 +81,10 @@ func TestCatalogMetadataSurvivesRepositoryRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	loadedView, err := restartedCatalog.(ports.ViewRepository).GetView(ctx, view.ProjectID, view.DatasetID, view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(loadedProject, project) {
 		t.Fatalf("project round-trip mismatch:\n got: %#v\nwant: %#v", loadedProject, project)
 	}
@@ -74,6 +93,9 @@ func TestCatalogMetadataSurvivesRepositoryRestart(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loadedTable, table) {
 		t.Fatalf("table round-trip mismatch:\n got: %#v\nwant: %#v", loadedTable, table)
+	}
+	if !reflect.DeepEqual(loadedView, view) {
+		t.Fatalf("view round-trip mismatch:\n got: %#v\nwant: %#v", loadedView, view)
 	}
 
 	assertDecimalIdentity(t, loadedTable.Schema)
@@ -287,7 +309,7 @@ WHERE type = 'table' AND name = 'bqemu_schema_migrations'`).Scan(&legacyCount); 
 FROM bqemu_goose_db_version WHERE is_applied = 1`).Scan(&maximumVersion); err != nil {
 		t.Fatal(err)
 	}
-	if legacyCount != 0 || maximumVersion != 6 {
+	if legacyCount != 0 || maximumVersion != 7 {
 		t.Fatalf("legacy import retained ledger=%d with Goose version=%d", legacyCount, maximumVersion)
 	}
 }
@@ -333,6 +355,7 @@ func TestEmbeddedGooseMigrationsAreVersionedSQLResources(t *testing.T) {
 		"migrations/00004_storage_write_ledger.sql",
 		"migrations/00005_load_mutation_journal.sql",
 		"migrations/00006_drop_legacy_migration_ledger.sql",
+		"migrations/00007_logical_views.sql",
 	}
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("migration resource paths = %#v, want %#v", paths, want)

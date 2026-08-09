@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -18,6 +19,7 @@ type catalogRepository struct {
 }
 
 var _ ports.CatalogRepository = (*catalogRepository)(nil)
+var _ ports.ViewRepository = (*catalogRepository)(nil)
 
 type queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -348,6 +350,191 @@ func (r *catalogRepository) DeleteTable(ctx context.Context, projectID, datasetI
 WHERE project_id = ? AND dataset_id = ? AND table_id = ?`, projectID, datasetID, tableID)
 		return err
 	})
+}
+
+const viewSelect = `SELECT project_id, dataset_id, view_id, friendly_name, description,
+    labels_json, query_sql, use_legacy_sql, schema_json, dependencies_json,
+    analysis_fingerprint, location, created_at, updated_at FROM bqemu_views`
+
+func (r *catalogRepository) CreateView(ctx context.Context, view domain.View) error {
+	if err := view.Validate(); err != nil {
+		return err
+	}
+	return r.write(ctx, "create view", func(tx *sql.Tx) error {
+		parentExists, err := datasetExists(ctx, tx, view.ProjectID, view.DatasetID)
+		if err != nil {
+			return err
+		}
+		if !parentExists {
+			return fmt.Errorf("%w: dataset %s/%s", domain.ErrNotFound, view.ProjectID, view.DatasetID)
+		}
+		exists, err := viewExists(ctx, tx, view.ProjectID, view.DatasetID, view.ID)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("%w: view %s/%s/%s", domain.ErrConflict, view.ProjectID, view.DatasetID, view.ID)
+		}
+		return insertView(ctx, tx, view)
+	})
+}
+
+func (r *catalogRepository) ReplaceView(ctx context.Context, view domain.View) error {
+	if err := view.Validate(); err != nil {
+		return err
+	}
+	return r.write(ctx, "replace view", func(tx *sql.Tx) error {
+		exists, err := viewExists(ctx, tx, view.ProjectID, view.DatasetID, view.ID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("%w: view %s/%s/%s", domain.ErrNotFound, view.ProjectID, view.DatasetID, view.ID)
+		}
+		labels, schema, dependencies, err := encodeView(view)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE bqemu_views SET
+    friendly_name = ?, description = ?, labels_json = ?, query_sql = ?, use_legacy_sql = ?,
+    schema_json = ?, dependencies_json = ?, analysis_fingerprint = ?, location = ?,
+    created_at = ?, updated_at = ?
+WHERE project_id = ? AND dataset_id = ? AND view_id = ?`,
+			view.FriendlyName, view.Description, labels, view.Query, boolInt(view.UseLegacySQL),
+			schema, dependencies, view.AnalysisFingerprint, view.Location, encodeTime(view.CreatedAt), encodeTime(view.UpdatedAt),
+			view.ProjectID, view.DatasetID, view.ID)
+		return err
+	})
+}
+
+func (r *catalogRepository) GetView(ctx context.Context, projectID, datasetID, viewID string) (domain.View, error) {
+	view, err := scanView(r.db.QueryRowContext(ctx, viewSelect+`
+WHERE project_id = ? AND dataset_id = ? AND view_id = ?`, projectID, datasetID, viewID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.View{}, fmt.Errorf("%w: view %s/%s/%s", domain.ErrNotFound, projectID, datasetID, viewID)
+	}
+	if err != nil {
+		return domain.View{}, repositoryError(ctx, "get view", err)
+	}
+	return view, nil
+}
+
+func (r *catalogRepository) ListViews(ctx context.Context, projectID, datasetID string) ([]domain.View, error) {
+	exists, err := datasetExists(ctx, r.db, projectID, datasetID)
+	if err != nil {
+		return nil, repositoryError(ctx, "list views", err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("%w: dataset %s/%s", domain.ErrNotFound, projectID, datasetID)
+	}
+	rows, err := r.db.QueryContext(ctx, viewSelect+`
+WHERE project_id = ? AND dataset_id = ? ORDER BY view_id`, projectID, datasetID)
+	if err != nil {
+		return nil, repositoryError(ctx, "list views", err)
+	}
+	defer rows.Close()
+	views := make([]domain.View, 0)
+	for rows.Next() {
+		view, scanErr := scanView(rows)
+		if scanErr != nil {
+			return nil, repositoryError(ctx, "list views", scanErr)
+		}
+		views = append(views, view)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, repositoryError(ctx, "list views", err)
+	}
+	return views, nil
+}
+
+func (r *catalogRepository) DeleteView(ctx context.Context, projectID, datasetID, viewID string) error {
+	return r.write(ctx, "delete view", func(tx *sql.Tx) error {
+		exists, err := viewExists(ctx, tx, projectID, datasetID, viewID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("%w: view %s/%s/%s", domain.ErrNotFound, projectID, datasetID, viewID)
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM bqemu_views
+WHERE project_id = ? AND dataset_id = ? AND view_id = ?`, projectID, datasetID, viewID)
+		return err
+	})
+}
+
+func viewExists(ctx context.Context, q queryer, projectID, datasetID, viewID string) (bool, error) {
+	var value int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM bqemu_views
+WHERE project_id = ? AND dataset_id = ? AND view_id = ?`, projectID, datasetID, viewID).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func insertView(ctx context.Context, tx *sql.Tx, view domain.View) error {
+	labels, schema, dependencies, err := encodeView(view)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO bqemu_views
+    (project_id, dataset_id, view_id, friendly_name, description, labels_json, query_sql,
+     use_legacy_sql, schema_json, dependencies_json, analysis_fingerprint, location, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		view.ProjectID, view.DatasetID, view.ID, view.FriendlyName, view.Description, labels, view.Query,
+		boolInt(view.UseLegacySQL), schema, dependencies, view.AnalysisFingerprint, view.Location,
+		encodeTime(view.CreatedAt), encodeTime(view.UpdatedAt))
+	return err
+}
+
+func encodeView(view domain.View) (labels, schema, dependencies string, err error) {
+	labelsBytes, err := json.Marshal(view.Labels)
+	if err != nil {
+		return "", "", "", err
+	}
+	schemaBytes, err := json.Marshal(view.Schema)
+	if err != nil {
+		return "", "", "", err
+	}
+	dependenciesBytes, err := json.Marshal(view.Dependencies)
+	if err != nil {
+		return "", "", "", err
+	}
+	return string(labelsBytes), string(schemaBytes), string(dependenciesBytes), nil
+}
+
+func scanView(scanner rowScanner) (domain.View, error) {
+	var view domain.View
+	var labels, schema, dependencies, createdAt, updatedAt string
+	var legacy int
+	if err := scanner.Scan(&view.ProjectID, &view.DatasetID, &view.ID, &view.FriendlyName, &view.Description,
+		&labels, &view.Query, &legacy, &schema, &dependencies, &view.AnalysisFingerprint, &view.Location, &createdAt, &updatedAt); err != nil {
+		return domain.View{}, err
+	}
+	if legacy != 0 && legacy != 1 {
+		return domain.View{}, errors.New("view legacy SQL presence marker is inconsistent")
+	}
+	view.UseLegacySQL = legacy == 1
+	if err := json.Unmarshal([]byte(labels), &view.Labels); err != nil {
+		return domain.View{}, err
+	}
+	if err := json.Unmarshal([]byte(schema), &view.Schema); err != nil {
+		return domain.View{}, err
+	}
+	if err := json.Unmarshal([]byte(dependencies), &view.Dependencies); err != nil {
+		return domain.View{}, err
+	}
+	var err error
+	if view.CreatedAt, err = decodeTime(createdAt); err != nil {
+		return domain.View{}, err
+	}
+	if view.UpdatedAt, err = decodeTime(updatedAt); err != nil {
+		return domain.View{}, err
+	}
+	if err := view.Validate(); err != nil {
+		return domain.View{}, err
+	}
+	return domain.CloneView(view), nil
 }
 
 func (r *catalogRepository) write(ctx context.Context, operation string, mutate func(*sql.Tx) error) error {

@@ -296,7 +296,7 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 func validQueryStatementType(value string) bool {
 	switch value {
 	case "SCRIPT", "DECLARE", "SET", "SELECT", "INSERT", "UPDATE", "DELETE", "MERGE",
-		"CREATE_TABLE", "DROP_TABLE", "ALTER_TABLE", "TRUNCATE_TABLE":
+		"CREATE_TABLE", "DROP_TABLE", "ALTER_TABLE", "TRUNCATE_TABLE", "CREATE_VIEW", "DROP_VIEW":
 		return true
 	default:
 		return false

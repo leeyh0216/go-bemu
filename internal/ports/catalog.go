@@ -5,6 +5,7 @@ import (
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/engine"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
 // ProjectRepository is the project metadata boundary for the catalog context.
@@ -34,6 +35,23 @@ type TableRepository interface {
 	GetTable(context.Context, string, string, string) (domain.Table, error)
 	ListTables(context.Context, string, string) ([]domain.Table, error)
 	DeleteTable(context.Context, string, string, string) error
+}
+
+// ViewRepository keeps logical view definitions separate from physical table
+// metadata. Implementations must return owned values at every boundary.
+type ViewRepository interface {
+	CreateView(context.Context, domain.View) error
+	ReplaceView(context.Context, domain.View) error
+	GetView(context.Context, string, string, string) (domain.View, error)
+	ListViews(context.Context, string, string) ([]domain.View, error)
+	DeleteView(context.Context, string, string, string) error
+}
+
+// LogicalViewStorage materializes an already analyzed logical view without
+// receiving GoogleSQL source text or parser handles.
+type LogicalViewStorage interface {
+	CreateLogicalView(context.Context, semantic.Statement, domain.TableReference, bool) error
+	DropLogicalView(context.Context, domain.TableReference) error
 }
 
 // CatalogRepository composes the narrow catalog metadata ports. Adapters may

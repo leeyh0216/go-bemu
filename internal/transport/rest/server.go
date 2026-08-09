@@ -39,6 +39,12 @@ type CatalogUseCases interface {
 	DeleteTable(context.Context, string, string, string) error
 }
 
+// ViewMetadataUseCases is deliberately separate from CatalogUseCases so the
+// established table-only catalog surface remains source-compatible.
+type ViewMetadataUseCases interface {
+	GetView(context.Context, string, string, string) (domain.View, error)
+}
+
 var _ CatalogUseCases = (*application.CatalogService)(nil)
 
 type operationRouteRegistration func() []routeBinding
@@ -50,6 +56,7 @@ type routeBinding struct {
 }
 type Server struct {
 	catalog             CatalogUseCases
+	queries             QueryUseCases
 	readiness           ports.HealthChecker
 	baseURL             string
 	requestBodyLimits   requestBodyLimits

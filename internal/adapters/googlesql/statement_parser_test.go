@@ -102,6 +102,9 @@ func TestStatementParserMapsPublicGoogleSQLCorpus(t *testing.T) {
 			kind: queryast.StatementCreateTable,
 		},
 		{name: "drop table", sql: "DROP TABLE `test-project.analytics.events`", kind: queryast.StatementDropTable},
+		{name: "create view", sql: "CREATE VIEW `test-project.analytics.event_ids` AS SELECT id FROM analytics.events", kind: queryast.StatementCreateView},
+		{name: "replace view", sql: "CREATE OR REPLACE VIEW `test-project.analytics.event_ids` AS SELECT id FROM analytics.events", kind: queryast.StatementCreateView},
+		{name: "drop view", sql: "DROP VIEW `test-project.analytics.event_ids`", kind: queryast.StatementDropView},
 		{name: "alter table", sql: "ALTER TABLE `test-project.analytics.events` ADD COLUMN amount NUMERIC(38, 9)", kind: queryast.StatementAlterTable},
 		{name: "truncate table", sql: "TRUNCATE TABLE `test-project.analytics.events`", kind: queryast.StatementTruncateTable},
 	}

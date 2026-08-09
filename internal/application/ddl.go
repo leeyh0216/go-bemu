@@ -52,6 +52,9 @@ func (s *CatalogService) executeDDLCreateTable(
 	correlationID string,
 ) error {
 	reference := command.Table()
+	if err := s.ensureNoViewAtTableReference(ctx, reference.ProjectID, reference.DatasetID, reference.TableID); err != nil {
+		return err
+	}
 	dataset, err := s.catalog.GetDataset(ctx, reference.ProjectID, reference.DatasetID)
 	if err != nil {
 		return err
@@ -116,6 +119,12 @@ func (s *CatalogService) executeDDLDropTable(
 	if err != nil {
 		return err
 	}
+	if table.Type != "TABLE" {
+		return fmt.Errorf("%w: DROP TABLE requires a physical table", domain.ErrInvalid)
+	}
+	if err := s.ensureNoDependentViews(ctx, reference); err != nil {
+		return err
+	}
 	expected := ddlMetadataGeneration(table.UpdatedAt)
 	mutation, err := engine.NewTableMutation(engine.TableMutationDescriptor{
 		Kind: engine.TableMutationDrop, Target: reference, BeforeSchema: table.Schema,
@@ -142,6 +151,12 @@ func (s *CatalogService) executeDDLAlterTable(
 	reference := command.Table()
 	before, err := s.getTableLocked(ctx, reference.ProjectID, reference.DatasetID, reference.TableID)
 	if err != nil {
+		return err
+	}
+	if before.Type != "TABLE" {
+		return fmt.Errorf("%w: ALTER TABLE requires a physical table", domain.ErrInvalid)
+	}
+	if err := s.ensureNoDependentViews(ctx, reference); err != nil {
 		return err
 	}
 	after := before
@@ -245,6 +260,9 @@ func (s *CatalogService) executeDDLTruncateTable(
 	before, err := s.getTableLocked(ctx, reference.ProjectID, reference.DatasetID, reference.TableID)
 	if err != nil {
 		return err
+	}
+	if before.Type != "TABLE" {
+		return fmt.Errorf("%w: TRUNCATE TABLE requires a physical table", domain.ErrInvalid)
 	}
 	after := before
 	after.UpdatedAt = nextDDLMetadataTime(before.UpdatedAt, s.clock.Now())

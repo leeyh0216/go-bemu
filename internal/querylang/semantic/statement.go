@@ -446,7 +446,8 @@ func validStatementKind(kind queryast.StatementKind) bool {
 	case queryast.StatementScript, queryast.StatementDeclare, queryast.StatementSet,
 		queryast.StatementSelect, queryast.StatementInsert, queryast.StatementUpdate,
 		queryast.StatementDelete, queryast.StatementMerge, queryast.StatementCreateTable,
-		queryast.StatementAlterTable, queryast.StatementDropTable, queryast.StatementTruncateTable:
+		queryast.StatementAlterTable, queryast.StatementDropTable, queryast.StatementTruncateTable,
+		queryast.StatementCreateView, queryast.StatementDropView:
 		return true
 	default:
 		return false
@@ -697,6 +698,10 @@ func mutationTargetKeys(statement queryast.Statement) ([]queryast.NodeKey, error
 	case *queryast.CreateTableStatement:
 		return []queryast.NodeKey{value.Target().NodeKey()}, nil
 	case *queryast.DropTableStatement:
+		return []queryast.NodeKey{value.Target().NodeKey()}, nil
+	case *queryast.CreateViewStatement:
+		return []queryast.NodeKey{value.Target().NodeKey()}, nil
+	case *queryast.DropViewStatement:
 		return []queryast.NodeKey{value.Target().NodeKey()}, nil
 	case *queryast.AlterTableStatement:
 		return []queryast.NodeKey{value.Target().NodeKey()}, nil

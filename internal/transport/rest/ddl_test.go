@@ -93,6 +93,33 @@ func TestGoogleSQLDDLMutatesCatalogAndStorageThroughPublicREST(t *testing.T) {
 	if data["totalRows"] != "1" {
 		t.Fatalf("ALTER data = %#v", data)
 	}
+	if result := query("CREATE VIEW `test-project.analytics.event_messages` AS SELECT message, convertible FROM analytics.events", http.StatusOK); result["errors"] != nil {
+		t.Fatalf("CREATE VIEW failed: %#v", result)
+	}
+	if result := query("CREATE OR REPLACE VIEW `test-project.analytics.event_messages_copy` AS SELECT message, convertible FROM analytics.event_messages", http.StatusOK); result["errors"] != nil {
+		t.Fatalf("nested CREATE VIEW failed: %#v", result)
+	}
+	if result := query("SELECT message, convertible FROM analytics.event_messages_copy", http.StatusOK); result["errors"] != nil || len(result["rows"].([]any)) != 1 {
+		t.Fatalf("nested VIEW query failed: %#v", result)
+	}
+	if result := query("CREATE OR REPLACE VIEW `test-project.analytics.event_messages` AS SELECT message, convertible FROM analytics.event_messages_copy", http.StatusOK); result["errors"] == nil {
+		t.Fatalf("view cycle unexpectedly succeeded: %#v", result)
+	}
+	if result := query("SELECT message, convertible FROM analytics.event_messages", http.StatusOK); result["errors"] != nil || len(result["rows"].([]any)) != 1 {
+		t.Fatalf("cycle rejection changed existing view: %#v", result)
+	}
+	createdView := request("/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+      "tableReference":{"tableId":"event_ids"},
+      "view":{"query":"SELECT id FROM analytics.events","useLegacySql":false}
+    }`, http.StatusOK)
+	if createdView["type"] != "VIEW" || createdView["view"].(map[string]any)["query"] != "SELECT id FROM analytics.events" {
+		t.Fatalf("tables.insert VIEW = %#v", createdView)
+	}
+	if result := query("SELECT id FROM analytics.event_ids", http.StatusOK); result["errors"] != nil || len(result["rows"].([]any)) != 1 {
+		t.Fatalf("REST VIEW query failed: %#v", result)
+	}
+	staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodGet,
+		"/bigquery/v2/projects/test-project/datasets/analytics/tables/event_ids/data?maxResults=10", "", http.StatusNotImplemented)
 
 	query("TRUNCATE TABLE `test-project.analytics.events`", http.StatusOK)
 	data = staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodGet,
@@ -104,6 +131,10 @@ func TestGoogleSQLDDLMutatesCatalogAndStorageThroughPublicREST(t *testing.T) {
 	query("CREATE TABLE `test-project.analytics.hidden` (id INT64); DROP TABLE `test-project.analytics.hidden`", http.StatusNotImplemented)
 	staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodGet,
 		"/bigquery/v2/projects/test-project/datasets/analytics/tables/hidden", "", http.StatusNotFound)
+	query("DROP VIEW `test-project.analytics.event_messages_copy`", http.StatusOK)
+	staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodDelete,
+		"/bigquery/v2/projects/test-project/datasets/analytics/tables/event_ids", "", http.StatusNoContent)
+	query("DROP VIEW `test-project.analytics.event_messages`", http.StatusOK)
 	query("DROP TABLE `test-project.analytics.events`", http.StatusOK)
 	staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodGet,
 		"/bigquery/v2/projects/test-project/datasets/analytics/tables/events", "", http.StatusNotFound)

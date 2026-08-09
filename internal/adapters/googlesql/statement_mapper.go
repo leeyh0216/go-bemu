@@ -24,6 +24,8 @@ func (mapper *statementMapper) mapStatement(node gsql.ASTStatementNode) (queryas
 		return mapper.mapMergeStatement(statement)
 	case *gsql.ASTCreateTableStatement:
 		return mapper.mapCreateTableStatement(statement)
+	case *gsql.ASTCreateViewStatement:
+		return mapper.mapCreateViewStatement(statement)
 	case *gsql.ASTDropStatement:
 		return mapper.mapDropStatement(statement)
 	case *gsql.ASTAlterTableStatement:

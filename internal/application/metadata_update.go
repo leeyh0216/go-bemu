@@ -111,6 +111,9 @@ func (s *CatalogService) UpdateTable(ctx context.Context, projectID, datasetID, 
 		if err != nil {
 			return domain.Table{}, err
 		}
+		if err := s.ensureNoDependentViews(ctx, domain.TableReference{ProjectID: projectID, DatasetID: datasetID, TableID: tableID}); err != nil {
+			return domain.Table{}, err
+		}
 		table.Schema = copyFields(patch.Schema.Value)
 	}
 	if err := table.Validate(); err != nil {
