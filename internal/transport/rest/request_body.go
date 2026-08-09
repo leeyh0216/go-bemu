@@ -90,9 +90,13 @@ func WithRequestBodyLimits(maxCompressedBytes, maxUncompressedBytes int64) Optio
 	}
 }
 
-func requestBodyMiddleware(limits requestBodyLimits, next http.Handler) http.Handler {
+func requestBodyMiddleware(limits requestBodyLimits, mediaUploadLimits *requestBodyLimits, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), requestBodyLimitsContextKey{}, limits)
+		requestLimits, captureBody := limits, true
+		if mediaUploadLimits != nil && isMediaUploadRequest(r) {
+			requestLimits, captureBody = *mediaUploadLimits, false
+		}
+		ctx := context.WithValue(r.Context(), requestBodyLimitsContextKey{}, requestLimits)
 		outcome := &requestBodyOutcome{}
 		ctx = context.WithValue(ctx, requestBodyOutcomeContextKey{}, outcome)
 		r = r.WithContext(ctx)
@@ -105,7 +109,8 @@ func requestBodyMiddleware(limits requestBodyLimits, next http.Handler) http.Han
 		}
 
 		compressed := newDigestingReader(r.Body)
-		compressedBody := http.MaxBytesReader(w, &readerCloser{Reader: compressed, Closer: r.Body}, limits.maxCompressedBytes)
+		compressed.capture = captureBody
+		compressedBody := http.MaxBytesReader(w, &readerCloser{Reader: compressed, Closer: r.Body}, requestLimits.maxCompressedBytes)
 		var decoded io.ReadCloser
 		switch encoding {
 		case "gzip":
@@ -130,7 +135,8 @@ func requestBodyMiddleware(limits requestBodyLimits, next http.Handler) http.Han
 		}
 
 		uncompressed := newDigestingReader(decoded)
-		limitedBody := http.MaxBytesReader(w, &readerCloser{Reader: uncompressed, Closer: decoded}, limits.maxUncompressedBytes)
+		uncompressed.capture = captureBody
+		limitedBody := http.MaxBytesReader(w, &readerCloser{Reader: uncompressed, Closer: decoded}, requestLimits.maxUncompressedBytes)
 		r.Body = &outcomeReadCloser{ReadCloser: limitedBody, outcome: outcome, encoding: encoding}
 		defer func() {
 			_ = r.Body.Close()
@@ -138,6 +144,11 @@ func requestBodyMiddleware(limits requestBodyLimits, next http.Handler) http.Han
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isMediaUploadRequest(r *http.Request) bool {
+	path := r.URL.Path
+	return strings.HasPrefix(path, "/upload/bigquery/v2/projects/") || strings.HasPrefix(path, "/resumable/upload/bigquery/v2/projects/")
 }
 
 func parseRequestContentEncoding(values []string) (string, error) {
@@ -170,6 +181,7 @@ type digestingReader struct {
 	hash    hash.Hash
 	payload bytes.Buffer
 	bytes   int64
+	capture bool
 }
 
 func newDigestingReader(reader io.Reader) *digestingReader {
@@ -181,7 +193,9 @@ func (r *digestingReader) Read(payload []byte) (int, error) {
 	if n > 0 {
 		r.bytes += int64(n)
 		_, _ = r.hash.Write(payload[:n])
-		_, _ = r.payload.Write(payload[:n])
+		if r.capture {
+			_, _ = r.payload.Write(payload[:n])
+		}
 	}
 	return n, err
 }
@@ -245,10 +259,16 @@ func logRequestBodyBoundary(ctx context.Context, encoding string, compressed, un
 		"operation", "rest.request_body.decode", "encoding", encoding, "outcome", outcome,
 	)
 	if compressed != nil {
-		attrs = append(attrs, "compressed_body", compressed.payload.String(), "compressed_bytes_read", compressed.bytes, "compressed_digest", compressed.digest())
+		attrs = append(attrs, "compressed_bytes_read", compressed.bytes, "compressed_digest", compressed.digest())
+		if compressed.capture {
+			attrs = append(attrs, "compressed_body", compressed.payload.String())
+		}
 	}
 	if uncompressed != nil {
-		attrs = append(attrs, "uncompressed_body", uncompressed.payload.String(), "uncompressed_bytes_read", uncompressed.bytes, "uncompressed_digest", uncompressed.digest())
+		attrs = append(attrs, "uncompressed_bytes_read", uncompressed.bytes, "uncompressed_digest", uncompressed.digest())
+		if uncompressed.capture {
+			attrs = append(attrs, "uncompressed_body", uncompressed.payload.String())
+		}
 	}
 	if err != nil {
 		var protocolError *httpProtocolError

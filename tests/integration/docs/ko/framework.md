@@ -45,6 +45,43 @@ go run ./tests/integration/cmd/integrationctl matrix \
   --root . --family spark --lane required --execution public
 ```
 
+<!-- section: add-behavior -->
+## 동작을 추가하는 순서
+
+1. 외부 프로세스 테스트와 literal operation annotation을 먼저 추가합니다.
+2. `consumers.yaml`에 scenario selector를 추가하거나 범위를 좁힙니다. selector는
+   자료형이 있는 runner가 실행할 test file 또는 command entrypoint를 가리킵니다.
+3. runner가 비교해야 할 순서와 cardinality만 기록합니다. marker는 operation이
+   관련 있다는 사실만 말하며, 몇 번 호출되고 무엇 뒤에 와야 하는지는 expectation을
+   통해서만 알 수 있습니다.
+4. scenario에 `operationIds`나 `testEvidence`를 작성하지 않습니다.
+   `trafficSource: {kind: annotations}`이면 compiler가 선택한 annotation에서 둘 다
+   파생합니다. `runner-evidence`는 `load:` selector만 사용할 수 있고 reason이 필요하며,
+   operation은 명시한 ordering expectation에서 파생합니다.
+5. 새로운 고정 executable/runtime/provenance 조합에만 release case YAML을 추가합니다.
+   wire contract가 같다면 runner adapter와 scenario set을 재사용합니다.
+6. `make integration-contract-generate`를 실행해 생성된 claim과 정규 matrix를 검토하고,
+   `make integration-contract-check`와 runner unit test를 실행합니다.
+
+load 전용 흐름은 `load:` adapter가 선택하고 구조화한 runtime evidence로 operation 순서를
+증명합니다. 선택 test function으로 직접 표현하지 못하는 예외는 `trafficSource`에
+명시하며, 다른 scenario kind에는 사용할 수 없습니다.
+
+dataframe media upload는 `runner-evidence` 예외가 아니라 선택된 Python test입니다. CI는
+`tests/integration/python/dataframe-requirements.lock`을 설치하며, 로컬에서 같은 환경을
+준비할 때는 `make python-dataframe-setup`을 사용합니다. 이 test는 fake-GCS runtime을
+소유하고 외부 client는 BQEMU 공개 endpoint로만 연결하며 multipart와 resumable Parquet
+upload를 모두 확인합니다. dataframe helper를 검증할 때는 호출 전에 같은 endpoint-aware
+client로 destination table을 만들어야 합니다. 누락된 table을 생성하는 과정에서 helper가
+기본 endpoint client를 새로 만들 수 있기 때문입니다.
+계약은 공개 client의 생성과, 미리 만든 destination에 대한 helper append/replace를
+검증합니다.
+
+REST setup 또는 assertion query에는 phase-aware harness helper를 사용합니다. helper가
+request log에 `setup` 또는 `assertion`을 기록하고 runner는 그 응답을 호출자 wire
+claim에서 제외합니다. 새 harness helper를 추가하기 전에 이 mechanism을 확장합니다.
+comparator를 통과시키기 위해 harness 전용 operation을 `contract_case(...)`에 넣지 마세요.
+
 <!-- section: extending -->
 ## 사례 추가 또는 변경
 

@@ -78,6 +78,8 @@ compatibilityProfiles:
     scenarioIds: [spark-pyspark-public-edge, spark-scala-public-edge]
   - id: google-cloud-bigquery-python-indirect-load-v1
     scenarioIds: [python-indirect-load]
+  - id: google-cloud-bigquery-python-media-upload-v1
+    scenarioIds: [python-dataframe-media-upload]
   - id: bq-cli-indirect-load-v1
     scenarioIds: [bq-indirect-load]
   - id: spark-bigquery-connector-indirect-load-v1
@@ -227,6 +229,53 @@ scenarios:
         min: 1
         max: 0
         after: [bigquery.jobs.insert]
+  - id: python-dataframe-media-upload
+    selectors: [pytest:tests/integration/python/test_media_upload_contract.py]
+    testEvidence:
+      - python:tests/integration/python/test_media_upload_contract.py:test_dataframe_writers_use_bounded_parquet_media_upload
+      - python:tests/integration/python/test_media_upload_contract.py:test_dataframe_media_upload_preserves_explicit_parquet_schema
+    operationIds:
+      - bigquery.datasets.insert
+      - bigquery.datasets.delete
+      - bigquery.tables.insert
+      - bigquery.tables.get
+      - bigquery.tabledata.list
+      - bigquery.jobs.insert.upload
+      - bigquery.jobs.insert.upload-resume
+      - bigquery.jobs.get
+    operationExpectations:
+      - operationId: bigquery.datasets.insert
+        min: 1
+        max: 1
+        after: []
+      - operationId: bigquery.datasets.delete
+        min: 1
+        max: 1
+        after: []
+      - operationId: bigquery.tables.insert
+        min: 1
+        max: 1
+        after: []
+      - operationId: bigquery.tables.get
+        min: 0
+        max: 0
+        after: []
+      - operationId: bigquery.tabledata.list
+        min: 3
+        max: 3
+        after: [bigquery.jobs.insert.upload]
+      - operationId: bigquery.jobs.insert.upload
+        min: 6
+        max: 0
+        after: []
+      - operationId: bigquery.jobs.insert.upload-resume
+        min: 1
+        max: 0
+        after: [bigquery.jobs.insert.upload]
+      - operationId: bigquery.jobs.get
+        min: 6
+        max: 0
+        after: [bigquery.jobs.insert.upload]
   - id: bq-indirect-load
     selectors: [load:bq]
     testEvidence: []
@@ -319,6 +368,8 @@ scenarioSets:
     scenarioIds: [spark-scala-public-edge]
   - id: python-indirect-load-contract
     scenarioIds: [python-indirect-load]
+  - id: python-media-upload-contract
+    scenarioIds: [python-dataframe-media-upload]
   - id: bq-indirect-load-contract
     scenarioIds: [bq-indirect-load]
   - id: spark-pyspark-indirect-load-contract

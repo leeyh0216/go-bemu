@@ -77,6 +77,63 @@ type tableFieldSchema struct {
 	Fields       []tableFieldSchema  `json:"fields,omitempty"`
 }
 
+// UnmarshalJSON accepts both representations emitted by BigQuery REST clients
+// for TableFieldSchema's int64 decimal metadata. Responses retain the official
+// string representation through the fields' json ",string" tags above.
+func (field *tableFieldSchema) UnmarshalJSON(payload []byte) error {
+	var wire struct {
+		Name         string              `json:"name"`
+		Type         string              `json:"type"`
+		Mode         string              `json:"mode,omitempty"`
+		Description  string              `json:"description,omitempty"`
+		Precision    json.RawMessage     `json:"precision"`
+		Scale        json.RawMessage     `json:"scale"`
+		RoundingMode domain.RoundingMode `json:"roundingMode,omitempty"`
+		Fields       []tableFieldSchema  `json:"fields,omitempty"`
+	}
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return err
+	}
+	precision, err := parseTableFieldInt64(wire.Precision)
+	if err != nil {
+		return fmt.Errorf("precision: %w", err)
+	}
+	scale, err := parseTableFieldInt64(wire.Scale)
+	if err != nil {
+		return fmt.Errorf("scale: %w", err)
+	}
+	*field = tableFieldSchema{
+		Name:         wire.Name,
+		Type:         wire.Type,
+		Mode:         wire.Mode,
+		Description:  wire.Description,
+		Precision:    precision,
+		Scale:        scale,
+		RoundingMode: wire.RoundingMode,
+		Fields:       wire.Fields,
+	}
+	return nil
+}
+
+func parseTableFieldInt64(payload json.RawMessage) (*int64, error) {
+	if len(payload) == 0 || string(payload) == "null" {
+		return nil, nil
+	}
+	var numeric int64
+	if err := json.Unmarshal(payload, &numeric); err == nil {
+		return &numeric, nil
+	}
+	var text string
+	if err := json.Unmarshal(payload, &text); err != nil {
+		return nil, fmt.Errorf("must be an int64 JSON number or decimal string")
+	}
+	parsed, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("must be an int64 decimal string: %w", err)
+	}
+	return &parsed, nil
+}
+
 type tableSchema struct {
 	Fields []tableFieldSchema `json:"fields"`
 }

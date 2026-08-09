@@ -307,6 +307,31 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	}
 }
 
+func TestDecodeLoadConfigurationAcceptsNumericDecimalSchemaParameters(t *testing.T) {
+	configuration, err := decodeLoadConfiguration([]byte(`{
+		"sourceUris":["gs://load-bucket/events.parquet"],
+		"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},
+		"sourceFormat":"PARQUET",
+		"schema":{"fields":[
+			{"name":"amount","type":"NUMERIC","precision":20,"scale":4},
+			{"name":"nested","type":"STRUCT","fields":[
+				{"name":"total","type":"BIGNUMERIC","precision":"38","scale":"18"}
+			]}
+		]}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	amount := configuration.Schema[0]
+	if amount.Precision == nil || *amount.Precision != 20 || amount.Scale == nil || *amount.Scale != 4 {
+		t.Fatalf("numeric decimal parameters = %#v", amount)
+	}
+	nested := configuration.Schema[1].Fields[0]
+	if nested.Precision == nil || *nested.Precision != 38 || nested.Scale == nil || *nested.Scale != 18 {
+		t.Fatalf("string decimal parameters = %#v", nested)
+	}
+}
+
 func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
 	accepted := map[string]string{
 		"absent":                 `{}`,

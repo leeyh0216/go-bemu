@@ -26,3 +26,7 @@ executions:
     runnerAdapter: python-indirect-load-v1
     compatibilityProfile: google-cloud-bigquery-python-indirect-load-v1
     scenarioSet: python-indirect-load-contract
+  - id: media-upload
+    runnerAdapter: python-pytest-v1
+    compatibilityProfile: google-cloud-bigquery-python-media-upload-v1
+    scenarioSet: python-media-upload-contract

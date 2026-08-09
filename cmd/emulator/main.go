@@ -156,12 +156,13 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure query service: %w", err)
 	}
-	loadService, err := composeLoadJobs(
+	loadRuntime, err := composeLoadJobs(
 		cfg, state.loadJobs, state.loadMutations, catalogService, loader, clock, system.IDGenerator{},
 	)
 	if err != nil {
 		return err
 	}
+	loadService := loadRuntime.service
 	if err := loadService.Recover(ctx); err != nil {
 		return fmt.Errorf("recover load mutations: %w", err)
 	}
@@ -192,11 +193,20 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}()
 
-	restOptions := make([]rest.Option, 0, 3)
+	restOptions := make([]rest.Option, 0, 4)
 	restOptions = append(restOptions, rest.WithRequestBodyLimits(
 		cfg.Server.HTTP.MaxCompressedRequestBytes, cfg.Server.HTTP.MaxUncompressedRequestBytes,
 	))
 	restOptions = append(restOptions, rest.WithTableDataAPI(catalogService))
+	mediaUploads, err := rest.NewMediaUploadSupport(loadRuntime.media, rest.MediaUploadConfig{
+		Bucket: cfg.Load.MediaUpload.Bucket, MaxSessions: cfg.Load.MediaUpload.MaxSessions,
+		MaxBytes: cfg.Load.MediaUpload.MaxBytes, MaxChunkBytes: cfg.Load.MediaUpload.MaxChunkBytes,
+		SessionTTL: cfg.Load.MediaUpload.SessionTTL.Value(),
+	})
+	if err != nil {
+		return fmt.Errorf("configure media uploads: %w", err)
+	}
+	restOptions = append(restOptions, rest.WithMediaUpload(mediaUploads))
 	if cfg.UI.Enabled {
 		restOptions = append(restOptions, rest.WithConsoleDirectory(cfg.UI.Directory))
 	}

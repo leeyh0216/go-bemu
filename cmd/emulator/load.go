@@ -18,6 +18,11 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/transport/rest"
 )
 
+type loadRuntime struct {
+	service *loadapplication.Service
+	media   *objectstore.GCSJSON
+}
+
 func composeLoadJobs(
 	cfg config.Config,
 	jobs loadports.JobRepository,
@@ -26,7 +31,7 @@ func composeLoadJobs(
 	loader loadports.Loader,
 	clock loadports.Clock,
 	ids loadports.IDGenerator,
-) (*loadapplication.Service, error) {
+) (loadRuntime, error) {
 	gcs, err := objectstore.NewGCSJSON(objectstore.GCSJSONConfig{
 		Endpoint: cfg.Load.GCSEndpoint,
 		Client: &http.Client{
@@ -36,7 +41,7 @@ func composeLoadJobs(
 		MaxListedObjects: cfg.Load.MaxListedObjects,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("configure load GCS adapter: %w", err)
+		return loadRuntime{}, fmt.Errorf("configure load GCS adapter: %w", err)
 	}
 	loadConfig := loadapplication.Config{
 		DefaultLocation: cfg.Defaults.Location, OperationTimeout: cfg.Load.OperationTimeout.Value(),
@@ -48,7 +53,7 @@ func composeLoadJobs(
 		loader, clock, ids, loadConfig, loadapplication.WithMutationJournal(mutations),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("configure load job service: %w", err)
+		return loadRuntime{}, fmt.Errorf("configure load job service: %w", err)
 	}
-	return service, nil
+	return loadRuntime{service: service, media: gcs}, nil
 }

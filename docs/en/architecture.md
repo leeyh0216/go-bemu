@@ -278,9 +278,9 @@ that every flow succeeds.
    byte/row/session bounds.
 4. Add Storage Write ArrowRows, BUFFERED/explicit COMMITTED streams, FlushRows,
    default expressions, CDC, and durable pending recovery.
-5. Extend the load port with missing-table create, schema-update options,
-   non-Parquet formats, and multipart/resumable transfer while retaining bounded
-   staging.
+5. Make incomplete media-upload sessions restart-durable and add bounded
+   cleanup for their GCS staging objects. Parquet remains the only supported
+   load format.
 6. Add an optional bounded background expiration sweep while preserving the
    current restart-durable metadata, physical-first cleanup, and retryable
    metadata deletion.

@@ -687,7 +687,10 @@ func TestParquetLoadPreservesNumericAndBigNumericPhysicalDecimals(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	parquet := createLoadParquet(t, warehouse, "SELECT 123.4500::DECIMAL(20,4) AS numeric_value, 12345678901234567890.123456789012345678::DECIMAL(38,18) AS bignumeric_value")
+	// The public Python client serializes an explicitly constrained NUMERIC
+	// through its wider Parquet decimal representation. Its value is still
+	// lossless for NUMERIC(20,4), whereas a rounding value is rejected below.
+	parquet := createLoadParquet(t, warehouse, "SELECT 123.450000000::DECIMAL(38,9) AS numeric_value, 12345678901234567890.123456789012345678::DECIMAL(38,18) AS bignumeric_value")
 	result, err := executeTestLoad(ctx, warehouse, testLoadRequest{
 		Destination: loadDomain.Table{
 			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},

@@ -24,6 +24,15 @@ type ObjectStore interface {
 	Open(context.Context, ObjectInfo) (io.ReadCloser, error)
 }
 
+// MediaObjectWriter persists one completed direct-upload payload as an
+// immutable GCS object. The public load-job model continues to accept only
+// gs:// source URIs; HTTP upload handling uses this port before it submits the
+// ordinary load job.
+type MediaObjectWriter interface {
+	Upload(context.Context, string, string, string, io.Reader, int64) (ObjectInfo, error)
+	Delete(context.Context, ObjectInfo) error
+}
+
 type TableCatalog interface {
 	GetTable(context.Context, domain.TableReference) (domain.Table, error)
 	GetDataset(context.Context, string, string) (domain.Dataset, error)

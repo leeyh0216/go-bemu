@@ -192,10 +192,11 @@ to `_PARTITIONTIME`. Decorated `WRITE_EMPTY` and `WRITE_TRUNCATE` inspect or
 replace only that partition in the destination transaction. Partition expiration sweeping and physical
 reclustering are not yet implemented. Local paths and non-GCS URI schemes are rejected before job
 persistence. The separate `autodetect` request flag, query-job schema updates,
-Avro/ORC/CSV/NDJSON, and
-multipart/resumable download are unsupported. Job metadata and idempotency
-identity persist in SQLite; downloaded objects and temporary staging workspaces
-do not.
+and Avro/ORC/CSV/NDJSON are unsupported. Multipart and resumable Parquet media
+uploads first become immutable objects in the configured GCS-compatible service,
+then execute through this same load plan. Incomplete resumable sessions are
+process-local and do not survive a restart. Job metadata and idempotency identity
+persist in SQLite; downloaded objects and temporary staging workspaces do not.
 
 <!-- section: rest-jobs -->
 ## REST Jobs, Polling, and Paging

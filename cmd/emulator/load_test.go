@@ -22,10 +22,10 @@ func TestComposeLoadJobsAlwaysUsesConfiguredGCSAdapter(t *testing.T) {
 	cfg := config.Defaults()
 
 	jobs := loadapplication.NewMemoryJobRepository()
-	service, err := composeLoadJobs(
+	runtime, err := composeLoadJobs(
 		cfg, jobs, loadapplication.NewMemoryMutationJournal(), catalog, warehouse, clock, system.IDGenerator{},
 	)
-	if err != nil || service == nil {
-		t.Fatalf("load composition = %#v, %v", service, err)
+	if err != nil || runtime.service == nil || runtime.media == nil {
+		t.Fatalf("load composition = %#v, %v", runtime, err)
 	}
 }

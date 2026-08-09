@@ -104,6 +104,11 @@ lists matching objects when necessary, downloads object media, and commits the
 load. Direct Storage Write does not use GCS. Tested uploader configurations are
 kept in the [integration test guides](../../tests/integration/docs/en/index.md).
 
+Parquet is the only supported load format. A caller can also use the BigQuery
+media-upload endpoints; BQEMU stores completed media in the configured fake
+GCS service and then submits the same `gs://` Parquet load path. Media sessions
+are process-local and restart-invalid.
+
 <!-- section: tls -->
 ## Enable TLS And Credential Fixtures
 

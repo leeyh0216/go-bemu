@@ -46,10 +46,16 @@ load:
   gcsEndpoint: http://127.0.0.1:1
   operationTimeout: "45s"
   maxObjects: 16
-  maxObjectBytes: 1048576
-  maxTotalBytes: 4194304
+  maxObjectBytes: 268435456
+  maxTotalBytes: 268435456
   maxMetadataBytes: 1048576
   maxListedObjects: 32
+  mediaUpload:
+    bucket: bqemu-media
+    maxSessions: 8
+    maxBytes: 268435456
+    maxChunkBytes: 134217728
+    sessionTtl: "1h"
 
 logging:
   level: info

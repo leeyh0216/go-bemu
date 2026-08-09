@@ -103,6 +103,10 @@ curl --fail http://localhost:4443/storage/v1/b
 직접 Storage Write는 GCS를 사용하지 않습니다. 검증된 업로더 설정은 [통합 테스트
 안내](../../tests/integration/docs/ko/index.md)에서 관리합니다.
 
+Parquet만 지원하는 load 형식입니다. 호출자는 BigQuery media-upload endpoint도 사용할 수
+있습니다. BQEMU는 완료된 media를 설정한 fake GCS 서비스에 저장한 뒤 같은 `gs://` Parquet
+load 경로를 제출합니다. media 세션은 프로세스 로컬이므로 재시작 뒤에는 유효하지 않습니다.
+
 <!-- section: tls -->
 ## TLS와 인증 파일 사용하기
 

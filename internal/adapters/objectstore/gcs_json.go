@@ -189,6 +189,125 @@ func (g *GCSJSON) Open(ctx context.Context, object loadports.ObjectInfo) (io.Rea
 	return response.Body, nil
 }
 
+// Upload writes a completed direct-upload payload into the configured GCS
+// endpoint. The caller owns admission and byte limits; this adapter guarantees
+// that the load application receives an immutable gs:// object identity rather
+// than a host-local path.
+func (g *GCSJSON) Upload(ctx context.Context, bucket, object, contentType string, payload io.Reader, size int64) (loadports.ObjectInfo, error) {
+	if err := validateMediaObjectTarget(bucket, object, contentType, payload, size); err != nil {
+		return loadports.ObjectInfo{}, err
+	}
+	if err := g.ensureBucket(ctx, bucket); err != nil {
+		return loadports.ObjectInfo{}, err
+	}
+	values := url.Values{}
+	values.Set("uploadType", "media")
+	values.Set("name", object)
+	// Media object names are generated once per upload. A create-only
+	// precondition turns a collision into a deterministic failure instead of
+	// silently replacing bytes that a load job is about to resolve.
+	values.Set("ifGenerationMatch", "0")
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint+"/upload/storage/v1/b/"+url.PathEscape(bucket)+"/o?"+values.Encode(), payload)
+	if err != nil {
+		return loadports.ObjectInfo{}, fmt.Errorf("construct object media upload request: %w", err)
+	}
+	request.Header.Set("Content-Type", contentType)
+	request.ContentLength = size
+	response, err := g.client.Do(request)
+	if err != nil {
+		return loadports.ObjectInfo{}, fmt.Errorf("upload object media: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return loadports.ObjectInfo{}, g.readHTTPStatusError(response)
+	}
+	var resource gcsObjectResource
+	if err := g.readJSONResponse(response, &resource); err != nil {
+		return loadports.ObjectInfo{}, err
+	}
+	if resource.Name == "" {
+		resource.Name = object
+	}
+	if resource.Name != object {
+		return loadports.ObjectInfo{}, fmt.Errorf("%w: uploaded object metadata name differs from the requested object", domain.ErrPrecondition)
+	}
+	return objectInfo(bucket, resource)
+}
+
+func (g *GCSJSON) Delete(ctx context.Context, object loadports.ObjectInfo) error {
+	bucket, name, err := parseGCSURI(object.URI)
+	if err != nil {
+		return err
+	}
+	values := url.Values{}
+	if object.Generation != "" {
+		values.Set("generation", object.Generation)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, g.objectURL(bucket, name, values), nil)
+	if err != nil {
+		return fmt.Errorf("construct object delete request: %w", err)
+	}
+	response, err := g.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("delete object: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return g.readHTTPStatusError(response)
+	}
+	return nil
+}
+
+func validateMediaObjectTarget(bucket, object, contentType string, payload io.Reader, size int64) error {
+	if strings.TrimSpace(bucket) == "" || strings.TrimSpace(object) == "" || strings.TrimSpace(contentType) == "" || payload == nil || size < 0 {
+		return fmt.Errorf("%w: media object target and payload are required", domain.ErrInvalid)
+	}
+	if _, _, err := parseGCSURI("gs://" + bucket + "/" + object); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (g *GCSJSON) ensureBucket(ctx context.Context, bucket string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, g.endpoint+"/storage/v1/b/"+url.PathEscape(bucket), nil)
+	if err != nil {
+		return fmt.Errorf("construct bucket metadata request: %w", err)
+	}
+	response, err := g.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("request bucket metadata: %w", err)
+	}
+	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+		_ = response.Body.Close()
+		return nil
+	}
+	if response.StatusCode != http.StatusNotFound {
+		return g.readHTTPStatusError(response)
+	}
+	_ = response.Body.Close()
+	body, err := json.Marshal(map[string]string{"name": bucket})
+	if err != nil {
+		return fmt.Errorf("encode bucket create request: %w", err)
+	}
+	request, err = http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint+"/storage/v1/b", strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("construct bucket create request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err = g.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("create bucket: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+		return nil
+	}
+	if response.StatusCode == http.StatusConflict {
+		return nil
+	}
+	return g.readHTTPStatusError(response)
+}
+
 func (g *GCSJSON) getJSON(ctx context.Context, requestURL string, target any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
@@ -202,6 +321,10 @@ func (g *GCSJSON) getJSON(ctx context.Context, requestURL string, target any) er
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return g.readHTTPStatusError(response)
 	}
+	return g.readJSONResponse(response, target)
+}
+
+func (g *GCSJSON) readJSONResponse(response *http.Response, target any) error {
 	limited := io.LimitReader(response.Body, g.maxMetadataBytes+1)
 	payload, err := io.ReadAll(limited)
 	if err != nil {
@@ -298,3 +421,4 @@ func literalPrefix(pattern string) string {
 }
 
 var _ loadports.ObjectStore = (*GCSJSON)(nil)
+var _ loadports.MediaObjectWriter = (*GCSJSON)(nil)

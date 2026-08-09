@@ -1,10 +1,37 @@
 package rest
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 )
+
+func TestTableFieldSchemaAcceptsNumericDecimalMetadataAndWritesStrings(t *testing.T) {
+	var field tableFieldSchema
+	if err := json.Unmarshal([]byte(`{
+		"name":"amount",
+		"type":"NUMERIC",
+		"precision":20,
+		"scale":4
+	}`), &field); err != nil {
+		t.Fatal(err)
+	}
+	if field.Precision == nil || *field.Precision != 20 || field.Scale == nil || *field.Scale != 4 {
+		t.Fatalf("decoded decimal metadata = %#v", field)
+	}
+	payload, err := json.Marshal(field)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(payload, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["precision"] != "20" || response["scale"] != "4" {
+		t.Fatalf("decimal metadata wire format = %#v", response)
+	}
+}
 
 func TestQueryResultRESTPreservesRecursiveDecimalSchemaAndRows(t *testing.T) {
 	precision10, scale2 := int64(10), int64(2)

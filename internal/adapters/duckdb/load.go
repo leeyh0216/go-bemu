@@ -373,7 +373,7 @@ func validateLosslessLoadValues(ctx context.Context, tx *sql.Tx, staging string,
 			continue
 		}
 		if decimal {
-			return fmt.Errorf("%w: capability=%s nested Parquet decimal values require narrowing or rounding", loadDomain.ErrUnsupported, loadDomain.CapabilityDecimalRoundingV1)
+			return fmt.Errorf("%w: capability=%s Parquet decimal values require narrowing or rounding", loadDomain.ErrUnsupported, loadDomain.CapabilityDecimalRoundingV1)
 		}
 		return fmt.Errorf("%w: nested Parquet values cannot be converted losslessly", loadDomain.ErrInvalid)
 	}
@@ -526,7 +526,8 @@ func validateLoadShape(schema []loadDomain.Field, columns []stagingColumn) ([]st
 		source := quoteIdentifier(column.name)
 		selectExpressions[index] = "CAST(" + source + " AS " + targetType + ") AS " + quoteIdentifier(field.Name)
 		destinationColumns[index] = quoteIdentifier(field.Name)
-		if isLoadRecord(field) || strings.EqualFold(field.Mode, "REPEATED") {
+		if isLoadRecord(field) || strings.EqualFold(field.Mode, "REPEATED") ||
+			(loadFieldContainsDecimal(field) && decimalPattern.MatchString(strings.ToUpper(strings.TrimSpace(column.typeName)))) {
 			valueChecks = append(valueChecks, stagingValueCheck{
 				predicate: source + " IS DISTINCT FROM CAST(CAST(" + source + " AS " + targetType + ") AS " + column.typeName + ")",
 				decimal:   loadFieldContainsDecimal(field),
@@ -599,12 +600,10 @@ func validatedTargetType(field loadDomain.Field, sourceType string) (string, err
 			return targetType, nil
 		}
 		if match := decimalPattern.FindStringSubmatch(source); match != nil {
-			precision, _ := strconv.Atoi(match[1])
-			scale, _ := strconv.Atoi(match[2])
-			if scale <= int(parameters.Scale) && precision-scale <= int(parameters.Precision-parameters.Scale) {
-				return targetType, nil
-			}
-			return "", fmt.Errorf("%w: capability=%s Parquet field %q requires decimal narrowing or rounding", loadDomain.ErrUnsupported, loadDomain.CapabilityDecimalRoundingV1, field.Name)
+			// Producers can declare a wider Parquet DECIMAL than the values require.
+			// The post-staging round-trip check rejects every value that would
+			// narrow or round before the destination mutates.
+			return targetType, nil
 		}
 		return "", fmt.Errorf("%w: capability=%s Parquet field %q requires an unsupported decimal conversion", loadDomain.ErrUnsupported, loadDomain.CapabilityDecimalRoundingV1, field.Name)
 	case "STRING":
