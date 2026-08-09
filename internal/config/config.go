@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -474,7 +476,7 @@ func load(args []string, lookupEnv func(string) (string, bool)) (Result, error) 
 		}
 	}
 
-	for _, item := range environmentOverrides {
+	for _, item := range generatedEnvironmentOverrides() {
 		if value, ok := lookupEnv(item.environment); ok && strings.TrimSpace(value) != "" {
 			if err := applyOverride(&cfg, item.path, value); err != nil {
 				return Result{}, configError("configuration", "apply-environment", item.path, "scalar", "fix-environment-value", result.SourceFingerprint, err)
@@ -538,6 +540,162 @@ func decodeStrict(payload []byte, cfg *Config) error {
 type environmentOverride struct {
 	environment string
 	path        string
+}
+
+// LeafDescriptor is derived from the versioned YAML model. It is the shared
+// input for --set resolution, generated environment aliases, and config
+// reference generators. Collections are YAML-shaped --set values and do not
+// receive an environment alias because an environment scalar cannot safely
+// describe ordered bootstrap resources.
+type LeafDescriptor struct {
+	Path        string
+	Environment string
+	Type        string
+	Default     string
+	Secret      bool
+}
+
+func LeafDescriptors() []LeafDescriptor {
+	leaves := make([]LeafDescriptor, 0, 96)
+	defaults := reflect.ValueOf(Defaults())
+	collectLeaves(reflect.TypeOf(Config{}), defaults, nil, &leaves)
+	return leaves
+}
+
+func collectLeaves(typeOfValue reflect.Type, defaultValue reflect.Value, prefix []string, leaves *[]LeafDescriptor) {
+	for index := 0; index < typeOfValue.NumField(); index++ {
+		field := typeOfValue.Field(index)
+		name := strings.Split(field.Tag.Get("yaml"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		path := append(append([]string(nil), prefix...), name)
+		fieldDefault := defaultValue.Field(index)
+		if field.Type.Kind() == reflect.Struct && field.Type != reflect.TypeOf(Duration(0)) {
+			collectLeaves(field.Type, fieldDefault, path, leaves)
+			continue
+		}
+		if field.Type.Kind() == reflect.Slice || field.Type.Kind() == reflect.Map || field.Type.Kind() == reflect.Ptr {
+			*leaves = append(*leaves, LeafDescriptor{Path: strings.Join(path, "."), Type: collectionType(field.Type), Default: leafDefault(fieldDefault)})
+			continue
+		}
+		joined := strings.Join(path, ".")
+		*leaves = append(*leaves, LeafDescriptor{Path: joined, Environment: "BQEMU_" + envName(joined), Type: leafType(field.Type), Default: leafDefault(fieldDefault), Secret: secretLeaf(joined)})
+	}
+}
+
+func collectionType(typeOfValue reflect.Type) string {
+	if typeOfValue.Kind() == reflect.Slice {
+		return "array"
+	}
+	if typeOfValue.Kind() == reflect.Map {
+		return "object"
+	}
+	return "nullable"
+}
+
+func leafType(typeOfValue reflect.Type) string {
+	if typeOfValue == reflect.TypeOf(Duration(0)) {
+		return "duration"
+	}
+	switch typeOfValue.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "boolean"
+	case reflect.Int, reflect.Int64:
+		return "integer"
+	default:
+		return typeOfValue.Kind().String()
+	}
+}
+
+func leafDefault(value reflect.Value) string {
+	if value.Type() == reflect.TypeOf(Duration(0)) {
+		return Duration(value.Int()).Value().String()
+	}
+	return fmt.Sprint(value.Interface())
+}
+
+func secretLeaf(path string) bool {
+	return strings.HasSuffix(path, ".token") || strings.HasSuffix(path, ".password") || strings.HasSuffix(path, ".secret")
+}
+
+// JSONSchema returns the deterministic generated schema for runtime leaves.
+func JSONSchema() ([]byte, error) {
+	schema := schemaValue(reflect.TypeOf(Config{}), reflect.ValueOf(Defaults()), nil).(map[string]any)
+	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+	schema["title"] = "BQEMU configuration"
+	return json.MarshalIndent(schema, "", "  ")
+}
+
+func schemaValue(typeOfValue reflect.Type, defaultValue reflect.Value, path []string) any {
+	if typeOfValue.Kind() == reflect.Struct && typeOfValue != reflect.TypeOf(Duration(0)) {
+		properties := make(map[string]any, typeOfValue.NumField())
+		for index := 0; index < typeOfValue.NumField(); index++ {
+			field := typeOfValue.Field(index)
+			name := strings.Split(field.Tag.Get("yaml"), ",")[0]
+			if name == "" || name == "-" {
+				continue
+			}
+			properties[name] = schemaValue(field.Type, defaultValue.Field(index), append(append([]string(nil), path...), name))
+		}
+		return map[string]any{"type": "object", "additionalProperties": false, "properties": properties}
+	}
+	if typeOfValue.Kind() == reflect.Slice {
+		return map[string]any{"type": "array", "items": schemaValue(typeOfValue.Elem(), reflect.Zero(typeOfValue.Elem()), path)}
+	}
+	if typeOfValue.Kind() == reflect.Map {
+		return map[string]any{"type": "object", "additionalProperties": schemaValue(typeOfValue.Elem(), reflect.Zero(typeOfValue.Elem()), path)}
+	}
+	item := map[string]any{"type": leafType(typeOfValue), "x-bqemu-secret": secretLeaf(strings.Join(path, "."))}
+	if typeOfValue.Kind() != reflect.Ptr {
+		item["default"] = schemaDefault(defaultValue)
+	}
+	if len(path) > 0 && typeOfValue.Kind() != reflect.Ptr {
+		item["x-bqemu-env"] = "BQEMU_" + envName(strings.Join(path, "."))
+	}
+	return item
+}
+
+func schemaDefault(value reflect.Value) any {
+	if value.Type() == reflect.TypeOf(Duration(0)) {
+		return Duration(value.Int()).Value().String()
+	}
+	return value.Interface()
+}
+
+func envName(path string) string {
+	var builder strings.Builder
+	for index, character := range path {
+		if character == '.' {
+			builder.WriteByte('_')
+			continue
+		}
+		if index > 0 && character >= 'A' && character <= 'Z' {
+			builder.WriteByte('_')
+		}
+		builder.WriteRune(character)
+	}
+	return strings.ToUpper(builder.String())
+}
+
+func generatedEnvironmentOverrides() []environmentOverride {
+	seen := make(map[string]struct{}, 128)
+	overrides := make([]environmentOverride, 0, 128)
+	for _, leaf := range LeafDescriptors() {
+		if leaf.Environment == "" {
+			continue
+		}
+		overrides = append(overrides, environmentOverride{environment: leaf.Environment, path: leaf.Path})
+		seen[leaf.Environment] = struct{}{}
+	}
+	for _, legacy := range environmentOverrides {
+		if _, ok := seen[legacy.environment]; !ok {
+			overrides = append(overrides, legacy)
+		}
+	}
+	return overrides
 }
 
 var environmentOverrides = []environmentOverride{
@@ -605,219 +763,86 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_UI_ENABLED", "ui.enabled"}, {"BQEMU_UI_DIRECTORY", "ui.directory"},
 }
 
+// applyOverride resolves a typed leaf from the Config YAML model. Keeping the
+// path traversal next to the model means a new scalar leaf does not require a
+// second switch branch merely to support --set or an environment alias.
 func applyOverride(cfg *Config, path, value string) error {
-	setString := func(target *string) error { *target = value; return nil }
-	setBool := func(target *bool) error {
+	target, err := configLeaf(reflect.ValueOf(cfg).Elem(), strings.Split(path, "."))
+	if err != nil {
+		return fmt.Errorf("unknown configuration path %q: %w", path, err)
+	}
+	if !target.CanSet() {
+		return fmt.Errorf("configuration path %q is not a writable scalar", path)
+	}
+	if target.Kind() == reflect.Slice || target.Kind() == reflect.Map || target.Kind() == reflect.Ptr {
+		return decodeOverrideValue([]byte(value), target.Addr().Interface())
+	}
+	switch target.Type() {
+	case reflect.TypeOf(""):
+		target.SetString(value)
+	case reflect.TypeOf(true):
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
 			return err
 		}
-		*target = parsed
-		return nil
-	}
-	setInt := func(target *int) error {
+		target.SetBool(parsed)
+	case reflect.TypeOf(int(0)):
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
 			return err
 		}
-		*target = parsed
-		return nil
-	}
-	setInt64 := func(target *int64) error {
+		target.SetInt(int64(parsed))
+	case reflect.TypeOf(int64(0)):
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return err
 		}
-		*target = parsed
-		return nil
-	}
-	setDuration := func(target *Duration) error {
+		target.SetInt(parsed)
+	case reflect.TypeOf(Duration(0)):
 		parsed, err := time.ParseDuration(value)
 		if err != nil {
 			return err
 		}
-		*target = Duration(parsed)
-		return nil
-	}
-
-	switch path {
-	case "defaults.projectId":
-		return setString(&cfg.Defaults.ProjectID)
-	case "defaults.location":
-		return setString(&cfg.Defaults.Location)
-	case "server.http.address":
-		return setString(&cfg.Server.HTTP.Address)
-	case "server.http.publicUrl":
-		return setString(&cfg.Server.HTTP.PublicURL)
-	case "server.http.readHeaderTimeout":
-		return setDuration(&cfg.Server.HTTP.ReadHeaderTimeout)
-	case "server.http.readTimeout":
-		return setDuration(&cfg.Server.HTTP.ReadTimeout)
-	case "server.http.writeTimeout":
-		return setDuration(&cfg.Server.HTTP.WriteTimeout)
-	case "server.http.idleTimeout":
-		return setDuration(&cfg.Server.HTTP.IdleTimeout)
-	case "server.http.maxCompressedRequestBytes":
-		return setInt64(&cfg.Server.HTTP.MaxCompressedRequestBytes)
-	case "server.http.maxUncompressedRequestBytes":
-		return setInt64(&cfg.Server.HTTP.MaxUncompressedRequestBytes)
-	case "server.grpc.address":
-		return setString(&cfg.Server.GRPC.Address)
-	case "server.grpc.maxReceiveMessageBytes":
-		return setInt(&cfg.Server.GRPC.MaxReceiveMessageBytes)
-	case "server.grpc.maxSendMessageBytes":
-		return setInt(&cfg.Server.GRPC.MaxSendMessageBytes)
-	case "server.tls.certFile":
-		return setString(&cfg.Server.TLS.CertFile)
-	case "server.tls.keyFile":
-		return setString(&cfg.Server.TLS.KeyFile)
-	case "database.adapter":
-		return setString(&cfg.Database.Adapter)
-	case "database.dsn":
-		return setString(&cfg.Database.DSN)
-	case "database.tempDirectory":
-		return setString(&cfg.Database.TempDirectory)
-	case "state.dsn":
-		return setString(&cfg.State.DSN)
-	case "runtime.shutdownTimeout":
-		return setDuration(&cfg.Runtime.ShutdownTimeout)
-	case "runtime.serverDrainTimeout":
-		return setDuration(&cfg.Runtime.ServerDrainTimeout)
-	case "runtime.storageCloseTimeout":
-		return setDuration(&cfg.Runtime.StorageCloseTimeout)
-	case "runtime.jobPollInterval":
-		return setDuration(&cfg.Runtime.JobPollInterval)
-	case "runtime.readSessionTtl":
-		return setDuration(&cfg.Runtime.ReadSessionTTL)
-	case "runtime.cleanupInterval":
-		return setDuration(&cfg.Runtime.CleanupInterval)
-	case "query.operationTimeout":
-		return setDuration(&cfg.Query.OperationTimeout)
-	case "query.compensationTimeout":
-		return setDuration(&cfg.Query.CompensationTimeout)
-	case "query.materialization.projectId":
-		return setString(&cfg.Query.Materialization.ProjectID)
-	case "query.materialization.datasetId":
-		return setString(&cfg.Query.Materialization.DatasetID)
-	case "query.materialization.expiration":
-		return setDuration(&cfg.Query.Materialization.Expiration)
-	case "tableData.operationTimeout":
-		return setDuration(&cfg.TableData.OperationTimeout)
-	case "tableData.maxPageRows":
-		return setInt(&cfg.TableData.MaxPageRows)
-	case "tableData.maxResponseBytes":
-		return setInt64(&cfg.TableData.MaxResponseBytes)
-	case "tableData.maxRowBytes":
-		return setInt64(&cfg.TableData.MaxRowBytes)
-	case "storage.read.enabled":
-		return setBool(&cfg.Storage.Read.Enabled)
-	case "storage.read.maxStreams":
-		return setInt(&cfg.Storage.Read.MaxStreams)
-	case "storage.read.defaultStreamCount":
-		return setInt(&cfg.Storage.Read.DefaultStreamCount)
-	case "storage.read.rowsPerResponse":
-		return setInt(&cfg.Storage.Read.RowsPerResponse)
-	case "storage.read.maxResponseBytes":
-		return setInt(&cfg.Storage.Read.MaxResponseBytes)
-	case "storage.read.maxSchemaBytes":
-		return setInt(&cfg.Storage.Read.MaxSchemaBytes)
-	case "storage.read.maxSessions":
-		return setInt(&cfg.Storage.Read.MaxSessions)
-	case "storage.read.spillThresholdBytes":
-		return setInt64(&cfg.Storage.Read.SpillThresholdBytes)
-	case "storage.read.maxRowBytes":
-		return setInt64(&cfg.Storage.Read.MaxRowBytes)
-	case "storage.read.maxSnapshotBytes":
-		return setInt64(&cfg.Storage.Read.MaxSnapshotBytes)
-	case "storage.read.maxTotalSnapshotBytes":
-		return setInt64(&cfg.Storage.Read.MaxTotalSnapshotBytes)
-	case "storage.read.maxSnapshotRows":
-		return setInt64(&cfg.Storage.Read.MaxSnapshotRows)
-	case "storage.read.tempFilePattern":
-		return setString(&cfg.Storage.Read.TempFilePattern)
-	case "storage.read.protocolModelVersion":
-		return setString(&cfg.Storage.Read.ProtocolModelVersion)
-	case "storage.write.maxStreams":
-		return setInt(&cfg.Storage.Write.MaxStreams)
-	case "storage.write.enabled":
-		return setBool(&cfg.Storage.Write.Enabled)
-	case "storage.write.maxAppendRequestBytes":
-		return setInt(&cfg.Storage.Write.MaxAppendRequestBytes)
-	case "storage.write.maxAppendEnvelopeBytes":
-		return setInt(&cfg.Storage.Write.MaxAppendEnvelopeBytes)
-	case "storage.write.maxConcurrentAppendRequests":
-		return setInt(&cfg.Storage.Write.MaxConcurrentAppendRequests)
-	case "storage.write.queueCapacity":
-		return setInt(&cfg.Storage.Write.QueueCapacity)
-	case "storage.write.queueWaitTimeout":
-		return setDuration(&cfg.Storage.Write.QueueWaitTimeout)
-	case "storage.write.operationTimeout":
-		return setDuration(&cfg.Storage.Write.OperationTimeout)
-	case "storage.write.maxInFlightBytes":
-		return setInt64(&cfg.Storage.Write.MaxInFlightBytes)
-	case "storage.write.maxInFlightBytesPerStream":
-		return setInt64(&cfg.Storage.Write.MaxInFlightBytesPerStream)
-	case "storage.write.maxStagedBytes":
-		return setInt64(&cfg.Storage.Write.MaxStagedBytes)
-	case "storage.write.maxStagedBytesPerStream":
-		return setInt64(&cfg.Storage.Write.MaxStagedBytesPerStream)
-	case "storage.write.orphanTtl":
-		return setDuration(&cfg.Storage.Write.OrphanTTL)
-	case "storage.write.cleanupInterval":
-		return setDuration(&cfg.Storage.Write.CleanupInterval)
-	case "storage.write.protocolModelVersion":
-		return setString(&cfg.Storage.Write.ProtocolModelVersion)
-	case "load.gcsEndpoint":
-		return setString(&cfg.Load.GCSEndpoint)
-	case "load.operationTimeout":
-		return setDuration(&cfg.Load.OperationTimeout)
-	case "load.maxObjects":
-		return setInt(&cfg.Load.MaxObjects)
-	case "load.maxObjectBytes":
-		return setInt64(&cfg.Load.MaxObjectBytes)
-	case "load.maxTotalBytes":
-		return setInt64(&cfg.Load.MaxTotalBytes)
-	case "load.maxMetadataBytes":
-		return setInt64(&cfg.Load.MaxMetadataBytes)
-	case "load.maxListedObjects":
-		return setInt(&cfg.Load.MaxListedObjects)
-	case "load.mediaUpload.bucket":
-		return setString(&cfg.Load.MediaUpload.Bucket)
-	case "load.mediaUpload.maxSessions":
-		return setInt(&cfg.Load.MediaUpload.MaxSessions)
-	case "load.mediaUpload.maxBytes":
-		return setInt64(&cfg.Load.MediaUpload.MaxBytes)
-	case "load.mediaUpload.maxChunkBytes":
-		return setInt64(&cfg.Load.MediaUpload.MaxChunkBytes)
-	case "load.mediaUpload.sessionTtl":
-		return setDuration(&cfg.Load.MediaUpload.SessionTTL)
-	case "diagnostics.timeline.maxEvents":
-		return setInt(&cfg.Diagnostics.Timeline.MaxEvents)
-	case "diagnostics.timeline.maxBytes":
-		return setInt64(&cfg.Diagnostics.Timeline.MaxBytes)
-	case "diagnostics.timeline.maxPayloadBytes":
-		return setInt64(&cfg.Diagnostics.Timeline.MaxPayloadBytes)
-	case "logging.level":
-		return setString(&cfg.Logging.Level)
-	case "logging.format":
-		return setString(&cfg.Logging.Format)
-	case "admin.enabled":
-		return setBool(&cfg.Admin.Enabled)
-	case "admin.address":
-		return setString(&cfg.Admin.Address)
-	case "admin.tokenFile":
-		return setString(&cfg.Admin.TokenFile)
-	case "admin.readHeaderTimeout":
-		return setDuration(&cfg.Admin.ReadHeaderTimeout)
-	case "admin.maxStackBytes":
-		return setInt(&cfg.Admin.MaxStackBytes)
-	case "ui.enabled":
-		return setBool(&cfg.UI.Enabled)
-	case "ui.directory":
-		return setString(&cfg.UI.Directory)
+		target.SetInt(int64(parsed))
 	default:
-		return fmt.Errorf("unknown configuration path %q", path)
+		return fmt.Errorf("configuration path %q is not a scalar override", path)
 	}
+	return nil
+}
+
+func decodeOverrideValue(payload []byte, target any) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(payload))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple YAML documents are not supported")
+		}
+		return err
+	}
+	return nil
+}
+
+func configLeaf(value reflect.Value, path []string) (reflect.Value, error) {
+	if len(path) == 0 {
+		return value, nil
+	}
+	if value.Kind() != reflect.Struct {
+		return reflect.Value{}, fmt.Errorf("unknown configuration path %q", strings.Join(path, "."))
+	}
+	typeOfValue := value.Type()
+	for index := 0; index < typeOfValue.NumField(); index++ {
+		field := typeOfValue.Field(index)
+		name := strings.Split(field.Tag.Get("yaml"), ",")[0]
+		if name == "" || name == "-" || name != path[0] {
+			continue
+		}
+		return configLeaf(value.Field(index), path[1:])
+	}
+	return reflect.Value{}, fmt.Errorf("unknown configuration path %q", strings.Join(path, "."))
 }
 
 func (cfg Config) Validate() error {

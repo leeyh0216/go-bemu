@@ -1,4 +1,4 @@
-package config
+package integrationcipolicy
 
 import (
 	"go/parser"
@@ -10,10 +10,10 @@ import (
 )
 
 // Keep consumer-specific names and versions in tests/integration. This guard
-// deliberately checks source rather than a compiled package graph: config and
-// command wiring can otherwise retain an inactive consumer switch unnoticed.
+// checks source rather than a compiled package graph: config and command
+// wiring can otherwise retain an inactive consumer switch unnoticed.
 func TestProductionRuntimeDoesNotNameConsumerImplementations(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", ".."))
+	root := filepath.Clean(filepath.Join("..", "..", ".."))
 	for _, directory := range []string{"cmd", "internal"} {
 		err := filepath.WalkDir(filepath.Join(root, directory), func(path string, entry os.DirEntry, err error) error {
 			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

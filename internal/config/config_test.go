@@ -291,6 +291,37 @@ func TestConsumerProfilesAreNotRuntimeConfiguration(t *testing.T) {
 	}
 }
 
+func TestLeafDescriptorsDriveGeneratedEnvironmentAndSetPaths(t *testing.T) {
+	leaves := LeafDescriptors()
+	seen := map[string]LeafDescriptor{}
+	for _, leaf := range leaves {
+		seen[leaf.Path] = leaf
+	}
+	for _, path := range []string{"server.http.publicUrl", "runtime.shutdownTimeout", "storage.write.maxStreams", "admin.enabled"} {
+		leaf, ok := seen[path]
+		if !ok {
+			t.Fatalf("missing descriptor for %s", path)
+		}
+		if leaf.Environment == "" {
+			t.Fatalf("missing generated environment name for %s", path)
+		}
+	}
+	result, err := load([]string{"--set", "runtime.shutdownTimeout=12s"}, lookup(map[string]string{"BQEMU_RUNTIME_JOB_POLL_INTERVAL": "250ms"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.Runtime.ShutdownTimeout.Value() != 12*time.Second || result.Config.Runtime.JobPollInterval.Value() != 250*time.Millisecond {
+		t.Fatalf("generated descriptor overrides not applied: %#v", result.Config.Runtime)
+	}
+	result, err = load([]string{"--set", `bootstrap.projects=[{id: extra-project, datasets: [{id: data, location: US}]}]`}, lookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Config.Bootstrap.Projects; len(got) != 1 || got[0].ID != "extra-project" || got[0].Datasets[0].ID != "data" {
+		t.Fatalf("structured --set did not decode bootstrap: %#v", got)
+	}
+}
+
 func TestStateDSNLoadsIndependentlyFromEngineDatabase(t *testing.T) {
 	result, err := load(nil, lookup(map[string]string{
 		"BQEMU_DATABASE_DSN": ":memory:",

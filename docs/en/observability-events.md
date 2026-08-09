@@ -1,7 +1,14 @@
+<!-- doc-id: observability-events -->
+<!-- lang: en -->
+
+[English](observability-events.md) | [한국어](../ko/observability-events.md)
+
+<!-- section: contract -->
 # Observability event contract
 
 The runtime emits a small synchronous event vocabulary. These are structured
 log records, not a delivery API: bqemu has no EventBus or outbox.
+Retention and access controls follow [Cloud Logging guidance](https://cloud.google.com/logging/docs/audit/best-practices).
 
 | Event | Required context |
 | --- | --- |

@@ -30,7 +30,7 @@ PYTHON3 ?= python3
 
 SQLC_VERSION ?= v1.31.1
 
-.PHONY: help doctor docker-doctor setup python-setup python-dataframe-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test ci-report-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup version-check version-bump version-set vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup python-dataframe-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test ci-report-test build run format format-check config-generate config-artifacts-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup version-check version-bump version-set vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -44,6 +44,8 @@ help:
 	  'make build        Build the emulator and local credential helper' \
 	  'make run          Run locally with repository data and temp directories' \
 	  'make contract-generate Regenerate canonical API/RPC contract artifacts' \
+	  'make config-generate Regenerate config schema and EN/KO references' \
+	  'make config-artifacts-check Check generated config schema and references' \
 	  'make version-check Validate the canonical stable release version' \
 	  'make version-bump BUMP=patch Prepare the next release version' \
 	  'make version-set VERSION=1.2.3 Set an exact stable release version' \
@@ -146,6 +148,12 @@ contract-generate:
 contract-check:
 	go run ./cmd/contractctl check --root .
 
+config-generate:
+	go run ./cmd/configctl generate
+
+config-artifacts-check:
+	go run ./cmd/configctl check
+
 integration-contract-generate:
 	go run ./tests/integration/cmd/integrationctl compile --root .
 
@@ -216,7 +224,7 @@ vet:
 github-actions-policy:
 	CGO_ENABLED=1 go test ./tests/integration/cipolicy
 
-ci-static: github-actions-policy format-check contract-check integration-contract-check sqlc-check consumer-runner-test auth-runner-test vet config-check
+ci-static: github-actions-policy format-check config-artifacts-check contract-check integration-contract-check sqlc-check consumer-runner-test auth-runner-test vet config-check
 
 ci-test-all:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...
@@ -257,7 +265,7 @@ ci-test-composition:
 config-check:
 	CGO_ENABLED=1 go run ./cmd/emulator --config "$(BQEMU_CONFIG)" --print-effective-config >/dev/null
 
-check: format-check contract-check integration-contract-check test-race vet config-check
+check: format-check config-artifacts-check contract-check integration-contract-check test-race vet config-check
 
 docker-build: docker-doctor
 	docker build --tag "$(IMAGE)" .

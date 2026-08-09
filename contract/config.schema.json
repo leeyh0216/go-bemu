@@ -1,0 +1,751 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "admin": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "default": "127.0.0.1:9051",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_ADMIN_ADDRESS",
+          "x-bqemu-secret": false
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean",
+          "x-bqemu-env": "BQEMU_ADMIN_ENABLED",
+          "x-bqemu-secret": false
+        },
+        "maxStackBytes": {
+          "default": 4194304,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_ADMIN_MAX_STACK_BYTES",
+          "x-bqemu-secret": false
+        },
+        "readHeaderTimeout": {
+          "default": "5s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_ADMIN_READ_HEADER_TIMEOUT",
+          "x-bqemu-secret": false
+        },
+        "tokenFile": {
+          "default": "",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_ADMIN_TOKEN_FILE",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "apiVersion": {
+      "default": "config.bqemu.dev/v1alpha1",
+      "type": "string",
+      "x-bqemu-env": "BQEMU_API_VERSION",
+      "x-bqemu-secret": false
+    },
+    "bootstrap": {
+      "additionalProperties": false,
+      "properties": {
+        "projects": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "datasets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defaultPartitionExpirationMs": {
+                      "type": "ptr",
+                      "x-bqemu-secret": false
+                    },
+                    "defaultTableExpirationMs": {
+                      "type": "ptr",
+                      "x-bqemu-secret": false
+                    },
+                    "description": {
+                      "default": "",
+                      "type": "string",
+                      "x-bqemu-env": "BQEMU_BOOTSTRAP_PROJECTS_DATASETS_DESCRIPTION",
+                      "x-bqemu-secret": false
+                    },
+                    "friendlyName": {
+                      "default": "",
+                      "type": "string",
+                      "x-bqemu-env": "BQEMU_BOOTSTRAP_PROJECTS_DATASETS_FRIENDLY_NAME",
+                      "x-bqemu-secret": false
+                    },
+                    "id": {
+                      "default": "",
+                      "type": "string",
+                      "x-bqemu-env": "BQEMU_BOOTSTRAP_PROJECTS_DATASETS_ID",
+                      "x-bqemu-secret": false
+                    },
+                    "labels": {
+                      "additionalProperties": {
+                        "default": "",
+                        "type": "string",
+                        "x-bqemu-env": "BQEMU_BOOTSTRAP_PROJECTS_DATASETS_LABELS",
+                        "x-bqemu-secret": false
+                      },
+                      "type": "object"
+                    },
+                    "location": {
+                      "default": "",
+                      "type": "string",
+                      "x-bqemu-env": "BQEMU_BOOTSTRAP_PROJECTS_DATASETS_LOCATION",
+                      "x-bqemu-secret": false
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "description": {
+                "default": "",
+                "type": "string",
+                "x-bqemu-env": "BQEMU_BOOTSTRAP_PROJECTS_DESCRIPTION",
+                "x-bqemu-secret": false
+              },
+              "friendlyName": {
+                "default": "",
+                "type": "string",
+                "x-bqemu-env": "BQEMU_BOOTSTRAP_PROJECTS_FRIENDLY_NAME",
+                "x-bqemu-secret": false
+              },
+              "id": {
+                "default": "",
+                "type": "string",
+                "x-bqemu-env": "BQEMU_BOOTSTRAP_PROJECTS_ID",
+                "x-bqemu-secret": false
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "database": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "default": "duckdb",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_DATABASE_ADAPTER",
+          "x-bqemu-secret": false
+        },
+        "dsn": {
+          "default": ":memory:",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_DATABASE_DSN",
+          "x-bqemu-secret": false
+        },
+        "tempDirectory": {
+          "default": "/var/folders/y1/gfgjv8zj36b17h89m_k5_m6h0000gn/T/",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_DATABASE_TEMP_DIRECTORY",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "defaults": {
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "default": "US",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_DEFAULTS_LOCATION",
+          "x-bqemu-secret": false
+        },
+        "projectId": {
+          "default": "local-project",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_DEFAULTS_PROJECT_ID",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "diagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "timeline": {
+          "additionalProperties": false,
+          "properties": {
+            "maxBytes": {
+              "default": 67108864,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_DIAGNOSTICS_TIMELINE_MAX_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxEvents": {
+              "default": 5000,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_DIAGNOSTICS_TIMELINE_MAX_EVENTS",
+              "x-bqemu-secret": false
+            },
+            "maxPayloadBytes": {
+              "default": 4194304,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_DIAGNOSTICS_TIMELINE_MAX_PAYLOAD_BYTES",
+              "x-bqemu-secret": false
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "kind": {
+      "default": "BQEMUConfig",
+      "type": "string",
+      "x-bqemu-env": "BQEMU_KIND",
+      "x-bqemu-secret": false
+    },
+    "load": {
+      "additionalProperties": false,
+      "properties": {
+        "gcsEndpoint": {
+          "default": "http://127.0.0.1:4443",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_LOAD_GCS_ENDPOINT",
+          "x-bqemu-secret": false
+        },
+        "maxListedObjects": {
+          "default": 10000,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_LOAD_MAX_LISTED_OBJECTS",
+          "x-bqemu-secret": false
+        },
+        "maxMetadataBytes": {
+          "default": 8388608,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_LOAD_MAX_METADATA_BYTES",
+          "x-bqemu-secret": false
+        },
+        "maxObjectBytes": {
+          "default": 1073741824,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_LOAD_MAX_OBJECT_BYTES",
+          "x-bqemu-secret": false
+        },
+        "maxObjects": {
+          "default": 1000,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_LOAD_MAX_OBJECTS",
+          "x-bqemu-secret": false
+        },
+        "maxTotalBytes": {
+          "default": 4294967296,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_LOAD_MAX_TOTAL_BYTES",
+          "x-bqemu-secret": false
+        },
+        "mediaUpload": {
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {
+              "default": "bqemu-media",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_LOAD_MEDIA_UPLOAD_BUCKET",
+              "x-bqemu-secret": false
+            },
+            "maxBytes": {
+              "default": 268435456,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_LOAD_MEDIA_UPLOAD_MAX_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxChunkBytes": {
+              "default": 134217728,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_LOAD_MEDIA_UPLOAD_MAX_CHUNK_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxSessions": {
+              "default": 8,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_LOAD_MEDIA_UPLOAD_MAX_SESSIONS",
+              "x-bqemu-secret": false
+            },
+            "sessionTtl": {
+              "default": "1h0m0s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_LOAD_MEDIA_UPLOAD_SESSION_TTL",
+              "x-bqemu-secret": false
+            }
+          },
+          "type": "object"
+        },
+        "operationTimeout": {
+          "default": "2m0s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_LOAD_OPERATION_TIMEOUT",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "logging": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "default": "json",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_LOGGING_FORMAT",
+          "x-bqemu-secret": false
+        },
+        "level": {
+          "default": "info",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_LOGGING_LEVEL",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "query": {
+      "additionalProperties": false,
+      "properties": {
+        "compensationTimeout": {
+          "default": "30s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_QUERY_COMPENSATION_TIMEOUT",
+          "x-bqemu-secret": false
+        },
+        "materialization": {
+          "additionalProperties": false,
+          "properties": {
+            "datasetId": {
+              "default": "",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_QUERY_MATERIALIZATION_DATASET_ID",
+              "x-bqemu-secret": false
+            },
+            "expiration": {
+              "default": "24h0m0s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_QUERY_MATERIALIZATION_EXPIRATION",
+              "x-bqemu-secret": false
+            },
+            "projectId": {
+              "default": "",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_QUERY_MATERIALIZATION_PROJECT_ID",
+              "x-bqemu-secret": false
+            }
+          },
+          "type": "object"
+        },
+        "operationTimeout": {
+          "default": "2m0s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_QUERY_OPERATION_TIMEOUT",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "cleanupInterval": {
+          "default": "1m0s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_RUNTIME_CLEANUP_INTERVAL",
+          "x-bqemu-secret": false
+        },
+        "jobPollInterval": {
+          "default": "100ms",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_RUNTIME_JOB_POLL_INTERVAL",
+          "x-bqemu-secret": false
+        },
+        "readSessionTtl": {
+          "default": "6h0m0s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_RUNTIME_READ_SESSION_TTL",
+          "x-bqemu-secret": false
+        },
+        "serverDrainTimeout": {
+          "default": "5s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_RUNTIME_SERVER_DRAIN_TIMEOUT",
+          "x-bqemu-secret": false
+        },
+        "shutdownTimeout": {
+          "default": "10s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_RUNTIME_SHUTDOWN_TIMEOUT",
+          "x-bqemu-secret": false
+        },
+        "storageCloseTimeout": {
+          "default": "4s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_RUNTIME_STORAGE_CLOSE_TIMEOUT",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "server": {
+      "additionalProperties": false,
+      "properties": {
+        "grpc": {
+          "additionalProperties": false,
+          "properties": {
+            "address": {
+              "default": ":9060",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_SERVER_GRPC_ADDRESS",
+              "x-bqemu-secret": false
+            },
+            "maxReceiveMessageBytes": {
+              "default": 33554432,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_SERVER_GRPC_MAX_RECEIVE_MESSAGE_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxSendMessageBytes": {
+              "default": 33554432,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_SERVER_GRPC_MAX_SEND_MESSAGE_BYTES",
+              "x-bqemu-secret": false
+            }
+          },
+          "type": "object"
+        },
+        "http": {
+          "additionalProperties": false,
+          "properties": {
+            "address": {
+              "default": ":9050",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_SERVER_HTTP_ADDRESS",
+              "x-bqemu-secret": false
+            },
+            "idleTimeout": {
+              "default": "2m0s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_SERVER_HTTP_IDLE_TIMEOUT",
+              "x-bqemu-secret": false
+            },
+            "maxCompressedRequestBytes": {
+              "default": 2097152,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_SERVER_HTTP_MAX_COMPRESSED_REQUEST_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxUncompressedRequestBytes": {
+              "default": 2097152,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_SERVER_HTTP_MAX_UNCOMPRESSED_REQUEST_BYTES",
+              "x-bqemu-secret": false
+            },
+            "publicUrl": {
+              "default": "http://localhost:9050",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_SERVER_HTTP_PUBLIC_URL",
+              "x-bqemu-secret": false
+            },
+            "readHeaderTimeout": {
+              "default": "5s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_SERVER_HTTP_READ_HEADER_TIMEOUT",
+              "x-bqemu-secret": false
+            },
+            "readTimeout": {
+              "default": "30s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_SERVER_HTTP_READ_TIMEOUT",
+              "x-bqemu-secret": false
+            },
+            "writeTimeout": {
+              "default": "30s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_SERVER_HTTP_WRITE_TIMEOUT",
+              "x-bqemu-secret": false
+            }
+          },
+          "type": "object"
+        },
+        "tls": {
+          "additionalProperties": false,
+          "properties": {
+            "certFile": {
+              "default": "",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_SERVER_TLS_CERT_FILE",
+              "x-bqemu-secret": false
+            },
+            "keyFile": {
+              "default": "",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_SERVER_TLS_KEY_FILE",
+              "x-bqemu-secret": false
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "state": {
+      "additionalProperties": false,
+      "properties": {
+        "dsn": {
+          "default": ":memory:",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_STATE_DSN",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "storage": {
+      "additionalProperties": false,
+      "properties": {
+        "read": {
+          "additionalProperties": false,
+          "properties": {
+            "defaultStreamCount": {
+              "default": 4,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_DEFAULT_STREAM_COUNT",
+              "x-bqemu-secret": false
+            },
+            "enabled": {
+              "default": true,
+              "type": "boolean",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_ENABLED",
+              "x-bqemu-secret": false
+            },
+            "maxResponseBytes": {
+              "default": 16777216,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_MAX_RESPONSE_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxRowBytes": {
+              "default": 8388608,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_MAX_ROW_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxSchemaBytes": {
+              "default": 1048576,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_MAX_SCHEMA_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxSessions": {
+              "default": 128,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_MAX_SESSIONS",
+              "x-bqemu-secret": false
+            },
+            "maxSnapshotBytes": {
+              "default": 536870912,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_MAX_SNAPSHOT_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxSnapshotRows": {
+              "default": 10000000,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_MAX_SNAPSHOT_ROWS",
+              "x-bqemu-secret": false
+            },
+            "maxStreams": {
+              "default": 64,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_MAX_STREAMS",
+              "x-bqemu-secret": false
+            },
+            "maxTotalSnapshotBytes": {
+              "default": 4294967296,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_MAX_TOTAL_SNAPSHOT_BYTES",
+              "x-bqemu-secret": false
+            },
+            "protocolModelVersion": {
+              "default": "google.cloud.bigquery.storage.v1",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_PROTOCOL_MODEL_VERSION",
+              "x-bqemu-secret": false
+            },
+            "rowsPerResponse": {
+              "default": 10000,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_ROWS_PER_RESPONSE",
+              "x-bqemu-secret": false
+            },
+            "spillThresholdBytes": {
+              "default": 67108864,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_SPILL_THRESHOLD_BYTES",
+              "x-bqemu-secret": false
+            },
+            "tempFilePattern": {
+              "default": "bqemu-storage-read-*",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_STORAGE_READ_TEMP_FILE_PATTERN",
+              "x-bqemu-secret": false
+            }
+          },
+          "type": "object"
+        },
+        "write": {
+          "additionalProperties": false,
+          "properties": {
+            "cleanupInterval": {
+              "default": "1m0s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_CLEANUP_INTERVAL",
+              "x-bqemu-secret": false
+            },
+            "enabled": {
+              "default": true,
+              "type": "boolean",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_ENABLED",
+              "x-bqemu-secret": false
+            },
+            "maxAppendEnvelopeBytes": {
+              "default": 65536,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_MAX_APPEND_ENVELOPE_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxAppendRequestBytes": {
+              "default": 20905984,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_MAX_APPEND_REQUEST_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxConcurrentAppendRequests": {
+              "default": 16,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS",
+              "x-bqemu-secret": false
+            },
+            "maxInFlightBytes": {
+              "default": 268435456,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxInFlightBytesPerStream": {
+              "default": 33554432,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_MAX_IN_FLIGHT_BYTES_PER_STREAM",
+              "x-bqemu-secret": false
+            },
+            "maxStagedBytes": {
+              "default": 4294967296,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_MAX_STAGED_BYTES",
+              "x-bqemu-secret": false
+            },
+            "maxStagedBytesPerStream": {
+              "default": 536870912,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_MAX_STAGED_BYTES_PER_STREAM",
+              "x-bqemu-secret": false
+            },
+            "maxStreams": {
+              "default": 1024,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_MAX_STREAMS",
+              "x-bqemu-secret": false
+            },
+            "operationTimeout": {
+              "default": "30s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_OPERATION_TIMEOUT",
+              "x-bqemu-secret": false
+            },
+            "orphanTtl": {
+              "default": "6h0m0s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_ORPHAN_TTL",
+              "x-bqemu-secret": false
+            },
+            "protocolModelVersion": {
+              "default": "google.cloud.bigquery.storage.v1",
+              "type": "string",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_PROTOCOL_MODEL_VERSION",
+              "x-bqemu-secret": false
+            },
+            "queueCapacity": {
+              "default": 256,
+              "type": "integer",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_QUEUE_CAPACITY",
+              "x-bqemu-secret": false
+            },
+            "queueWaitTimeout": {
+              "default": "5s",
+              "type": "duration",
+              "x-bqemu-env": "BQEMU_STORAGE_WRITE_QUEUE_WAIT_TIMEOUT",
+              "x-bqemu-secret": false
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "tableData": {
+      "additionalProperties": false,
+      "properties": {
+        "maxPageRows": {
+          "default": 10000,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_TABLE_DATA_MAX_PAGE_ROWS",
+          "x-bqemu-secret": false
+        },
+        "maxResponseBytes": {
+          "default": 10000000,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES",
+          "x-bqemu-secret": false
+        },
+        "maxRowBytes": {
+          "default": 100000000,
+          "type": "integer",
+          "x-bqemu-env": "BQEMU_TABLE_DATA_MAX_ROW_BYTES",
+          "x-bqemu-secret": false
+        },
+        "operationTimeout": {
+          "default": "30s",
+          "type": "duration",
+          "x-bqemu-env": "BQEMU_TABLE_DATA_OPERATION_TIMEOUT",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    },
+    "ui": {
+      "additionalProperties": false,
+      "properties": {
+        "directory": {
+          "default": "",
+          "type": "string",
+          "x-bqemu-env": "BQEMU_UI_DIRECTORY",
+          "x-bqemu-secret": false
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean",
+          "x-bqemu-env": "BQEMU_UI_ENABLED",
+          "x-bqemu-secret": false
+        }
+      },
+      "type": "object"
+    }
+  },
+  "title": "BQEMU configuration",
+  "type": "object"
+}

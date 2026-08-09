@@ -17,6 +17,8 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 - [Client credentials and TLS](client-credentials-and-tls.md): generate local
   service-account, authorized-user, WIF, direct-token, certificate, and
   truststore fixtures.
+- [Configuration reference](config-reference.md): generated scalar settings,
+  defaults, `--set` paths, and environment aliases.
 
 <!-- section: integrations -->
 ## Integration Examples

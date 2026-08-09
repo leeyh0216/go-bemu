@@ -17,6 +17,8 @@ BigQuery 리소스는 공개 [BigQuery REST API
 - [클라이언트 인증 파일과 TLS](client-credentials-and-tls.md): 로컬 service account,
   authorized user, WIF, direct token, 인증서, truststore 자료를 생성하는 방법을
   설명합니다.
+- [설정 참조](config-reference.md): 생성된 scalar 설정, 기본값, `--set` 경로와 환경
+  변수 별칭을 제공합니다.
 
 <!-- section: integrations -->
 ## 통합 예제
