@@ -57,6 +57,18 @@ type SnapshotMetadata struct {
 	RowCount       int64
 	EstimatedBytes int64
 	RetainedBytes  int64
+	// SelectedFields contains the canonical top-level field names resolved by
+	// the materializer. It is lifecycle metadata, not snapshot payload.
+	SelectedFields []string
+	FilterShape    FilterShape
+}
+
+// FilterShape records non-sensitive structural facts about a validated row
+// restriction. Literal values and the restriction text never cross the
+// lifecycle-state port.
+type FilterShape struct {
+	PredicateCount       int
+	LogicalOperatorCount int
 }
 
 // EncodedBatch is an exact contiguous range in a materialized snapshot.
@@ -106,6 +118,51 @@ type Session struct {
 	RowRestriction        string
 	SnapshotTime          *time.Time
 	TraceID               string
+}
+
+// SessionLifecycle is canonical metadata for a Storage Read session. ACTIVE
+// means its snapshot belongs to the current process. Terminal states are kept
+// after snapshot bytes have gone away so an old stream cannot be confused with
+// a newly materialized result.
+type SessionLifecycle string
+
+const (
+	SessionActive      SessionLifecycle = "ACTIVE"
+	SessionExpired     SessionLifecycle = "EXPIRED"
+	SessionUnavailable SessionLifecycle = "UNAVAILABLE"
+)
+
+// SessionRecord is the durable, payload-free representation of one read
+// session. RowRestrictionDigest is SHA-256 over the client predicate and is
+// deliberately not reversible. SelectedFields are canonical names returned by
+// the snapshot materializer.
+type SessionRecord struct {
+	Name                  string
+	Table                 string
+	Format                Format
+	SelectedFields        []string
+	RowRestrictionDigest  string
+	RowRestrictionBytes   int
+	FilterShape           FilterShape
+	Streams               []Stream
+	CreatedAt             time.Time
+	ExpireTime            time.Time
+	SnapshotTime          *time.Time
+	RetainedRowCount      int64
+	RetainedBytes         int64
+	EstimatedBytesScanned int64
+	SchemaFingerprint     string
+	Lifecycle             SessionLifecycle
+	LifecycleUpdatedAt    time.Time
+}
+
+// PersistedStream identifies the terminal or active lifecycle metadata for an
+// exact stream name. It does not provide access to snapshot bytes.
+type PersistedStream struct {
+	Name      string
+	Session   string
+	Lifecycle SessionLifecycle
+	ExpiresAt time.Time
 }
 
 type ReadRowsRequest struct {

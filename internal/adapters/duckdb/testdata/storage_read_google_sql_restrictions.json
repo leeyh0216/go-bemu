@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "caseId": "boolean-null-between-in",
+      "rowRestriction": "active = TRUE AND id BETWEEN 2 AND 4 AND id IN (2, 3, 4)",
+      "expectedIds": [2, 4]
+    },
+    {
+      "caseId": "nested-not-or",
+      "rowRestriction": "NOT (profile.rank < 3 OR name = 'skip')",
+      "expectedIds": [2, 3, 4]
+    },
+    {
+      "caseId": "typed-cast-and-functions",
+      "rowRestriction": "CAST(id AS STRING) = '4' AND STARTS_WITH(LOWER(name), 'four')",
+      "expectedIds": [4]
+    },
+    {
+      "caseId": "timestamp-literal",
+      "rowRestriction": "created_at >= TIMESTAMP '2026-08-09 00:00:00+00'",
+      "expectedIds": [3, 4]
+    }
+  ]
+}

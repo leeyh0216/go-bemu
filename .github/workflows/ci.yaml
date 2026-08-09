@@ -31,7 +31,18 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Validate static contracts
-        run: make ci-static
+        run: >-
+          python3 tools/ci/command_summary.py --suite static-validation
+          --report .artifacts/static-validation/report.html
+          --artifact static-validation-report-${{ github.run_id }} -- make ci-static
+      - name: Upload readable static validation report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: static-validation-report-${{ github.run_id }}
+          path: .artifacts/static-validation/report.html
+          if-no-files-found: ignore
+          retention-days: 7
 
   go-tests:
     name: Go / ${{ matrix.name }}
@@ -62,7 +73,19 @@ jobs:
       - name: Run bounded race tests
         env:
           CI_TARGET: ${{ matrix.target }}
-        run: make "$CI_TARGET"
+        run: >-
+          python3 tools/ci/command_summary.py --suite "go-${{ matrix.target }}"
+          --report ".artifacts/go-${{ matrix.target }}/report.html"
+          --artifact "go-${{ matrix.target }}-report-${{ github.run_id }}" --
+          make "$CI_TARGET"
+      - name: Upload readable Go report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-${{ matrix.target }}-report-${{ github.run_id }}
+          path: .artifacts/go-${{ matrix.target }}/report.html
+          if-no-files-found: ignore
+          retention-days: 7
 
   go-smoke:
     name: Go / Complete package smoke
@@ -75,7 +98,18 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test every Go package
-        run: make ci-test-all
+        run: >-
+          python3 tools/ci/command_summary.py --suite go-smoke
+          --report .artifacts/go-smoke/report.html
+          --artifact go-smoke-report-${{ github.run_id }} -- make ci-test-all
+      - name: Upload readable Go smoke report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-smoke-report-${{ github.run_id }}
+          path: .artifacts/go-smoke/report.html
+          if-no-files-found: ignore
+          retention-days: 7
 
   python-client:
     name: Official Python client contract
@@ -99,13 +133,131 @@ jobs:
         run: |
           mkdir -p .artifacts/python
           python -m pytest -c tests/python/pytest.ini tests/python \
-            --basetemp=.artifacts/python/pytest
+            --basetemp=.artifacts/python/pytest --junitxml=.artifacts/python/junit.xml
+      - name: Publish compact test summary
+        if: always()
+        run: python tools/ci/junit_summary.py python-client .artifacts/python/junit.xml
+      - name: Upload readable test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-client-report-${{ github.run_id }}
+          path: .artifacts/python/junit.html
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload redacted failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: python-client-diagnostics-${{ github.run_id }}
           path: .artifacts/python
+          if-no-files-found: ignore
+          retention-days: 7
+
+  integration-query-parameters:
+    name: External query parameter integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Install hash-locked dependencies
+        run: uv pip sync --system --require-hashes tests/python/requirements.lock
+      - name: Run dedicated external-consumer query parameter contract
+        run: |
+          mkdir -p .artifacts/integration-query-parameters
+          python -m pytest -c tests/integration/pytest.ini tests/integration \
+            --junitxml=.artifacts/integration-query-parameters/junit.xml
+      - name: Publish compact test summary
+        if: always()
+        run: python tools/ci/junit_summary.py integration-query-parameters .artifacts/integration-query-parameters/junit.xml
+      - name: Upload readable test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-query-parameters-report-${{ github.run_id }}
+          path: .artifacts/integration-query-parameters/junit.html
+          if-no-files-found: ignore
+          retention-days: 7
+
+  integration-tabledata-insert-all:
+    name: External tabledata insertAll integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Install hash-locked dependencies
+        run: uv pip sync --system --require-hashes tests/python/requirements.lock
+      - name: Run dedicated external-consumer insertAll contract
+        run: |
+          mkdir -p .artifacts/integration-tabledata
+          python -m pytest -c tests/integration/pytest.ini tests/integration/test_tabledata_insert_all.py \
+            --junitxml=.artifacts/integration-tabledata/junit.xml
+      - name: Publish compact test summary
+        if: always()
+        run: python tools/ci/junit_summary.py integration-tabledata-insert-all .artifacts/integration-tabledata/junit.xml
+      - name: Upload readable test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-tabledata-report-${{ github.run_id }}
+          path: .artifacts/integration-tabledata/junit.html
+          if-no-files-found: ignore
+          retention-days: 7
+
+  integration-parquet-media-upload:
+    name: External Parquet media-upload integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Install hash-locked consumer dependencies
+        run: |
+          uv pip sync --system --require-hashes tests/python/requirements.lock
+          uv pip install --system --require-hashes -r tests/integration/requirements-media.lock
+      - name: Run pinned DataFrame and pandas-gbq media-upload contract
+        run: |
+          mkdir -p .artifacts/integration-parquet-media
+          python -m pytest -c tests/integration/pytest.ini tests/integration/test_parquet_media_upload.py \
+            --junitxml=.artifacts/integration-parquet-media/junit.xml
+      - name: Publish compact test summary
+        if: always()
+        run: python tools/ci/junit_summary.py integration-parquet-media-upload .artifacts/integration-parquet-media/junit.xml
+      - name: Upload readable test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-parquet-media-report-${{ github.run_id }}
+          path: .artifacts/integration-parquet-media/junit.html
           if-no-files-found: ignore
           retention-days: 7
 
@@ -131,7 +283,18 @@ jobs:
           BQEMU_BQCLI_ARTIFACT_DIR: .artifacts/bqcli
         run: |
           mkdir -p .artifacts/bqcli
-          python3 tests/bqcli/run_contract.py
+          python3 tools/ci/command_summary.py --suite bq-cli \
+            --report .artifacts/bqcli/report.html \
+            --artifact bq-cli-report-${{ github.run_id }} -- \
+            python3 tests/bqcli/run_contract.py
+      - name: Upload readable bq report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bq-cli-report-${{ github.run_id }}
+          path: .artifacts/bqcli/report.html
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload payload-safe bq diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -152,21 +315,43 @@ jobs:
       BQEMU_ADMIN_PORT: "19051"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Build pinned multi-stage image
-        run: docker build --tag "$BQEMU_IMAGE" .
-      - name: Start read-only Compose service
-        run: timeout 180s docker compose up -d --no-build --wait --wait-timeout 120 bqemu
-      - name: Verify readiness, identity, writable paths, and query
+      - name: Build, start, and verify the Compose smoke suite
         run: |
-          curl --fail --silent --show-error --max-time 5 http://127.0.0.1:19050/readyz
-          test "$(docker compose exec -T bqemu id -u)" = "65532"
-          docker compose exec -T bqemu sh -c \
-            'test -w /data && test -w /tmp/bqemu && ! test -w /etc/bqemu/bqemu.yaml'
-          curl --fail --silent --show-error --max-time 5 \
-            -X POST http://127.0.0.1:19050/bigquery/v2/projects/local-project/queries \
-            -H 'Content-Type: application/json' \
-            -d '{"query":"SELECT 1 AS answer","useLegacySql":false}' \
-            | grep -q '"answer"'
+          python3 tools/ci/command_summary.py --suite container-smoke \
+            --report .artifacts/container-smoke/report.html \
+            --artifact container-smoke-report-${{ github.run_id }} -- \
+            sh -ec '
+              docker build --build-arg BQEMU_CONFIG_SOURCE=configs/ci/bootstrap-compose.yaml --tag "$BQEMU_IMAGE" .
+              timeout 180s docker compose up -d --no-build --wait --wait-timeout 120 bqemu
+              curl --fail --silent --show-error --max-time 5 http://127.0.0.1:19050/readyz
+              curl --fail --silent --show-error --max-time 5 \
+                http://127.0.0.1:19050/bigquery/v2/projects/bootstrap-project/datasets/bootstrap_us \
+                | grep -F -q "\"location\":\"US\""
+              docker compose restart bqemu
+              for retry in $(seq 1 120); do
+                if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:19050/readyz; then break; fi
+                test "$retry" -lt 120
+                sleep 1
+              done
+              curl --fail --silent --show-error --max-time 5 \
+                http://127.0.0.1:19050/bigquery/v2/projects/bootstrap-project/datasets/bootstrap_us \
+                | grep -F -q "\"description\":\"Compose restart fixture\""
+              test "$(docker compose exec -T bqemu id -u)" = "65532"
+              docker compose exec -T bqemu sh -c "test -w /data && test -w /tmp/bqemu && ! test -w /etc/bqemu/bqemu.yaml"
+              curl --fail --silent --show-error --max-time 5 \
+                -X POST http://127.0.0.1:19050/bigquery/v2/projects/local-project/queries \
+                -H "Content-Type: application/json" \
+                -d "{\\"query\\":\\"SELECT 1 AS answer\\",\\"useLegacySql\\":false}" \
+                | grep -q "\\"answer\\""
+            '
+      - name: Upload readable container report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-smoke-report-${{ github.run_id }}
+          path: .artifacts/container-smoke/report.html
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Capture payload-safe container logs
         if: failure()
         run: |
@@ -199,6 +384,10 @@ jobs:
       - go-smoke
       - go-tests
       - python-client
+
+      - integration-query-parameters
+      - integration-tabledata-insert-all
+      - integration-parquet-media-upload
       - bq-cli
       - spark-contract
       - container-smoke
@@ -211,6 +400,9 @@ jobs:
           GO_SMOKE_RESULT: ${{ needs.go-smoke.result }}
           GO_RESULT: ${{ needs.go-tests.result }}
           PYTHON_RESULT: ${{ needs.python-client.result }}
+          INTEGRATION_PARAMETERS_RESULT: ${{ needs.integration-query-parameters.result }}
+          INTEGRATION_TABLEDATA_RESULT: ${{ needs.integration-tabledata-insert-all.result }}
+          INTEGRATION_MEDIA_RESULT: ${{ needs.integration-parquet-media-upload.result }}
           BQ_RESULT: ${{ needs.bq-cli.result }}
           SPARK_RESULT: ${{ needs.spark-contract.result }}
           CONTAINER_RESULT: ${{ needs.container-smoke.result }}
@@ -221,6 +413,9 @@ jobs:
             "go-smoke:$GO_SMOKE_RESULT" \
             "go-tests:$GO_RESULT" \
             "python-client:$PYTHON_RESULT" \
+            "integration-query-parameters:$INTEGRATION_PARAMETERS_RESULT" \
+            "integration-tabledata-insert-all:$INTEGRATION_TABLEDATA_RESULT" \
+            "integration-parquet-media-upload:$INTEGRATION_MEDIA_RESULT" \
             "bq-cli:$BQ_RESULT" \
             "spark-contract:$SPARK_RESULT" \
             "container-smoke:$CONTAINER_RESULT"

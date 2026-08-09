@@ -22,6 +22,54 @@ import (
 const tableDataModelVersion = "duckdb-tabledata-canonical-page-v3"
 
 var _ ports.TableDataReader = (*Warehouse)(nil)
+var _ ports.TableDataWriter = (*Warehouse)(nil)
+
+// InsertTableData appends a fully preflighted insertAll batch in one explicit
+// DuckDB transaction.  Values are always passed as bound parameters; casts
+// are derived exclusively from the canonical schema, never request text.
+func (w *Warehouse) InsertTableData(ctx context.Context, request ports.TableDataWriteRequest) (err error) {
+	if len(request.Rows) == 0 {
+		return nil
+	}
+	if len(request.Schema) == 0 {
+		return fmt.Errorf("%w: table data write schema is empty", domain.ErrInvalid)
+	}
+	for index, row := range request.Rows {
+		if len(row) != len(request.Schema) {
+			return fmt.Errorf("%w: row %d has %d values for %d schema fields", domain.ErrInvalid, index, len(row), len(request.Schema))
+		}
+	}
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin table data insert transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	columns := make([]string, len(request.Schema))
+	placeholders := make([]string, len(request.Schema))
+	for index, field := range request.Schema {
+		fieldType, typeErr := duckDBType(field)
+		if typeErr != nil {
+			return typeErr
+		}
+		columns[index] = quoteIdentifier(field.Name)
+		placeholders[index] = "CAST(? AS " + fieldType + ")"
+	}
+	table := quoteIdentifier(physicalSchema(request.Reference.ProjectID, request.Reference.DatasetID)) + "." + quoteIdentifier(request.Reference.TableID)
+	statement := "INSERT INTO " + table + " (" + strings.Join(columns, ", ") + ") VALUES (" + strings.Join(placeholders, ", ") + ")"
+	for index, row := range request.Rows {
+		if _, execErr := tx.ExecContext(ctx, statement, row...); execErr != nil {
+			return fmt.Errorf("insert table data row %d: %w", index, execErr)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit table data insert transaction: %w", err)
+	}
+	return nil
+}
 
 func (w *Warehouse) ListTableData(ctx context.Context, request ports.TableDataReadRequest) (page ports.TableDataPage, err error) {
 	reference, offset, limit := request.Reference, request.Offset, request.Limit

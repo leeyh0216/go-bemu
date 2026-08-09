@@ -99,6 +99,20 @@ go vet ./...
 <!-- section: release -->
 ## 릴리스 및 문서 점검 절차
 
+통합 operation coverage는 실행 가능한 integration source 옆의 literal
+`# bqemu:operation <id> scenario=<scenario>` annotation에 둡니다. 하나를
+추가한 뒤 `make integration-contract-check`를 실행하면 정규 consumer manifest를
+다시 만들고 drift를 거부합니다. runner-only/load scenario는 비어 있지 않은 이유를
+명시한 reviewed exception일 때만 허용합니다.
+
+모든 CI 테스트 job은 suite 결과, 통과·실패·건너뜀 수, 실행 시간, 읽기 쉬운 report
+artifact 이름을 GitHub Job Summary에 하나로 남깁니다. JUnit을 사용하는 경로에서는
+XML을 기계용 입력으로만 사용하고 JUnit HTML report를 올립니다. Go, 정적 검사, CLI,
+Compose, matrix 경로도 같은 방식의 payload-safe suite HTML을 만듭니다. 간단한 report는
+7일 동안 보관합니다. Compose, service, Spark, 원시 진단 자료는 실패한 job에서만
+`-diagnostics-<run-id>`로 끝나는 artifact 이름으로 보관하며, CI의 첫 화면으로 쓰지
+않습니다.
+
 `make check`를 실행합니다. Docker 동작을 바꿨다면 컨테이너도 빌드합니다.
 호환성 변경 내용을 검토하고, 외부에 공개하는 모든 설명에 어디까지 테스트했는지
 명시되어 있는지 확인합니다.

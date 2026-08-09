@@ -21,11 +21,12 @@ import (
 )
 
 type Service struct {
-	config       Config
-	materializer ports.SnapshotMaterializer
-	clock        ports.Clock
-	ids          ports.IDGenerator
-	logger       *slog.Logger
+	config          Config
+	materializer    ports.SnapshotMaterializer
+	clock           ports.Clock
+	ids             ports.IDGenerator
+	logger          *slog.Logger
+	stateRepository ports.SessionStateRepository
 
 	mu                    sync.RWMutex
 	sessions              map[string]*sessionState
@@ -34,6 +35,7 @@ type Service struct {
 	nextReservationID     uint64
 	retainedSnapshotBytes int64
 	closed                bool
+	stateReconciled       bool
 }
 
 type sessionState struct {
@@ -41,6 +43,7 @@ type sessionState struct {
 	session       domain.Session
 	snapshot      ports.ReadSnapshot
 	retainedBytes int64
+	record        domain.SessionRecord
 }
 
 type streamState struct {
@@ -48,23 +51,34 @@ type streamState struct {
 	stream  domain.Stream
 }
 
-func New(config Config, materializer ports.SnapshotMaterializer, clock ports.Clock, ids ports.IDGenerator, logger *slog.Logger) (*Service, error) {
+func New(config Config, materializer ports.SnapshotMaterializer, clock ports.Clock, ids ports.IDGenerator, logger *slog.Logger, options ...Option) (*Service, error) {
 	if materializer == nil || clock == nil || ids == nil || logger == nil {
 		return nil, fmt.Errorf("storage read dependencies must not be nil")
 	}
 	if err := validateConfig(&config); err != nil {
 		return nil, err
 	}
-	return &Service{
-		config:       config,
-		materializer: materializer,
-		clock:        clock,
-		ids:          ids,
-		logger:       logger,
-		sessions:     make(map[string]*sessionState),
-		streams:      make(map[string]streamState),
-		reservations: make(map[uint64]*sessionReservation),
-	}, nil
+	service := &Service{
+		config:          config,
+		materializer:    materializer,
+		clock:           clock,
+		ids:             ids,
+		logger:          logger,
+		stateRepository: transientSessionStateRepository{},
+		stateReconciled: true,
+		sessions:        make(map[string]*sessionState),
+		streams:         make(map[string]streamState),
+		reservations:    make(map[uint64]*sessionReservation),
+	}
+	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("Storage Read option must not be nil")
+		}
+		if err := option(service); err != nil {
+			return nil, err
+		}
+	}
+	return service, nil
 }
 
 func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessionRequest) (domain.Session, error) {
@@ -177,7 +191,22 @@ func (s *Service) CreateSession(ctx context.Context, request domain.CreateSessio
 		SnapshotTime:          cloneTime(request.SnapshotTime),
 		TraceID:               request.TraceID,
 	}
-	state := &sessionState{session: session, snapshot: snapshot, retainedBytes: metadata.RetainedBytes}
+	canonicalSelectedFields := slices.Clone(metadata.SelectedFields)
+	if canonicalSelectedFields == nil {
+		canonicalSelectedFields = slices.Clone(request.SelectedFields)
+	}
+	record := domain.SessionRecord{
+		Name: session.Name, Table: session.Table, Format: session.Format,
+		SelectedFields:       canonicalSelectedFields,
+		RowRestrictionDigest: digest([]byte(request.RowRestriction)),
+		RowRestrictionBytes:  len(request.RowRestriction), FilterShape: metadata.FilterShape,
+		Streams: slices.Clone(streams), CreatedAt: now, ExpireTime: session.ExpireTime,
+		SnapshotTime: cloneTime(request.SnapshotTime), RetainedRowCount: metadata.RowCount,
+		RetainedBytes: metadata.RetainedBytes, EstimatedBytesScanned: metadata.EstimatedBytes,
+		SchemaFingerprint: metadata.Schema.Fingerprint, Lifecycle: domain.SessionActive,
+		LifecycleUpdatedAt: now,
+	}
+	state := &sessionState{session: session, snapshot: snapshot, retainedBytes: metadata.RetainedBytes, record: record}
 	if err := s.commitReservedSession(ctx, operation, reservation, state); err != nil {
 		reservationReason = "commit_rejected"
 		closeErr := s.closeUnstoredSnapshot(ctx, operation, reservationReason, snapshot)

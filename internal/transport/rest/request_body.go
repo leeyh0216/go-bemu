@@ -90,8 +90,23 @@ func WithRequestBodyLimits(maxCompressedBytes, maxUncompressedBytes int64) Optio
 	}
 }
 
-func requestBodyMiddleware(limits requestBodyLimits, next http.Handler) http.Handler {
+// WithMediaUploadMaxBytes raises the body ceiling only for the official media
+// upload paths. The media store enforces the same per-object ceiling while
+// streaming, so this is not an unbounded HTTP exception.
+func WithMediaUploadMaxBytes(maxBytes int64) Option {
+	return func(server *Server) {
+		if maxBytes > 0 {
+			server.mediaUploadMaxBytes = maxBytes
+		}
+	}
+}
+
+func requestBodyMiddleware(limits requestBodyLimits, mediaUploadMaxBytes int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if mediaUploadMaxBytes > 0 && (strings.HasPrefix(r.URL.Path, "/upload/bigquery/") || strings.HasPrefix(r.URL.Path, "/resumable/upload/bigquery/")) {
+			limits.maxCompressedBytes = max(limits.maxCompressedBytes, mediaUploadMaxBytes)
+			limits.maxUncompressedBytes = max(limits.maxUncompressedBytes, mediaUploadMaxBytes)
+		}
 		ctx := context.WithValue(r.Context(), requestBodyLimitsContextKey{}, limits)
 		outcome := &requestBodyOutcome{}
 		ctx = context.WithValue(ctx, requestBodyOutcomeContextKey{}, outcome)

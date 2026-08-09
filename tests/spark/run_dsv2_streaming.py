@@ -20,14 +20,17 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
 from artifact_variants import (
+    DSV2_OVERLAY_VARIANT,
     DSV2_PROVIDER,
     DSV2_RAW_VARIANT,
     SERVICE_ENTRY,
     enforce_connector_classpath,
+    enforce_overlay_pair,
 )
 
 
@@ -37,6 +40,39 @@ DIRECT_WRITER_CONTEXT = (
     "com.google.cloud.spark.bigquery.write.context."
     "BigQueryDirectDataSourceWriterContext"
 )
+
+
+class RunnerStageFailure(RuntimeError):
+    def __init__(self, stage: str, cause_shape: str):
+        self.stage = stage
+        self.cause_shape = cause_shape
+        super().__init__(stage)
+
+
+def _at_stage(stage: str, operation: Any) -> Any:
+    try:
+        return operation()
+    except Exception as error:
+        raise RunnerStageFailure(stage, _exception_type_shape(error)) from None
+
+
+def _exception_type_shape(error: Exception) -> str:
+    """Retain exception classes only; never inspect or log messages."""
+
+    classes = [type(error).__name__]
+    current = getattr(error, "_origin", None)
+    for _ in range(8):
+        if current is None:
+            break
+        try:
+            name = str(current.getClass().getName()).rsplit(".", 1)[-1]
+            if not re.fullmatch(r"[A-Za-z0-9_$]+", name):
+                name = "UnknownJavaException"
+            classes.append(name)
+            current = current.getCause()
+        except Exception:
+            break
+    return ":".join(classes)
 
 
 def _positive_seconds(value: object, field: str) -> float:
@@ -49,15 +85,17 @@ def _positive_seconds(value: object, field: str) -> float:
     return parsed
 
 
-def _safe_event(*, stage: str, shape: str, status: str, fix_hint: str) -> None:
+def _safe_event(
+    *, operation: str, stage: str, shape: str, status: str, fix_hint: str
+) -> None:
     fingerprint = hashlib.sha256(
-        f"dsv2-raw-streaming\0{stage}\0{shape}\0{status}".encode("utf-8")
+        f"{operation}\0{stage}\0{shape}\0{status}".encode("utf-8")
     ).hexdigest()
     print(
         " ".join(
             (
                 "version=0.44.2",
-                "operation=dsv2-raw-streaming",
+                f"operation={operation}",
                 f"stage={stage}",
                 f"shape={shape}",
                 f"fingerprint=sha256:{fingerprint}",
@@ -88,10 +126,15 @@ def _load_config(path: Path) -> dict[str, Any]:
         "testTimeoutSeconds",
         "rpcTimeoutSeconds",
     }
-    if set(config) != required:
+    allowed_shapes = (required, required | {"overlayClasspath"})
+    if set(config) not in allowed_shapes:
         raise ValueError("runner configuration shape drift")
     if not isinstance(config["connectorClasspath"], list):
         raise ValueError("connectorClasspath must be a list")
+    if "overlayClasspath" in config and not isinstance(
+        config["overlayClasspath"], list
+    ):
+        raise ValueError("overlayClasspath must be a list")
     return config
 
 
@@ -164,6 +207,21 @@ def _run(config: dict[str, Any]) -> None:
         expected_variant=DSV2_RAW_VARIANT,
         repository_root=REPOSITORY_ROOT,
     )
+    pair = None
+    variant = DSV2_RAW_VARIANT
+    operation = "dsv2-raw-streaming"
+    if "overlayClasspath" in config:
+        pair = enforce_overlay_pair(
+            base_paths=[
+                Path(str(path)).resolve() for path in config["connectorClasspath"]
+            ],
+            overlay_paths=[
+                Path(str(path)).resolve() for path in config["overlayClasspath"]
+            ],
+            repository_root=REPOSITORY_ROOT,
+        )
+        variant = DSV2_OVERLAY_VARIANT
+        operation = "dsv2-overlay-streaming"
 
     from pyspark.sql import SparkSession
     from pyspark.sql.types import (
@@ -186,10 +244,9 @@ def _run(config: dict[str, Any]) -> None:
     os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
     os.environ["PYSPARK_PYTHON"] = python_executable
     os.environ["PYSPARK_DRIVER_PYTHON"] = python_executable
-    spark = (
+    builder = (
         SparkSession.builder.master("local[1]")
-        .appName("bqemu-dsv2-raw-streaming-contract")
-        .config("spark.jars", str(selected.path))
+        .appName("bqemu-dsv2-streaming-contract")
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.driver.extraJavaOptions", trust_options)
@@ -199,36 +256,82 @@ def _run(config: dict[str, Any]) -> None:
         .config("spark.sql.shuffle.partitions", "1")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.ui.enabled", "false")
-        .getOrCreate()
     )
+    if pair is not None:
+        # Put the exact pair in one parent classloader. Duplicating the base in
+        # Spark's driver/executor child loaders makes commit-message classes
+        # non-identical and fails the DSv2 driver cast.
+        pair_classpath = os.pathsep.join(
+            str(path) for path in pair.runtime_classpath
+        )
+        builder = builder.config("spark.driver.extraClassPath", pair_classpath).config(
+            "spark.executor.extraClassPath", pair_classpath
+        )
+        expected_listed_jar_count = 0
+    else:
+        builder = builder.config("spark.jars", str(selected.path))
+        expected_listed_jar_count = 1
+    spark = _at_stage("spark-start", builder.getOrCreate)
     spark.sparkContext.setLogLevel("WARN")
     query = None
     try:
         java = spark._jvm
-        provider = java.org.apache.spark.sql.execution.datasources.DataSource.lookupDataSource(
-            "bigquery", spark._jsparkSession.sessionState().conf()
+        provider = _at_stage(
+            "provider-lookup",
+            lambda: java.org.apache.spark.sql.execution.datasources.DataSource.lookupDataSource(
+                "bigquery", spark._jsparkSession.sessionState().conf()
+            ),
         )
         runtime_scala = java.scala.util.Properties.versionNumberString()
         service_count, other_connector_count = _connector_service_shape(
             java, SERVICE_ENTRY
         )
-        context_class = java.java.lang.Class.forName(
-            DIRECT_WRITER_CONTEXT,
-            False,
-            java.java.lang.Thread.currentThread().getContextClassLoader(),
+        context_class = _at_stage(
+            "writer-context-load",
+            lambda: java.java.lang.Class.forName(
+                DIRECT_WRITER_CONTEXT,
+                False,
+                java.java.lang.Thread.currentThread().getContextClassLoader(),
+            ),
         )
         listed_jar_count = int(spark.sparkContext._jsc.sc().listJars().size())
         provider_source_matches = _code_source_path(provider) == selected.path
-        context_source_matches = _code_source_path(context_class) == selected.path
+        expected_context_source = pair.overlay.path if pair is not None else selected.path
+        context_source_matches = _code_source_path(context_class) == expected_context_source
+        hook_names = {
+            str(method.getName())
+            for method in context_class.getDeclaredMethods()
+            if str(method.getName())
+            in {"onDataStreamingWriterCommit", "onDataStreamingWriterAbort"}
+            and len(method.getParameterTypes()) == 2
+            and str(method.getParameterTypes()[0].getName()) == "long"
+            and str(method.getParameterTypes()[1].getName())
+            == "[Lcom.google.cloud.spark.bigquery.write.context.WriterCommitMessageContext;"
+            and str(method.getReturnType().getName()) == "void"
+        }
+        expected_hook_count = 2 if pair is not None else 0
+        if pair is not None:
+            runtime_classpath_matches = (
+                spark.sparkContext.getConf().get("spark.driver.extraClassPath", "")
+                == pair_classpath
+                and spark.sparkContext.getConf().get(
+                    "spark.executor.extraClassPath", ""
+                )
+                == pair_classpath
+            )
+        else:
+            runtime_classpath_matches = True
         if (
             spark.version != "3.5.8"
             or runtime_scala != "2.12.18"
             or provider.getName() != DSV2_PROVIDER
             or service_count != 1
             or other_connector_count != 0
-            or listed_jar_count != 1
+            or listed_jar_count != expected_listed_jar_count
             or not provider_source_matches
             or not context_source_matches
+            or len(hook_names) != expected_hook_count
+            or not runtime_classpath_matches
         ):
             raise RuntimeError("Spark runtime/provider identity drift")
 
@@ -268,8 +371,13 @@ def _run(config: dict[str, Any]) -> None:
         writer = frame.writeStream.format("bigquery").outputMode("append")
         for key, value in options.items():
             writer = writer.option(key, value)
-        query = writer.trigger(availableNow=True).start()
-        if not query.awaitTermination(timeout):
+        query = _at_stage(
+            "query-start", lambda: writer.trigger(availableNow=True).start()
+        )
+        terminated = _at_stage(
+            "query-await", lambda: query.awaitTermination(timeout)
+        )
+        if not terminated:
             query.stop()
             query.awaitTermination(min(timeout, 10.0))
             raise TimeoutError("streaming query exceeded its configured timeout")
@@ -285,7 +393,7 @@ def _run(config: dict[str, Any]) -> None:
         ]
         result = {
             "schemaVersion": "1",
-            "variant": DSV2_RAW_VARIANT,
+            "variant": variant,
             "sparkVersion": "3.5.8",
             "scalaVersion": "2.12.18",
             "provider": "Spark35BigQueryTableProvider",
@@ -293,6 +401,8 @@ def _run(config: dict[str, Any]) -> None:
             "listedJarCount": listed_jar_count,
             "providerCodeSourceMatches": provider_source_matches,
             "writerContextCodeSourceMatches": context_source_matches,
+            "streamingHookCount": len(hook_names),
+            "runtimeClasspathOrderMatches": runtime_classpath_matches,
             "batches": batches,
         }
         Path(str(config["resultPath"])).write_text(
@@ -300,6 +410,7 @@ def _run(config: dict[str, Any]) -> None:
             encoding="utf-8",
         )
         _safe_event(
+            operation=operation,
             stage="query-complete",
             shape=f"batches:{len(batches)},input-rows:{sum(item['inputRows'] for item in batches)}",
             status="passed",
@@ -316,10 +427,21 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     arguments = parser.parse_args()
     try:
-        _run(_load_config(arguments.config))
+        config = _load_config(arguments.config)
+        operation = (
+            "dsv2-overlay-streaming"
+            if "overlayClasspath" in config
+            else "dsv2-raw-streaming"
+        )
+        _run(config)
     except Exception as error:
-        shape = type(error).__name__
+        shape = (
+            f"{error.stage}:{error.cause_shape}"
+            if isinstance(error, RunnerStageFailure)
+            else type(error).__name__
+        )
         _safe_event(
+            operation=locals().get("operation", "dsv2-streaming"),
             stage="runner",
             shape=shape,
             status="failed",

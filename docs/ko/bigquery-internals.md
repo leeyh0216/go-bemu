@@ -189,8 +189,10 @@ BigQuery는 REST 요청 구조를
 `WRITE_EMPTY`, `WRITE_TRUNCATE`는 DuckDB 트랜잭션 하나에서 적용합니다. 파일 원본을
 사용하려면 로컬 전용 옵션을 명시해야 합니다.
 
-대상 생성, 자동 감지, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, 멀티파트·재개 가능
-다운로드는 지원하지 않습니다. 작업과 멱등성 상태는 프로세스 내부에만 보관합니다.
+명시 스키마를 사용한 대상 생성과 `WRITE_APPEND`의 `ALLOW_FIELD_ADDITION`은
+지원합니다. 필드 추가는 기존 필드를 모두 보존하고 새 nullable/repeated 필드만
+허용합니다. 완화, 자동 감지, Avro/ORC/CSV/NDJSON, 멀티파트·재개 가능 다운로드는
+지원하지 않습니다. 작업과 멱등성 상태는 프로세스 내부에만 보관합니다.
 
 <!-- section: rest-jobs -->
 ## REST 작업, 상태 확인, 페이지 조회
@@ -240,10 +242,12 @@ Federation](https://cloud.google.com/iam/docs/workload-identity-federation)에 �
 있습니다.
 
 BQEMU는 BigQuery 호환 엔드포인트의 요청을 인증하거나 인가하지 않습니다. REST와
-gRPC는 인증 정보가 없는 요청을 허용하며 `Authorization` 값이 있어도 무시합니다.
-클라이언트 토큰 획득, TLS, 별도의 진단용 관리 토큰, IAM은 서로 다른 지원 범위로
-관리합니다. 공개 실행 환경은 서명 신뢰, IAM 역할, 권한 상속, 연합 정책, 토큰 검사,
-운영 환경의 인가를 재현하지 않습니다.
+gRPC는 인증 정보가 없는 요청을 허용하며 Authorization 값이 있어도 무시합니다. 이
+저장소의 생성기는 세 가지 클라이언트 인증 파일을 만듭니다. 루프백 OAuth/STS 발급
+서버는 크기에 상한을 둔 로컬 토큰 교환을 처리합니다. 자세한 사용법은 [로컬
+클라이언트 인증 파일과 TLS](client-credentials-and-tls.md)에 있습니다. 이 기능은
+서명 신뢰, IAM 역할, 권한 상속, 연합 정책, 토큰 검사와 운영 환경의 인가를 재현하지
+않습니다.
 
 <!-- section: implementation-map -->
 ## 구현 매핑
@@ -257,8 +261,8 @@ gRPC는 인증 정보가 없는 요청을 허용하며 `Authorization` 값이 �
 | `AppendRows`/확정/커밋 | 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋 지원. 고급 스트림 유형과 영속성은 미지원 |
 | 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 선택형 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 대상 Parquet 지원. 다른 형식, 생성, 스키마 변경, 다운로드 방식은 미지원 |
 | 직접 덮어쓰기 `MERGE` | 구조 기반 커넥터 SQL 어댑터 | 정적 비파티션 커넥터 `0.44.2` 공개 API 검증 완료. 동적 시간·범위 파티션과 일반 `MERGE` 호환성은 미지원 |
-| BigQuery 호환 요청 인증 | REST/gRPC 전송 동작 | 의도적으로 제공하지 않으며 인증 정보 값을 무시함 |
-| ADC/WIF 획득 | 클라이언트 인증 정보 라이브러리 | 공개 BQEMU 실행 환경의 범위 밖 |
+| BigQuery 호환 요청 인증 | REST/gRPC 전송 동작 | 의도적으로 제공하지 않으며 인증 정보를 무시함 |
+| ADC/WIF 획득 | 저장소의 인증 파일 생성기와 루프백 발급 서버 | 서비스 계정, 사용자 계정과 파일 기반 WIF 테스트 절차 구현 |
 
 지원 범위를 바꾸려면 공개 경계 테스트를 추가해야 합니다. 한국어와 영어 호환성
 문서도 함께 갱신해야 합니다.

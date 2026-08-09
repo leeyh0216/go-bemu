@@ -46,6 +46,7 @@ type Server struct {
 	readiness           ports.HealthChecker
 	baseURL             string
 	requestBodyLimits   requestBodyLimits
+	mediaUploadMaxBytes int64
 	routeExtensions     []routeRegistration
 	discoveryExtensions []discoveryExtension
 }
@@ -85,7 +86,7 @@ func (s *Server) Handler() http.Handler {
 	for _, register := range s.routeExtensions {
 		register(mux)
 	}
-	handler := requestBodyMiddleware(s.requestBodyLimits, mux)
+	handler := requestBodyMiddleware(s.requestBodyLimits, s.mediaUploadMaxBytes, mux)
 	handler = methodOverrideMiddleware(handler)
 	handler = recoverMiddleware(handler)
 	return observability.HTTPMiddleware(handler)

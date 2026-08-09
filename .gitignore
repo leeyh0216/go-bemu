@@ -3,6 +3,10 @@
 /.artifacts/
 *.duckdb
 *.duckdb.wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.bqemu-auth/
 coverage.out
 .envrc.local
 .pytest_cache/

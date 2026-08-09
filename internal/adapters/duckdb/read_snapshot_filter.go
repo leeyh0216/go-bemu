@@ -1,353 +1,472 @@
 package duckdb
 
-// Storage Read row_restriction accepts a GoogleSQL predicate, not a complete
-// query. This deliberately small parser accepts the connector's common scalar
-// pushdown shape and emits parameterized DuckDB SQL; unsupported grammar fails
-// before any database side effect.
-//
-// Protocol sources:
-//   - row_restriction: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession.tablereadoptions
-//   - GoogleSQL lexical rules: https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical
+// Storage Read row_restriction enters through the official GoogleSQL AST. Every
+// literal becomes a database parameter, while identifiers are resolved against
+// the canonical table schema before a statement is materialized.
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 
+	gsql "github.com/goccy/go-googlesql"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
+	readdomain "github.com/leeyh0216/go-bemu/internal/storageread/domain"
 )
-
-type restrictionTokenKind uint8
-
-const (
-	restrictionEOF restrictionTokenKind = iota
-	restrictionIdentifier
-	restrictionString
-	restrictionNumber
-	restrictionOperator
-	restrictionLeftParen
-	restrictionRightParen
-	restrictionDot
-)
-
-type restrictionToken struct {
-	kind  restrictionTokenKind
-	value string
-}
-
-type restrictionParser struct {
-	tokens []restrictionToken
-	index  int
-	schema []catalogdomain.Field
-	args   []any
-}
 
 func compileRowRestriction(input string, schema []catalogdomain.Field) (string, []any, error) {
+	expression, args, _, err := compileRowRestrictionWithShape(input, schema)
+	return expression, args, err
+}
+
+func compileRowRestrictionWithShape(input string, schema []catalogdomain.Field) (string, []any, readdomain.FilterShape, error) {
 	if strings.TrimSpace(input) == "" {
-		return "", nil, nil
+		return "", nil, readdomain.FilterShape{}, nil
 	}
-	tokens, err := lexRowRestriction(input)
+	parser, err := googlesqladapter.NewParser()
 	if err != nil {
-		return "", nil, err
+		return "", nil, readdomain.FilterShape{}, fmt.Errorf("initialize GoogleSQL row restriction parser: %w", err)
 	}
-	parser := restrictionParser{tokens: tokens, schema: schema}
-	expression, err := parser.parseOr()
+	expression, err := parser.ParseStorageReadPredicate(context.Background(), input)
 	if err != nil {
-		return "", nil, err
+		return "", nil, readdomain.FilterShape{}, err
 	}
-	if parser.peek().kind != restrictionEOF {
-		return "", nil, fmt.Errorf("unsupported row restriction token %q", parser.peek().value)
-	}
-	return expression, parser.args, nil
-}
-
-func lexRowRestriction(input string) ([]restrictionToken, error) {
-	tokens := make([]restrictionToken, 0, 16)
-	for index := 0; index < len(input); {
-		current := input[index]
-		switch {
-		case unicode.IsSpace(rune(current)):
-			index++
-		case isIdentifierStart(current):
-			end := index + 1
-			for end < len(input) && isIdentifierPart(input[end]) {
-				end++
-			}
-			tokens = append(tokens, restrictionToken{kind: restrictionIdentifier, value: input[index:end]})
-			index = end
-		case current == '`':
-			identifier, end, err := scanBacktickIdentifier(input, index)
-			if err != nil {
-				return nil, err
-			}
-			tokens = append(tokens, restrictionToken{kind: restrictionIdentifier, value: identifier})
-			index = end
-		case current == '\'':
-			value, end, err := scanRestrictionString(input, index)
-			if err != nil {
-				return nil, err
-			}
-			tokens = append(tokens, restrictionToken{kind: restrictionString, value: value})
-			index = end
-		case current >= '0' && current <= '9' || (current == '-' || current == '+') && index+1 < len(input) && input[index+1] >= '0' && input[index+1] <= '9':
-			end := scanRestrictionNumber(input, index)
-			tokens = append(tokens, restrictionToken{kind: restrictionNumber, value: input[index:end]})
-			index = end
-		case current == '(':
-			tokens = append(tokens, restrictionToken{kind: restrictionLeftParen, value: "("})
-			index++
-		case current == ')':
-			tokens = append(tokens, restrictionToken{kind: restrictionRightParen, value: ")"})
-			index++
-		case current == '.':
-			tokens = append(tokens, restrictionToken{kind: restrictionDot, value: "."})
-			index++
-		case strings.ContainsRune("=<>!", rune(current)):
-			end := index + 1
-			if end < len(input) && (input[end] == '=' || current == '<' && input[end] == '>') {
-				end++
-			}
-			operator := input[index:end]
-			if operator == "!" {
-				return nil, fmt.Errorf("unsupported row restriction operator %q", operator)
-			}
-			tokens = append(tokens, restrictionToken{kind: restrictionOperator, value: operator})
-			index = end
-		default:
-			return nil, fmt.Errorf("unsupported row restriction character %q at byte %d", current, index)
-		}
-	}
-	tokens = append(tokens, restrictionToken{kind: restrictionEOF})
-	return tokens, nil
-}
-
-func scanRestrictionString(input string, start int) (string, int, error) {
-	var value strings.Builder
-	for index := start + 1; index < len(input); index++ {
-		if input[index] != '\'' {
-			if input[index] == '\\' {
-				return "", 0, fmt.Errorf("backslash escapes are not supported in row restrictions")
-			}
-			value.WriteByte(input[index])
-			continue
-		}
-		if index+1 < len(input) && input[index+1] == '\'' {
-			value.WriteByte('\'')
-			index++
-			continue
-		}
-		return value.String(), index + 1, nil
-	}
-	return "", 0, fmt.Errorf("unterminated row restriction string")
-}
-
-func scanRestrictionNumber(input string, start int) int {
-	index := start
-	if input[index] == '-' || input[index] == '+' {
-		index++
-	}
-	for index < len(input) && input[index] >= '0' && input[index] <= '9' {
-		index++
-	}
-	if index < len(input) && input[index] == '.' {
-		index++
-		for index < len(input) && input[index] >= '0' && input[index] <= '9' {
-			index++
-		}
-	}
-	if index < len(input) && (input[index] == 'e' || input[index] == 'E') {
-		index++
-		if index < len(input) && (input[index] == '-' || input[index] == '+') {
-			index++
-		}
-		for index < len(input) && input[index] >= '0' && input[index] <= '9' {
-			index++
-		}
-	}
-	return index
-}
-
-func (p *restrictionParser) parseOr() (string, error) {
-	left, err := p.parseAnd()
+	lowerer := restrictionLowerer{schema: schema}
+	sql, err := lowerer.expression(expression, nil)
 	if err != nil {
-		return "", err
+		return "", nil, readdomain.FilterShape{}, err
 	}
-	for p.consumeKeyword("OR") {
-		right, err := p.parseAnd()
+	return sql, lowerer.args, readdomain.FilterShape{
+		PredicateCount: lowerer.predicateCount, LogicalOperatorCount: lowerer.logicalOperatorCount,
+	}, nil
+}
+
+type restrictionLowerer struct {
+	schema               []catalogdomain.Field
+	args                 []any
+	predicateCount       int
+	logicalOperatorCount int
+}
+
+func (l *restrictionLowerer) expression(node gsql.ASTExpressionNode, expected *catalogdomain.Field) (string, error) {
+	if node == nil {
+		return "", fmt.Errorf("row restriction has an empty expression")
+	}
+	switch value := node.(type) {
+	case *gsql.ASTAndExpr:
+		return l.logical("AND", value, value.Conjuncts)
+	case *gsql.ASTOrExpr:
+		return l.logical("OR", value, value.Disjuncts)
+	case *gsql.ASTUnaryExpression:
+		operator, err := value.GetSQLForOperator()
+		if err != nil {
+			return "", fmt.Errorf("read GoogleSQL unary operator: %w", err)
+		}
+		operator = strings.ToUpper(strings.TrimSpace(operator))
+		if operator != "NOT" && operator != "+" && operator != "-" {
+			return "", fmt.Errorf("unsupported GoogleSQL unary expression")
+		}
+		operand, err := value.Operand()
+		if err != nil {
+			return "", fmt.Errorf("read unary expression: %w", err)
+		}
+		sql, err := l.expression(operand, nil)
 		if err != nil {
 			return "", err
 		}
-		left = "(" + left + " OR " + right + ")"
-	}
-	return left, nil
-}
-
-func (p *restrictionParser) parseAnd() (string, error) {
-	left, err := p.parseUnary()
-	if err != nil {
-		return "", err
-	}
-	for p.consumeKeyword("AND") {
-		right, err := p.parseUnary()
+		if operator == "NOT" {
+			l.logicalOperatorCount++
+			return "(NOT " + sql + ")", nil
+		}
+		return "(" + operator + sql + ")", nil
+	case *gsql.ASTBinaryExpression:
+		return l.binary(value)
+	case *gsql.ASTBetweenExpression:
+		return l.between(value)
+	case *gsql.ASTInExpression:
+		return l.in(value)
+	case *gsql.ASTCastExpression:
+		return l.cast(value)
+	case *gsql.ASTFunctionCall:
+		return l.function(value)
+	case *gsql.ASTPathExpression:
+		path, field, err := l.path(value)
 		if err != nil {
 			return "", err
 		}
-		left = "(" + left + " AND " + right + ")"
-	}
-	return left, nil
-}
-
-func (p *restrictionParser) parseUnary() (string, error) {
-	if p.consumeKeyword("NOT") {
-		expression, err := p.parseUnary()
+		_ = field
+		return path, nil
+	case *gsql.ASTStringLiteral:
+		literal, err := value.StringValue()
 		if err != nil {
 			return "", err
 		}
-		return "(NOT " + expression + ")", nil
-	}
-	if p.peek().kind == restrictionLeftParen {
-		p.index++
-		expression, err := p.parseOr()
+		l.args = append(l.args, literal)
+		return "?", nil
+	case *gsql.ASTBooleanLiteral:
+		literal, err := value.Value()
 		if err != nil {
 			return "", err
 		}
-		if p.peek().kind != restrictionRightParen {
-			return "", fmt.Errorf("row restriction is missing a closing parenthesis")
-		}
-		p.index++
-		return "(" + expression + ")", nil
+		l.args = append(l.args, literal)
+		return "?", nil
+	case *gsql.ASTIntLiteral:
+		return l.number(value.ASTPrintableLeaf, expected)
+	case *gsql.ASTFloatLiteral:
+		return l.number(value.ASTPrintableLeaf, expected)
+	case *gsql.ASTNullLiteral:
+		return "NULL", nil
+	case *gsql.ASTDateOrTimeLiteral:
+		return l.dateOrTime(value)
+	default:
+		return "", fmt.Errorf("unsupported GoogleSQL row restriction expression %T", node)
 	}
-	return p.parsePredicate()
 }
 
-func (p *restrictionParser) parsePredicate() (string, error) {
-	path, field, err := p.parseFieldPath()
+func (l *restrictionLowerer) cast(node *gsql.ASTCastExpression) (string, error) {
+	expression, err := node.Expr()
 	if err != nil {
 		return "", err
 	}
-	quoted := make([]string, len(path))
-	for index, component := range path {
-		quoted[index] = quoteIdentifier(component)
-	}
-	column := strings.Join(quoted, ".")
-	if p.consumeKeyword("IS") {
-		not := p.consumeKeyword("NOT")
-		if !p.consumeKeyword("NULL") {
-			return "", fmt.Errorf("row restriction IS supports only NULL")
-		}
-		if not {
-			return column + " IS NOT NULL", nil
-		}
-		return column + " IS NULL", nil
-	}
-	operator := p.peek()
-	if operator.kind != restrictionOperator {
-		return "", fmt.Errorf("row restriction field %q requires a comparison or IS NULL", strings.Join(path, "."))
-	}
-	p.index++
-	if operator.value == "==" {
-		operator.value = "="
-	}
-	literal, err := p.parseLiteral(field)
+	sql, err := l.expression(expression, nil)
 	if err != nil {
 		return "", err
 	}
-	p.args = append(p.args, literal)
-	return column + " " + operator.value + " ?", nil
+	typeNode, err := node.Type()
+	if err != nil {
+		return "", err
+	}
+	simple, ok := typeNode.(*gsql.ASTSimpleType)
+	if !ok {
+		return "", fmt.Errorf("unsupported GoogleSQL CAST target %T", typeNode)
+	}
+	path, err := simple.TypeName()
+	if err != nil || path == nil {
+		return "", fmt.Errorf("read GoogleSQL CAST target: %w", err)
+	}
+	names, err := path.ToIdentifierVector()
+	if err != nil || len(names) != 1 {
+		return "", fmt.Errorf("unsupported GoogleSQL CAST target")
+	}
+	target, ok := duckDBCastTarget(names[0])
+	if !ok {
+		return "", fmt.Errorf("unsupported GoogleSQL CAST target %q", names[0])
+	}
+	return "CAST(" + sql + " AS " + target + ")", nil
 }
 
-func (p *restrictionParser) parseFieldPath() ([]string, catalogdomain.Field, error) {
-	first := p.peek()
-	if first.kind != restrictionIdentifier || isRestrictionKeyword(first.value) {
-		return nil, catalogdomain.Field{}, fmt.Errorf("row restriction requires a field identifier, got %q", first.value)
+func duckDBCastTarget(name string) (string, bool) {
+	switch strings.ToUpper(name) {
+	case "STRING":
+		return "VARCHAR", true
+	case "BOOL", "BOOLEAN":
+		return "BOOLEAN", true
+	case "INT64", "INTEGER":
+		return "BIGINT", true
+	case "FLOAT64", "FLOAT":
+		return "DOUBLE", true
+	case "DATE":
+		return "DATE", true
+	case "TIMESTAMP":
+		return "TIMESTAMPTZ", true
+	default:
+		return "", false
 	}
-	p.index++
-	path := []string{first.value}
-	for p.peek().kind == restrictionDot {
-		p.index++
-		next := p.peek()
-		if next.kind != restrictionIdentifier || isRestrictionKeyword(next.value) {
-			return nil, catalogdomain.Field{}, fmt.Errorf("invalid nested field path after %q", strings.Join(path, "."))
+}
+
+func (l *restrictionLowerer) logical(operator string, node gsql.ASTExpressionNode, child func(int32) (gsql.ASTExpressionNode, error)) (string, error) {
+	childCount, err := node.NumChildren()
+	if err != nil || childCount < 2 {
+		return "", fmt.Errorf("GoogleSQL %s requires at least two expressions", operator)
+	}
+	parts := make([]string, 0, int(childCount))
+	for index := int32(0); index < childCount; index++ {
+		node, err := child(index)
+		if err != nil {
+			return "", fmt.Errorf("read %s expression: %w", operator, err)
 		}
-		p.index++
-		path = append(path, next.value)
+		part, err := l.expression(node, nil)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, part)
 	}
-	field, found := findFieldPath(p.schema, path)
+	l.logicalOperatorCount += len(parts) - 1
+	return "(" + strings.Join(parts, " "+operator+" ") + ")", nil
+}
+
+func (l *restrictionLowerer) binary(node *gsql.ASTBinaryExpression) (string, error) {
+	lhs, err := node.Lhs()
+	if err != nil {
+		return "", err
+	}
+	path, field, fieldBound, err := l.comparisonLeft(lhs)
+	if err != nil {
+		return "", err
+	}
+	operator, err := node.GetSQLForOperator()
+	if err != nil {
+		return "", err
+	}
+	operator = strings.ToUpper(strings.TrimSpace(operator))
+	rhs, err := node.Rhs()
+	if err != nil {
+		return "", err
+	}
+	if operator == "IS" || operator == "IS NOT" {
+		if _, ok := rhs.(*gsql.ASTNullLiteral); !ok {
+			return "", fmt.Errorf("row restriction %s only supports NULL", operator)
+		}
+		l.predicateCount++
+		return path + " " + operator + " NULL", nil
+	}
+	switch operator {
+	case "=", "!=", "<>", "<", "<=", ">", ">=":
+	default:
+		return "", fmt.Errorf("unsupported GoogleSQL comparison operator %q", operator)
+	}
+	var expected *catalogdomain.Field
+	if fieldBound {
+		expected = &field
+	}
+	right, err := l.expression(rhs, expected)
+	if err != nil {
+		return "", err
+	}
+	l.predicateCount++
+	return path + " " + operator + " " + right, nil
+}
+
+func (l *restrictionLowerer) comparisonLeft(node gsql.ASTExpressionNode) (string, catalogdomain.Field, bool, error) {
+	path, field, err := l.identifier(node)
+	if err == nil {
+		return path, field, true, nil
+	}
+	sql, lowerErr := l.expression(node, nil)
+	if lowerErr != nil {
+		return "", catalogdomain.Field{}, false, lowerErr
+	}
+	return sql, catalogdomain.Field{}, false, nil
+}
+
+// function maps the small Storage Read function subset from the official AST
+// to DuckDB. Names are never copied from user input; a function outside this
+// allowlist fails before the materialization statement is constructed.
+func (l *restrictionLowerer) function(node *gsql.ASTFunctionCall) (string, error) {
+	if hasModifiers, err := node.HasModifiers(false); err != nil || hasModifiers {
+		return "", fmt.Errorf("unsupported GoogleSQL row restriction function modifiers")
+	}
+	function, err := node.Function()
+	if err != nil || function == nil {
+		return "", fmt.Errorf("read GoogleSQL row restriction function")
+	}
+	name, err := function.ToIdentifierVector()
+	if err != nil || len(name) != 1 {
+		return "", fmt.Errorf("unsupported GoogleSQL row restriction function")
+	}
+	childCount, err := node.NumChildren()
+	if err != nil || childCount < 1 {
+		return "", fmt.Errorf("read GoogleSQL row restriction function arguments")
+	}
+	// With modifiers rejected above, the first child is the function path and
+	// every remaining child is an argument. Do not probe Arguments past this
+	// count: the pinned upstream WASM binding faults on an out-of-range index.
+	argumentCount := childCount - 1
+	arguments := make([]string, 0, int(argumentCount))
+	for index := int32(0); index < argumentCount; index++ {
+		argument, err := node.Arguments(index)
+		if err != nil {
+			return "", fmt.Errorf("read GoogleSQL row restriction function argument: %w", err)
+		}
+		sql, err := l.expression(argument, nil)
+		if err != nil {
+			return "", err
+		}
+		arguments = append(arguments, sql)
+	}
+	switch strings.ToUpper(name[0]) {
+	case "LOWER":
+		if len(arguments) != 1 {
+			return "", fmt.Errorf("GoogleSQL LOWER requires one argument")
+		}
+		return "LOWER(" + arguments[0] + ")", nil
+	case "STARTS_WITH":
+		if len(arguments) != 2 {
+			return "", fmt.Errorf("GoogleSQL STARTS_WITH requires two arguments")
+		}
+		return "STARTS_WITH(" + strings.Join(arguments, ", ") + ")", nil
+	default:
+		return "", fmt.Errorf("unsupported GoogleSQL row restriction function %q", name[0])
+	}
+}
+
+func (l *restrictionLowerer) between(node *gsql.ASTBetweenExpression) (string, error) {
+	lhs, err := node.Lhs()
+	if err != nil {
+		return "", err
+	}
+	path, field, err := l.identifier(lhs)
+	if err != nil {
+		return "", err
+	}
+	low, err := node.Low()
+	if err != nil {
+		return "", err
+	}
+	high, err := node.High()
+	if err != nil {
+		return "", err
+	}
+	lowSQL, err := l.expression(low, &field)
+	if err != nil {
+		return "", err
+	}
+	highSQL, err := l.expression(high, &field)
+	if err != nil {
+		return "", err
+	}
+	not, err := node.IsNot()
+	if err != nil {
+		return "", err
+	}
+	l.predicateCount++
+	if not {
+		return path + " NOT BETWEEN " + lowSQL + " AND " + highSQL, nil
+	}
+	return path + " BETWEEN " + lowSQL + " AND " + highSQL, nil
+}
+
+func (l *restrictionLowerer) in(node *gsql.ASTInExpression) (string, error) {
+	lhs, err := node.Lhs()
+	if err != nil {
+		return "", err
+	}
+	path, field, err := l.identifier(lhs)
+	if err != nil {
+		return "", err
+	}
+	list, err := node.InList()
+	if err != nil || list == nil {
+		return "", fmt.Errorf("row restriction IN supports only a literal list")
+	}
+	itemCount, err := list.NumChildren()
+	if err != nil || itemCount == 0 {
+		return "", fmt.Errorf("row restriction IN requires at least one literal")
+	}
+	items := make([]string, 0, int(itemCount))
+	for index := int32(0); index < itemCount; index++ {
+		item, err := list.List(index)
+		if err != nil {
+			return "", err
+		}
+		sql, err := l.expression(item, &field)
+		if err != nil {
+			return "", err
+		}
+		items = append(items, sql)
+	}
+	not, err := node.IsNot()
+	if err != nil {
+		return "", err
+	}
+	l.predicateCount++
+	if not {
+		return path + " NOT IN (" + strings.Join(items, ", ") + ")", nil
+	}
+	return path + " IN (" + strings.Join(items, ", ") + ")", nil
+}
+
+func (l *restrictionLowerer) identifier(node gsql.ASTExpressionNode) (string, catalogdomain.Field, error) {
+	pathNode, ok := node.(*gsql.ASTPathExpression)
+	if !ok {
+		return "", catalogdomain.Field{}, fmt.Errorf("row restriction comparison requires a table field")
+	}
+	return l.path(pathNode)
+}
+
+func (l *restrictionLowerer) path(node *gsql.ASTPathExpression) (string, catalogdomain.Field, error) {
+	components, err := node.ToIdentifierVector()
+	if err != nil {
+		return "", catalogdomain.Field{}, err
+	}
+	field, found := findFieldPath(l.schema, components)
 	if !found {
-		return nil, catalogdomain.Field{}, fmt.Errorf("row restriction references unknown field %q", strings.Join(path, "."))
+		return "", catalogdomain.Field{}, fmt.Errorf("row restriction references unknown field %q", strings.Join(components, "."))
 	}
 	if strings.EqualFold(field.Mode, "REPEATED") {
-		return nil, catalogdomain.Field{}, fmt.Errorf("row restriction on repeated field %q is not supported", strings.Join(path, "."))
+		return "", catalogdomain.Field{}, fmt.Errorf("row restriction on repeated field %q is not supported", strings.Join(components, "."))
 	}
-	return path, field, nil
+	quoted := make([]string, len(components))
+	for i, component := range components {
+		quoted[i] = quoteIdentifier(component)
+	}
+	return strings.Join(quoted, "."), field, nil
 }
 
-func (p *restrictionParser) parseLiteral(field catalogdomain.Field) (any, error) {
-	token := p.peek()
-	p.index++
-	switch token.kind {
-	case restrictionString:
-		return token.value, nil
-	case restrictionNumber:
-		upperType := strings.ToUpper(field.Type)
-		if upperType == "INT64" || upperType == "INTEGER" {
-			value, err := strconv.ParseInt(token.value, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid INT64 literal %q", token.value)
-			}
-			return value, nil
-		}
-		value, err := strconv.ParseFloat(token.value, 64)
+func (l *restrictionLowerer) number(node *gsql.ASTPrintableLeaf, expected *catalogdomain.Field) (string, error) {
+	image, err := node.Image()
+	if err != nil {
+		return "", err
+	}
+	if expected != nil && (strings.EqualFold(expected.Type, "INT64") || strings.EqualFold(expected.Type, "INTEGER")) {
+		value, err := strconv.ParseInt(image, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid numeric literal %q", token.value)
+			return "", fmt.Errorf("invalid INT64 literal %q", image)
 		}
-		return value, nil
-	case restrictionIdentifier:
-		switch strings.ToUpper(token.value) {
-		case "TRUE":
-			return true, nil
-		case "FALSE":
-			return false, nil
-		case "NULL":
-			return nil, fmt.Errorf("use IS NULL instead of comparing with NULL")
-		}
+		l.args = append(l.args, value)
+		return "?", nil
 	}
-	return nil, fmt.Errorf("unsupported row restriction literal %q", token.value)
+	value, err := strconv.ParseFloat(image, 64)
+	if err != nil {
+		return "", fmt.Errorf("invalid numeric literal %q", image)
+	}
+	l.args = append(l.args, value)
+	return "?", nil
 }
 
-func (p *restrictionParser) consumeKeyword(keyword string) bool {
-	if p.peek().kind == restrictionIdentifier && strings.EqualFold(p.peek().value, keyword) {
-		p.index++
-		return true
+func (l *restrictionLowerer) dateOrTime(node *gsql.ASTDateOrTimeLiteral) (string, error) {
+	literal, err := node.StringLiteral()
+	if err != nil || literal == nil {
+		return "", fmt.Errorf("read date/time literal: %w", err)
 	}
-	return false
-}
-
-func (p *restrictionParser) peek() restrictionToken { return p.tokens[p.index] }
-
-func isRestrictionKeyword(value string) bool {
-	switch strings.ToUpper(value) {
-	case "AND", "OR", "NOT", "IS", "NULL", "TRUE", "FALSE":
-		return true
+	value, err := literal.StringValue()
+	if err != nil {
+		return "", err
+	}
+	kind, err := node.TypeKind()
+	if err != nil {
+		return "", err
+	}
+	l.args = append(l.args, value)
+	switch kind {
+	case gsql.TypeKindTypeDate:
+		return "CAST(? AS DATE)", nil
+	case gsql.TypeKindTypeTimestamp:
+		return "CAST(? AS TIMESTAMPTZ)", nil
 	default:
-		return false
+		return "", fmt.Errorf("unsupported GoogleSQL temporal literal %s", kind)
 	}
 }
 
+// findFieldPath resolves case-insensitively through the canonical catalog
+// schema. It is shared by row restriction binding and selected-field
+// validation; callers decide whether a missing path is invalid or unsupported.
 func findFieldPath(schema []catalogdomain.Field, path []string) (catalogdomain.Field, bool) {
 	fields := schema
 	for pathIndex, component := range path {
 		found := false
 		for _, field := range fields {
-			if strings.EqualFold(field.Name, component) {
-				if pathIndex == len(path)-1 {
-					return field, true
-				}
-				fields = field.Fields
-				found = true
-				break
+			if !strings.EqualFold(field.Name, component) {
+				continue
 			}
+			if pathIndex == len(path)-1 {
+				return field, true
+			}
+			fields = field.Fields
+			found = true
+			break
 		}
 		if !found {
 			return catalogdomain.Field{}, false

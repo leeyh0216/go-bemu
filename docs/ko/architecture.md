@@ -26,7 +26,7 @@ Dremel, Colossus, 슬롯, 할당량, 과금, 지역 배치, 운영 환경 수준
 ```text
 transport/rest, transport/grpc  ->  application  ->  domain + ports
                                                   ^
-adapters/duckdb, memory, objectstore, system  ----|
+adapters/duckdb, sqlite, memory, objectstore, system  ----|
 ```
 
 화살표는 소스 코드의 의존 방향을 나타냅니다.
@@ -46,8 +46,9 @@ adapters/duckdb, memory, objectstore, system  ----|
 | `internal/domain` | 식별자, 기준 스키마, 작업 상태, 도메인 오류 | HTTP, protobuf, DuckDB |
 | `internal/application` | 사용 사례, 실행 순서, 보상 작업 | 라우팅, 생성된 전송 형식, SQL 문법 |
 | `internal/ports` | 계층 간 입출력 계약 | 구체 클라이언트 |
+| `internal/adapters/sqlite` | 기준 카탈로그와 영속 BQEMU 상태 기본 기능 | 물리 행, 쿼리 의미 |
 | `internal/adapters/duckdb` | 저장소 객체 이름, 유형 변환, SQL 실행 | REST 리소스, 작업 수명 주기 |
-| `internal/adapters/memory` | 프로세스 내부 저장소 | 쿼리 의미 |
+| `internal/adapters/memory` | 프로세스 내부 작업 저장소 | 기준 카탈로그 영속성, 쿼리 의미 |
 | `internal/transport/*` | 공개 REST/gRPC 경계 | 데이터베이스 의존성 |
 | `cmd/emulator` | 객체 조립과 수명 주기 | 업무 규칙 |
 
@@ -86,21 +87,23 @@ Arrow 또는 Avro로 인코딩합니다. 각 스트림은 정해진 논리 범�
 <!-- section: catalog-physical-model -->
 ## 카탈로그와 저장 모델
 
-기준 리소스에는 BigQuery 프로젝트, 데이터 세트, 테이블, 필드, 파티션, 클러스터링
-메타데이터가 들어 있습니다. DuckDB 어댑터는 `project.dataset.table`을 16진수로
-인코딩한 저장소 스키마와 인용 처리한 테이블 식별자로 변환합니다. DuckDB
+SQLite는 BigQuery 프로젝트, 데이터 세트, 테이블, 필드, 파티션, 클러스터링, 만료와
+숨김 결과 메타데이터의 기준입니다. 컨테이너에서는 이 BQEMU 상태를
+`/data/bqemu-state.sqlite`에 저장합니다. DuckDB는 물리 객체와 행만 소유하며 설정
+경로는 `/data/bqemu.duckdb`입니다. DuckDB 어댑터는 `project.dataset.table`을 16진수로
+인코딩한 물리 스키마와 인용 처리한 테이블 식별자로 변환합니다. DuckDB의 물리
 카탈로그와 SQL 동작은 [DuckDB CREATE
 SCHEMA](https://duckdb.org/docs/stable/sql/statements/create_schema)와 [식별자
 규칙](https://duckdb.org/docs/stable/sql/dialect/keywords_and_identifiers)에 정의되어
 있습니다.
 
-현재 메타데이터 저장소와 엔진 카탈로그는 분리되어 있습니다. 생성 작업은 저장소
-DDL을 먼저 실행한 뒤 메타데이터를 저장합니다. 메타데이터 저장에 실패하면 앞선
-DDL을 보상합니다.
-
-삭제 작업은 저장소 객체를 먼저 지운 뒤 메타데이터를 지웁니다. 두 단계 사이에서
-프로세스가 중단되면 상태가 어긋날 수 있습니다. 재시작 후 일관성이나 원자적
-카탈로그를 보장하려면 영속 메타데이터와 하나의 트랜잭션 경계가 필요합니다.
+두 데이터베이스의 트랜잭션 범위는 서로 분리되어 있습니다. 생성 작업은 물리 DDL을
+실행한 뒤 SQLite에 반영하며, 반영에 실패하면 보상 작업을 실행합니다. 삭제 작업은
+물리 객체를 먼저 지운 뒤 SQLite에서 삭제합니다. 영속 변경 기록용 스키마와 포트는
+있지만, 카탈로그 작업과 시작 후 복구가 아직 미완료 의도를 대조하지는 않습니다. 두
+단계 사이에서 프로세스가 중단되면 기준 상태와 물리 상태가 어긋날 수 있습니다.
+소유권과 복구 계약은 [저장 엔진 어댑터 구현
+안내서](storage-engine-adapter.md)에 정리했습니다.
 
 익명 쿼리 결과는 프로젝트와 위치별로 에뮬레이터가 소유하는 숨김 데이터 세트
 하나를 사용합니다. 각 작업의 테이블 식별자는 충돌하기 어렵게 생성합니다.
@@ -133,7 +136,8 @@ BigQuery는 성공한 작업과 실패한 작업을 모두 `DONE`으로 표시�
 리소스](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatus)에
 따라 `status.errorResult`를 확인합니다.
 
-현재 저장소는 작업 상태와 구체화한 결과를 메모리에 보관합니다. 쿼리 작업은
+현재 쿼리 작업 저장소는 작업 상태와 구체화한 결과를 메모리에 보관합니다. 영속
+SQLite 카탈로그와는 별도입니다. 쿼리 작업은
 `(project, location, jobId)`와 기준 설정 지문값으로 식별합니다. 이미 사용한 ID는
 설정이 같아도 `409 duplicate`를 반환합니다. 설정 지문값은 SQL을 기록하지 않고도
 기존 설정과 새 설정이 같은지 구분합니다.
@@ -231,7 +235,8 @@ GoogleSQL 요청
 ## 트랜잭션과 공개 시점
 
 엔진의 명령문 트랜잭션이 곧바로 BigQuery 작업 트랜잭션이 되는 것은 아닙니다.
-메타데이터와 저장소 DDL은 여전히 서로 다른 저장소에 있습니다.
+기준 SQLite 상태와 물리 DDL은 서로 다른 저장소에 있습니다. 영속 변경 기록도 아직
+처음부터 끝까지 수행하는 복구 절차에 연결되지 않았습니다.
 
 명시적 쿼리 대상은 DuckDB 임시 테이블에서 한 번만 계산합니다. `WRITE_EMPTY`,
 `WRITE_APPEND`, 정확히 같은 스키마를 요구하는 `WRITE_TRUNCATE`는 같은 트랜잭션에서
@@ -258,9 +263,9 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 <!-- section: sql-boundary -->
 ## SQL 문법 경계
 
-백틱 참조 변환은 현재 임시 어댑터가 담당합니다. 어휘 분석기는 관계가 나오는 위치,
-인용된 열, 문자열, 주석을 구분합니다. 스크립트, 테이블 데코레이터, 함수 인수, 인용하지
-않은 모든 경로까지 처리하는 완전한 구문 분석기는 아닙니다.
+현재 어휘 분석기는 지원하는 릴레이션 위치, 인용된 열, 문자열과 주석을 구분합니다.
+스크립트, 테이블 데코레이터, 함수 인수, 인용하지 않은 모든 경로까지 처리하는 완전한
+구문 분석기는 아닙니다.
 
 일반적인 호환성을 제공하려면 GoogleSQL 구문 분석기와 의미 분석 어댑터가 필요합니다.
 문법 기준은 [GoogleSQL 어휘
@@ -269,15 +274,17 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 알 수 없거나 지원하지 않는 형식은 비슷한 SQL로 추정하지 않고 명시적으로
 거부해야 합니다.
 
-분석기는 카탈로그를 바꾸는 DDL을 표시합니다. 애플리케이션은
-`query.ddl.catalog-sync-v1`에 따라 `CREATE`, `ALTER`, `DROP`, `TRUNCATE`를 작업 생성과
-엔진 실행 전에 거부합니다. DDL을 지원하려면 DuckDB에서 직접 실행해서는 안 됩니다.
-기준 카탈로그와 저장소 변경을 원자적으로 조정하는 포트가 필요합니다.
+카탈로그 DDL을 일반 DuckDB 경로로 보내지 않습니다. 애플리케이션은 `CREATE TABLE`,
+`DROP TABLE`, 최상위 스칼라 `ADD COLUMN`, `RENAME COLUMN`을 의미 명령으로 실행합니다.
+물리 저장소와 SQLite 변경도 함께 조정합니다. `DROP COLUMN`과 `SET DATA TYPE`은
+인식하지만 영속 변경 기록을 이용한 복구를 연결할 때까지 물리 변경 전에 실패합니다.
+`TRUNCATE`와 나머지 DDL은 지원하지 않습니다.
 
 같은 경계에서는 명령문 하나와 선택적인 마지막 세미콜론만 허용합니다. 리터럴과
 주석을 구분하는 검사기는 모든 [여러 명령문
 쿼리](https://cloud.google.com/bigquery/docs/multi-statement-queries)를
-`query.scripts.unsupported-v1`로 작업 생성과 엔진 변경 전에 거부합니다.
+`query.scripts.unsupported-v1`로 작업 생성과 엔진 변경 전에 거부합니다. 출처 버전을
+고정한 동적 시간 파티션 덮어쓰기 작업은 예외입니다.
 
 스크립트를 완전히 지원하려면 명령문별 의미 분석, 변수, 제어 흐름, 임시 객체, 작업
 단위 트랜잭션 의미가 필요합니다. 해석하지 못한 스크립트를 DuckDB에 그대로 넘기는
@@ -291,27 +298,30 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 적용하고 원자적인 [DuckDB `MERGE
 INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실행합니다.
 
-동적 시간·범위 파티션 덮어쓰기나 임의의 `MERGE`로 일반화하지 않습니다. 두 기능은
-명시적인 미지원 항목입니다.
+별도의 출처 고정 의미 어댑터는 기준 시간 파티션 메타데이터를 확인한 뒤 커넥터의 동적
+시간 파티션 덮어쓰기를 지원합니다. 동적 범위 파티션 덮어쓰기, 임의의 스크립트나 일반
+BigQuery `MERGE`로 일반화하지 않습니다. 실제 변환과 미지원 절은 [GoogleSQL 경계
+안내서](google-sql-boundary.md)에 정리했습니다.
 
 <!-- section: runtime-security -->
-## 실행 환경, TLS, 공개 접근
+## 실행 환경, TLS, 인증 정보
 
-프로세스는 웨어하우스 하나와 프로세스 내부 카탈로그·작업 저장소를 구성합니다.
-시스템 시계와 ID 어댑터, 애플리케이션 서비스, 공개 REST/gRPC 수신기도 구성합니다.
-관리용 수신기는 선택 사항입니다.
+프로세스는 SQLite 카탈로그 하나, 웨어하우스 하나와 프로세스 내부 작업 저장소를
+구성합니다. 시스템 시계와 ID 어댑터, 애플리케이션 서비스, 공개 REST/gRPC 수신기도 구성합니다. 관리용 수신기는
+선택 사항입니다. 인증서 한 쌍으로 공개 수신기와 활성화된 관리 수신기에 TLS를 적용할
+수 있습니다.
 
-인증서 한 쌍으로 공개 수신기와 활성화된 관리 수신기에 TLS를 적용할 수 있습니다.
+BQEMU는 BigQuery 호환 엔드포인트를 위한 인증 서비스를 구성하지 않습니다. REST와
+gRPC는 인증 정보가 없는 요청을 허용하며, 인증 정보가 있어도 무시합니다.
 
-BigQuery 호환 REST와 gRPC 엔드포인트는 호출자를 인증하거나 인가하지 않습니다.
-`Authorization` 값이 없거나, 임의 값이거나, 형식이 잘못되었거나, 만료된 형태여도
-동일한 프로토콜 핸들러로 전달합니다. 공개 실행 환경은 인증 정보를 해석하거나 호출자
-신원을 요청 컨텍스트에 넣지 않습니다. 경계 로그에는 값 대신 가린 메타데이터 키만
-기록합니다.
-
-TLS는 전송 구간을 보호할 뿐 호출자 신원을 추가하지 않습니다. 클라이언트의 토큰 획득
-절차는 에뮬레이터 실행 환경 밖의 책임입니다. `admin.tokenFile`은 별도의 진단용
-수신기만 보호하며, 공개 BigQuery 요청의 인증 정책으로 사용하지 않습니다.
+전송 보안과 클라이언트 인증 파일 발급은 에뮬레이터 요청 처리와 분리합니다. 이
+저장소의 생성기는 서비스 계정, 사용자 인증 ADC와 외부 계정 WIF 파일을 만들 수
+있습니다. 루프백 발급 서버는 해당 파일에서 요청하는 토큰 발급 절차를 처리합니다.
+자세한 사용법은 [로컬 클라이언트 인증 파일과
+TLS](client-credentials-and-tls.md)에 있습니다. 이 기능은 [Google Cloud
+인증](https://cloud.google.com/docs/authentication)의 Google 사용자 식별 정보,
+서명 신뢰와 IAM 인가를 구현하지 않습니다. 별도의 `admin.tokenFile` 설정은 선택형
+관리 수신기만 보호합니다.
 
 <!-- section: observability -->
 ## 지원 범위와 관측성
@@ -335,8 +345,8 @@ Authorization 값, 인증 정보, 토큰, SQL 원문, 행 내용, protobuf JSON,
 <!-- section: replacement-roadmap -->
 ## 교체 로드맵
 
-1. 기준 메타데이터, 작업, 읽기 세션, 쓰기·적재 원장을 트랜잭션을 지원하는 시스템
-   테이블에 영속화합니다.
+1. 쿼리·로드 작업, 읽기 세션, 쓰기·로드 원장을 BQEMU 상태 포트 뒤에 영속화합니다.
+   기존 변경 기록을 시작 후 복구 절차에도 연결합니다.
 2. 버전을 고정한 정적 덮어쓰기 입력 구조는 일반화하지 않습니다. 넓은 범위의 정규식
    SQL 변환은 구조 기반 어댑터로 교체합니다.
 3. 현재 바이트, 행, 세션 상한은 유지합니다. Storage Read에 스트림 분할, 압축, 과거

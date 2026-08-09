@@ -59,7 +59,7 @@ func queryPageTokenChecksum(token queryPageToken) string {
 func queryResultPageBounds(r *http.Request, job *domain.Job) (start, end int, next string, err error) {
 	total := 0
 	if job.Result != nil {
-		total = len(job.Result.Rows)
+		total = queryResultRowCount(job.Result)
 	}
 	scope := queryResultPageScope(job)
 	rawToken := r.URL.Query().Get("pageToken")
@@ -104,13 +104,26 @@ func queryResultPageScope(job *domain.Job) string {
 	rowCount := 0
 	columns := []domain.Column(nil)
 	if job.Result != nil {
-		rowCount = len(job.Result.Rows)
+		rowCount = queryResultRowCount(job.Result)
 		columns = job.Result.Columns
 	}
 	shape := fmt.Sprintf("%v", columns)
 	return observability.Digest([]byte(job.Reference.ProjectID + "\x00" + job.Reference.Location + "\x00" +
 		job.Reference.JobID + "\x00" + job.ConfigurationDigest + "\x00" + ended + "\x00" +
 		strconv.Itoa(rowCount) + "\x00" + observability.Digest([]byte(shape))))
+}
+
+func queryResultRowCount(result *domain.QueryResult) int {
+	if result == nil {
+		return 0
+	}
+	if result.TotalRows > 0 {
+		if result.TotalRows > int64(math.MaxInt) {
+			return math.MaxInt
+		}
+		return int(result.TotalRows)
+	}
+	return len(result.Rows)
 }
 
 func parseQueryRowOffset(raw string, total int, field string) (int, error) {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	loadApplication "github.com/leeyh0216/go-bemu/internal/loadjob/application"
 	loadDomain "github.com/leeyh0216/go-bemu/internal/loadjob/domain"
+	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
@@ -25,27 +27,42 @@ type LoadJobUseCases interface {
 	List(context.Context, string, string) ([]*loadDomain.Job, error)
 }
 
+// MediaUploadProvider is intentionally optional so embedded users retaining
+// the source-URI-only load service keep the existing surface.
+type MediaUploadProvider interface {
+	MediaUploads() loadports.MediaUploadStore
+}
+
 var _ LoadJobUseCases = (*loadApplication.Service)(nil)
 
 type combinedJobHandlers struct {
-	query *queryHandlers
-	loads LoadJobUseCases
+	query    *queryHandlers
+	loads    LoadJobUseCases
+	media    loadports.MediaUploadStore
+	sessions *mediaUploadSessions
 }
 
 // NewServerWithLoadJobs installs one jobs.insert dispatcher for query and load
 // configurations. NewServer remains the query-only compatibility constructor.
 func NewServerWithLoadJobs(catalog CatalogUseCases, queries QueryUseCases, loads LoadJobUseCases, readiness ports.HealthChecker, baseURL string, options ...Option) *Server {
-	defaults := []Option{withCombinedJobAPI(queries, loads), withCapabilitiesAPI(), withConsoleAPI()}
+	var media loadports.MediaUploadStore
+	if provider, ok := loads.(MediaUploadProvider); ok {
+		media = provider.MediaUploads()
+	}
+	defaults := []Option{withCombinedJobAPI(queries, loads, media), withCapabilitiesAPI(), withConsoleAPI()}
 	return NewCatalogServer(catalog, readiness, baseURL, append(defaults, options...)...)
 }
 
-func withCombinedJobAPI(queries QueryUseCases, loads LoadJobUseCases) Option {
+func withCombinedJobAPI(queries QueryUseCases, loads LoadJobUseCases, media loadports.MediaUploadStore) Option {
 	return func(server *Server) {
-		handlers := &combinedJobHandlers{query: &queryHandlers{queries: queries}, loads: loads}
+		handlers := &combinedJobHandlers{query: &queryHandlers{queries: queries}, loads: loads, media: media, sessions: &mediaUploadSessions{items: make(map[string]*mediaUploadSession)}}
 		server.routeExtensions = append(server.routeExtensions, func(mux *http.ServeMux) {
 			mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/queries", handlers.query.query)
 			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/queries/{jobId}", handlers.query.getQueryResults)
 			mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/jobs", handlers.insertJob)
+			mux.HandleFunc("POST /upload/bigquery/v2/projects/{projectId}/jobs", handlers.uploadLoadJob)
+			mux.HandleFunc("POST /resumable/upload/bigquery/v2/projects/{projectId}/jobs", handlers.uploadLoadJob)
+			mux.HandleFunc("PUT /resumable/upload/bigquery/v2/projects/{projectId}/jobs", handlers.uploadLoadJob)
 			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/jobs", handlers.listJobs)
 			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/jobs/{jobId}", handlers.getJob)
 		})
@@ -101,6 +118,10 @@ func (h *combinedJobHandlers) insertQueryJob(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Request, payload, loadPayload []byte) {
+	h.insertLoadJobWithSource(w, r, payload, loadPayload, "")
+}
+
+func (h *combinedJobHandlers) insertLoadJobWithSource(w http.ResponseWriter, r *http.Request, payload, loadPayload []byte, sourceURI string) {
 	var request loadJobRequest
 	if err := json.Unmarshal(payload, &request); err != nil {
 		writeLoadError(w, fmt.Errorf("%w: invalid load job JSON", loadDomain.ErrInvalid))
@@ -127,6 +148,12 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		writeLoadError(w, fmt.Errorf("%w: invalid load configuration JSON", loadDomain.ErrInvalid))
 		return
 	}
+	if sourceURI == "" {
+		if err := validatePublicLoadSourceURIs(wire.SourceURIs); err != nil {
+			writeLoadError(w, err)
+			return
+		}
+	}
 	unsupported, err := unsupportedLoadOptions(loadPayload, wire)
 	if err != nil {
 		writeLoadError(w, err)
@@ -142,6 +169,15 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		SchemaUpdateOptions: append([]string(nil), wire.SchemaUpdateOptions...), IgnoreUnknownValues: wire.IgnoreUnknownValues,
 		MaxBadRecords: wire.MaxBadRecords, UnsupportedOptions: unsupported,
 	}
+	if request.Configuration.Labels != nil {
+		configuration.Labels = make(map[string]string, len(*request.Configuration.Labels))
+		for key, value := range *request.Configuration.Labels {
+			configuration.Labels[key] = value
+		}
+	}
+	if sourceURI != "" {
+		configuration.SourceURIs = []string{sourceURI}
+	}
 	if wire.Schema != nil {
 		configuration.Schema = loadFieldsFromWire(wire.Schema.Fields)
 	}
@@ -153,6 +189,25 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, loadJobFromDomain(job))
+}
+
+// validatePublicLoadSourceURIs runs before a job is persisted. Media uploads
+// receive their private source URI only after the server has committed bytes,
+// so this public REST boundary deliberately accepts gs:// and nothing else.
+func validatePublicLoadSourceURIs(uris []string) error {
+	for _, rawURI := range uris {
+		parsed, err := url.Parse(rawURI)
+		if err != nil || parsed.Scheme == "" {
+			return fmt.Errorf("%w: load source URI must use gs://", loadDomain.ErrInvalid)
+		}
+		if !strings.EqualFold(parsed.Scheme, "gs") {
+			return fmt.Errorf("%w: public load source URI scheme %q", loadDomain.ErrUnsupported, parsed.Scheme)
+		}
+		if parsed.Host == "" || parsed.Path == "" || parsed.Path == "/" {
+			return fmt.Errorf("%w: gs:// load source requires bucket and object", loadDomain.ErrInvalid)
+		}
+	}
+	return nil
 }
 
 func (h *combinedJobHandlers) getJob(w http.ResponseWriter, r *http.Request) {
@@ -255,7 +310,7 @@ func unsupportedLoadOptions(payload []byte, wire loadConfigurationResource) ([]s
 		for field, fieldValue := range parquetFields {
 			switch field {
 			case "enableListInference":
-				if wire.ParquetOptions == nil || wire.ParquetOptions.EnableListInference == nil || *wire.ParquetOptions.EnableListInference {
+				if wire.ParquetOptions == nil || wire.ParquetOptions.EnableListInference == nil {
 					unsupported = append(unsupported, unsupportedLoadOption("parquetOptions."+field, fieldValue))
 				}
 			case "enumAsString":

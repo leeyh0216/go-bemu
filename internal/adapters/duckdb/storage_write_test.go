@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	storagepb "cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	writememory "github.com/leeyh0216/go-bemu/internal/storagewrite/adapters/memory"
 	writeapp "github.com/leeyh0216/go-bemu/internal/storagewrite/application"
 	writedomain "github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
@@ -39,7 +41,6 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 		{Name: "event_date", Type: "DATE"},
 		{Name: "event_at", Type: "TIMESTAMP"},
 		{Name: "amount", Type: "NUMERIC"},
-		{Name: "geo", Type: "GEOGRAPHY"},
 		{Name: "tags", Type: "STRING", Mode: "REPEATED"},
 	})
 	descriptor := storageWriteDescriptor(t,
@@ -48,13 +49,12 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 		protoField("event_date", 3, descriptorpb.FieldDescriptorProto_TYPE_INT32, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
 		protoField("event_at", 4, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
 		protoField("amount", 5, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
-		protoField("geo", 6, descriptorpb.FieldDescriptorProto_TYPE_BYTES, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
-		protoField("tags", 7, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_REPEATED),
+		protoField("tags", 6, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_REPEATED),
 	)
 	row := storageWriteRow(t, descriptor, map[string]any{
 		"id": int64(7), "name": "first", "event_date": int32(1),
 		"event_at": int64(1_500_000), "amount": "12.340000000",
-		"geo": []byte("POINT(1 2)"), "tags": []any{"alpha", "beta"},
+		"tags": []any{"alpha", "beta"},
 	})
 	pendingName := table.Name() + "/streams/pending-a"
 	batch := writeports.AppendBatch{
@@ -69,7 +69,11 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 	}
 	if err := coordinator.CommitPending(ctx, writeports.CommitRequest{
 		Parent: table, StreamNames: []string{pendingName},
+		RowCounts: map[string]int64{pendingName: 1},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.AcknowledgeApplied(ctx, []string{pendingName}); err != nil {
 		t.Fatal(err)
 	}
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 1 {
@@ -87,15 +91,126 @@ func TestStorageWritePendingAndDefaultVisibility(t *testing.T) {
 		t.Fatalf("DEFAULT append was not immediately visible: %d", got)
 	}
 
-	query := `SELECT "name", CAST("event_date" AS VARCHAR), epoch_us("event_at"), CAST("amount" AS VARCHAR), "geo", "tags"[1] FROM ` +
+	query := `SELECT "name", CAST("event_date" AS VARCHAR), epoch_us("event_at"), CAST("amount" AS VARCHAR), "tags"[1] FROM ` +
 		quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + `.` + quoteIdentifier(table.TableID) + ` WHERE "id" = 7`
-	var name, date, amount, geography, firstTag string
+	var name, date, amount, firstTag string
 	var timestampMicros int64
-	if err := warehouse.db.QueryRowContext(ctx, query).Scan(&name, &date, &timestampMicros, &amount, &geography, &firstTag); err != nil {
+	if err := warehouse.db.QueryRowContext(ctx, query).Scan(&name, &date, &timestampMicros, &amount, &firstTag); err != nil {
 		t.Fatal(err)
 	}
-	if name != "first" || date != "1970-01-02" || timestampMicros != 1_500_000 || amount != "12.340000000" || geography != "POINT(1 2)" || firstTag != "alpha" {
-		t.Fatalf("unexpected converted row: %q %q %d %q %q %q", name, date, timestampMicros, amount, geography, firstTag)
+	if name != "first" || date != "1970-01-02" || timestampMicros != 1_500_000 || amount != "12.340000000" || firstTag != "alpha" {
+		t.Fatalf("unexpected converted row: %q %q %d %q %q", name, date, timestampMicros, amount, firstTag)
+	}
+}
+
+func TestStorageWriteCreateAndGetExposeCanonicalDecimalAndNestedSchema(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	precision, bigScale, numericScale := int64(38), int64(18), int64(9)
+	_, coordinator, table := newStorageWriteFixture(t, []domain.Field{
+		{
+			Name: "wide", Type: "BIGNUMERIC", Mode: "REQUIRED", Description: "wide decimal",
+			Precision: &precision, Scale: &bigScale,
+		},
+		{
+			Name: "payload", Type: "STRUCT", Fields: []domain.Field{
+				{Name: "amount", Type: "NUMERIC", Precision: &precision, Scale: &numericScale},
+				{Name: "labels", Type: "STRING", Mode: "REPEATED"},
+			},
+		},
+		{
+			Name: "events", Type: "RECORD", Mode: "REPEATED",
+			Fields: []domain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}},
+		},
+	})
+	service, err := writeapp.New(writeapp.Config{
+		Location: "US", ProtocolModelVersion: "spark-0.44.2",
+		MaxStreams: 2, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 2,
+		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
+	}, coordinator, writememory.NewRepository(), storageWriteRetryClock{}, storageWriteRetryIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener := bufconn.Listen(4 * 1024 * 1024)
+	server := grpc.NewServer()
+	storagepb.RegisterBigQueryWriteServer(server, grpcserver.NewStorageWriteServer(service))
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	client := newDuckDBStorageWriteClient(t, listener)
+	created, err := client.CreateWriteStream(ctx, &storagepb.CreateWriteStreamRequest{
+		Parent: table.Name(), WriteStream: &storagepb.WriteStream{Type: storagepb.WriteStream_PENDING},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCanonicalStorageWriteProtoSchema(t, created.GetTableSchema())
+
+	got, err := client.GetWriteStream(ctx, &storagepb.GetWriteStreamRequest{
+		Name: created.GetName(), View: storagepb.WriteStreamView_FULL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCanonicalStorageWriteProtoSchema(t, got.GetTableSchema())
+}
+
+func TestStorageWriteCanonicalSchemaNotFoundAndPhysicalMismatchFailClosed(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "amount", Type: "BIGNUMERIC"}})
+	resolver := coordinator.resolver.(*storageWriteTestTableResolver)
+
+	resolver.err = fmt.Errorf("%w: injected missing catalog table", domain.ErrNotFound)
+	if _, err := coordinator.DescribeTable(ctx, table); !errors.Is(err, writeports.ErrTableNotFound) {
+		t.Fatalf("catalog miss = %v, want Storage Write table not found", err)
+	}
+
+	resolver.err = nil
+	canonical := resolver.table
+	resolver.table.Schema = []domain.Field{{Name: "amount", Type: "STRING"}}
+	if _, err := coordinator.DescribeTable(ctx, table); err == nil || !strings.Contains(err.Error(), "canonical/physical Storage Write schema mismatch") {
+		t.Fatalf("physical type mismatch = %v, want fail-closed mismatch", err)
+	}
+
+	resolver.table = canonical
+	if err := warehouse.DropTable(ctx, table.ProjectID, table.DatasetID, table.TableID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.DescribeTable(ctx, table); !errors.Is(err, writeports.ErrTableNotFound) {
+		t.Fatalf("physical table miss = %v, want Storage Write table not found", err)
+	}
+}
+
+func assertCanonicalStorageWriteProtoSchema(t *testing.T, schema *storagepb.TableSchema) {
+	t.Helper()
+	if schema == nil || len(schema.GetFields()) != 3 {
+		t.Fatalf("canonical schema = %#v, want three fields", schema)
+	}
+	wide := schema.GetFields()[0]
+	if wide.GetName() != "wide" || wide.GetType() != storagepb.TableFieldSchema_BIGNUMERIC ||
+		wide.GetMode() != storagepb.TableFieldSchema_REQUIRED || wide.GetPrecision() != 38 || wide.GetScale() != 18 ||
+		wide.GetDescription() != "wide decimal" {
+		t.Fatalf("canonical BIGNUMERIC field = %#v", wide)
+	}
+	payload := schema.GetFields()[1]
+	if payload.GetType() != storagepb.TableFieldSchema_STRUCT || payload.GetMode() != storagepb.TableFieldSchema_NULLABLE || len(payload.GetFields()) != 2 {
+		t.Fatalf("canonical STRUCT field = %#v", payload)
+	}
+	amount, labels := payload.GetFields()[0], payload.GetFields()[1]
+	if amount.GetType() != storagepb.TableFieldSchema_NUMERIC || amount.GetPrecision() != 38 || amount.GetScale() != 9 {
+		t.Fatalf("nested NUMERIC field = %#v", amount)
+	}
+	if labels.GetType() != storagepb.TableFieldSchema_STRING || labels.GetMode() != storagepb.TableFieldSchema_REPEATED {
+		t.Fatalf("nested REPEATED field = %#v", labels)
+	}
+	events := schema.GetFields()[2]
+	if events.GetType() != storagepb.TableFieldSchema_STRUCT || events.GetMode() != storagepb.TableFieldSchema_REPEATED || len(events.GetFields()) != 1 ||
+		events.GetFields()[0].GetMode() != storagepb.TableFieldSchema_REQUIRED {
+		t.Fatalf("canonical REPEATED STRUCT field = %#v", events)
 	}
 }
 
@@ -118,7 +233,10 @@ func TestStorageWriteCommitFaultRollsBackAllStreams(t *testing.T) {
 		}
 	}
 	coordinator.beforeCommit = func() error { return errors.New("injected fault before commit") }
-	request := writeports.CommitRequest{Parent: table, StreamNames: streamNames}
+	request := writeports.CommitRequest{
+		Parent: table, StreamNames: streamNames,
+		RowCounts: map[string]int64{streamNames[0]: 1, streamNames[1]: 1},
+	}
 	if err := coordinator.CommitPending(ctx, request); err == nil {
 		t.Fatal("expected injected commit fault")
 	}
@@ -132,8 +250,8 @@ func TestStorageWriteCommitFaultRollsBackAllStreams(t *testing.T) {
 		t.Fatalf("failed commit retained %d staging tables, want 2", got)
 	}
 	for _, streamName := range streamNames {
-		if got := storageWriteReceiptCount(t, ctx, warehouse, streamName); got != 1 {
-			t.Fatalf("failed commit receipt count for stream = %d, want 1", got)
+		if got := storageWritePendingRowCount(t, ctx, warehouse, streamName); got != 1 {
+			t.Fatalf("failed commit retained %d staged rows for stream, want 1", got)
 		}
 	}
 	coordinator.beforeCommit = nil
@@ -143,15 +261,27 @@ func TestStorageWriteCommitFaultRollsBackAllStreams(t *testing.T) {
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 2 {
 		t.Fatalf("retry exposed %d rows, want 2", got)
 	}
-	if got := coordinator.stagedBytes.Load(); got != 0 {
-		t.Fatalf("successful retry retained %d staged bytes", got)
+	if got := coordinator.stagedBytes.Load(); got != expectedStagedBytes {
+		t.Fatalf("commit acknowledgement marker accounts for %d staged bytes, want %d", got, expectedStagedBytes)
 	}
 	if got := storageWriteStagingTableCount(t, ctx, warehouse); got != 0 {
 		t.Fatalf("successful retry retained %d staging tables", got)
 	}
+	if got := storageWriteInternalTableCount(t, ctx, warehouse); got != 2 {
+		t.Fatalf("successful retry retained %d internal tables, want two applied markers", got)
+	}
+	if err := coordinator.AcknowledgeApplied(ctx, streamNames); err != nil {
+		t.Fatal(err)
+	}
+	if got := coordinator.stagedBytes.Load(); got != 0 {
+		t.Fatalf("acknowledgement retained %d staged bytes", got)
+	}
+	if got := storageWriteInternalTableCount(t, ctx, warehouse); got != 0 {
+		t.Fatalf("acknowledgement retained %d internal tables", got)
+	}
 }
 
-func TestStorageWriteStagePendingReceiptIsIdempotentAndRejectsConflicts(t *testing.T) {
+func TestStorageWriteStagePendingIsPhysicallyIdempotentAndRejectsRowDrift(t *testing.T) {
 	ctx, cancel := duckDBStorageWriteTestContext(t)
 	defer cancel()
 	warehouse, coordinator, table := newStorageWriteFixture(t, []domain.Field{{Name: "id", Type: "INT64"}})
@@ -167,33 +297,18 @@ func TestStorageWriteStagePendingReceiptIsIdempotentAndRejectsConflicts(t *testi
 	if err := coordinator.StagePending(ctx, batch); err != nil {
 		t.Fatalf("identical receipt retry: %v", err)
 	}
-	if got := storageWriteReceiptCount(t, ctx, warehouse, batch.StreamName); got != 1 {
-		t.Fatalf("identical receipt created %d staged batches, want 1", got)
+	if got := storageWritePendingRowCount(t, ctx, warehouse, batch.StreamName); got != 1 {
+		t.Fatalf("identical retry staged %d rows, want 1", got)
 	}
-
-	conflicts := map[string]writeports.AppendBatch{
-		"row count":          batch,
-		"schema fingerprint": batch,
-		"payload digest":     batch,
-	}
-	rowCountConflict := conflicts["row count"]
+	// Schema and payload retry identity is owned by the canonical metadata
+	// repository. The physical adapter rejects only row/offset drift.
+	rowCountConflict := batch
 	rowCountConflict.Rows = [][]byte{row, row}
-	conflicts["row count"] = rowCountConflict
-	schemaConflict := conflicts["schema fingerprint"]
-	schemaConflict.SchemaFingerprint = "schema-b"
-	conflicts["schema fingerprint"] = schemaConflict
-	payloadConflict := conflicts["payload digest"]
-	payloadConflict.PayloadDigest = "payload-b"
-	conflicts["payload digest"] = payloadConflict
-	for name, conflicting := range conflicts {
-		t.Run(name, func(t *testing.T) {
-			if err := coordinator.StagePending(ctx, conflicting); err == nil {
-				t.Fatal("expected receipt conflict")
-			}
-			if got := storageWriteReceiptCount(t, ctx, warehouse, batch.StreamName); got != 1 {
-				t.Fatalf("receipt conflict changed staged batches to %d", got)
-			}
-		})
+	if err := coordinator.StagePending(ctx, rowCountConflict); err == nil {
+		t.Fatal("expected physical row drift")
+	}
+	if got := storageWritePendingRowCount(t, ctx, warehouse, batch.StreamName); got != 1 {
+		t.Fatalf("row drift changed staged rows to %d", got)
 	}
 }
 
@@ -220,8 +335,8 @@ func TestStorageWriteStagesHundredSequentialBatchesWithinLowByteBudget(t *testin
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 0 {
 		t.Fatalf("PENDING destination rows = %d before commit", got)
 	}
-	if got := storageWriteReceiptCount(t, ctx, warehouse, stream); got != 100 {
-		t.Fatalf("receipt count = %d, want 100", got)
+	if got := storageWritePendingRowCount(t, ctx, warehouse, stream); got != 100 {
+		t.Fatalf("pending row count = %d, want 100", got)
 	}
 	if got := storageWriteStagingTableCount(t, ctx, warehouse); got != 1 {
 		t.Fatalf("staging table count = %d, want 1", got)
@@ -238,14 +353,25 @@ func TestStorageWriteStagesHundredSequentialBatchesWithinLowByteBudget(t *testin
 	if global, perStream := coordinator.admission.snapshot(stream); global != 0 || perStream != 0 {
 		t.Fatalf("rejected staged batch retained in-flight bytes global=%d stream=%d", global, perStream)
 	}
-	if err := coordinator.CommitPending(ctx, writeports.CommitRequest{Parent: table, StreamNames: []string{stream}}); err != nil {
+	if err := coordinator.CommitPending(ctx, writeports.CommitRequest{
+		Parent: table, StreamNames: []string{stream}, RowCounts: map[string]int64{stream: 100},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if got := storageWriteRowCount(t, ctx, warehouse, table); got != 100 {
 		t.Fatalf("committed rows = %d, want 100", got)
 	}
+	if got := storageWriteAppliedRowCount(t, ctx, warehouse, stream); got != 100 {
+		t.Fatalf("applied marker row count = %d, want 100", got)
+	}
+	if got := coordinator.stagedBytes.Load(); got != unitBytes*100 {
+		t.Fatalf("unacknowledged commit accounts for %d staged bytes, want %d", got, unitBytes*100)
+	}
+	if err := coordinator.AcknowledgeApplied(ctx, []string{stream}); err != nil {
+		t.Fatal(err)
+	}
 	if got := coordinator.stagedBytes.Load(); got != 0 {
-		t.Fatalf("commit retained %d staged bytes", got)
+		t.Fatalf("acknowledgement retained %d staged bytes", got)
 	}
 }
 
@@ -359,8 +485,8 @@ func TestStorageWriteSixteenConcurrentPayloadsUseWeightedAdmission(t *testing.T)
 	if global, _ := coordinator.admission.snapshot(""); global != 0 {
 		t.Fatalf("completed concurrent writes retained %d in-flight bytes", global)
 	}
-	if got := storageWriteTotalReceiptCount(t, ctx, coordinator.warehouse); got != 4 {
-		t.Fatalf("weighted admission staged %d batches, want 4", got)
+	if got := storageWriteStagingTableCount(t, ctx, coordinator.warehouse); got != 4 {
+		t.Fatalf("weighted admission staged %d physical streams, want 4", got)
 	}
 	for index := 0; index < 16; index++ {
 		stream := fmt.Sprintf("%s/streams/concurrent-%d", table.Name(), index)
@@ -492,8 +618,8 @@ func TestStorageWriteOperationTimeoutAllowsPendingReceiptRetry(t *testing.T) {
 	if err := coordinator.StagePending(ctx, batch); err != nil {
 		t.Fatalf("receipt-backed retry after acknowledgement timeout: %v", err)
 	}
-	if got := storageWriteReceiptCount(t, ctx, coordinator.warehouse, batch.StreamName); got != 1 {
-		t.Fatalf("receipt-backed retry count = %d, want 1", got)
+	if got := storageWritePendingRowCount(t, ctx, coordinator.warehouse, batch.StreamName); got != 1 {
+		t.Fatalf("physical retry row count = %d, want 1", got)
 	}
 }
 
@@ -585,9 +711,6 @@ func TestStorageWriteDiscardAndCloseCleanHiddenStaging(t *testing.T) {
 		if err := coordinator.DiscardPending(ctx, stream); err != nil {
 			t.Fatal(err)
 		}
-		if got := storageWriteReceiptCount(t, ctx, warehouse, stream); got != 0 {
-			t.Fatalf("discard retained %d receipts", got)
-		}
 		if got := storageWriteStagingTableCount(t, ctx, warehouse); got != 0 {
 			t.Fatalf("discard retained %d staging tables", got)
 		}
@@ -612,11 +735,11 @@ func TestStorageWriteDiscardAndCloseCleanHiddenStaging(t *testing.T) {
 		if err := coordinator.Close(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if got := storageWriteInternalTableCount(t, ctx, warehouse); got != 0 {
-			t.Fatalf("close retained %d internal tables", got)
+		if got := storageWriteInternalTableCount(t, ctx, warehouse); got != 1 {
+			t.Fatalf("close retained %d internal tables, want one recoverable staging table", got)
 		}
-		if got := coordinator.stagedBytes.Load(); got != 0 {
-			t.Fatalf("close retained %d staged bytes", got)
+		if got := coordinator.stagedBytes.Load(); got == 0 {
+			t.Fatal("close lost staged-byte accounting")
 		}
 		if global, perStream := coordinator.admission.snapshot(stream); global != 0 || perStream != 0 {
 			t.Fatalf("close retained in-flight bytes global=%d stream=%d", global, perStream)
@@ -667,11 +790,11 @@ func TestStorageWriteCloseOrdersCleanupAfterAcceptedAppendAndRejectsLateAppend(t
 		t.Fatalf("close after accepted append: %v", err)
 	}
 	coordinator.afterStage = nil
-	if got := storageWriteInternalTableCount(t, ctx, warehouse); got != 0 {
-		t.Fatalf("ordered close retained %d internal tables", got)
+	if got := storageWriteInternalTableCount(t, ctx, warehouse); got != 1 {
+		t.Fatalf("ordered close retained %d internal tables, want one recoverable staging table", got)
 	}
-	if got := coordinator.stagedBytes.Load(); got != 0 {
-		t.Fatalf("ordered close retained %d staged bytes", got)
+	if got := coordinator.stagedBytes.Load(); got == 0 {
+		t.Fatal("ordered close lost staged-byte accounting")
 	}
 	if global, _ := coordinator.admission.snapshot(""); global != 0 {
 		t.Fatalf("ordered close retained %d in-flight bytes", global)
@@ -730,26 +853,35 @@ func TestStorageWriteCloseDeadlineStopsWorkerAndReleasesAdmission(t *testing.T) 
 	if global, perStream := coordinator.admission.snapshot(stream); global != 0 || perStream != 0 {
 		t.Fatalf("deadline close retained in-flight bytes global=%d stream=%d", global, perStream)
 	}
-	// Cleanup did not complete before its deadline, so its error is paired with
-	// an intact receipt/staging table that a later process initialization drops.
-	if got := storageWriteReceiptCount(t, ctx, warehouse, stream); got != 1 {
-		t.Fatalf("deadline close receipt count = %d, want 1", got)
+	// Close is a queue barrier. Physical rows remain intact for reconciliation
+	// with the canonical SQLite state on the next process start.
+	if got := storageWritePendingRowCount(t, ctx, warehouse, stream); got != 1 {
+		t.Fatalf("deadline close pending row count = %d, want 1", got)
 	}
 	if got := storageWriteStagingTableCount(t, ctx, warehouse); got != 1 {
 		t.Fatalf("deadline close staging table count = %d, want 1", got)
 	}
-	restarted, err := NewStorageWriteCoordinator(ctx, warehouse, storageWriteCoordinatorTestConfig())
+	restarted, err := NewStorageWriteCoordinator(ctx, warehouse, coordinator.resolver, storageWriteCoordinatorTestConfig())
 	if err != nil {
-		t.Fatalf("restart coordinator cleanup: %v", err)
+		t.Fatalf("restart coordinator: %v", err)
 	}
-	if got := storageWriteTotalReceiptCount(t, ctx, warehouse); got != 0 {
-		t.Fatalf("restart retained %d stale receipts", got)
+	physical, err := restarted.InspectPhysical(ctx, []writeports.PhysicalExpectation{{
+		StreamName: stream, StagedBytes: batchStagedBytes(writeports.AppendBatch{Rows: [][]byte{row}}),
+	}})
+	if err != nil {
+		t.Fatalf("inspect restarted physical state: %v", err)
+	}
+	if got := physical[stream]; !got.PendingExists || got.PendingRows != 1 || got.AppliedExists {
+		t.Fatalf("restart physical state = %#v, want one pending row", got)
+	}
+	if got := restarted.stagedBytes.Load(); got == 0 {
+		t.Fatal("restart did not restore staged-byte accounting")
+	}
+	if err := restarted.DiscardPending(ctx, stream); err != nil {
+		t.Fatalf("discard recovered staging: %v", err)
 	}
 	if got := storageWriteStagingTableCount(t, ctx, warehouse); got != 0 {
-		t.Fatalf("restart retained %d stale staging tables", got)
-	}
-	if got := restarted.stagedBytes.Load(); got != 0 {
-		t.Fatalf("restart staged byte counter = %d, want 0", got)
+		t.Fatalf("discard retained %d recovered staging tables", got)
 	}
 	if err := restarted.Close(ctx); err != nil {
 		t.Fatalf("close restarted coordinator: %v", err)
@@ -764,7 +896,7 @@ func TestStorageWriteLostStageAcknowledgementRecoversOnNewBidiCall(t *testing.T)
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
 		MaxStreams: 2, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 2,
 		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
-	}, coordinator, storageWriteRetryClock{}, storageWriteRetryIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, coordinator, writememory.NewRepository(), storageWriteRetryClock{}, storageWriteRetryIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,8 +984,8 @@ func TestStorageWriteLostStageAcknowledgementRecoversOnNewBidiCall(t *testing.T)
 	if got := coordinator.stagedBytes.Load(); got != expectedStagedBytes {
 		t.Fatalf("lost acknowledgement staged bytes = %d, want %d", got, expectedStagedBytes)
 	}
-	if got := storageWriteReceiptCount(t, ctx, warehouse, created.GetName()); got != 1 {
-		t.Fatalf("lost acknowledgement receipt count = %d, want 1", got)
+	if got := storageWritePendingRowCount(t, ctx, warehouse, created.GetName()); got != 1 {
+		t.Fatalf("lost acknowledgement pending row count = %d, want 1", got)
 	}
 
 	// A new transport connection also creates a fresh bidi inheritance scope.
@@ -1031,7 +1163,8 @@ func newStorageWriteFixtureWithConfig(t *testing.T, fields []domain.Field, confi
 	if err := warehouse.CreateTable(ctx, table); err != nil {
 		t.Fatal(err)
 	}
-	coordinator, err := NewStorageWriteCoordinator(ctx, warehouse, config)
+	resolver := &storageWriteTestTableResolver{table: table}
+	coordinator, err := NewStorageWriteCoordinator(ctx, warehouse, resolver, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1042,6 +1175,18 @@ func newStorageWriteFixtureWithConfig(t *testing.T, fields []domain.Field, confi
 		_ = warehouse.Close()
 	})
 	return warehouse, coordinator, writedomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}
+}
+
+type storageWriteTestTableResolver struct {
+	table domain.Table
+	err   error
+}
+
+func (r *storageWriteTestTableResolver) GetTable(_ context.Context, _, _, _ string) (domain.Table, error) {
+	if r.err != nil {
+		return domain.Table{}, r.err
+	}
+	return r.table, nil
 }
 
 func storageWriteDescriptor(t *testing.T, fields ...*descriptorpb.FieldDescriptorProto) []byte {
@@ -1097,19 +1242,19 @@ func storageWriteRowCount(t *testing.T, ctx context.Context, warehouse *Warehous
 	return count
 }
 
-func storageWriteReceiptCount(t *testing.T, ctx context.Context, warehouse *Warehouse, stream string) int {
+func storageWritePendingRowCount(t *testing.T, ctx context.Context, warehouse *Warehouse, stream string) int {
 	t.Helper()
-	statement := "SELECT count(*) FROM " + quoteIdentifier(storageWriteInternalSchema) + "." + quoteIdentifier(storageWriteReceiptTable) + " WHERE stream_name = ?"
-	var count int
-	if err := warehouse.db.QueryRowContext(ctx, statement, stream).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	return count
+	return storageWritePhysicalRowCount(t, ctx, warehouse, storageWriteStagingTable(stream))
 }
 
-func storageWriteTotalReceiptCount(t *testing.T, ctx context.Context, warehouse *Warehouse) int {
+func storageWriteAppliedRowCount(t *testing.T, ctx context.Context, warehouse *Warehouse, stream string) int {
 	t.Helper()
-	statement := "SELECT count(*) FROM " + quoteIdentifier(storageWriteInternalSchema) + "." + quoteIdentifier(storageWriteReceiptTable)
+	return storageWritePhysicalRowCount(t, ctx, warehouse, storageWriteAppliedTable(stream))
+}
+
+func storageWritePhysicalRowCount(t *testing.T, ctx context.Context, warehouse *Warehouse, table string) int {
+	t.Helper()
+	statement := "SELECT count(*) FROM " + quoteIdentifier(storageWriteInternalSchema) + "." + quoteIdentifier(table)
 	var count int
 	if err := warehouse.db.QueryRowContext(ctx, statement).Scan(&count); err != nil {
 		t.Fatal(err)

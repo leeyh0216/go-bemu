@@ -23,6 +23,31 @@ import (
 	tabledatabudget "github.com/leeyh0216/go-bemu/internal/tabledata"
 )
 
+// tabledata.insertAll accepts ordinary JSON objects.  json.RawMessage keeps
+// integer precision and temporal literals intact until schema-driven
+// application conversion.
+type tableDataInsertAllRequest struct {
+	Rows                []tableDataInsertRow `json:"rows"`
+	SkipInvalidRows     bool                 `json:"skipInvalidRows,omitempty"`
+	IgnoreUnknownValues bool                 `json:"ignoreUnknownValues,omitempty"`
+	TemplateSuffix      string               `json:"templateSuffix,omitempty"`
+}
+
+type tableDataInsertRow struct {
+	InsertID string                     `json:"insertId,omitempty"`
+	JSON     map[string]json.RawMessage `json:"json"`
+}
+
+type tableDataInsertAllResponse struct {
+	Kind         string                    `json:"kind"`
+	InsertErrors []tableDataInsertRowError `json:"insertErrors,omitempty"`
+}
+
+type tableDataInsertRowError struct {
+	Index  int          `json:"index"`
+	Errors []errorProto `json:"errors"`
+}
+
 const (
 	defaultTableDataResponseBytes int64 = 10_000_000
 	defaultTableDataRowBytes      int64 = 100_000_000

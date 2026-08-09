@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "1",
+  "overlayId": "dsv2-spark-3.5-streaming-visibility-0.44.2",
+  "connectorVersion": "0.44.2",
+  "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92",
+  "inputArtifact": {
+    "kind": "maven-jar",
+    "url": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/spark-3.5-bigquery-0.44.2.jar",
+    "output": "spark-3.5-bigquery-0.44.2.jar",
+    "size": 42618495,
+    "sha256": "2e6bbb41bcaf56ae17a5488dd4453698bd35f13e9849f4daed744ca7b57b053f"
+  },
+  "targetClass": {
+    "name": "com.google.cloud.spark.bigquery.write.context.BigQueryDirectDataSourceWriterContext",
+    "entry": "com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataSourceWriterContext.class",
+    "size": 20291,
+    "sha256": "3df68a5c1912fee08a1099399f2616bb1918566abf93a3f31194412584d31a63",
+    "requiredMethods": [
+      {
+        "name": "commit",
+        "descriptor": "([Lcom/google/cloud/spark/bigquery/write/context/WriterCommitMessageContext;)V",
+        "codeBytes": 436,
+        "codeSha256": "04246c9daf6eb684c0704a9005e4346b9f2755f834ca949177ab54f9b8335cc6"
+      },
+      {
+        "name": "abort",
+        "descriptor": "([Lcom/google/cloud/spark/bigquery/write/context/WriterCommitMessageContext;)V",
+        "codeBytes": 56,
+        "codeSha256": "b9b627f168c61c5c8e7e5c64225a8b1a55318c106758d3c084edb6f60eafa747"
+      }
+    ],
+    "forbiddenMethods": [
+      {
+        "name": "onDataStreamingWriterCommit",
+        "descriptor": "(J[Lcom/google/cloud/spark/bigquery/write/context/WriterCommitMessageContext;)V"
+      },
+      {
+        "name": "onDataStreamingWriterAbort",
+        "descriptor": "(J[Lcom/google/cloud/spark/bigquery/write/context/WriterCommitMessageContext;)V"
+      }
+    ]
+  },
+  "patch": {
+    "commitGuard": {
+      "writeAtLeastOnce": false,
+      "tableToWriteDeleteOnAbort": false,
+      "failure": "java.lang.IllegalStateException"
+    },
+    "methods": [
+      {
+        "name": "onDataStreamingWriterCommit",
+        "descriptor": "(J[Lcom/google/cloud/spark/bigquery/write/context/WriterCommitMessageContext;)V",
+        "delegate": "commit",
+        "codeBytes": 34,
+        "codeSha256": "6174e9886129f75e6e0ecb894887605ab3ce4d430e2c9c76ae3eec79d615e8e1"
+      },
+      {
+        "name": "onDataStreamingWriterAbort",
+        "descriptor": "(J[Lcom/google/cloud/spark/bigquery/write/context/WriterCommitMessageContext;)V",
+        "delegate": "abort",
+        "codeBytes": 6,
+        "codeSha256": "c2f4cab39d82fb3d4459c1c1d4f6d37ceacf45e381b3aeb4b9260dd0d2f0a3ee"
+      }
+    ]
+  },
+  "outputArtifact": {
+    "kind": "one-class-overlay-jar",
+    "output": "spark-3.5-bigquery-0.44.2-dsv2-streaming-overlay.jar",
+    "entries": [
+      "com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataSourceWriterContext.class"
+    ],
+    "classSize": 20673,
+    "classSha256": "1f41fa60279c39e9fbc144ff2d6252b78dffa1a505f329e51af60dcee91af67d",
+    "size": 20949,
+    "sha256": "1e4d3705834745aa662442eb41f4aa99e6f7a1a89aa51b8aae1eb93c7c6c5bd3"
+  },
+  "builderSource": {
+    "ref": "tools/dsv2-overlay/src/dev/bqemu/overlay/OverlayBuilder.java",
+    "size": 14332,
+    "sha256": "405950777605aa26440e59aa2c99da50b65734c3d33970eb4f232ba6da610c4a"
+  },
+  "buildTool": {
+    "javaRelease": "11",
+    "runtimeJavaMajor": "17",
+    "javassist": {
+      "version": "3.30.2-GA",
+      "url": "https://repo.maven.apache.org/maven2/org/javassist/javassist/3.30.2-GA/javassist-3.30.2-GA.jar",
+      "output": "javassist-3.30.2-GA.jar",
+      "size": 794714,
+      "sha256": "eba37290994b5e4868f3af98ff113f6244a6b099385d9ad46881307d3cb01aaf"
+    }
+  }
+}

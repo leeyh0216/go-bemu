@@ -86,6 +86,27 @@ DuckDB가 SQL을 받아들였다는 사실만으로는 BigQuery 동작을 재현
 저장소의 필수 검증을 모두 실행합니다. 생성된 매니페스트와 문서, 검증 자료는
 원본과 같은 커밋에 포함해야 합니다. CI는 오래된 생성 파일을 거부합니다.
 
+<!-- section: integration-contract -->
+## 통합 계약 주석
+
+외부에서 실행하는 Python 통합 operation마다 원본에 주석을 하나만 작성합니다.
+
+```python
+# bqemu:operation bigquery.jobs.query.parameters scenario=query-parameters
+```
+
+그 operation ID를 `cmd/integration-contract/main.go`의 scenario selector에
+정확히 등록한 뒤 다음을 실행합니다.
+
+```bash
+make integration-contract-check
+```
+
+이 검사는 `contract/generated/integration-consumer-contract.json`을 다시
+생성하고, 중복·알 수 없음·scenario 불일치·선택되지 않은 operation이 있으면
+실패합니다. 사람이 별도로 관리하는 coverage JSON을 추가하지 않습니다. 생성된
+매니페스트가 원본과 scenario를 검토 가능한 형태로 연결합니다.
+
 <!-- section: evolution-pipeline -->
 ## 호환성 확장 절차
 

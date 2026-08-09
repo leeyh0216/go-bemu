@@ -191,6 +191,54 @@ func TestAnonymousDestinationAndLocationInferenceCrossPublicRESTEdge(t *testing.
 	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/"+datasetID, "", http.StatusNotFound)
 }
 
+func TestConfiguredMaterializationTargetCrossPublicRESTEdge(t *testing.T) {
+	ctx, cancel := staticOverwriteRESTTestContext(t)
+	defer cancel()
+	warehouse, err := duckdb.New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	now := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
+	clock := &anonymousRESTClock{now: now}
+	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock, application.WithTableDataReader(warehouse))
+	queries := application.NewQueryService(
+		memory.NewJobRepository(), warehouse, clock, &testIDs{},
+		application.WithQueryAnalyzer(warehouse), application.WithQueryMaterializer(warehouse),
+		application.WithQueryDestinationCatalog(catalog), application.WithQueryDefaultLocation("US"),
+		application.WithQueryMaterializationTarget(application.MaterializationTarget{ProjectID: "results-project", DatasetID: "managed_results", TTL: 6 * time.Hour}),
+	)
+	server := httptest.NewServer(NewServer(catalog, queries, warehouse, "", WithTableDataAPI(catalog)).Handler())
+	t.Cleanup(server.Close)
+	request := func(method, path, body string, wantStatus int) map[string]any {
+		t.Helper()
+		return staticOverwriteRESTRequest(t, ctx, server.URL, method, path, body, wantStatus)
+	}
+
+	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"results-project"}`, http.StatusOK)
+	request(http.MethodPost, "/bigquery/v2/projects/results-project/datasets", `{"datasetReference":{"datasetId":"managed_results"},"location":"US"}`, http.StatusOK)
+	inserted := request(http.MethodPost, "/bigquery/v2/projects/test-project/jobs", `{
+		"jobReference":{"projectId":"test-project","jobId":"configured-materialization"},
+		"configuration":{"query":{"query":"SELECT 1 AS id","useLegacySql":false}}
+	}`, http.StatusOK)
+	destination := inserted["configuration"].(map[string]any)["query"].(map[string]any)["destinationTable"].(map[string]any)
+	if destination["projectId"] != "results-project" || destination["datasetId"] != "managed_results" {
+		t.Fatalf("configured destination = %#v", destination)
+	}
+	if strings.HasPrefix(destination["datasetId"].(string), "_bqemu_anonymous_") {
+		t.Fatalf("configured target used anonymous dataset: %#v", destination)
+	}
+	completed := waitForRESTQueryJob(t, ctx, request, "configured-materialization", "US")
+	completedDestination := completed["configuration"].(map[string]any)["query"].(map[string]any)["destinationTable"].(map[string]any)
+	if fmt.Sprint(completedDestination) != fmt.Sprint(destination) {
+		t.Fatalf("destination changed while polling: insert=%#v get=%#v", destination, completedDestination)
+	}
+	table := request(http.MethodGet, "/bigquery/v2/projects/results-project/datasets/managed_results/tables/"+destination["tableId"].(string), "", http.StatusOK)
+	if table["expirationTime"] != strconv.FormatInt(now.Add(6*time.Hour).UnixMilli(), 10) || table["location"] != "US" {
+		t.Fatalf("managed result metadata = %#v", table)
+	}
+}
+
 func assertQueryScriptGap(t *testing.T, response map[string]any) {
 	t.Helper()
 	errorResource := response["error"].(map[string]any)

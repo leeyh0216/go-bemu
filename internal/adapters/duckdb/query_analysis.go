@@ -56,11 +56,25 @@ func (w *Warehouse) AnalyzeQuery(ctx context.Context, request ports.QueryRequest
 		return ports.QueryAnalysis{}, fmt.Errorf("%w: query statement type is outside the declared engine subset; capability=%s",
 			domain.ErrUnsupported, domain.GapQueryScriptsUnsupportedV1)
 	}
-	translated, model, err := translateSQLWithModel(request)
+	references, err := analyzeRelationReferences(request)
 	if err != nil {
 		return ports.QueryAnalysis{}, err
 	}
-	references, err := analyzeRelationReferences(request)
+	// Catalog DDL is parsed into a semantic command by the application. Do not
+	// translate it to DuckDB SQL here: doing so would let physical syntax decide
+	// canonical BigQuery metadata.
+	if statement == "CREATE" || statement == "ALTER" || statement == "DROP" || statement == "TRUNCATE" {
+		// DDL targets may be created and therefore must not be resolved as
+		// existing source tables. Location routing still resolves their dataset
+		// through MutationTargets.
+		analysis := ports.QueryAnalysis{MutationTargets: references, RequiresCatalogMutation: true}
+		slog.InfoContext(ctx, "query analysis", "event", "boundary.exit", "boundary", "duckdb.query_analysis",
+			"model_version", "catalog-ddl-semantic-v1", "query_bytes", len(request.SQL), "query_digest", observability.Digest([]byte(request.SQL)),
+			"statement_type", statement, "referenced_table_count", len(references), "mutation_target_count", len(analysis.MutationTargets),
+			"produces_rows", false, "requires_catalog_mutation", true)
+		return analysis, nil
+	}
+	translated, model, err := translateSQLWithModel(request)
 	if err != nil {
 		return ports.QueryAnalysis{}, err
 	}
@@ -70,11 +84,6 @@ func (w *Warehouse) AnalyzeQuery(ctx context.Context, request ports.QueryRequest
 		if len(references) > 0 {
 			analysis.MutationTargets = append([]domain.TableReference(nil), references[0])
 		}
-	case "CREATE", "ALTER", "DROP", "TRUNCATE":
-		// QueryService has no catalog-DDL reconciliation port. Mark the
-		// statement so the application rejects it before a DuckDB side effect
-		// can create metadata drift.
-		analysis.RequiresCatalogMutation = true
 	}
 	attrs := []any{
 		"event", "boundary.exit", "boundary", "duckdb.query_analysis",

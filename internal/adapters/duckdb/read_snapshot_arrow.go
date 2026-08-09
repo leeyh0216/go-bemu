@@ -67,9 +67,19 @@ func arrowBaseType(field catalogdomain.Field, path string) (arrow.DataType, erro
 	case "FLOAT64", "FLOAT":
 		return arrow.PrimitiveTypes.Float64, nil
 	case "NUMERIC":
-		return &arrow.Decimal128Type{Precision: 38, Scale: 9}, nil
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return nil, fmt.Errorf("map BigQuery field at %s: %w", path, err)
+		}
+		return &arrow.Decimal128Type{Precision: int32(parameters.Precision), Scale: int32(parameters.Scale)}, nil
 	case "BIGNUMERIC":
-		return &arrow.Decimal256Type{Precision: 76, Scale: 38}, nil
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return nil, fmt.Errorf("map BigQuery field at %s: %w", path, err)
+		}
+		// Keep Decimal256 for the BIGNUMERIC wire identity even though this
+		// emulator intentionally limits its precision to Spark's 38 digits.
+		return &arrow.Decimal256Type{Precision: int32(parameters.Precision), Scale: int32(parameters.Scale)}, nil
 	case "STRING", "GEOGRAPHY", "JSON":
 		return arrow.BinaryTypes.String, nil
 	case "BYTES":
@@ -193,13 +203,21 @@ func appendArrowValue(builder array.Builder, field catalogdomain.Field, value sn
 	case "FLOAT64", "FLOAT":
 		builder.(*array.Float64Builder).Append(value.Float)
 	case "NUMERIC":
-		decimal, err := decimal128.FromString(value.Text, 38, 9)
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return err
+		}
+		decimal, err := decimal128.FromString(value.Text, int32(parameters.Precision), int32(parameters.Scale))
 		if err != nil {
 			return fmt.Errorf("parse NUMERIC %q: %w", value.Text, err)
 		}
 		builder.(*array.Decimal128Builder).Append(decimal)
 	case "BIGNUMERIC":
-		decimal, err := decimal256.FromString(value.Text, 76, 38)
+		parameters, err := field.EffectiveDecimalParameters()
+		if err != nil {
+			return err
+		}
+		decimal, err := decimal256.FromString(value.Text, int32(parameters.Precision), int32(parameters.Scale))
 		if err != nil {
 			return fmt.Errorf("parse BIGNUMERIC %q: %w", value.Text, err)
 		}

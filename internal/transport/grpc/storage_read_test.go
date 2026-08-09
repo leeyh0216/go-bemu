@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -24,13 +25,89 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	stateadapter "github.com/leeyh0216/go-bemu/internal/adapters/sqlite"
 	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
 	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
 	"github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
+
+func TestStorageReadGeneratedClientOldStreamIsUnavailableAfterRestart(t *testing.T) {
+	ctx, cancel := grpcTestContext(t)
+	defer cancel()
+	store, err := stateadapter.Open(ctx, stateadapter.DefaultConfig(filepath.Join(t.TempDir(), "state.sqlite")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	firstMaterializer := newWireMaterializer(t, domain.FormatArrow, 4)
+	first := newWireDurableReadService(t, firstMaterializer, store)
+	if err := first.ReconcilePersistedSessions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close(context.Background()) })
+	firstClient, _ := startReadServer(t, first)
+	session, err := firstClient.CreateReadSession(ctx, wireCreateSessionRequest(storagepb.DataFormat_ARROW))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStream := session.GetStreams()[0].GetName()
+
+	secondMaterializer := newWireMaterializer(t, domain.FormatArrow, 99)
+	second := newWireDurableReadService(t, secondMaterializer, store)
+	if err := second.ReconcilePersistedSessions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close(context.Background()) })
+	secondClient, _ := startReadServer(t, second)
+	for attempt := 0; attempt < 2; attempt++ {
+		reader, err := secondClient.ReadRows(ctx, &storagepb.ReadRowsRequest{ReadStream: oldStream})
+		if err == nil {
+			_, err = reader.Recv()
+		}
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("old stream attempt %d status = %s, want UNAVAILABLE: %v", attempt, status.Code(err), err)
+		}
+	}
+	if secondMaterializer.calls != 0 {
+		t.Fatalf("old stream was rematerialized %d times", secondMaterializer.calls)
+	}
+
+	expiredName := "projects/reader-project/locations/test-location/sessions/expired-session"
+	expiredStream := expiredName + "/streams/0"
+	createdAt := wireClock{}.Now().Add(-2 * time.Hour)
+	if err := store.CreateSession(ctx, domain.SessionRecord{
+		Name: expiredName, Table: "projects/data-project/datasets/analytics/tables/events",
+		Format: domain.FormatArrow, Streams: []domain.Stream{{Name: expiredStream}},
+		RowRestrictionDigest: "sha256:" + strings.Repeat("a", 64),
+		SchemaFingerprint:    "sha256:" + strings.Repeat("b", 64),
+		CreatedAt:            createdAt, ExpireTime: createdAt.Add(time.Hour),
+		Lifecycle: domain.SessionActive, LifecycleUpdatedAt: createdAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	thirdMaterializer := newWireMaterializer(t, domain.FormatArrow, 99)
+	third := newWireDurableReadService(t, thirdMaterializer, store)
+	if err := third.ReconcilePersistedSessions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = third.Close(context.Background()) })
+	thirdClient, _ := startReadServer(t, third)
+	reader, err := thirdClient.ReadRows(ctx, &storagepb.ReadRowsRequest{ReadStream: expiredStream})
+	if err == nil {
+		_, err = reader.Recv()
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expired old stream status = %s, want NOT_FOUND: %v", status.Code(err), err)
+	}
+	if thirdMaterializer.calls != 0 {
+		t.Fatalf("expired stream was rematerialized %d times", thirdMaterializer.calls)
+	}
+}
 
 func TestStorageReadWireFormatsAndOffsetResume(t *testing.T) {
 	for _, testCase := range []struct {
@@ -45,6 +122,7 @@ func TestStorageReadWireFormatsAndOffsetResume(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			ctx, cancel := grpcTestContext(t)
 			defer cancel()
+			ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer arbitrary-local-fixture-token"))
 			materializer := newWireMaterializer(t, testCase.format, 8)
 			service := newWireReadService(t, materializer)
 			client, healthClient := startReadServer(t, service)
@@ -479,7 +557,28 @@ func newWireReadServiceWithLimitsAndLogger(t *testing.T, materializer ports.Snap
 		MaxSessions:           maxSessions,
 		MaxSnapshotBytes:      maxSnapshotBytes,
 		MaxTotalSnapshotBytes: maxTotalSnapshotBytes,
+		StateOperationTimeout: time.Second,
 	}, materializer, wireClock{}, &wireIDs{}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+func newWireDurableReadService(
+	t *testing.T,
+	materializer ports.SnapshotMaterializer,
+	repository ports.SessionStateRepository,
+) *readapp.Service {
+	t.Helper()
+	service, err := readapp.New(readapp.Config{
+		Location: "test-location", ProtocolModelVersion: "google.cloud.bigquery.storage.v1@durable-test",
+		MaxStreams: 16, DefaultStreamCount: 4, SessionTTL: 30 * time.Minute,
+		CleanupInterval: time.Minute, MaxRowsPerResponse: 2, MaxSessions: 16,
+		MaxSnapshotBytes: 1 << 20, MaxTotalSnapshotBytes: 16 << 20,
+		StateOperationTimeout: time.Second,
+	}, materializer, wireClock{}, &wireIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		readapp.WithSessionStateRepository(repository))
 	if err != nil {
 		t.Fatal(err)
 	}

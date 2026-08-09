@@ -67,6 +67,7 @@ func cloneJob(job *domain.Job) *domain.Job {
 		destination := *job.Configuration.Destination
 		clone.Configuration.Destination = &destination
 	}
+	clone.Configuration.QueryParameters = append([]domain.QueryParameter(nil), job.Configuration.QueryParameters...)
 	if job.Error != nil {
 		jobError := *job.Error
 		clone.Error = &jobError

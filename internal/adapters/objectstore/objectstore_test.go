@@ -14,36 +14,26 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 )
 
-func TestFileSystemListGetAndOpen(t *testing.T) {
+func TestMediaStoreStartupCleansOnlyPrivateIncompleteUploads(t *testing.T) {
 	directory := t.TempDir()
-	for name, contents := range map[string]string{"a.parquet": "a", "b.parquet": "bb", "ignored.txt": "x"} {
-		if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0o600); err != nil {
+	staging := filepath.Join(directory, ".upload-interrupted.part")
+	immutable := filepath.Join(directory, strings.Repeat("a", 64)+".object")
+	unrelated := filepath.Join(directory, "keep.txt")
+	for path := range map[string]string{staging: "partial", immutable: "complete", unrelated: "keep"} {
+		if err := os.WriteFile(path, []byte("payload"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	store := FileSystem{}
-	objects, err := store.List(context.Background(), canonicalFileURI(filepath.Join(directory, "*.parquet")))
-	if err != nil {
+	if _, err := NewMediaStore(directory, 1024); err != nil {
 		t.Fatal(err)
 	}
-	if len(objects) != 2 || objects[0].Size != 1 || objects[1].Size != 2 {
-		t.Fatalf("unexpected objects: %+v", objects)
+	if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale upload error=%v, want not exist", err)
 	}
-	object, err := store.Get(context.Background(), canonicalFileURI(filepath.Join(directory, "b.parquet")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err := store.Open(context.Background(), object)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
-	payload, err := io.ReadAll(reader)
-	if err != nil || string(payload) != "bb" {
-		t.Fatalf("payload=%q err=%v", payload, err)
-	}
-	if _, err := store.Get(context.Background(), filepath.Join(directory, "b.parquet")); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("bare path error = %v", err)
+	for _, path := range []string{immutable, unrelated} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("startup cleanup removed %q: %v", path, err)
+		}
 	}
 }
 

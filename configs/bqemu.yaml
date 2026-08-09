@@ -8,6 +8,11 @@ defaults:
   projectId: local-project
   location: US
 
+# Optional idempotent startup resources. Existing datasets must retain the
+# declared location; mismatches fail before listeners start.
+bootstrap:
+  projects: []
+
 server:
   http:
     address: ":9050"
@@ -28,6 +33,16 @@ server:
     certFile: ""
     keyFile: ""
 
+# BQEMU owns all canonical metadata in this SQLite file. Mount /data to retain
+# it across container replacement. Back it up together with bqemu.duckdb.
+state:
+  adapter: sqlite
+  dsn: /data/bqemu-state.sqlite
+  busyTimeout: "5s"
+  journalMode: WAL
+  synchronous: FULL
+
+# DuckDB stores physical tables and rows only. It is not a metadata source.
 database:
   adapter: duckdb
   dsn: /data/bqemu.duckdb
@@ -50,6 +65,12 @@ query:
   compensationTimeout: "30s"
   # BigQuery documents anonymous cached result tables as approximately 24h.
   anonymousResultTtl: "24h"
+  # Optional server-managed destination for row-producing queries that omit
+  # destinationTable. Explicit destinationTable always takes precedence.
+  # projectId: local-project
+  # datasetId: query-results
+  # expiration: "24h"
+  materialization: {}
 
 tableData:
   # Bounds catalog admission, TTL resolution, and one count-and-page transaction.
@@ -64,6 +85,7 @@ tableData:
 storage:
   read:
     enabled: true
+    stateOperationTimeout: "5s"
     maxStreams: 64
     defaultStreamCount: 4
     rowsPerResponse: 10000
@@ -94,12 +116,11 @@ storage:
     cleanupInterval: "1m"
     protocolModelVersion: google.cloud.bigquery.storage.v1+spark-bigquery-connector-0.44.2
 
-# Enable only with an explicit fake-GCS or GCS-compatible JSON endpoint.
-# file:// sources remain disabled unless allowFileSources is deliberately set.
+# Parquet load jobs are always available. Public sources use the configured
+# fake-GCS-compatible JSON endpoint; media uploads use a private immutable
+# store. For host execution use 127.0.0.1; Docker Compose uses fake-gcs.
 load:
-  enabled: false
-  gcsEndpoint: ""
-  allowFileSources: false
+  gcsEndpoint: http://fake-gcs:4443
   operationTimeout: "2m"
   maxObjects: 1000
   maxObjectBytes: 1073741824

@@ -11,19 +11,35 @@ import (
 )
 
 type Router struct {
-	file loadports.ObjectStore
-	gcs  loadports.ObjectStore
+	gcs   loadports.ObjectStore
+	media loadports.ObjectStore
 }
 
-func NewRouter(file, gcs loadports.ObjectStore) (*Router, error) {
-	if file == nil && gcs == nil {
-		return nil, fmt.Errorf("%w: at least one object-store adapter is required", domain.ErrInvalid)
+func NewRouter(gcs loadports.ObjectStore) (*Router, error) {
+	if gcs == nil {
+		return nil, fmt.Errorf("%w: GCS object-store adapter is required", domain.ErrInvalid)
 	}
-	return &Router{file: file, gcs: gcs}, nil
+	return &Router{gcs: gcs}, nil
 }
 
-// NewGCSOnlyRouter is the secure public-runtime default. file:// sources are
-// enabled only when a caller deliberately supplies FileSystem to NewRouter.
+// NewRouterWithMedia adds the private bqemu-upload:// scheme used only after a
+// media upload has been committed. It does not enable client file:// sources.
+func NewRouterWithMedia(gcs, media loadports.ObjectStore) (*Router, error) {
+	if media == nil {
+		return nil, fmt.Errorf("%w: media upload store is required", domain.ErrInvalid)
+	}
+	if gcs == nil {
+		return &Router{media: media}, nil
+	}
+	router, err := NewRouter(gcs)
+	if err != nil {
+		return nil, err
+	}
+	router.media = media
+	return router, nil
+}
+
+// NewGCSOnlyRouter is the public-runtime default.
 func NewGCSOnlyRouter(gcs loadports.ObjectStore) (*Router, error) {
 	if gcs == nil {
 		return nil, fmt.Errorf("%w: GCS object-store adapter is required", domain.ErrInvalid)
@@ -62,15 +78,17 @@ func (r *Router) adapter(rawURI string) (loadports.ObjectStore, error) {
 	}
 	switch u.Scheme {
 	case "file":
-		if r.file == nil {
-			return nil, fmt.Errorf("%w: file:// load sources are disabled", domain.ErrUnsupported)
-		}
-		return r.file, nil
+		return nil, fmt.Errorf("%w: file:// load sources are disabled", domain.ErrUnsupported)
 	case "gs":
 		if r.gcs == nil {
 			return nil, fmt.Errorf("%w: gs:// load sources are disabled", domain.ErrUnsupported)
 		}
 		return r.gcs, nil
+	case mediaScheme:
+		if r.media == nil {
+			return nil, fmt.Errorf("%w: media upload objects are disabled", domain.ErrUnsupported)
+		}
+		return r.media, nil
 	default:
 		return nil, fmt.Errorf("%w: object URI scheme %q is not implemented", domain.ErrUnsupported, u.Scheme)
 	}

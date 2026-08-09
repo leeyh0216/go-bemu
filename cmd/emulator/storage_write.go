@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
@@ -31,6 +32,8 @@ func composeStorageWrite(
 	ctx context.Context,
 	cfg config.Config,
 	warehouse *duckdb.Warehouse,
+	resolver duckdb.StorageWriteTableSchemaResolver,
+	repository writeports.StreamRepository,
 	clock writeports.Clock,
 	ids writeports.IDGenerator,
 	logger *slog.Logger,
@@ -38,7 +41,7 @@ func composeStorageWrite(
 	if !cfg.Storage.Write.Enabled {
 		return &storageWriteRuntime{}, nil
 	}
-	coordinator, err := duckdb.NewStorageWriteCoordinator(ctx, warehouse, duckdb.StorageWriteCoordinatorConfig{
+	coordinator, err := duckdb.NewStorageWriteCoordinator(ctx, warehouse, resolver, duckdb.StorageWriteCoordinatorConfig{
 		QueueCapacity:             cfg.Storage.Write.QueueCapacity,
 		QueueWaitTimeout:          cfg.Storage.Write.QueueWaitTimeout.Value(),
 		OperationTimeout:          cfg.Storage.Write.OperationTimeout.Value(),
@@ -56,12 +59,18 @@ func composeStorageWrite(
 		MaxAppendEnvelopeBytes:      cfg.Storage.Write.MaxAppendEnvelopeBytes,
 		MaxConcurrentAppendRequests: cfg.Storage.Write.MaxConcurrentAppendRequests,
 		OrphanTTL:                   cfg.Storage.Write.OrphanTTL.Value(), CleanupInterval: cfg.Storage.Write.CleanupInterval.Value(),
-	}, coordinator, clock, ids, logger)
+	}, coordinator, repository, clock, ids, logger)
 	if err != nil {
 		closeContext, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())
 		defer cancel()
 		_ = coordinator.Close(closeContext)
 		return nil, err
+	}
+	if err := service.Reconcile(ctx); err != nil {
+		closeContext, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout.Value())
+		defer cancel()
+		_ = coordinator.Close(closeContext)
+		return nil, fmt.Errorf("reconcile Storage Write state: %w", err)
 	}
 	cleanupContext, cancel := context.WithCancel(context.Background())
 	runtime := &storageWriteRuntime{

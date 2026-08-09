@@ -1,0 +1,10 @@
+services:
+  spark-client:
+    image: eclipse-temurin:17-jre
+    depends_on:
+      bqemu:
+        condition: service_healthy
+    environment:
+      BIGQUERY_HTTP_TRANSPORT: http://bqemu:9050
+      BIGQUERY_STORAGE_GRPC_ENDPOINT: bqemu:9060
+    command: ["sh", "-c", "sleep infinity"]

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
@@ -36,78 +37,86 @@ func (s *Service) SweepOrphans(ctx context.Context) error {
 	}
 
 	cutoff := s.clock.Now().Add(-s.config.OrphanTTL)
-	type orphan struct {
-		name  string
-		state *streamState
+	records, err := s.repository.ListWriteStreams(ctx)
+	if err != nil {
+		return fmt.Errorf("list Storage Write streams for orphan cleanup: %w", err)
 	}
-	orphans := make([]orphan, 0)
-	s.mu.Lock()
-	for name, state := range s.streams {
-		state.mu.Lock()
-		eligible := state.stream.Type == domain.StreamTypePending && state.stream.State != domain.StreamStateCommitted &&
-			(state.cleanupPhase == cleanupPhasePending ||
-				(state.cleanupPhase == cleanupPhaseActive && !state.stream.LastActivity.After(cutoff)))
+	orphans := make([]domain.StreamRecord, 0)
+	for _, record := range records {
+		eligible := record.Stream.Type == domain.StreamTypePending && record.Stream.State != domain.StreamStateCommitted &&
+			(record.CleanupState == domain.CleanupStatePending ||
+				(record.CleanupState == domain.CleanupStateActive && !record.Stream.LastActivity.After(cutoff)))
 		if eligible {
-			if state.cleanupPhase == cleanupPhaseActive {
-				state.cleanupPhase = cleanupPhasePending
-				s.logger.InfoContext(ctx, "pending write stream entered cleanup",
-					"event", "domain.transition", "operation", "storage_write.sweep_orphans",
-					"model_version", s.config.ProtocolModelVersion,
-					"stream_fingerprint", digest([]byte(name)),
-					"state_before", cleanupPhaseActive, "state_after", cleanupPhasePending,
-					"retry_count", uint64(0))
-			}
-			orphans = append(orphans, orphan{name: name, state: state})
+			orphans = append(orphans, record)
 		}
-		state.mu.Unlock()
 	}
-	s.mu.Unlock()
-	sort.Slice(orphans, func(i, j int) bool { return orphans[i].name < orphans[j].name })
+	sort.Slice(orphans, func(i, j int) bool { return orphans[i].Stream.Name < orphans[j].Stream.Name })
 
 	var result error
-	for _, item := range orphans {
+	for _, record := range orphans {
 		if err := ctx.Err(); err != nil {
 			result = errors.Join(result, err)
 			break
 		}
-		item.state.mu.Lock()
-		retryCount := item.state.cleanupAttempts
-		item.state.cleanupAttempts++
-		item.state.mu.Unlock()
+		stateBefore := record.CleanupState
+		retryCount := record.CleanupAttempts
+		expected := record.Revision
+		record.CleanupState = domain.CleanupStatePending
+		record.CleanupAttempts++
+		record.Revision++
+		if err := s.repository.SaveWriteStream(ctx, expected, record); err != nil {
+			result = errors.Join(result, fmt.Errorf("prepare orphan cleanup: %w", err))
+			continue
+		}
+		if stateBefore == domain.CleanupStateActive {
+			s.logger.InfoContext(ctx, "pending write stream entered cleanup",
+				"event", "domain.transition", "operation", "storage_write.sweep_orphans",
+				"model_version", s.config.ProtocolModelVersion,
+				"stream_fingerprint", digest([]byte(record.Stream.Name)),
+				"state_before", cleanupStateLogValue(domain.CleanupStateActive), "state_after", cleanupStateLogValue(domain.CleanupStatePending),
+				"retry_count", retryCount)
+		}
 		s.logger.InfoContext(ctx, "discarding orphaned write stream",
 			"event", "side_effect.before", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
-			"stream_fingerprint", digest([]byte(item.name)),
-			"state_before", cleanupPhasePending, "state_after", cleanupPhasePending,
+			"stream_fingerprint", digest([]byte(record.Stream.Name)),
+			"state_before", cleanupStateLogValue(domain.CleanupStatePending), "state_after", cleanupStateLogValue(domain.CleanupStatePending),
 			"retry_count", retryCount)
-		err := s.coordinator.DiscardPending(ctx, item.name)
-		stateAfter := cleanupPhasePending
+		err := s.coordinator.DiscardPending(ctx, record.Stream.Name)
+		stateAfter := cleanupStateLogValue(domain.CleanupStatePending)
 		if err == nil {
-			s.mu.Lock()
-			item.state.mu.Lock()
-			if s.streams[item.name] == item.state && item.state.cleanupPhase == cleanupPhasePending {
-				item.state.cleanupPhase = cleanupPhaseDiscarded
-				delete(s.streams, item.name)
-				s.pending.Add(-1)
-				stateAfter = cleanupPhaseDiscarded
+			deleteErr := s.repository.DeleteWriteStream(ctx, record.Stream.Name, record.Revision)
+			if deleteErr != nil {
+				err = fmt.Errorf("delete discarded stream metadata: %w", deleteErr)
+			} else {
+				stateAfter = "discarded"
 			}
-			item.state.mu.Unlock()
-			s.mu.Unlock()
 		}
 		attrs := []any{
 			"event", "side_effect.after", "side_effect", "coordinator.discard_pending",
 			"operation", "storage_write.sweep_orphans", "model_version", s.config.ProtocolModelVersion,
-			"stream_fingerprint", digest([]byte(item.name)), "success", err == nil,
-			"state_before", cleanupPhasePending, "state_after", stateAfter,
+			"stream_fingerprint", digest([]byte(record.Stream.Name)), "success", err == nil,
+			"state_before", cleanupStateLogValue(domain.CleanupStatePending), "state_after", stateAfter,
 			"retry_count", retryCount,
 		}
 		if err != nil {
 			attrs = append(attrs, errorLogAttrs(err)...)
-			result = errors.Join(result, fmt.Errorf("discard pending stream %s: %w", digest([]byte(item.name)), err))
+			result = errors.Join(result, fmt.Errorf("discard pending stream %s: %w", digest([]byte(record.Stream.Name)), err))
 		}
 		s.logger.InfoContext(ctx, "orphaned write stream discard completed", attrs...)
 	}
 	return result
+}
+
+func cleanupStateLogValue(state domain.CleanupState) string {
+	switch state {
+	case domain.CleanupStateActive:
+		return "active"
+	case domain.CleanupStatePending:
+		return "cleanup_pending"
+	default:
+		return strings.ToLower(string(state))
+	}
 }
 
 func (s *Service) RunCleanup(ctx context.Context) error {
@@ -129,15 +138,9 @@ func (s *Service) RunCleanup(ctx context.Context) error {
 }
 
 func (s *Service) Close(ctx context.Context) error {
-	s.mu.Lock()
-	s.closed = true
-	for _, state := range s.streams {
-		state.mu.Lock()
-		if state.stream.Type == domain.StreamTypePending && state.stream.State != domain.StreamStateCommitted {
-			state.stream.LastActivity = time.Time{}
-		}
-		state.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	s.mu.Unlock()
-	return s.SweepOrphans(ctx)
+	s.closed.Store(true)
+	return nil
 }

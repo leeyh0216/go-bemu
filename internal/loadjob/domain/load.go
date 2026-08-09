@@ -9,8 +9,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
+)
+
+var (
+	loadLabelKeyPattern   = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+	loadLabelValuePattern = regexp.MustCompile(`^[a-z0-9_-]*$`)
 )
 
 type JobState string
@@ -83,6 +89,7 @@ type LoadConfiguration struct {
 	IgnoreUnknownValues bool
 	MaxBadRecords       int64
 	UnsupportedOptions  []string
+	Labels              map[string]string
 }
 
 type JobError struct {
@@ -150,6 +157,13 @@ func normalizeConfiguration(configuration LoadConfiguration) LoadConfiguration {
 	configuration.Schema = cloneFields(configuration.Schema)
 	configuration.SchemaUpdateOptions = append([]string(nil), configuration.SchemaUpdateOptions...)
 	configuration.UnsupportedOptions = append([]string(nil), configuration.UnsupportedOptions...)
+	if configuration.Labels != nil {
+		labels := make(map[string]string, len(configuration.Labels))
+		for key, value := range configuration.Labels {
+			labels[key] = value
+		}
+		configuration.Labels = labels
+	}
 	return configuration
 }
 
@@ -185,6 +199,14 @@ func ValidateConfiguration(configuration LoadConfiguration) error {
 	}
 	if err := ValidateSchema(configuration.Schema); err != nil {
 		return err
+	}
+	if len(configuration.Labels) > 64 {
+		return fmt.Errorf("%w: load job labels exceed 64 entries", ErrInvalid)
+	}
+	for key, value := range configuration.Labels {
+		if len(key) > 63 || len(value) > 63 || !loadLabelKeyPattern.MatchString(key) || !loadLabelValuePattern.MatchString(value) {
+			return fmt.Errorf("%w: invalid load job label key or value", ErrInvalid)
+		}
 	}
 	return nil
 }

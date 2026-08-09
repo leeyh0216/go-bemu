@@ -14,13 +14,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,15 +31,13 @@ import (
 
 type Service struct {
 	config      Config
-	coordinator ports.Coordinator
+	coordinator ports.DurableCoordinator
+	repository  ports.StreamRepository
 	clock       ports.Clock
 	ids         ports.IDGenerator
 	logger      *slog.Logger
 
-	mu      sync.RWMutex
-	streams map[string]*streamState
-	closed  bool
-	pending atomic.Int64
+	closed atomic.Bool
 
 	// cleanupGate serializes orphan disposal without making a caller wait past
 	// its context deadline. This keeps DiscardPending exactly-once per sweep even
@@ -46,45 +45,16 @@ type Service struct {
 	cleanupGate chan struct{}
 }
 
-type streamState struct {
-	mu              sync.Mutex
-	stream          domain.WriteStream
-	descriptor      []byte
-	unacknowledged  *appendReceipt
-	cleanupPhase    cleanupPhase
-	cleanupAttempts uint64
-}
-
-// appendReceipt identifies a PENDING append whose backend outcome may have
-// succeeded although the acknowledgement was lost. Finalize must not cross
-// this boundary until an identical retry reconciles the application ledger.
-// See the official offset retry contract:
-// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#appendrowsrequest
-type appendReceipt struct {
-	startOffset       int64
-	rowCount          int64
-	schemaFingerprint string
-	payloadDigest     string
-}
-
-type cleanupPhase string
-
-const (
-	cleanupPhaseActive    cleanupPhase = "active"
-	cleanupPhasePending   cleanupPhase = "cleanup_pending"
-	cleanupPhaseDiscarded cleanupPhase = "discarded"
-)
-
-func New(config Config, coordinator ports.Coordinator, clock ports.Clock, ids ports.IDGenerator, logger *slog.Logger) (*Service, error) {
-	if coordinator == nil || clock == nil || ids == nil || logger == nil {
+func New(config Config, coordinator ports.DurableCoordinator, repository ports.StreamRepository, clock ports.Clock, ids ports.IDGenerator, logger *slog.Logger) (*Service, error) {
+	if coordinator == nil || repository == nil || clock == nil || ids == nil || logger == nil {
 		return nil, fmt.Errorf("storage write dependencies must not be nil")
 	}
 	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
 	service := &Service{
-		config: config, coordinator: coordinator, clock: clock, ids: ids,
-		logger: logger, streams: make(map[string]*streamState), cleanupGate: make(chan struct{}, 1),
+		config: config, coordinator: coordinator, repository: repository, clock: clock, ids: ids,
+		logger: logger, cleanupGate: make(chan struct{}, 1),
 	}
 	service.cleanupGate <- struct{}{}
 	return service, nil
@@ -108,8 +78,18 @@ func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamR
 	if _, err := domain.ParseTableName(request.Parent.Name()); err != nil {
 		return domain.WriteStream{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
 	}
-	if err := s.admissionError(operation); err != nil {
-		return domain.WriteStream{}, err
+	if s.closed.Load() {
+		return domain.WriteStream{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Write service is closed"))
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.WriteStream{}, domain.NewError(coordinatorErrorCode(err, domain.ErrorInternal), operation, err)
+	}
+	count, err := s.repository.CountActivePendingStreams(ctx)
+	if err != nil {
+		return domain.WriteStream{}, domain.NewError(domain.ErrorInternal, operation, err)
+	}
+	if count >= int64(s.config.MaxStreams) {
+		return domain.WriteStream{}, domain.NewError(domain.ErrorResourceExhausted, operation, errors.New("logical stream capacity reached"))
 	}
 	schema, err := s.describeTable(ctx, operation, request.Parent)
 	if err != nil {
@@ -117,41 +97,40 @@ func (s *Service) CreateStream(ctx context.Context, request domain.CreateStreamR
 	}
 	now := s.clock.Now()
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return domain.WriteStream{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Write service is closed"))
-	}
-	if s.pending.Load() >= int64(s.config.MaxStreams) {
-		return domain.WriteStream{}, domain.NewError(domain.ErrorResourceExhausted, operation, errors.New("logical stream capacity reached"))
-	}
-	var name string
+	var stream domain.WriteStream
 	for attempts := 0; attempts < 4; attempts++ {
 		id := s.ids.NewID()
 		candidate := request.Parent.Name() + "/streams/" + id
 		if _, _, isDefault, parseErr := domain.ParseStreamName(candidate); parseErr != nil || isDefault {
 			continue
 		}
-		if _, exists := s.streams[candidate]; !exists {
-			name = candidate
+		stream = domain.WriteStream{
+			Name: candidate, Parent: request.Parent, Type: domain.StreamTypePending,
+			State: domain.StreamStateOpen, CreateTime: now, LastActivity: now,
+			Location: s.config.Location, Schema: cloneSchema(schema),
+			TableFingerprint: schemaDigest(schema),
+		}
+		record := domain.StreamRecord{Stream: stream, CleanupState: domain.CleanupStateActive, Revision: 1}
+		err = s.repository.CreateWriteStream(ctx, record, int64(s.config.MaxStreams))
+		if err == nil {
 			break
 		}
+		if errors.Is(err, ports.ErrResourceExhausted) {
+			return domain.WriteStream{}, domain.NewError(domain.ErrorResourceExhausted, operation, errors.New("logical stream capacity reached"))
+		}
+		if !errors.Is(err, ports.ErrStreamExists) {
+			return domain.WriteStream{}, domain.NewError(domain.ErrorInternal, operation, err)
+		}
+		stream = domain.WriteStream{}
 	}
-	if name == "" {
+	if stream.Name == "" {
 		return domain.WriteStream{}, domain.NewError(domain.ErrorInternal, operation, errors.New("ID generator did not produce a unique valid stream ID"))
 	}
-	stream := domain.WriteStream{
-		Name: name, Parent: request.Parent, Type: domain.StreamTypePending,
-		State: domain.StreamStateOpen, CreateTime: now, LastActivity: now,
-		Location: s.config.Location, Schema: cloneSchema(schema),
-	}
-	s.streams[name] = &streamState{stream: stream, cleanupPhase: cleanupPhaseActive}
-	s.pending.Add(1)
 	s.logger.InfoContext(ctx, "pending write stream created",
 		"event", "domain.transition", "operation", operation,
-		"model_version", s.config.ProtocolModelVersion, "stream_fingerprint", digest([]byte(name)),
+		"model_version", s.config.ProtocolModelVersion, "stream_fingerprint", digest([]byte(stream.Name)),
 		"table", request.Parent.Name(), "stream_type", stream.Type,
-		"stream_count", s.pending.Load())
+		"stream_count", count+1)
 	return cloneStream(stream), nil
 }
 
@@ -161,16 +140,14 @@ func (s *Service) GetStream(ctx context.Context, name string) (domain.WriteStrea
 	if err != nil {
 		return domain.WriteStream{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
 	}
-	state, err := s.lookupOrCreateDefault(ctx, operation, table, canonical, isDefault)
+	record, err := s.lookupOrCreateDefault(ctx, operation, table, canonical, isDefault)
 	if err != nil {
 		return domain.WriteStream{}, err
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.cleanupPhase != cleanupPhaseActive {
+	if record.CleanupState != domain.CleanupStateActive {
 		return domain.WriteStream{}, domain.NewError(domain.ErrorNotFound, operation, errors.New("write stream was discarded"))
 	}
-	return cloneStream(state.stream), nil
+	return cloneStream(record.Stream), nil
 }
 
 // Append enforces the exactly-once offset ledger before invoking a backend side
@@ -194,41 +171,39 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	if request.WireBytes-request.PayloadBytes > s.config.MaxAppendEnvelopeBytes {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, fmt.Errorf("append envelope size %d exceeds configured limit %d", request.WireBytes-request.PayloadBytes, s.config.MaxAppendEnvelopeBytes))
 	}
-	state, err := s.lookupOrCreateDefault(ctx, operation, table, canonical, isDefault)
+	record, err := s.lookupOrCreateDefault(ctx, operation, table, canonical, isDefault)
 	if err != nil {
 		return domain.AppendResult{}, err
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.cleanupPhase != cleanupPhaseActive {
+	if record.CleanupState != domain.CleanupStateActive {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorNotFound, operation, errors.New("write stream was discarded"))
 	}
-	if state.stream.Type == domain.StreamTypePending && state.stream.State != domain.StreamStateOpen {
+	if record.Stream.Type == domain.StreamTypePending && record.Stream.State != domain.StreamStateOpen {
 		code := domain.ErrorFailedPrecondition
 		cause := errors.New("write stream is finalized")
-		if state.stream.State == domain.StreamStateCommitted {
+		if record.Stream.State == domain.StreamStateCommitted {
 			cause = errors.New("write stream is already committed")
 		}
 		return domain.AppendResult{}, domain.NewError(code, operation, cause)
 	}
-	if state.stream.Type == domain.StreamTypeDefault && request.Offset != nil {
+	if record.Stream.Type == domain.StreamTypeDefault && request.Offset != nil {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("offset is not allowed for the default stream"))
 	}
-	if len(request.Descriptor) == 0 && len(state.descriptor) == 0 {
+	if len(request.Descriptor) == 0 && len(record.WriterDescriptor) == 0 {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("writer schema is required on the first append"))
 	}
 	descriptor := request.Descriptor
 	fingerprint := request.SchemaFingerprint
 	if len(descriptor) == 0 {
-		descriptor = state.descriptor
-		fingerprint = state.stream.SchemaFingerprint
+		descriptor = record.WriterDescriptor
+		fingerprint = record.Stream.SchemaFingerprint
 	} else {
 		computedFingerprint := digest(descriptor)
 		if fingerprint != "" && fingerprint != computedFingerprint {
 			return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("writer schema fingerprint does not match descriptor"))
 		}
 		fingerprint = computedFingerprint
-		if state.stream.SchemaFingerprint != "" && fingerprint != state.stream.SchemaFingerprint {
+		if record.Stream.SchemaFingerprint != "" && fingerprint != record.Stream.SchemaFingerprint {
 			return domain.AppendResult{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("writer schema changed for an existing stream"))
 		}
 	}
@@ -236,24 +211,53 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	if request.PayloadDigest != "" && request.PayloadDigest != computedPayloadDigest {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("payload digest does not match ProtoRows"))
 	}
-	startOffset := state.stream.NextOffset
-	receipt := appendReceipt{
-		startOffset: startOffset, rowCount: int64(len(request.Rows)),
-		schemaFingerprint: fingerprint, payloadDigest: computedPayloadDigest,
+	startOffset := record.Stream.NextOffset
+	now := s.clock.Now()
+	receipt := domain.AppendReceipt{
+		StreamName: canonical, StartOffset: startOffset, RowCount: int64(len(request.Rows)),
+		StagedBytes:       int64(rowsBytes(request.Rows) + len(request.Rows)),
+		SchemaFingerprint: fingerprint, PayloadDigest: computedPayloadDigest,
+		State: domain.AppendReceiptPrepared, CreatedAt: now, UpdatedAt: now,
 	}
-	if state.unacknowledged != nil && *state.unacknowledged != receipt {
-		return domain.AppendResult{}, domain.NewError(
-			domain.ErrorFailedPrecondition, operation,
-			errors.New("an unacknowledged append must be retried with the same offset, schema, and payload before the stream can advance"),
-		)
-	}
-	if request.Offset != nil {
-		switch {
-		case *request.Offset < startOffset:
+	preparedRecord := record
+	preparedHere := false
+	if record.Operation == domain.StreamOperationAppend {
+		preparedOffset, parseErr := strconv.ParseInt(record.OperationToken, 10, 64)
+		if parseErr != nil {
+			return domain.AppendResult{}, domain.NewError(domain.ErrorInternal, operation, errors.New("persisted append operation token is invalid"))
+		}
+		receipt, err = s.repository.GetWriteAppendReceipt(ctx, canonical, preparedOffset)
+		if err != nil {
+			return domain.AppendResult{}, domain.NewError(domain.ErrorInternal, operation, err)
+		}
+		if !receiptMatchesRequest(receipt, request.Offset, fingerprint, computedPayloadDigest, int64(len(request.Rows))) {
+			return domain.AppendResult{}, domain.NewError(domain.ErrorFailedPrecondition, operation,
+				errors.New("an unresolved append must be retried with the same offset, schema, and payload"))
+		}
+		startOffset = receipt.StartOffset
+	} else {
+		if record.Operation != domain.StreamOperationNone {
+			return domain.AppendResult{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("write stream has another operation in progress"))
+		}
+		if request.Offset != nil && *request.Offset < startOffset {
 			return domain.AppendResult{}, domain.NewError(domain.ErrorAlreadyExists, operation, errors.New("append offset already exists"))
-		case *request.Offset > startOffset:
+		}
+		if request.Offset != nil && *request.Offset > startOffset {
 			return domain.AppendResult{}, domain.NewError(domain.ErrorOutOfRange, operation, errors.New("append offset is beyond stream end"))
 		}
+		preparedRecord.Operation = domain.StreamOperationAppend
+		preparedRecord.OperationToken = strconv.FormatInt(startOffset, 10)
+		preparedRecord.WriterDescriptor = slices.Clone(descriptor)
+		preparedRecord.Stream.SchemaFingerprint = fingerprint
+		preparedRecord.Stream.LastActivity = now
+		preparedRecord.Revision++
+		if err := s.repository.PrepareAppend(ctx, record.Revision, preparedRecord, receipt); err != nil {
+			if errors.Is(err, ports.ErrStreamConflict) || errors.Is(err, ports.ErrReceiptConflict) {
+				return domain.AppendResult{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("write stream changed concurrently; retry the append"))
+			}
+			return domain.AppendResult{}, domain.NewError(domain.ErrorInternal, operation, err)
+		}
+		preparedHere = true
 	}
 	batch := ports.AppendBatch{
 		StreamName: canonical, Table: table, StartOffset: startOffset,
@@ -279,34 +283,49 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	err = call(ctx, batch)
 	s.logSideEffectEnd(ctx, operation, sideEffect, canonical, table.Name(), startOffset, len(request.Rows), fingerprint, batch.PayloadDigest, err)
 	if err != nil {
-		if !isDefault && appendOutcomeIsAmbiguous(err) {
-			state.unacknowledged = &receipt
+		if appendOutcomeIsAmbiguous(err) {
 			s.logger.WarnContext(ctx, "pending append acknowledgement is unresolved",
 				"event", "domain.transition", "operation", operation,
 				"model_version", s.config.ProtocolModelVersion,
 				"stream_fingerprint", digest([]byte(canonical)), "start_offset", startOffset,
 				"row_count", len(request.Rows), "schema_fingerprint", fingerprint,
 				"payload_digest", batch.PayloadDigest, "state_after", "append_unacknowledged")
+		} else if preparedHere && !isDefault {
+			abort := record
+			abort.Stream.LastActivity = s.clock.Now()
+			abort.Revision = preparedRecord.Revision + 1
+			abort.Operation = domain.StreamOperationNone
+			abort.OperationToken = ""
+			compensationContext, cancel := boundedCompensationContext(ctx)
+			abortErr := s.repository.AbortAppend(compensationContext, preparedRecord.Revision, abort, receipt)
+			cancel()
+			if abortErr != nil {
+				s.logger.ErrorContext(ctx, "failed to abort rejected Storage Write append", errorLogAttrs(abortErr)...)
+			}
 		}
 		code := coordinatorErrorCode(err, domain.ErrorInternal)
 		return domain.AppendResult{}, domain.NewError(code, operation, err)
 	}
-	wasUnacknowledged := state.unacknowledged != nil
-	state.unacknowledged = nil
-	if len(state.descriptor) == 0 {
-		state.descriptor = slices.Clone(descriptor)
-		state.stream.SchemaFingerprint = fingerprint
+	completed := preparedRecord
+	completed.Operation = domain.StreamOperationNone
+	completed.OperationToken = ""
+	completed.Stream.RowCount += receipt.RowCount
+	completed.Stream.NextOffset += receipt.RowCount
+	completed.Stream.LastActivity = s.clock.Now()
+	completed.Revision++
+	receipt.State = domain.AppendReceiptApplied
+	receipt.UpdatedAt = completed.Stream.LastActivity
+	if err := s.repository.CompleteAppend(ctx, preparedRecord.Revision, completed, receipt); err != nil {
+		return domain.AppendResult{}, domain.NewError(domain.ErrorInternal, operation,
+			fmt.Errorf("physical append succeeded but canonical receipt remains prepared: %w", err))
 	}
-	state.stream.RowCount += int64(len(request.Rows))
-	state.stream.NextOffset += int64(len(request.Rows))
-	state.stream.LastActivity = s.clock.Now()
-	if wasUnacknowledged {
-		s.logger.InfoContext(ctx, "pending append acknowledgement reconciled",
-			"event", "domain.transition", "operation", operation,
-			"model_version", s.config.ProtocolModelVersion,
-			"stream_fingerprint", digest([]byte(canonical)), "start_offset", startOffset,
-			"row_count", len(request.Rows), "schema_fingerprint", fingerprint,
-			"payload_digest", batch.PayloadDigest, "state_after", "append_acknowledged")
+	if isDefault {
+		ackContext, cancel := boundedCompensationContext(ctx)
+		ackErr := s.coordinator.AcknowledgeApplied(ackContext, []string{canonical})
+		cancel()
+		if ackErr != nil {
+			s.logger.WarnContext(ctx, "deferred cleanup of acknowledged default stream rows", errorLogAttrs(ackErr)...)
+		}
 	}
 	return domain.AppendResult{
 		StreamName: canonical, StartOffset: startOffset,
@@ -316,7 +335,7 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 
 // Finalize is idempotent for an already-finalized PENDING stream and returns
 // the total accepted row count. DEFAULT streams cannot be finalized.
-func (s *Service) Finalize(_ context.Context, name string) (int64, error) {
+func (s *Service) Finalize(ctx context.Context, name string) (int64, error) {
 	const operation = "storage_write.finalize_stream"
 	_, canonical, isDefault, err := domain.ParseStreamName(name)
 	if err != nil {
@@ -325,24 +344,33 @@ func (s *Service) Finalize(_ context.Context, name string) (int64, error) {
 	if isDefault {
 		return 0, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("the default stream cannot be finalized"))
 	}
-	state, err := s.lookup(canonical, operation)
+	record, err := s.lookup(ctx, canonical, operation)
 	if err != nil {
 		return 0, err
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.cleanupPhase != cleanupPhaseActive {
+	if record.CleanupState != domain.CleanupStateActive {
 		return 0, domain.NewError(domain.ErrorNotFound, operation, errors.New("write stream was discarded"))
 	}
-	if state.stream.State == domain.StreamStateCommitted {
+	if record.Stream.State == domain.StreamStateCommitted {
 		return 0, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("write stream is already committed"))
 	}
-	if state.unacknowledged != nil {
+	if record.Operation != domain.StreamOperationNone {
 		return 0, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("an unacknowledged append must be reconciled before finalizing the stream"))
 	}
-	state.stream.State = domain.StreamStateFinalized
-	state.stream.LastActivity = s.clock.Now()
-	return state.stream.RowCount, nil
+	if record.Stream.State == domain.StreamStateFinalized {
+		return record.Stream.RowCount, nil
+	}
+	expected := record.Revision
+	record.Stream.State = domain.StreamStateFinalized
+	record.Stream.LastActivity = s.clock.Now()
+	record.Revision++
+	if err := s.repository.SaveWriteStream(ctx, expected, record); err != nil {
+		if errors.Is(err, ports.ErrStreamConflict) {
+			return 0, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("write stream changed concurrently; retry finalization"))
+		}
+		return 0, domain.NewError(domain.ErrorInternal, operation, err)
+	}
+	return record.Stream.RowCount, nil
 }
 
 // BatchCommit locks all streams in stable name order. Validation completes for
@@ -356,12 +384,8 @@ func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference,
 	if len(names) == 0 {
 		return domain.BatchCommitResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("at least one stream is required"))
 	}
-	type namedState struct {
-		name  string
-		state *streamState
-	}
 	unique := make(map[string]struct{}, len(names))
-	states := make([]namedState, 0, len(names))
+	records := make([]domain.StreamRecord, 0, len(names))
 	streamErrors := make([]domain.StreamError, 0)
 	for _, name := range names {
 		table, canonical, isDefault, err := domain.ParseStreamName(name)
@@ -382,118 +406,173 @@ func (s *Service) BatchCommit(ctx context.Context, parent domain.TableReference,
 			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamState, Stream: canonical, Message: "stream belongs to another table"})
 			continue
 		}
-		state, lookupErr := s.lookup(canonical, operation)
+		record, lookupErr := s.lookup(ctx, canonical, operation)
 		if lookupErr != nil {
 			streamErrors = append(streamErrors, domain.StreamError{Code: domain.StreamNotFound, Stream: canonical, Message: "stream not found"})
 			continue
 		}
-		states = append(states, namedState{name: canonical, state: state})
+		records = append(records, record)
 	}
 	if len(streamErrors) > 0 {
 		return domain.BatchCommitResult{StreamErrors: streamErrors}, nil
 	}
-	sort.Slice(states, func(i, j int) bool { return states[i].name < states[j].name })
-	for _, item := range states {
-		item.state.mu.Lock()
+	sort.Slice(records, func(i, j int) bool { return records[i].Stream.Name < records[j].Stream.Name })
+	canonicalNames := make([]string, len(records))
+	for index, record := range records {
+		canonicalNames[index] = record.Stream.Name
 	}
-	defer func() {
-		for index := len(states) - 1; index >= 0; index-- {
-			states[index].state.mu.Unlock()
-		}
-	}()
-	for _, item := range states {
+	commitToken := digest([]byte(strings.Join(canonicalNames, "\n")))
+	for _, record := range records {
 		switch {
-		case item.state.cleanupPhase != cleanupPhaseActive:
-			streamErrors = append(streamErrors, domain.StreamError{Code: domain.StreamNotFound, Stream: item.name, Message: "stream was discarded"})
-		case item.state.stream.Type != domain.StreamTypePending:
-			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamType, Stream: item.name, Message: "stream is not PENDING"})
-		case item.state.stream.State == domain.StreamStateCommitted:
-			streamErrors = append(streamErrors, domain.StreamError{Code: domain.StreamAlreadyCommitted, Stream: item.name, Message: "stream is already committed"})
-		case item.state.stream.State != domain.StreamStateFinalized:
-			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamState, Stream: item.name, Message: "stream must be finalized before commit"})
+		case record.CleanupState != domain.CleanupStateActive:
+			streamErrors = append(streamErrors, domain.StreamError{Code: domain.StreamNotFound, Stream: record.Stream.Name, Message: "stream was discarded"})
+		case record.Stream.Type != domain.StreamTypePending:
+			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamType, Stream: record.Stream.Name, Message: "stream is not PENDING"})
+		case record.Stream.State == domain.StreamStateCommitted:
+			streamErrors = append(streamErrors, domain.StreamError{Code: domain.StreamAlreadyCommitted, Stream: record.Stream.Name, Message: "stream is already committed"})
+		case record.Stream.State != domain.StreamStateFinalized:
+			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamState, Stream: record.Stream.Name, Message: "stream must be finalized before commit"})
+		case record.Operation != domain.StreamOperationNone && (record.Operation != domain.StreamOperationCommit || record.OperationToken != commitToken):
+			streamErrors = append(streamErrors, domain.StreamError{Code: domain.InvalidStreamState, Stream: record.Stream.Name, Message: "stream has another operation in progress"})
 		}
 	}
 	if len(streamErrors) > 0 {
 		return domain.BatchCommitResult{StreamErrors: streamErrors}, nil
 	}
-	canonicalNames := make([]string, len(states))
 	var rowCount int64
-	for index, item := range states {
-		canonicalNames[index] = item.name
-		rowCount += item.state.stream.RowCount
+	rowCounts := make(map[string]int64, len(records))
+	prepared := make([]domain.StreamRecord, len(records))
+	expected := make(map[string]int64, len(records))
+	allPrepared := true
+	for index, record := range records {
+		rowCount += record.Stream.RowCount
+		rowCounts[record.Stream.Name] = record.Stream.RowCount
+		expected[record.Stream.Name] = record.Revision
+		prepared[index] = record
+		if record.Operation == domain.StreamOperationNone {
+			allPrepared = false
+			prepared[index].Operation = domain.StreamOperationCommit
+			prepared[index].OperationToken = commitToken
+			prepared[index].Stream.LastActivity = s.clock.Now()
+			prepared[index].Revision++
+		}
+	}
+	if !allPrepared {
+		for _, record := range records {
+			if record.Operation != domain.StreamOperationNone {
+				return domain.BatchCommitResult{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("commit preparation is only partially persisted"))
+			}
+		}
+		if err := s.repository.SaveWriteStreams(ctx, expected, prepared); err != nil {
+			if errors.Is(err, ports.ErrStreamConflict) {
+				return domain.BatchCommitResult{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("write streams changed concurrently; retry commit"))
+			}
+			return domain.BatchCommitResult{}, domain.NewError(domain.ErrorInternal, operation, err)
+		}
 	}
 	s.logger.InfoContext(ctx, "committing pending write streams",
 		"event", "side_effect.before", "side_effect", "coordinator.commit_pending",
 		"operation", operation, "model_version", s.config.ProtocolModelVersion,
-		"table", parent.Name(), "stream_count", len(states), "row_count", rowCount,
+		"table", parent.Name(), "stream_count", len(records), "row_count", rowCount,
 		"stream_set_fingerprint", digest([]byte(strings.Join(canonicalNames, "\n"))),
 		"tx_state", "begin")
-	err := s.coordinator.CommitPending(ctx, ports.CommitRequest{Parent: parent, StreamNames: canonicalNames})
+	err := s.coordinator.CommitPending(ctx, ports.CommitRequest{Parent: parent, StreamNames: canonicalNames, RowCounts: rowCounts})
 	s.logCommitEnd(ctx, operation, parent.Name(), canonicalNames, rowCount, err)
 	if err != nil {
+		if !appendOutcomeIsAmbiguous(err) {
+			rollbackExpected := make(map[string]int64, len(prepared))
+			rollback := make([]domain.StreamRecord, len(prepared))
+			for index, record := range prepared {
+				rollbackExpected[record.Stream.Name] = record.Revision
+				rollback[index] = record
+				rollback[index].Operation = domain.StreamOperationNone
+				rollback[index].OperationToken = ""
+				rollback[index].Revision++
+			}
+			compensationContext, cancel := boundedCompensationContext(ctx)
+			rollbackErr := s.repository.SaveWriteStreams(compensationContext, rollbackExpected, rollback)
+			cancel()
+			if rollbackErr != nil {
+				s.logger.ErrorContext(ctx, "failed to abort rejected Storage Write commit", errorLogAttrs(rollbackErr)...)
+			}
+		}
 		return domain.BatchCommitResult{}, domain.NewError(coordinatorErrorCode(err, domain.ErrorInternal), operation, err)
 	}
 	// The response time represents successful atomic visibility, so capture it
 	// only after the coordinator transaction acknowledges its commit.
 	// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#batchcommitwritestreamsresponse
 	commitTime := s.clock.Now()
-	for _, item := range states {
-		item.state.stream.State = domain.StreamStateCommitted
-		item.state.stream.CommitTime = cloneTime(&commitTime)
-		item.state.stream.LastActivity = commitTime
+	completeExpected := make(map[string]int64, len(prepared))
+	completed := make([]domain.StreamRecord, len(prepared))
+	for index, record := range prepared {
+		completeExpected[record.Stream.Name] = record.Revision
+		completed[index] = record
+		completed[index].Stream.State = domain.StreamStateCommitted
+		completed[index].Stream.CommitTime = cloneTime(&commitTime)
+		completed[index].Stream.LastActivity = commitTime
+		completed[index].Operation = domain.StreamOperationNone
+		completed[index].OperationToken = ""
+		completed[index].Revision++
 	}
-	s.pending.Add(-int64(len(states)))
+	if err := s.repository.SaveWriteStreams(ctx, completeExpected, completed); err != nil {
+		return domain.BatchCommitResult{}, domain.NewError(domain.ErrorInternal, operation,
+			fmt.Errorf("physical commit succeeded but canonical streams remain prepared: %w", err))
+	}
+	ackContext, cancel := boundedCompensationContext(ctx)
+	ackErr := s.coordinator.AcknowledgeApplied(ackContext, canonicalNames)
+	cancel()
+	if ackErr != nil {
+		s.logger.WarnContext(ctx, "deferred cleanup of committed Storage Write rows", errorLogAttrs(ackErr)...)
+	}
 	return domain.BatchCommitResult{CommitTime: cloneTime(&commitTime)}, nil
 }
 
-func (s *Service) lookup(name, operation string) (*streamState, error) {
-	s.mu.RLock()
-	state := s.streams[name]
-	closed := s.closed
-	s.mu.RUnlock()
-	if closed {
-		return nil, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Write service is closed"))
+func (s *Service) lookup(ctx context.Context, name, operation string) (domain.StreamRecord, error) {
+	if s.closed.Load() {
+		return domain.StreamRecord{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Write service is closed"))
 	}
-	if state == nil {
-		return nil, domain.NewError(domain.ErrorNotFound, operation, errors.New("write stream not found"))
+	record, err := s.repository.GetWriteStream(ctx, name)
+	if errors.Is(err, ports.ErrStreamNotFound) {
+		return domain.StreamRecord{}, domain.NewError(domain.ErrorNotFound, operation, errors.New("write stream not found"))
 	}
-	return state, nil
+	if err != nil {
+		return domain.StreamRecord{}, domain.NewError(domain.ErrorInternal, operation, err)
+	}
+	return record, nil
 }
 
-func (s *Service) lookupOrCreateDefault(ctx context.Context, operation string, table domain.TableReference, canonical string, isDefault bool) (*streamState, error) {
+func (s *Service) lookupOrCreateDefault(ctx context.Context, operation string, table domain.TableReference, canonical string, isDefault bool) (domain.StreamRecord, error) {
 	if !isDefault {
-		return s.lookup(canonical, operation)
+		return s.lookup(ctx, canonical, operation)
 	}
-	s.mu.RLock()
-	state := s.streams[canonical]
-	closed := s.closed
-	s.mu.RUnlock()
-	if closed {
-		return nil, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Write service is closed"))
+	if s.closed.Load() {
+		return domain.StreamRecord{}, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Write service is closed"))
 	}
-	if state != nil {
-		return state, nil
+	existing, err := s.repository.GetWriteStream(ctx, canonical)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, ports.ErrStreamNotFound) {
+		return domain.StreamRecord{}, domain.NewError(domain.ErrorInternal, operation, err)
 	}
 	schema, err := s.describeTable(ctx, operation, table)
 	if err != nil {
-		return nil, err
+		return domain.StreamRecord{}, err
 	}
 	now := s.clock.Now()
 	commitTime := now
-	candidate := &streamState{stream: domain.WriteStream{
+	candidate := domain.StreamRecord{Stream: domain.WriteStream{
 		Name: canonical, Parent: table, Type: domain.StreamTypeDefault,
 		State: domain.StreamStateCommitted, CreateTime: now, CommitTime: &commitTime,
 		LastActivity: now, Location: s.config.Location, Schema: cloneSchema(schema),
-	}, cleanupPhase: cleanupPhaseActive}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return nil, domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Write service is closed"))
+		TableFingerprint: schemaDigest(schema),
+	}, CleanupState: domain.CleanupStateActive, Revision: 1}
+	if err := s.repository.CreateWriteStream(ctx, candidate, 0); err != nil {
+		if errors.Is(err, ports.ErrStreamExists) {
+			return s.repository.GetWriteStream(ctx, canonical)
+		}
+		return domain.StreamRecord{}, domain.NewError(domain.ErrorInternal, operation, err)
 	}
-	if existing := s.streams[canonical]; existing != nil {
-		return existing, nil
-	}
-	s.streams[canonical] = candidate
 	return candidate, nil
 }
 
@@ -541,18 +620,6 @@ func appendOutcomeIsAmbiguous(err error) bool {
 		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
-func (s *Service) admissionError(operation string) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.closed {
-		return domain.NewError(domain.ErrorFailedPrecondition, operation, errors.New("Storage Write service is closed"))
-	}
-	if s.pending.Load() >= int64(s.config.MaxStreams) {
-		return domain.NewError(domain.ErrorResourceExhausted, operation, errors.New("logical stream capacity reached"))
-	}
-	return nil
-}
-
 func (s *Service) logSideEffectEnd(ctx context.Context, operation, sideEffect, stream, table string, offset int64, rowCount int, schemaFingerprint, payloadDigest string, err error) {
 	attrs := []any{
 		"event", "side_effect.after", "side_effect", sideEffect,
@@ -595,6 +662,14 @@ func cloneFields(fields []domain.Field) []domain.Field {
 	result := make([]domain.Field, len(fields))
 	for index, field := range fields {
 		result[index] = field
+		if field.Precision != nil {
+			precision := *field.Precision
+			result[index].Precision = &precision
+		}
+		if field.Scale != nil {
+			scale := *field.Scale
+			result[index].Scale = &scale
+		}
 		result[index].Fields = cloneFields(field.Fields)
 	}
 	return result
@@ -606,6 +681,25 @@ func cloneTime(value *time.Time) *time.Time {
 	}
 	copy := *value
 	return &copy
+}
+
+func receiptMatchesRequest(receipt domain.AppendReceipt, requestedOffset *int64, schemaFingerprint, payloadDigest string, rowCount int64) bool {
+	if requestedOffset != nil && *requestedOffset != receipt.StartOffset {
+		return false
+	}
+	return receipt.RowCount == rowCount && receipt.SchemaFingerprint == schemaFingerprint && receipt.PayloadDigest == payloadDigest
+}
+
+func boundedCompensationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+}
+
+func schemaDigest(schema domain.TableSchema) string {
+	payload, err := json.Marshal(schema)
+	if err != nil {
+		return digest([]byte(fmt.Sprintf("%v", schema.Fields)))
+	}
+	return digest(payload)
 }
 
 func digest(payload []byte) string {

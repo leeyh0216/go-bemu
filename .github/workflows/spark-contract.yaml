@@ -18,6 +18,7 @@ env:
   BQEMU_SPARK_TEST_TIMEOUT_SECONDS: "600"
   BQEMU_SPARK_RPC_TIMEOUT_SECONDS: "30"
   BQEMU_ARTIFACT_TIMEOUT_SECONDS: "180"
+  BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS: "120"
 
 jobs:
   protocol-matrix:
@@ -31,7 +32,19 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Reject unclassified or drifting connector contracts
-        run: go test -race -timeout "$BQEMU_GO_TEST_TIMEOUT" ./contract
+        run: >-
+          python3 tools/ci/command_summary.py --suite spark-protocol-matrix
+          --report .artifacts/spark-protocol-matrix/report.html
+          --artifact spark-protocol-matrix-report-${{ github.run_id }} --
+          go test -race -timeout "$BQEMU_GO_TEST_TIMEOUT" ./contract
+      - name: Upload readable matrix report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spark-protocol-matrix-report-${{ github.run_id }}
+          path: .artifacts/spark-protocol-matrix/report.html
+          if-no-files-found: ignore
+          retention-days: 7
 
   spark-public-edge:
     name: Real Spark public-edge slice
@@ -58,8 +71,19 @@ jobs:
           enable-cache: true
       - name: Install locks and run TLS REST and gRPC public-edge contracts
         run: make spark-contract
-      - name: Upload payload-safe Spark diagnostics
+      - name: Publish compact test summary
         if: always()
+        run: python tools/ci/junit_summary.py spark-public-edge .artifacts/spark/diagnostics/junit.xml
+      - name: Upload readable Spark report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spark-public-edge-report-${{ github.run_id }}
+          path: .artifacts/spark/diagnostics/junit.html
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload payload-safe Spark diagnostics
+        if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: spark-public-edge-diagnostics-${{ github.run_id }}

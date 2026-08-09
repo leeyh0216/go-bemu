@@ -129,14 +129,24 @@ func TestQueryDestinationAndPagingCrossPublicRESTEdge(t *testing.T) {
 
 	for name, body := range map[string]string{
 		"dry run":     `{"query":"SELECT 1","dryRun":true}`,
-		"priority":    `{"query":"SELECT 1","priority":"BATCH"}`,
 		"parameters":  `{"query":"SELECT @id","queryParameters":[]}`,
-		"labels":      `{"query":"SELECT 1","labels":{"component":"test"}}`,
 		"job timeout": `{"query":"SELECT 1","jobTimeoutMs":2000}`,
 	} {
 		t.Run("reject synchronous "+name, func(t *testing.T) {
 			request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", body, http.StatusBadRequest)
 		})
+	}
+	controlled := request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", `{
+		"query":"SELECT 1","priority":"BATCH","labels":{"component":"test"}
+	}`, http.StatusOK)
+	controlledReference := queryJobReference(controlled)
+	controlledJob := request(http.MethodGet, "/bigquery/v2/projects/test-project/jobs/"+controlledReference["jobId"].(string)+"?location=US", "", http.StatusOK)
+	controlledConfiguration := controlledJob["configuration"].(map[string]any)
+	if priority := controlledConfiguration["query"].(map[string]any)["priority"]; priority != "BATCH" {
+		t.Fatalf("synchronous priority did not round-trip: %#v", controlledConfiguration)
+	}
+	if labels := controlledConfiguration["labels"].(map[string]any); labels["component"] != "test" {
+		t.Fatalf("synchronous labels did not round-trip: %#v", controlledConfiguration)
 	}
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", `{
 		"query":"SELECT 1","requestId":"123e4567-e89b-12d3-a456-426614174000",

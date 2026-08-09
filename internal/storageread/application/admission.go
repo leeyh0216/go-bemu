@@ -40,6 +40,9 @@ func (s *Service) reserveSession(ctx context.Context, operation string) (*sessio
 	if s.closed {
 		reason = "service_closed"
 		code = domainErrorCodeForAdmission(reason)
+	} else if !s.stateReconciled {
+		reason = "state_not_reconciled"
+		code = domain.ErrorFailedPrecondition
 	} else if sessionCount+inflightCount >= s.config.MaxSessions {
 		reason = "session_limit"
 		code = domainErrorCodeForAdmission(reason)
@@ -107,6 +110,10 @@ func (s *Service) commitReservedSession(ctx context.Context, operation string, r
 	if _, duplicate := s.sessions[state.session.Name]; duplicate {
 		s.mu.Unlock()
 		return domain.NewError(domain.ErrorInternal, operation, errors.New("session ID already exists"))
+	}
+	if err := s.persistSession(ctx, state.record); err != nil {
+		s.mu.Unlock()
+		return err
 	}
 	retainedBefore := s.retainedSnapshotBytes
 	s.retainedSnapshotBytes = retainedBefore - current.bytes + state.retainedBytes

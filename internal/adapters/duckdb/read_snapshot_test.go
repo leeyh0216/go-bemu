@@ -52,7 +52,7 @@ func TestDuckDBReadSnapshotAppliesProjectionRestrictionAndStableResume(t *testin
 	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
 		Table:          readTestTableResource(table),
 		Format:         readdomain.FormatArrow,
-		SelectedFields: []string{"name", "id"},
+		SelectedFields: []string{"id", "name"},
 		RowRestriction: "id >= 2 AND name != 'skip'",
 	})
 	if err != nil {
@@ -69,6 +69,10 @@ func TestDuckDBReadSnapshotAppliesProjectionRestrictionAndStableResume(t *testin
 	}
 	if metadata.RetainedBytes != metadata.EstimatedBytes {
 		t.Fatalf("in-memory retained/estimated bytes = %d/%d, want equal encoded payload charge", metadata.RetainedBytes, metadata.EstimatedBytes)
+	}
+	if !slices.Equal(metadata.SelectedFields, []string{"id", "name"}) ||
+		metadata.FilterShape != (readdomain.FilterShape{PredicateCount: 2, LogicalOperatorCount: 1}) {
+		t.Fatalf("canonical projection/filter metadata = fields %v shape %#v", metadata.SelectedFields, metadata.FilterShape)
 	}
 	if got, want := fieldNames(snapshot.fields), []string{"id", "name"}; !slices.Equal(got, want) {
 		t.Fatalf("projected fields = %v, want catalog order %v", got, want)
@@ -167,6 +171,32 @@ func TestDuckDBReadSnapshotEmptySelectedFieldsMeansFullSchema(t *testing.T) {
 	}
 }
 
+func TestProjectReadFieldsPreservesRequestedOrderAndNestedSchema(t *testing.T) {
+	schema := []catalogdomain.Field{
+		{Name: "id", Type: "INT64"},
+		{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{
+			{Name: "name", Type: "STRING"},
+			{Name: "rank", Type: "INT64"},
+			{Name: "address", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "city", Type: "STRING"}, {Name: "zip", Type: "INT64"}}},
+		}},
+		{Name: "enabled", Type: "BOOL"},
+	}
+	fields, err := projectReadFields(schema, []string{"profile.address.zip", "id", "profile.name", "enabled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fieldNames(fields), []string{"profile", "id", "enabled"}; !slices.Equal(got, want) {
+		t.Fatalf("projected root field order = %v, want %v", got, want)
+	}
+	profile := fields[0]
+	if got, want := fieldNames(profile.Fields), []string{"address", "name"}; !slices.Equal(got, want) {
+		t.Fatalf("projected profile fields = %v, want %v", got, want)
+	}
+	if got, want := fieldNames(profile.Fields[0].Fields), []string{"zip"}; !slices.Equal(got, want) {
+		t.Fatalf("projected address fields = %v, want %v", got, want)
+	}
+}
+
 func TestDuckDBReadSnapshotReadsNestedAndRepeatedDriverValues(t *testing.T) {
 	ctx, cancel := duckDBReadTestContext(t)
 	defer cancel()
@@ -208,6 +238,110 @@ func TestDuckDBReadSnapshotReadsNestedAndRepeatedDriverValues(t *testing.T) {
 	assertSingleArrowIPCMessage(t, batch.SerializedRows, ipc.MessageRecordBatch)
 	if err := iterator.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDuckDBReadSnapshotProjectsNestedStructFieldsForArrowAndAvro(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "nested_projection", Type: "TABLE",
+		Schema: []catalogdomain.Field{
+			{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+			{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "name", Type: "STRING"}, {Name: "rank", Type: "INT64"}}},
+		},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table, "(1, {'name':'alice', 'rank':7}), (2, {'name':'bob', 'rank':1})")
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+	for _, format := range []readdomain.Format{readdomain.FormatArrow, readdomain.FormatAvro} {
+		t.Run(strings.ToLower(format.String()), func(t *testing.T) {
+			snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+				Table: readTestTableResource(table), Format: format,
+				SelectedFields: []string{"profile.name", "id"}, RowRestriction: "profile.rank >= 7",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := snapshotPort.(*duckDBReadSnapshot)
+			defer closeReadSnapshot(t, snapshot)
+			if got, want := fieldNames(snapshot.fields), []string{"profile", "id"}; !slices.Equal(got, want) {
+				t.Fatalf("projected fields = %v, want %v", got, want)
+			}
+			if got, want := fieldNames(snapshot.fields[0].Fields), []string{"name"}; !slices.Equal(got, want) {
+				t.Fatalf("projected profile fields = %v, want %v", got, want)
+			}
+			if snapshot.Metadata().RowCount != 1 {
+				t.Fatalf("row count = %d, want 1", snapshot.Metadata().RowCount)
+			}
+			iterator, err := snapshot.OpenRange(ctx, 0, 1, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch, err := iterator.Next(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch.RowCount != 1 || len(batch.SerializedRows) == 0 {
+				t.Fatalf("batch rows/bytes = %d/%d", batch.RowCount, len(batch.SerializedRows))
+			}
+			if format == readdomain.FormatArrow {
+				assertSingleArrowIPCMessage(t, batch.SerializedRows, ipc.MessageRecordBatch)
+			}
+			if err := iterator.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestDuckDBReadSnapshotProjectsNestedRepeatedStructField(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "repeated_nested_projection", Type: "TABLE",
+		Schema: []catalogdomain.Field{
+			{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+			{Name: "profiles", Type: "RECORD", Mode: "REPEATED", Fields: []catalogdomain.Field{{Name: "name", Type: "STRING"}, {Name: "rank", Type: "INT64"}}},
+		},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table, "(1, [{'name':'alice', 'rank':7}, {'name':'bob', 'rank':1}])")
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+	for _, format := range []readdomain.Format{readdomain.FormatArrow, readdomain.FormatAvro} {
+		t.Run(strings.ToLower(format.String()), func(t *testing.T) {
+			snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+				Table: readTestTableResource(table), Format: format, SelectedFields: []string{"profiles.name"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := snapshotPort.(*duckDBReadSnapshot)
+			defer closeReadSnapshot(t, snapshot)
+			if got, want := fieldNames(snapshot.fields), []string{"profiles"}; !slices.Equal(got, want) {
+				t.Fatalf("projected fields = %v, want %v", got, want)
+			}
+			if got, want := fieldNames(snapshot.fields[0].Fields), []string{"name"}; !slices.Equal(got, want) {
+				t.Fatalf("projected repeated STRUCT fields = %v, want %v", got, want)
+			}
+			iterator, err := snapshot.OpenRange(ctx, 0, 1, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch, err := iterator.Next(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch.RowCount != 1 || len(batch.SerializedRows) == 0 {
+				t.Fatalf("batch rows/bytes = %d/%d", batch.RowCount, len(batch.SerializedRows))
+			}
+			if format == readdomain.FormatArrow {
+				assertSingleArrowIPCMessage(t, batch.SerializedRows, ipc.MessageRecordBatch)
+			}
+			if err := iterator.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -628,10 +762,10 @@ func TestDuckDBReadSnapshotRejectsUnsupportedOptionsBeforeQuery(t *testing.T) {
 			want: readdomain.ErrorInvalidArgument,
 		},
 		{
-			name: "nested projection",
+			name: "invalid nested scalar projection",
 			request: readdomain.MaterializeRequest{Table: readTestTableResource(table), Format: readdomain.FormatArrow,
 				SelectedFields: []string{"tags.value"}},
-			want: readdomain.ErrorUnimplemented,
+			want: readdomain.ErrorInvalidArgument,
 		},
 		{
 			name: "missing projection",

@@ -1,0 +1,137 @@
+{
+  "schemaVersion": "1",
+  "id": "spark-bigquery-connector-dsv2-overlay-0.44.2-spark-3.5.8",
+  "artifactVariant": "dsv2-spark-3.5-streaming-visibility-overlay",
+  "connector": {
+    "kind": "connector-artifact",
+    "name": "spark-3.5-bigquery-streaming-visibility-overlay",
+    "versions": ["0.44.2"]
+  },
+  "sparkVersion": "3.5.8",
+  "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92",
+  "sourceCatalog": {
+    "streaming-write": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-dsv2/spark-3.1-bigquery-lib/src/main/java/com/google/cloud/spark/bigquery/v2/BigQueryStreamingWrite.java"
+    },
+    "writer-context-interface": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/DataSourceWriterContext.java"
+    },
+    "direct-writer": {
+      "kind": "source",
+      "url": "https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataSourceWriterContext.java"
+    },
+    "spark-streaming-write-contract": {
+      "kind": "official-documentation",
+      "url": "https://spark.apache.org/docs/3.5.8/api/java/org/apache/spark/sql/connector/write/streaming/StreamingWrite.html"
+    },
+    "javassist": {
+      "kind": "build-tool",
+      "url": "https://repo.maven.apache.org/maven2/org/javassist/javassist/3.30.2-GA/javassist-3.30.2-GA.jar",
+      "fingerprint": "sha256:eba37290994b5e4868f3af98ff113f6244a6b099385d9ad46881307d3cb01aaf"
+    }
+  },
+  "issueCatalog": {
+    "dsv2-streaming": {
+      "url": "https://github.com/leeyh0216/go-bemu/issues/23",
+      "languages": ["en", "ko"]
+    }
+  },
+  "entries": [
+    {
+      "id": "SBQ-DSV2-OVERLAY-ARTIFACT-GUARD-V1",
+      "flow": "artifact-bootstrap",
+      "axes": {
+        "operation": "bootstrap",
+        "transport": "local-classpath",
+        "execution": "not-applicable",
+        "format": "not-applicable",
+        "delivery": "not-applicable",
+        "saveMode": "not-applicable",
+        "readShape": "not-applicable",
+        "tablePartitioning": "not-applicable",
+        "parallelism": "not-applicable",
+        "typeFamily": "not-applicable",
+        "auth": "not-applicable"
+      },
+      "state": "verified",
+      "officialSourceRefs": ["direct-writer", "javassist"],
+      "evidence": [
+        {"kind": "real-process-trace", "ref": "tests/spark/evidence/dsv2-overlay-streaming-normal-path-0.44.2.json", "fingerprint": "sha256:66c68bb163a8924fbec3e0f4b587e59012e809e2949c9550e7dde2bea23da0ae"},
+        {"kind": "artifact-lock", "ref": "tests/spark/artifacts-dsv2-overlay.lock.json", "fingerprint": "sha256:cae99cdafe6c679c5d8efa0065ac4efb9d8b543c97bc2f50cfcc1b1db414ff60"}
+      ],
+      "issueRef": "dsv2-streaming",
+      "limitation": "The guard proves exact build inputs, one patched class, overlay-first runtime classpath order, and live CodeSource identity; it does not establish delivery semantics."
+    },
+    {
+      "id": "SBQ-DSV2-OVERLAY-STREAM-NORMAL-APPEND-V1",
+      "flow": "write-structured-streaming",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "structured-streaming",
+        "format": "PROTO_ROWS",
+        "delivery": "normal-path-only",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "tablePartitioning": "unpartitioned",
+        "parallelism": "spark-partition-1",
+        "typeFamily": "boolean-integer-float",
+        "auth": "static-access-token"
+      },
+      "state": "verified",
+      "officialSourceRefs": ["streaming-write", "writer-context-interface", "direct-writer"],
+      "evidence": [
+        {"kind": "real-process-trace", "ref": "tests/spark/evidence/dsv2-overlay-streaming-normal-path-0.44.2.json", "fingerprint": "sha256:66c68bb163a8924fbec3e0f4b587e59012e809e2949c9550e7dde2bea23da0ae"},
+        {"kind": "artifact-lock", "ref": "tests/spark/artifacts-dsv2-overlay.lock.json", "fingerprint": "sha256:cae99cdafe6c679c5d8efa0065ac4efb9d8b543c97bc2f50cfcc1b1db414ff60"}
+      ],
+      "issueRef": "dsv2-streaming",
+      "limitation": "Verification is limited to two successful, non-replayed epochs against a pre-existing table and a no-input restart; this row is not an exactly-once claim."
+    },
+    {
+      "id": "SBQ-DSV2-OVERLAY-SAME-EPOCH-REPLAY-V1",
+      "flow": "write-streaming-epoch-replay",
+      "axes": {
+        "operation": "write", "transport": "rest+storage-write", "execution": "structured-streaming", "format": "PROTO_ROWS", "delivery": "normal-path-only", "saveMode": "append", "readShape": "not-applicable", "tablePartitioning": "unpartitioned", "parallelism": "spark-partition-1", "typeFamily": "boolean-integer-float", "auth": "static-access-token"
+      },
+      "state": "gap",
+      "officialSourceRefs": ["spark-streaming-write-contract", "direct-writer"],
+      "issueRef": "dsv2-streaming",
+      "limitation": "Spark may invoke commit repeatedly for one epoch, while the delegated batch method has no epoch ledger and Storage Write rejects an already committed stream."
+    },
+    {
+      "id": "SBQ-DSV2-OVERLAY-CHECKPOINT-FAILURE-REPLAY-V1",
+      "flow": "write-streaming-checkpoint-recovery",
+      "axes": {
+        "operation": "write", "transport": "rest+storage-write", "execution": "structured-streaming", "format": "PROTO_ROWS", "delivery": "normal-path-only", "saveMode": "append", "readShape": "not-applicable", "tablePartitioning": "unpartitioned", "parallelism": "spark-partition-1", "typeFamily": "boolean-integer-float", "auth": "static-access-token"
+      },
+      "state": "gap",
+      "officialSourceRefs": ["spark-streaming-write-contract", "direct-writer"],
+      "issueRef": "dsv2-streaming",
+      "limitation": "The one-class delegate has no durable epoch reconciliation for a commit that succeeds before Spark records the checkpoint."
+    },
+    {
+      "id": "SBQ-DSV2-OVERLAY-PARTIAL-ABORT-V1",
+      "flow": "write-streaming-partial-abort",
+      "axes": {
+        "operation": "write", "transport": "rest+storage-write", "execution": "structured-streaming", "format": "PROTO_ROWS", "delivery": "normal-path-only", "saveMode": "append", "readShape": "not-applicable", "tablePartitioning": "unpartitioned", "parallelism": "spark-partition-negotiated", "typeFamily": "boolean-integer-float", "auth": "static-access-token"
+      },
+      "state": "gap",
+      "officialSourceRefs": ["streaming-write", "direct-writer"],
+      "issueRef": "dsv2-streaming",
+      "limitation": "The unpatched DSv2 wrapper dereferences null commit-message slots before the patched context abort hook can run."
+    },
+    {
+      "id": "SBQ-DSV2-OVERLAY-NEW-TABLE-ABORT-V1",
+      "flow": "write-streaming-new-table-abort",
+      "axes": {
+        "operation": "write", "transport": "rest+storage-write", "execution": "structured-streaming", "format": "PROTO_ROWS", "delivery": "normal-path-only", "saveMode": "append", "readShape": "not-applicable", "tablePartitioning": "unpartitioned", "parallelism": "spark-partition-1", "typeFamily": "boolean-integer-float", "auth": "static-access-token"
+      },
+      "state": "gap",
+      "officialSourceRefs": ["writer-context-interface", "direct-writer"],
+      "issueRef": "dsv2-streaming",
+      "limitation": "Delegating to the batch abort method can delete a table created by this writer; restart and partial-progress safety are not reconciled."
+    }
+  ]
+}

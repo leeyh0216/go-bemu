@@ -177,9 +177,11 @@ a fake-GCS-compatible JSON adapter, downloads objects to a private temporary
 workspace, validates Parquet columns and casts against an existing table, and
 applies `WRITE_APPEND`, `WRITE_EMPTY`, or `WRITE_TRUNCATE` in one DuckDB
 transaction. File sources require an explicit local-only option. Destination
-creation, autodetect, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON, and
-multipart/resumable download are unsupported; job and idempotency state is
-process-local.
+creation from an explicit schema and `WRITE_APPEND` `ALLOW_FIELD_ADDITION`
+are supported. Field addition preserves every existing field and accepts only
+new nullable or repeated fields; relaxation, autodetect, Avro/ORC/CSV/NDJSON,
+and multipart/resumable download remain unsupported. Job and idempotency state
+is process-local.
 
 <!-- section: rest-jobs -->
 ## REST Jobs, Polling, and Paging
@@ -224,11 +226,13 @@ and WIF exchange is documented in [Workload Identity
 Federation](https://cloud.google.com/iam/docs/workload-identity-federation).
 
 BQEMU does not authenticate or authorize its BigQuery-compatible endpoints.
-REST and gRPC allow requests without credentials and ignore `Authorization`
-values when present. Client token acquisition, TLS, the separate diagnostics
-admin token, and IAM remain distinct capability claims. The public runtime does
-not emulate signature trust, IAM roles, permission inheritance, federation
-policy, token introspection, or production authorization.
+REST and gRPC accept requests without credentials and ignore Authorization
+values when supplied. The repository-local generator creates the three client
+credential formats, and its loopback OAuth/STS issuer satisfies their bounded
+local token exchanges. See [Local client credentials and
+TLS](client-credentials-and-tls.md). This client support does not emulate
+signature trust, IAM roles, permission inheritance, federation policy, token
+introspection, or production authorization.
 
 <!-- section: implementation-map -->
 ## Implementation Map
@@ -242,8 +246,8 @@ policy, token introspection, or production authorization.
 | AppendRows/finalize/commit | per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit; advanced stream kinds and durability gaps |
 | indirect load | object store, staging, load dispositions | opt-in public Partial: fake-GCS JSON plus Parquet into an existing table; other formats/create/evolution/download gaps |
 | direct overwrite MERGE | structural connector-template adapter | static unpartitioned connector `0.44.2` public-edge verified; dynamic time/range and general parity gaps |
-| BigQuery-compatible request authentication | REST/gRPC transport behavior | intentionally absent; credential values are ignored |
-| ADC/WIF acquisition | client credential library | external to the public BQEMU runtime |
+| BigQuery-compatible request authentication | REST/gRPC transport behavior | intentionally absent; credentials are ignored |
+| ADC/WIF acquisition | repository-local credential generator and loopback issuer | service-account, authorized-user, and file-sourced WIF test flows implemented |
 
 Capability changes require public-boundary tests and a compatibility update in
 both documentation languages.

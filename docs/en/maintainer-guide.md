@@ -91,6 +91,20 @@ types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)
 <!-- section: release -->
 ## Release and Documentation Runbook
 
+Integration operation coverage lives next to executable integration sources as
+literal `# bqemu:operation <id> scenario=<scenario>` annotations. Run
+`make integration-contract-check` after adding one; it regenerates the
+normalized consumer manifest and rejects drift. Runner-only/load scenarios may
+use an explicit reviewed exception only when it states a non-empty reason.
+
+Every CI test job writes one compact GitHub Job Summary with the suite result,
+pass/fail/skip counts, duration, and the named readable report artifact. JUnit
+lanes use XML only as the machine-readable input and upload a JUnit HTML report.
+Go, static, CLI, Compose, and matrix lanes use the same payload-safe suite HTML
+shape. Keep the compact report for seven days. Detailed Compose, service, Spark,
+and raw diagnostics are retained only for failed jobs under an artifact name
+ending in `-diagnostics-<run-id>`; they are not the primary CI interface.
+
 Run `make check`, build the container when Docker behavior changed, inspect the
 compatibility diff, and ensure every public claim names a tested boundary.
 README, CONTRIBUTING, and all `docs/en/**` files need Korean counterparts with

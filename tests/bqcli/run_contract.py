@@ -157,11 +157,19 @@ class Runtime(AbstractContextManager[str]):
             return self.endpoint
         self._temporary = tempfile.TemporaryDirectory(prefix="bqemu-bqcli-")
         work = Path(self._temporary.name)
-        binary = work / "go-bemu"
-        run_process(
-            ["go", "build", "-trimpath", "-o", str(binary), "./cmd/emulator"],
-            "build_emulator",
-        )
+        configured_binary = os.getenv("BQEMU_BQCLI_EMULATOR_BINARY", "")
+        binary = Path(configured_binary) if configured_binary else work / "go-bemu"
+        if configured_binary:
+            if not binary.is_file() or not os.access(binary, os.X_OK):
+                raise ContractError(
+                    "stage=config operation=emulator_binary shape=not-executable "
+                    "fix_hint=set-BQEMU_BQCLI_EMULATOR_BINARY-to-a-built-go-bemu-binary"
+                )
+        else:
+            run_process(
+                ["go", "build", "-trimpath", "-o", str(binary), "./cmd/emulator"],
+                "build_emulator",
+            )
         http_port, grpc_port = free_port(), free_port()
         self.endpoint = f"http://127.0.0.1:{http_port}"
         artifact_directory = Path(os.getenv("BQEMU_BQCLI_ARTIFACT_DIR", work / "artifacts"))
@@ -173,6 +181,7 @@ class Runtime(AbstractContextManager[str]):
                 "BQEMU_HTTP_ADDRESS": f"127.0.0.1:{http_port}",
                 "BQEMU_GRPC_ADDRESS": f"127.0.0.1:{grpc_port}",
                 "BQEMU_PUBLIC_URL": self.endpoint,
+                "BQEMU_STATE_DSN": str(work / "bqemu-state.sqlite"),
                 "BQEMU_DATABASE_DSN": str(work / "contract.duckdb"),
                 "BQEMU_TEMP_DIRECTORY": str(work / "tmp"),
                 "BQEMU_UI_ENABLED": "false",
@@ -259,9 +268,12 @@ def main() -> int:
         ]
         suffix = uuid.uuid4().hex[:10]
         dataset = f"bqcli_{suffix}"
+        filter_dataset = f"bqcli_filter_{suffix}"
         table = f"{project}:{dataset}.events"
         dataset_ref = f"{project}:{dataset}"
+        filter_dataset_ref = f"{project}:{filter_dataset}"
         created_dataset = False
+        created_filter_dataset = False
         created_table = False
         try:
             projects = decode_json(run_process(base + ["ls", "--projects"], "list_projects"), "list_projects")
@@ -274,7 +286,13 @@ def main() -> int:
 
             run_process(
                 base
-                + [f"--location={location}", "mk", "--dataset", "--description=CLI contract dataset", dataset_ref],
+                + [
+                    f"--location={location}",
+                    "mk",
+                    "--dataset",
+                    "--description=CLI contract dataset",
+                    dataset_ref,
+                ],
                 "create_dataset",
             )
             created_dataset = True
@@ -285,6 +303,30 @@ def main() -> int:
                 "get_dataset",
                 "dataset-resource",
                 "compare-datasets-get-response",
+            )
+            request_json(
+                endpoint,
+                "POST",
+                f"/bigquery/v2/projects/{project}/datasets",
+                {
+                    "datasetReference": {"datasetId": filter_dataset},
+                    "location": location,
+                    "labels": {"department": "receiving", "active": "true"},
+                },
+            )
+            created_filter_dataset = True
+            filtered_datasets = decode_json(
+                run_process(
+                    base + ["ls", "--filter=labels.department:receiving labels.active"],
+                    "list_datasets_by_label_filter",
+                ),
+                "list_datasets_by_label_filter",
+            )
+            require(
+                any(item.get("datasetReference", {}).get("datasetId") == filter_dataset for item in filtered_datasets),
+                "list_datasets_by_label_filter",
+                "dataset-label-filter",
+                "compare-datasets-list-filter-response",
             )
 
             run_process(base + ["mk", "--table", table, "id:INTEGER,name:STRING"], "create_table")
@@ -361,6 +403,8 @@ def main() -> int:
                 run_process(base + ["rm", "-f", "-t", table], "delete_table", expected_codes=(0, 2))
             if created_dataset:
                 run_process(base + ["rm", "-f", "-d", dataset_ref], "delete_dataset", expected_codes=(0, 2))
+            if created_filter_dataset:
+                run_process(base + ["rm", "-f", "-d", filter_dataset_ref], "delete_filter_dataset", expected_codes=(0, 2))
 
     event(status="passed", suite="bq-cli-contract", consumer_version=EXPECTED_VERSION)
     return 0

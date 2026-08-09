@@ -5,242 +5,486 @@
 
 # go-bemu
 
-`go-bemu` is an experimental, from-scratch BigQuery-compatible local service in
-Go. DuckDB is an outbound execution adapter; it is not the domain model. The
-service currently implements limited BigQuery v2 metadata/query/load paths and
-public partial Storage Read and Write gRPC data planes. It is not a production
-database or a drop-in BigQuery replacement.
+`go-bemu` is an experimental local BigQuery emulator for application and
+connector tests. It exposes a BigQuery v2 REST endpoint and the BigQuery
+Storage Read/Write gRPC services. DuckDB stores and executes physical data;
+BQEMU owns the BigQuery-facing model and compatibility behavior.
+
+It is not a production database, IAM implementation, or a complete BigQuery
+replacement. Start with the supported paths below, and treat every other
+BigQuery feature as unsupported until it is listed in the compatibility
+contract.
 
 The compatibility contract follows the [BigQuery REST v2
 reference](https://cloud.google.com/bigquery/docs/reference/rest), the
 [Storage RPC reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc),
-and the exact [Spark BigQuery connector `0.44.2`
+and the pinned [Spark BigQuery connector `0.44.2`
 source](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2).
-This repository does not vendor or clone the earlier emulator; comparison notes
-pin the exact [goccy BigQuery emulator
-`v0.8.1` source](https://github.com/goccy/bigquery-emulator/tree/v0.8.1).
 
 <!-- section: status -->
-## Current Status
+## What You Can Use
 
-Implemented and exercised through repository tests:
+The exercised public paths currently include:
 
-- liveness plus DuckDB-backed readiness;
-- emulator project lifecycle and dataset/table create, get, list, patch, update,
-  and delete, including ETag preconditions and metadata pagination;
-- additive top-level/nested schema changes with transactional DuckDB DDL,
-  including fields inside repeated records, exercised by the official [Python
-  client `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/);
-- synchronous `jobs.query` and process-local `jobs.insert` polling through
-  `jobs.get`/`getQueryResults`, exercised by the official [Python client
-  `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/), including
-  terminal `invalidQuery` mapping;
-- project/dataset/table/query/job and additive-schema flows exercised by the
-  official [`bq` CLI `2.1.31`](https://cloud.google.com/bigquery/docs/reference/bq-cli-reference)
-  from [Google Cloud SDK `566.0.0`](https://cloud.google.com/sdk/docs/release-notes#56600_2026-04-28);
-- isolated physical DuckDB schemas and a deliberately small SQL translation
-  boundary;
-- a source-derived connector `0.44.2` static-overwrite token adapter from
-  [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)
-  that maps the constant-false [BigQuery `MERGE`](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)
-  to one atomic [DuckDB `MERGE INTO`](https://duckdb.org/docs/current/sql/statements/merge_into);
-- public Storage Read sessions backed by one bounded DuckDB snapshot, Arrow or
-  Avro encoding, projection/restriction validation, logical stream ranges, and
-  offset resume;
-- public Storage Write `ProtoRows` paths for PENDING streams and the default
-  stream, including exact offsets, finalization, atomic batch commit, multiple
-  logical streams, weighted request admission, bounded hidden DuckDB staging,
-  and a serialized DuckDB backend;
-- opt-in load jobs through a bounded fake-GCS-compatible JSON adapter or an
-  explicitly enabled `file://` adapter, with Parquet staging and atomic
-  `WRITE_APPEND`, `WRITE_EMPTY`, and `WRITE_TRUNCATE` for an existing table;
-- optional REST and gRPC TLS termination;
-- strict versioned configuration, optional protected admin composition, bounded
-  multi-listener shutdown, and a hardened non-root Compose profile;
-- protocol profiles and redacted boundary observability.
+- project, dataset, and table lifecycle through BigQuery v2 REST;
+- synchronous `jobs.query`, process-local polling through `jobs.get` and
+  `getQueryResults`, and a limited DuckDB-compatible SQL boundary;
+- table schema updates that add top-level or nested fields, including fields in
+  repeated records;
+- catalog-synchronized `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE ADD COLUMN`,
+  and `ALTER TABLE RENAME COLUMN` statements through the query API;
+- Storage Read sessions with Arrow or Avro rows, stream offsets, projection
+  validation, and supported row restrictions;
+- Storage Write `ProtoRows` through the default and `PENDING` streams;
+- Spark connector `0.44.2` read paths and unpartitioned direct static
+  overwrite that are covered by the repository contract;
+- optional Parquet load jobs from the deliberately configured fake-GCS or
+  `file://` adapters; and
+- optional TLS for both REST and Storage gRPC.
 
 Important limits:
 
-- durable metadata, row insert/preview, copy/extract jobs, and full GoogleSQL are
-  not implemented;
-- unpartitioned direct static overwrite is verified with Spark `3.5.8` and
-  connector `0.44.2`; dynamic time/range partition overwrite and general
-  BigQuery `MERGE` parity are gaps;
-- Storage Read remains partial: `SplitReadStream`, response compression,
-  historical `snapshot_time`, restart-durable sessions, and nested-field
-  projection are gaps;
-- Storage Write remains partial: CDC, Arrow rows, BUFFERED and explicitly
-  created COMMITTED streams, `FlushRows`, default-value expressions, and
-  restart-durable pending staging are gaps;
-- load remains partial: non-Parquet formats, missing-table `CREATE_IF_NEEDED`,
-  schema-update options, autodetect, and multipart/resumable transfer are gaps;
-- BigQuery-compatible REST and gRPC endpoints do not authenticate callers;
-  client credentials and IAM are not emulated;
-- canonical BigQuery metadata can outlive neither the process nor the in-memory
-  repositories, even if a DuckDB file retains table data.
+- GoogleSQL is not implemented as a complete language. `ALTER COLUMN SET DATA
+  TYPE`, `DROP COLUMN`, `TRUNCATE`, general `MERGE`, scripts, and many
+  expressions are not available yet.
+- Copy/extract jobs, non-Parquet loads, CDC, Arrow Storage Write rows, and
+  several Storage Read/Write RPCs are not available. `tabledata.insertAll`
+  supports its atomic profile (typed JSON rows and retry `insertId`); partial
+  rows and template tables remain unsupported.
+- No IAM, OAuth authorization, quota, billing, regional placement, or Google
+  control-plane behavior is emulated.
+- Project, dataset, table, and schema metadata are stored in BQEMU-owned
+  SQLite state, while DuckDB stores physical tables and rows. Query and load
+  job history is still process-local, and cross-store crash reconciliation is
+  not complete yet.
 
-The detailed and testable status vocabulary is in
-[Compatibility](docs/en/compatibility.md). BigQuery's own job resources and
-polling contract are defined by [`jobs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs)
-and [`jobs.getQueryResults`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults).
-
-<!-- section: architecture -->
-## Architecture
-
-```text
-REST / gRPC inbound adapters
-            |
-            v
-     application use cases
-            |
-            v
- domain model + outbound ports
-            ^
-            |
-DuckDB / memory / object-store / system adapters
-```
-
-Domain and application packages do not depend on DuckDB, HTTP, gRPC, or Google
-DTOs. The design follows a replaceable adapter boundary; DuckDB transactions and
-SQL semantics remain DuckDB behavior unless an application use case explicitly
-adds BigQuery semantics. See [Architecture](docs/en/architecture.md) and
-[ADR-0001](docs/en/adr/0001-duckdb-behind-warehouse-port.md). The physical engine
-contract is documented by [DuckDB SQL
-introduction](https://duckdb.org/docs/stable/sql/introduction).
+See [Compatibility](docs/en/compatibility.md) for the precise, testable
+contract and [Architecture](docs/en/architecture.md) for responsibility
+boundaries.
 
 <!-- section: quick-start -->
-## Quick Start
+## Start With Docker Compose
 
-Requirements are Go 1.26+, a C/C++ toolchain for the DuckDB Go driver, and
-optionally Docker. The `bq` contract additionally requires the exact CLI version
-installed by Google Cloud SDK `566.0.0`.
+Docker Compose is the simplest way to run the emulator locally. It builds the
+image from this checkout, exposes the public APIs, creates a named `/data`
+volume, and waits for `/readyz`.
 
 ```bash
-make test
-make run
+git clone https://github.com/leeyh0216/go-bemu.git
+cd go-bemu
+docker compose up --build --wait
+curl --fail --silent --show-error http://localhost:9050/readyz
 ```
 
-Default endpoints:
+Endpoints on the host:
 
-| Surface | Address |
-| --- | --- |
-| BigQuery REST and health | `http://localhost:9050` |
-| BigQuery Storage gRPC | `localhost:9060` |
+| Surface | Address | Use |
+| --- | --- | --- |
+| BigQuery REST and health | `http://localhost:9050` | BigQuery v2 API, `/healthz`, `/readyz` |
+| BigQuery Storage gRPC | `localhost:9060` | Storage Read and Storage Write clients |
+| Admin | `127.0.0.1:9051` | Disabled by default; keep loopback-only |
 
-Create the emulator-only project before using BigQuery v2 resources:
+`/healthz` confirms that the process is alive. `/readyz` confirms that the
+required runtime dependencies are ready. Use `/readyz` for application startup
+checks and test fixtures.
+
+Stop the service without deleting its named data volume:
 
 ```bash
-curl -sS -X POST http://localhost:9050/bqemu/v1/projects \
-  -H 'Content-Type: application/json' \
-  -d '{"projectId":"test-project"}'
+docker compose down
+```
 
-curl -sS -X POST \
-  http://localhost:9050/bigquery/v2/projects/test-project/datasets \
+To remove the volume and start with an empty emulator, run:
+
+```bash
+docker compose down --volumes
+```
+
+`make docker-up`, `make docker-logs`, and `make docker-down` provide the same
+workflow from this checkout.
+
+<!-- section: image -->
+## Use a Published GHCR Image
+
+The container package name is `ghcr.io/leeyh0216/go-bemu`. The publishing
+workflow creates multi-architecture Linux images for `amd64` and `arm64` with
+these tags:
+
+| Source | Published tags |
+| --- | --- |
+| Push to `main` | `edge`, `sha-<full-commit-sha>` |
+| SemVer Git tag `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest`, `sha-<full-commit-sha>`; also `X` when `X > 0` |
+
+`edge` follows `main`. `latest` follows the latest SemVer release, not `main`.
+Use a release tag for interactive local work, then resolve it to a digest before
+using it in shared CI or a long-lived test environment.
+
+GHCR packages are private on first publication unless the package owner changes
+their visibility in GitHub package settings. For a private package, authenticate
+with a classic personal access token that has `read:packages` before pulling.
+Anonymous pulls work only after the owner makes the package public.
+
+```bash
+export GHCR_TOKEN=... # classic token with read:packages when the package is private
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username <github-user> --password-stdin
+
+export BQEMU_IMAGE=ghcr.io/leeyh0216/go-bemu:0.1.0
+docker pull "$BQEMU_IMAGE"
+
+# Prefer the digest reported by your approved image inventory or `docker inspect`.
+export BQEMU_IMAGE=ghcr.io/leeyh0216/go-bemu@sha256:<digest>
+docker compose up --no-build --wait bqemu
+```
+
+The checked-in Compose file reads `BQEMU_IMAGE`. With a digest-pinned value it
+uses the published image instead of building the local default `go-bemu:dev`
+when `--no-build` is present. Do not automate against the moving `edge` or
+`latest` tags.
+
+The same workflow publishes the shared console as
+`ghcr.io/leeyh0216/bqemu-console` with matching tags. The compatibility lab
+uses that image only through its optional `ui` profile.
+
+<!-- section: compose -->
+## Use It From Another Compose Service
+
+Services in the same Compose project use Docker DNS, not `localhost`. Connect
+to `http://bqemu:9050` for REST and `bqemu:9060` for Storage gRPC. Add the
+following application service to a Compose file that includes this repository's
+`compose.yaml`, or add equivalent settings to your existing project:
+
+```yaml
+services:
+  app:
+    build: .
+    depends_on:
+      bqemu:
+        condition: service_healthy
+    environment:
+      BIGQUERY_REST_ENDPOINT: http://bqemu:9050
+      BIGQUERY_STORAGE_GRPC_ENDPOINT: bqemu:9060
+```
+
+The checked-in `bqemu` service uses a named `bqemu-data` volume at `/data`.
+For a host-visible directory instead, use a Compose override:
+
+```yaml
+services:
+  bqemu:
+    volumes:
+      - ./bqemu-data:/data
+```
+
+Do not mount an individual database file. Mount the whole `/data` directory so
+SQLite sidecar files and DuckDB data stay together. The persistent layout uses
+`/data/bqemu-state.sqlite` for BQEMU metadata and `/data/bqemu.duckdb` for
+physical rows. Keep the directory as one backup and restore unit.
+
+<!-- section: dev-container -->
+## Use It From a Dev Container
+
+The repository does not require a Dev Container definition, but a consuming
+project can run its workspace and BQEMU in the same Compose network. In the
+consumer repository, create `.devcontainer/compose.yaml`:
+
+```yaml
+services:
+  workspace:
+    image: mcr.microsoft.com/devcontainers/go:1-1.26-bookworm
+    volumes:
+      - ..:/workspaces/app:cached
+    working_dir: /workspaces/app
+    command: sleep infinity
+
+  bqemu:
+    environment:
+      BQEMU_PUBLIC_URL: http://bqemu:9050
+```
+
+Create `.devcontainer/devcontainer.json` next to it. The first Compose file in
+the list is the `compose.yaml` that defines the `bqemu` service; use a relative
+path to the checked-out BQEMU repository or copy that service into your own
+Compose file.
+
+```json
+{
+  "name": "app-with-bqemu",
+  "dockerComposeFile": ["../../go-bemu/compose.yaml", "compose.yaml"],
+  "service": "workspace",
+  "workspaceFolder": "/workspaces/app",
+  "shutdownAction": "stopCompose"
+}
+```
+
+Inside the Dev Container, configure clients with `http://bqemu:9050` and
+`bqemu:9060`. On the host, use `http://localhost:9050` and `localhost:9060`.
+Wait for `http://bqemu:9050/readyz` before starting an integration test.
+
+<!-- section: bootstrap -->
+## Create a Project, Dataset, and Table
+
+BQEMU projects are local emulator resources. Create one before calling the
+BigQuery v2 dataset and table APIs:
+
+```bash
+export BQEMU_REST_ENDPOINT=http://localhost:9050
+export BQEMU_PROJECT=demo-project
+
+curl --fail --silent --show-error -X POST "$BQEMU_REST_ENDPOINT/bqemu/v1/projects" \
+  -H 'Content-Type: application/json' \
+  -d '{"projectId":"demo-project"}'
+
+curl --fail --silent --show-error -X POST \
+  "$BQEMU_REST_ENDPOINT/bigquery/v2/projects/$BQEMU_PROJECT/datasets" \
   -H 'Content-Type: application/json' \
   -d '{"datasetReference":{"datasetId":"analytics"},"location":"US"}'
-```
 
-Dataset JSON is modeled after the official
-[`datasets.insert`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/insert)
-resource. Unsupported request fields may be decoded but do not gain semantics.
-
-<!-- section: query-example -->
-## Query Example
-
-After creating a table, submit Standard SQL through `jobs.query`:
-
-```bash
-curl -sS -X POST \
-  http://localhost:9050/bigquery/v2/projects/test-project/queries \
+curl --fail --silent --show-error -X POST \
+  "$BQEMU_REST_ENDPOINT/bigquery/v2/projects/$BQEMU_PROJECT/datasets/analytics/tables" \
   -H 'Content-Type: application/json' \
   -d '{
-    "query":"SELECT * FROM `test-project.analytics.inventory` ORDER BY id",
-    "useLegacySql":false
+    "tableReference":{"tableId":"events"},
+    "schema":{"fields":[
+      {"name":"event_id","type":"INT64","mode":"REQUIRED"},
+      {"name":"name","type":"STRING","mode":"NULLABLE"}
+    ]}
   }'
 ```
 
-This executes a DuckDB-compatible subset. It does not imply compatibility with
-the [GoogleSQL query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax),
-functions, scripts, optimizer, billing, or distributed execution model.
-
-<!-- section: maintainer-onboarding -->
-## Maintainer Onboarding
-
-The shortest repeatable path from clone to a verified change is:
+Submitting a limited query uses the normal BigQuery v2 resource path:
 
 ```bash
-direnv allow              # optional; checked-in .envrc contains no credentials
-make check
-make run
+curl --fail --silent --show-error -X POST \
+  "$BQEMU_REST_ENDPOINT/bigquery/v2/projects/$BQEMU_PROJECT/queries" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"SELECT event_id, name FROM `demo-project.analytics.events`","useLegacySql":false}'
 ```
 
-The checked-in `.envrc` loads safe defaults from `.envrc.example` and then an
-optional ignored `.envrc.local`; only the local file may contain machine-specific
-non-production overrides, and neither file should contain credentials. Without
-direnv, run `make check` and `make run` directly; Make supplies the documented
-defaults.
-Then follow the ordered [maintainer guide](docs/en/maintainer-guide.md): read the
-architecture, run one public request, run the first focused test, add a protocol
-or client version through the compatibility pipeline, and diagnose drift from a
-structured report. The service contracts remain the official [BigQuery REST
-reference](https://cloud.google.com/bigquery/docs/reference/rest) and [Storage
-RPC reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc).
+<!-- section: clients -->
+## Configure Clients
+
+BQEMU does not authorize bearer tokens. Some Google client libraries still
+require a credentials object before they make a request. Use a local fixture or
+an anonymous credential as appropriate for the client; the server does not
+validate the token value.
+
+### Python BigQuery Client
+
+The official Python client accepts anonymous credentials and an explicit REST
+endpoint:
+
+```python
+from google.api_core.client_options import ClientOptions
+from google.auth.credentials import AnonymousCredentials
+from google.cloud import bigquery
+
+client = bigquery.Client(
+    project="demo-project",
+    credentials=AnonymousCredentials(),
+    client_options=ClientOptions(api_endpoint="http://localhost:9050"),
+)
+table = client.get_table("demo-project.analytics.events")
+```
+
+### bq CLI
+
+The `bq` CLI validates its own option set before issuing a request. Supply any
+non-empty local token and disable the active gcloud configuration:
+
+```bash
+bq --api=http://localhost:9050 \
+  --project_id=demo-project \
+  --use_gcloud_config=false \
+  --oauth_access_token=local-bqemu-token \
+  ls
+```
+
+### Spark BigQuery Connector
+
+Use separate HTTP and Storage gRPC options. From a container in the same
+Compose network, use `bqemu` as the hostname:
+
+```python
+df = (
+    spark.read.format("bigquery")
+    .option("table", "demo-project.analytics.events")
+    .option("parentProject", "demo-project")
+    .option("billingProject", "demo-project")
+    .option("project", "demo-project")
+    .option("bigQueryHttpEndpoint", "http://bqemu:9050")
+    .option("bigQueryStorageGrpcEndpoint", "bqemu:9060")
+    .option("gcpAccessToken", "local-bqemu-token")
+    .load()
+)
+```
+
+For a Spark process on the host, use `http://localhost:9050` and
+`localhost:9060`. Connector support is version-specific; the current tested
+contract is `0.44.2`.
+
+<!-- section: credentials -->
+## Local Credential Files
+
+The emulator intentionally has no authentication or IAM subsystem. It accepts
+requests without `Authorization` and never issues or validates Google access
+tokens. Credential files exist only to satisfy client-side validation and token
+acquisition flows.
+
+Generate a complete local fixture directory and run the issuer in another
+terminal:
+
+```bash
+go run ./cmd/bqemu-auth-fixture generate --output .bqemu-auth
+go run ./cmd/bqemu-auth-fixture serve \
+  --manifest .bqemu-auth/manifest.json \
+  --listen 127.0.0.1:9052
+```
+
+When you consume only the GHCR image, extract the statically linked helper and
+run it on the host. Running it on the host keeps the WIF subject-token path and
+the loopback-only TLS issuer valid for host clients:
+
+```bash
+fixture_container="$(docker create "$BQEMU_IMAGE")"
+docker cp "$fixture_container:/usr/local/bin/bqemu-auth-fixture" ./bqemu-auth-fixture
+docker rm "$fixture_container"
+chmod 0755 ./bqemu-auth-fixture
+
+./bqemu-auth-fixture generate --output .bqemu-auth
+./bqemu-auth-fixture serve \
+  --manifest .bqemu-auth/manifest.json \
+  --listen 127.0.0.1:9052
+```
+
+Generation writes `manifest.json`, `ca.pem`, `server.pem`, `server-key.pem`,
+`service-account.json`, `authorized-user.json`, `wif.json`, and
+`subject-token.txt`. The issuer serves `/healthz`, service-account and
+authorized-user token exchange at <https://localhost:9052/oauth/token>, and
+WIF token exchange at <https://localhost:9052/sts/token>.
+
+Choose one client credential file:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="$PWD/.bqemu-auth/service-account.json"
+# or: authorized-user.json
+# or: wif.json
+export REQUESTS_CA_BUNDLE="$PWD/.bqemu-auth/ca.pem"
+export SSL_CERT_FILE="$PWD/.bqemu-auth/ca.pem"
+```
+
+For Java-based clients, import `ca.pem` into the Java trust store and set
+`-Djavax.net.ssl.trustStore=/path/to/truststore`. The fixture issuer is local
+client test support only. It never protects BQEMU endpoints, and its issued
+token is intentionally not an authorization credential for another service.
+Do not use real Google credentials in local emulator configuration, Compose
+files, or Dev Container mounts.
 
 <!-- section: tls -->
 ## TLS
 
-Set both files to enable TLS on REST and gRPC:
+TLS protects both REST and gRPC. Generate a local certificate whose subject
+alternative names cover the hostnames that clients use:
+
+```bash
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 30 \
+  -keyout certs/server-key.pem -out certs/server.pem \
+  -subj '/CN=localhost' \
+  -addext 'subjectAltName=DNS:localhost,DNS:bqemu,IP:127.0.0.1'
+```
+
+For a local process:
 
 ```bash
 export BQEMU_TLS_CERT_FILE="$PWD/certs/server.pem"
 export BQEMU_TLS_KEY_FILE="$PWD/certs/server-key.pem"
-export BQEMU_PUBLIC_URL="https://localhost:9050"
+export BQEMU_PUBLIC_URL=https://localhost:9050
 make run
 ```
 
-The client must trust the issuing CA and connect with a hostname in the
-certificate SAN. TLS only protects transport; it does not add the token
-acquisition or IAM semantics described by [Google Cloud
-authentication](https://cloud.google.com/docs/authentication).
+The generated local credential fixture can supply the same certificate pair:
+
+```bash
+export BQEMU_TLS_CERT_FILE="$PWD/.bqemu-auth/server.pem"
+export BQEMU_TLS_KEY_FILE="$PWD/.bqemu-auth/server-key.pem"
+export BQEMU_PUBLIC_URL=https://localhost:9050
+make run
+```
+
+For Compose, add a read-only certificate mount and the same environment values
+in an override file:
+
+```yaml
+services:
+  bqemu:
+    environment:
+      BQEMU_TLS_CERT_FILE: /run/bqemu-tls/server.pem
+      BQEMU_TLS_KEY_FILE: /run/bqemu-tls/server-key.pem
+      BQEMU_PUBLIC_URL: https://localhost:9050
+    volumes:
+      - ./certs:/run/bqemu-tls:ro
+```
+
+Clients must trust the certificate issuer and connect through a SAN name. TLS
+does not add token validation or IAM behavior.
+
+<!-- section: configuration -->
+## Configuration and Persistence
+
+The checked-in [configuration](configs/bqemu.yaml) is the reference for all
+settings. Supply a different file with `--config`, `BQEMU_CONFIG`, or supported
+`BQEMU_*` environment overrides. In Compose, `BQEMU_PUBLIC_URL` should match
+the address visible to the client that consumes discovery documents.
+
+The default Compose configuration mounts `/data` as `bqemu-data`. Preserve that
+volume to keep local state across container recreation. When BQEMU SQLite state
+is enabled, the directory contains both canonical metadata and DuckDB data; do
+not retain one without the other.
+
+<!-- section: troubleshooting -->
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Client cannot connect | Confirm `curl http://localhost:9050/readyz` succeeds and that the published HTTP port is not in use. |
+| Container client calls `localhost` | Use `http://bqemu:9050` and `bqemu:9060` inside the Compose network. |
+| REST works but Spark Storage calls fail | Verify the separate `bigQueryStorageGrpcEndpoint` value and port `9060`. Do not put `http://` in the gRPC endpoint. |
+| TLS handshake fails | Trust the local CA and use a hostname listed in the certificate SAN. For a self-signed certificate, configure the client trust store explicitly. |
+| Data unexpectedly disappears | Check the `/data` mount. `docker compose down --volumes` deliberately deletes the named volume. |
+| SQL returns `invalidQuery` or unsupported behavior | Compare the statement with the limited compatibility contract; this is not full GoogleSQL. |
+| A Google client attempts real OAuth | Use the repository's local credential fixture or that client's anonymous credential mode. Never point local tests at production credentials. |
 
 <!-- section: documentation -->
 ## Documentation
 
 - [Documentation index](docs/en/index.md)
-- [Architecture](docs/en/architecture.md)
-- [BigQuery and connector internals](docs/en/bigquery-internals.md)
 - [Compatibility contract](docs/en/compatibility.md)
-- [Schema evolution and CDC](docs/en/schema-evolution-cdc.md)
-- [Maintainer guide and runbooks](docs/en/maintainer-guide.md)
+- [Architecture](docs/en/architecture.md)
 - [Configuration and operations](docs/en/operations.md)
-- [Architecture decisions](docs/en/adr/)
+- [Schema evolution and CDC](docs/en/schema-evolution-cdc.md)
+- [Maintainer guide](docs/en/maintainer-guide.md)
 - [Contributing](CONTRIBUTING.md)
 
-All maintainer documentation has an English and Korean counterpart. Repository
-tests reject missing counterparts, section drift, unpaired primary-source links,
-and mutable upstream `master`/`main` source links.
-
 <!-- section: development -->
-## Development
+## Build From Source
+
+For local development, Go 1.26+ and the C/C++ toolchain required by the DuckDB
+Go driver are needed:
 
 ```bash
-make format
-make test
-make vet
-make build
-make python-test
-make bq-test
+make setup
+make check
+make run
 ```
 
-Consumers build this repository directly; they do not clone or rebuild another
-emulator. Protocol code uses the official generated Google Storage API package,
-whose canonical methods and messages are listed in the [Storage RPC
-reference](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1).
+Run `make test` for the Go suite. The Python, `bq`, and Spark contracts have
+their own pinned client prerequisites; see the maintainer guide before running
+them.
 
 <!-- section: non-goals -->
-## Non-goals
+## Non-Goals
 
-Do not use `go-bemu` for performance prediction, IAM validation, quota or billing
-tests, regional placement, production durability, or proof of GoogleSQL
-equivalence. A local compatibility result is evidence only for the explicitly
-listed contract and version.
+Do not use `go-bemu` for production data, performance prediction, authorization
+tests, quota or billing tests, or proof of GoogleSQL equivalence. A successful
+local test demonstrates only the documented emulator contract and client
+version.

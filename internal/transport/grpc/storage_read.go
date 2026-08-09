@@ -273,6 +273,8 @@ func storageReadStatus(err error) error {
 		return status.Error(codes.ResourceExhausted, err.Error())
 	case domain.ErrorUnimplemented:
 		return status.Error(codes.Unimplemented, err.Error())
+	case domain.ErrorUnavailable:
+		return status.Error(codes.Unavailable, err.Error())
 	default:
 		return status.Error(codes.Internal, "Storage Read operation failed")
 	}

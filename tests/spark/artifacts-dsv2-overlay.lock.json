@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1",
+  "artifactVariant": "dsv2-spark-3.5-streaming-visibility-overlay",
+  "connectorVersion": "0.44.2",
+  "sourceCommit": "719817782a214b8ca72be520870013a3e0253d92",
+  "buildContract": {
+    "ref": "tools/dsv2-overlay/overlay.lock.json",
+    "sha256": "74acdde7e907a6b737557aedc406263d79def41fb1acd84109168d7c97132098"
+  },
+  "builderSources": [
+    {
+      "ref": "tools/dsv2-overlay/build.py",
+      "sha256": "8cfaee723b2033b245c5a645278081a2afb193ffdddd29c1caf697f40d5ac379"
+    },
+    {
+      "ref": "tools/dsv2-overlay/src/dev/bqemu/overlay/OverlayBuilder.java",
+      "sha256": "405950777605aa26440e59aa2c99da50b65734c3d33970eb4f232ba6da610c4a"
+    }
+  ],
+  "baseArtifact": {
+    "kind": "maven-jar",
+    "output": "spark-3.5-bigquery-0.44.2.jar",
+    "size": 42618495,
+    "sha256": "2e6bbb41bcaf56ae17a5488dd4453698bd35f13e9849f4daed744ca7b57b053f"
+  },
+  "overlayArtifact": {
+    "kind": "one-class-overlay-jar",
+    "output": "spark-3.5-bigquery-0.44.2-dsv2-streaming-overlay.jar",
+    "size": 20949,
+    "sha256": "1e4d3705834745aa662442eb41f4aa99e6f7a1a89aa51b8aae1eb93c7c6c5bd3",
+    "classEntry": "com/google/cloud/spark/bigquery/write/context/BigQueryDirectDataSourceWriterContext.class",
+    "classSize": 20673,
+    "classSha256": "1f41fa60279c39e9fbc144ff2d6252b78dffa1a505f329e51af60dcee91af67d"
+  },
+  "testRuntime": {
+    "sparkVersion": "3.5.8",
+    "scalaBinaryVersion": "2.12",
+    "scalaVersion": "2.12.18",
+    "javaVersion": "17"
+  },
+  "writePolicy": "direct-exact-pre-existing-table-append-only",
+  "executionClasspathPolicy": "exactly-one-base-connector-plus-one-class-overlay"
+}

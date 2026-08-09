@@ -47,6 +47,10 @@ func TestBigQueryRESTMetadataAndSynchronousQuery(t *testing.T) {
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		// Public BigQuery-compatible endpoints intentionally ignore credentials.
+		// Clients may still send an arbitrary fixture token after validating
+		// their own credential configuration.
+		req.Header.Set("Authorization", "Bearer arbitrary-local-fixture-token")
 		response, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)

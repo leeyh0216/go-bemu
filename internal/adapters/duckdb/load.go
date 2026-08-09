@@ -187,12 +187,21 @@ func validateLoadShape(schema []loadDomain.Field, columns []stagingColumn) ([]st
 	selectExpressions := make([]string, len(schema))
 	destinationColumns := make([]string, len(schema))
 	for index, field := range schema {
-		if len(field.Fields) > 0 || strings.EqualFold(field.Mode, "REPEATED") {
-			return nil, nil, fmt.Errorf("%w: nested and repeated Parquet loads", loadDomain.ErrUnsupported)
-		}
 		column, ok := byName[strings.ToLower(field.Name)]
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: Parquet field %q is missing", loadDomain.ErrInvalid, field.Name)
+		}
+		if len(field.Fields) > 0 || strings.EqualFold(field.Mode, "REPEATED") {
+			targetType, err := loadDuckDBType(field)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !equivalentDuckDBLoadType(column.typeName, targetType) {
+				return nil, nil, fmt.Errorf("%w: Parquet field %q has DuckDB type %s, incompatible with BigQuery %s", loadDomain.ErrInvalid, field.Name, column.typeName, field.Type)
+			}
+			selectExpressions[index] = "CAST(" + quoteIdentifier(column.name) + " AS " + targetType + ")"
+			destinationColumns[index] = quoteIdentifier(field.Name)
+			continue
 		}
 		targetType, err := validatedTargetType(field, column.typeName)
 		if err != nil {
@@ -202,6 +211,62 @@ func validateLoadShape(schema []loadDomain.Field, columns []stagingColumn) ([]st
 		destinationColumns[index] = quoteIdentifier(field.Name)
 	}
 	return selectExpressions, destinationColumns, nil
+}
+
+func loadDuckDBType(field loadDomain.Field) (string, error) {
+	var result string
+	switch strings.ToUpper(field.Type) {
+	case "BOOL", "BOOLEAN":
+		result = "BOOLEAN"
+	case "INT64", "INTEGER":
+		result = "BIGINT"
+	case "FLOAT64", "FLOAT":
+		result = "DOUBLE"
+	case "STRING", "GEOGRAPHY":
+		result = "VARCHAR"
+	case "BYTES":
+		result = "BLOB"
+	case "DATE":
+		result = "DATE"
+	case "TIME":
+		result = "TIME"
+	case "DATETIME":
+		result = "TIMESTAMP"
+	case "TIMESTAMP":
+		result = "TIMESTAMPTZ"
+	case "NUMERIC":
+		result = "DECIMAL(38,9)"
+	case "BIGNUMERIC":
+		result = "DECIMAL(38,18)"
+	case "RECORD", "STRUCT":
+		if len(field.Fields) == 0 {
+			return "", fmt.Errorf("%w: STRUCT field %q has no nested fields", loadDomain.ErrInvalid, field.Name)
+		}
+		children := make([]string, len(field.Fields))
+		for index, child := range field.Fields {
+			childType, err := loadDuckDBType(child)
+			if err != nil {
+				return "", err
+			}
+			children[index] = quoteIdentifier(child.Name) + " " + childType
+		}
+		result = "STRUCT(" + strings.Join(children, ", ") + ")"
+	default:
+		return "", fmt.Errorf("%w: BigQuery type %s", loadDomain.ErrInvalid, field.Type)
+	}
+	if strings.EqualFold(normalizeMode(field.Mode), "REPEATED") {
+		result += "[]"
+	}
+	return result, nil
+}
+
+func equivalentDuckDBLoadType(left, right string) bool {
+	normalize := func(value string) string {
+		value = strings.ToUpper(value)
+		value = strings.ReplaceAll(value, " ", "")
+		return strings.ReplaceAll(value, "\"", "")
+	}
+	return normalize(left) == normalize(right)
 }
 
 func validatedTargetType(field loadDomain.Field, sourceType string) (string, error) {
@@ -288,8 +353,16 @@ func databaseString(value any) (string, bool) {
 
 func loadSchemaDigest(schema []loadDomain.Field) string {
 	parts := make([]string, 0, len(schema))
+	var appendField func(loadDomain.Field)
+	appendField = func(field loadDomain.Field) {
+		parts = append(parts, field.Name+":"+strings.ToUpper(field.Type)+":"+normalizeMode(field.Mode)+"{")
+		for _, child := range field.Fields {
+			appendField(child)
+		}
+		parts = append(parts, "}")
+	}
 	for _, field := range schema {
-		parts = append(parts, field.Name+":"+strings.ToUpper(field.Type)+":"+normalizeMode(field.Mode))
+		appendField(field)
 	}
 	return observability.Digest([]byte(strings.Join(parts, "\x00")))
 }

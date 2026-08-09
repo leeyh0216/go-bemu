@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
+	stateadapter "github.com/leeyh0216/go-bemu/internal/adapters/sqlite"
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/config"
 	"github.com/leeyh0216/go-bemu/internal/domain"
@@ -87,6 +89,242 @@ func TestPrepareDirectoryCreatesConfiguredPath(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaultProjectIsIdempotentAcrossStateRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bqemu-state.sqlite")
+	warehouse := &tableDataCompositionWarehouse{}
+	for iteration := 0; iteration < 2; iteration++ {
+		store, err := stateadapter.Open(t.Context(), stateadapter.DefaultConfig(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		service := composeCatalogService(config.Defaults(), store, warehouse, shutdownClock{})
+		if err := ensureDefaultProject(t.Context(), service, "local-project"); err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		project, err := service.GetProject(t.Context(), "local-project")
+		if err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		if project.FriendlyName != "BQEMU default project" {
+			_ = store.Close()
+			t.Fatalf("default project = %#v", project)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestBootstrapCatalogCreatesMultipleResourcesIdempotently(t *testing.T) {
+	store, err := stateadapter.Open(t.Context(), stateadapter.DefaultConfig(filepath.Join(t.TempDir(), "state.sqlite")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := composeCatalogService(config.Defaults(), store, &tableDataCompositionWarehouse{}, shutdownClock{})
+	bootstrap := config.BootstrapConfig{Projects: []config.BootstrapProject{{ID: "one", Datasets: []config.BootstrapDataset{{ID: "us_data", Location: "US"}}}, {ID: "two", Datasets: []config.BootstrapDataset{{ID: "eu_data", Location: "EU", Description: "bootstrap"}}}}}
+	for range 2 {
+		if err := bootstrapCatalog(t.Context(), service, bootstrap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, reference := range []struct{ project, dataset, location string }{{"one", "us_data", "US"}, {"two", "eu_data", "EU"}} {
+		dataset, err := service.GetDataset(t.Context(), reference.project, reference.dataset)
+		if err != nil || dataset.Location != reference.location {
+			t.Fatalf("dataset=%#v err=%v", dataset, err)
+		}
+	}
+}
+
+func TestBootstrapCatalogIsIdempotentAcrossStateRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	bootstrap := config.BootstrapConfig{Projects: []config.BootstrapProject{{ID: "one", Datasets: []config.BootstrapDataset{{ID: "data", Location: "US"}}}}}
+	for range 2 {
+		store, err := stateadapter.Open(t.Context(), stateadapter.DefaultConfig(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		service := composeCatalogService(config.Defaults(), store, &tableDataCompositionWarehouse{}, shutdownClock{})
+		if err := bootstrapCatalog(t.Context(), service, bootstrap); err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		if _, err := service.GetDataset(t.Context(), "one", "data"); err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMaterializationTargetBootstrapSurvivesStateRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	bootstrap := config.BootstrapConfig{Projects: []config.BootstrapProject{{ID: "results-project", Datasets: []config.BootstrapDataset{{ID: "managed_results", Location: "US"}}}}}
+	target := config.MaterializationConfig{ProjectID: "results-project", DatasetID: "managed_results", Expiration: config.Duration(time.Hour)}
+	for range 2 {
+		store, err := stateadapter.Open(t.Context(), stateadapter.DefaultConfig(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		service := composeCatalogService(config.Defaults(), store, &tableDataCompositionWarehouse{}, shutdownClock{})
+		if err := bootstrapCatalog(t.Context(), service, bootstrap); err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		if err := verifyMaterializationTarget(t.Context(), service, target); err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMaterializationTargetRequiresExistingDataset(t *testing.T) {
+	store, err := stateadapter.Open(t.Context(), stateadapter.DefaultConfig(filepath.Join(t.TempDir(), "state.sqlite")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := composeCatalogService(config.Defaults(), store, &tableDataCompositionWarehouse{}, shutdownClock{})
+	err = verifyMaterializationTarget(t.Context(), service, config.MaterializationConfig{ProjectID: "results-project", DatasetID: "missing", Expiration: config.Duration(time.Hour)})
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("error=%v, want not found", err)
+	}
+}
+
+type mutableEmulatorClock struct{ now time.Time }
+
+func (clock *mutableEmulatorClock) Now() time.Time { return clock.now }
+
+func TestExpiredManagedMaterializationCleansAfterSQLiteAndDuckDBRestart(t *testing.T) {
+	ctx := t.Context()
+	statePath := filepath.Join(t.TempDir(), "state.sqlite")
+	warehousePath := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	now := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
+	expires := now.Add(time.Hour)
+	clock := &mutableEmulatorClock{now: now}
+
+	state, err := stateadapter.Open(ctx, stateadapter.DefaultConfig(statePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	warehouse, err := duckdb.New(warehousePath)
+	if err != nil {
+		_ = state.Close()
+		t.Fatal(err)
+	}
+	service := composeCatalogService(config.Defaults(), state, warehouse, clock)
+	if _, err := service.CreateProject(ctx, domain.Project{ID: "results-project"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateDataset(ctx, domain.Dataset{ProjectID: "results-project", ID: "managed_results", Location: "US"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateTable(ctx, domain.Table{
+		ProjectID: "results-project", DatasetID: "managed_results", ID: "managed_query_result",
+		Schema: []domain.Field{{Name: "id", Type: "INT64"}}, ExpirationTime: &expires,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := warehouse.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.now = expires
+	state, err = stateadapter.Open(ctx, stateadapter.DefaultConfig(statePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	warehouse, err = duckdb.New(warehousePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer warehouse.Close()
+	service = composeCatalogService(config.Defaults(), state, warehouse, clock)
+	if err := service.RecoverCatalogState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.GetTable(ctx, "results-project", "managed_results", "managed_query_result"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expired managed result error = %v, want not found", err)
+	}
+	if _, err := service.CreateTable(ctx, domain.Table{
+		ProjectID: "results-project", DatasetID: "managed_results", ID: "managed_query_result",
+		Schema: []domain.Field{{Name: "id", Type: "INT64"}},
+	}); err != nil {
+		t.Fatalf("recreate after durable expiration cleanup: %v", err)
+	}
+}
+
+func TestBootstrapCatalogRejectsExistingLocationConflict(t *testing.T) {
+	store, err := stateadapter.Open(t.Context(), stateadapter.DefaultConfig(filepath.Join(t.TempDir(), "state.sqlite")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := composeCatalogService(config.Defaults(), store, &tableDataCompositionWarehouse{}, shutdownClock{})
+	if err := bootstrapCatalog(t.Context(), service, config.BootstrapConfig{Projects: []config.BootstrapProject{{ID: "one", Datasets: []config.BootstrapDataset{{ID: "data", Location: "US"}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	err = bootstrapCatalog(t.Context(), service, config.BootstrapConfig{Projects: []config.BootstrapProject{{ID: "one", Datasets: []config.BootstrapDataset{{ID: "data", Location: "EU"}}}}})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestBootstrapCatalogRejectsExistingMetadataConflict(t *testing.T) {
+	store, err := stateadapter.Open(t.Context(), stateadapter.DefaultConfig(filepath.Join(t.TempDir(), "state.sqlite")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := composeCatalogService(config.Defaults(), store, &tableDataCompositionWarehouse{}, shutdownClock{})
+	base := config.BootstrapConfig{Projects: []config.BootstrapProject{{ID: "one", Datasets: []config.BootstrapDataset{{ID: "data", Location: "US", Description: "one", Labels: map[string]string{"team": "one"}}}}}}
+	if err := bootstrapCatalog(t.Context(), service, base); err != nil {
+		t.Fatal(err)
+	}
+	conflict := base
+	conflict.Projects[0].Datasets[0].Labels = map[string]string{"team": "two"}
+	if err := bootstrapCatalog(t.Context(), service, conflict); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+type healthCheckerFunc func(context.Context) error
+
+func (check healthCheckerFunc) Ping(ctx context.Context) error { return check(ctx) }
+
+func TestCompositeReadinessRequiresStateAndWarehouse(t *testing.T) {
+	stateErr := errors.New("state unavailable")
+	warehouseCalled := false
+	checks := compositeHealthChecker{
+		healthCheckerFunc(func(context.Context) error { return stateErr }),
+		healthCheckerFunc(func(context.Context) error { warehouseCalled = true; return nil }),
+	}
+	if err := checks.Ping(t.Context()); !errors.Is(err, stateErr) {
+		t.Fatalf("readiness error = %v, want state failure", err)
+	}
+	if warehouseCalled {
+		t.Fatal("warehouse readiness ran after state failure")
+	}
+	checks[0] = healthCheckerFunc(func(context.Context) error { return nil })
+	if err := checks.Ping(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !warehouseCalled {
+		t.Fatal("warehouse readiness was not checked")
+	}
+}
+
 type tableDataCompositionWarehouse struct {
 	request ports.TableDataReadRequest
 }
@@ -109,6 +347,9 @@ func (*tableDataCompositionWarehouse) DropTable(context.Context, string, string,
 func (warehouse *tableDataCompositionWarehouse) ListTableData(_ context.Context, request ports.TableDataReadRequest) (ports.TableDataPage, error) {
 	warehouse.request = request
 	return ports.TableDataPage{Rows: [][]any{{int64(1)}}, TotalRows: 1}, nil
+}
+func (*tableDataCompositionWarehouse) InsertTableData(context.Context, ports.TableDataWriteRequest) error {
+	return nil
 }
 
 func TestComposeCatalogServiceAppliesFileTableDataByteLimits(t *testing.T) {

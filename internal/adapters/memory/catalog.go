@@ -260,6 +260,8 @@ func cloneFields(fields []domain.Field) []domain.Field {
 	clone := make([]domain.Field, len(fields))
 	for index, field := range fields {
 		clone[index] = field
+		clone[index].Precision = cloneInt64Pointer(field.Precision)
+		clone[index].Scale = cloneInt64Pointer(field.Scale)
 		clone[index].Fields = cloneFields(field.Fields)
 	}
 	return clone

@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 )
@@ -31,6 +32,52 @@ type HealthChecker interface {
 	Ping(context.Context) error
 }
 
+// EngineCapabilities describes portable schema limits at the storage-engine
+// boundary. It intentionally contains no DuckDB type names or SQL syntax.
+type EngineCapabilities struct {
+	MaxDecimalPrecision int64
+	MaxDecimalScale     int64
+	SupportsStruct      bool
+	SupportsRepeated    bool
+	TableSchemaChanges  TableSchemaChangeCapabilities
+}
+
+// TableSchemaChangeCapabilities reports portable DDL behavior before an
+// application asks the engine to plan a concrete canonical change.
+type TableSchemaChangeCapabilities struct {
+	AddColumn          bool
+	DropColumn         bool
+	RenameColumn       bool
+	AlterColumnType    bool
+	Transactional      bool
+	InspectBeforeAfter bool
+}
+
+type EngineCapabilityProvider interface {
+	EngineCapabilities() EngineCapabilities
+}
+
+// SchemaPlanner verifies that a canonical schema can be represented by an
+// engine before that engine performs DDL or another physical side effect.
+type SchemaPlanner interface {
+	ValidateSchema([]domain.Field) error
+}
+
+// TableSchemaChangePlan contains no backend SQL. Physical fingerprints bind a
+// durable semantic intent to the engine mapping that approved it.
+type TableSchemaChangePlan struct {
+	Before                    domain.Table
+	After                     domain.Table
+	BeforePhysicalFingerprint string
+	AfterPhysicalFingerprint  string
+}
+
+// TableSchemaPlanner performs the authoritative preflight for one concrete
+// change. Capability booleans are descriptive and never replace this method.
+type TableSchemaPlanner interface {
+	PlanTableChange(domain.Table, domain.Table) (TableSchemaChangePlan, error)
+}
+
 // WarehouseAdmin owns physical dataset/table lifecycle behind the application
 // boundary. Domain and application packages never import DuckDB concepts.
 type WarehouseAdmin interface {
@@ -41,12 +88,59 @@ type WarehouseAdmin interface {
 	DropTable(context.Context, string, string, string) error
 }
 
+// TableSchemaMutator applies one catalog-approved top-level schema rewrite.
+// The application supplies both canonical schemas; engines never infer the
+// BigQuery schema from their physical catalogs.
+type TableSchemaMutator interface {
+	ApplyTableSchemaChange(context.Context, TableSchemaChangePlan) error
+	TableSchemaMatches(context.Context, domain.Table) (bool, error)
+}
+
+// CatalogStorageSnapshot is canonical SQLite metadata supplied to a physical
+// adapter for startup drift detection. Adapters compare it with their own
+// object catalog without deriving BigQuery logical types from that catalog.
+type CatalogStorageSnapshot struct {
+	Datasets []domain.Dataset
+	Tables   []domain.Table
+}
+
+type CatalogStorageInspector interface {
+	ValidateCatalogStorage(context.Context, CatalogStorageSnapshot) error
+}
+
 // TableDataReader pages physical table rows without exposing backend query
 // concepts to the application layer. Offset is a zero-based row ordinal and
 // TotalRows describes the complete table, not only the returned page.
 // https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list
 type TableDataReader interface {
 	ListTableData(context.Context, TableDataReadRequest) (TableDataPage, error)
+}
+
+// TableDataWriter appends schema-validated canonical rows.  The application
+// owns catalog lookup and JSON conversion; engines receive no REST-shaped
+// values and must make the complete accepted batch visible atomically.
+type TableDataWriter interface {
+	InsertTableData(context.Context, TableDataWriteRequest) error
+}
+
+type TableDataWriteRequest struct {
+	Reference domain.TableReference
+	Schema    []domain.Field
+	Rows      [][]any
+}
+
+// TableDataJSONRow keeps REST JSON opaque until application-level schema
+// preflight. InsertID is deliberately carried beside the payload because it
+// is an idempotency identity, not a user table column.
+type TableDataJSONRow struct {
+	InsertID string
+	JSON     map[string]json.RawMessage
+}
+
+// TableDataInsertIDLedger persists the bounded insertAll retry identities.
+type TableDataInsertIDLedger interface {
+	ExistingTableDataInsertIDs(context.Context, domain.TableReference, []string) (map[string]bool, error)
+	RecordTableDataInsertIDs(context.Context, domain.TableReference, []string) error
 }
 
 // TableDataMaxResults preserves the optional REST field's presence. The
@@ -99,6 +193,13 @@ type QueryAnalyzer interface {
 	AnalyzeQuery(context.Context, QueryRequest) (QueryAnalysis, error)
 }
 
+// QueryParameterValidator is the GoogleSQL AST boundary for typed query
+// parameters. It validates the submitted statement before a job is persisted
+// or an engine can observe the request.
+type QueryParameterValidator interface {
+	ValidateQueryParameters(context.Context, QueryRequest) error
+}
+
 // QueryMaterializer owns the atomic physical side of a query destination. The
 // application publishes canonical table metadata only after this transaction
 // succeeds. A compensating drop is available when metadata publication fails.
@@ -131,6 +232,8 @@ type QueryRequest struct {
 	DefaultProjectID string
 	DefaultDataset   string
 	SQL              string
+	ParameterMode    domain.QueryParameterMode
+	QueryParameters  []domain.QueryParameter
 }
 
 type QueryAnalysis struct {

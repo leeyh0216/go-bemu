@@ -123,11 +123,17 @@ type QueryConfiguration struct {
 	CreateDisposition CreateDisposition
 	Priority          QueryPriority
 	Labels            map[string]string
+	ParameterMode     QueryParameterMode
+	QueryParameters   []QueryParameter
 	// AnonymousDestination is application-generated output metadata. It is not
 	// accepted from the REST request, but causes the completed job to expose the
 	// generated destinationTable as BigQuery does for cached query results.
 	// https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 	AnonymousDestination bool
+	// ManagedDestination identifies a server-generated result table placed in a
+	// configured, non-anonymous materialization dataset. It remains distinct
+	// from an explicit client destination and carries server-owned expiration.
+	ManagedDestination bool
 }
 
 type JobError struct {
@@ -144,6 +150,12 @@ type QueryResult struct {
 	Columns      []Column
 	Rows         [][]any
 	AffectedRows int64
+	// TotalRows remains canonical even when row payloads are unavailable after a
+	// state-database restart. SQLite persists this count and schema, never Rows.
+	TotalRows int64
+	// RowsAvailable distinguishes an available empty result from metadata whose
+	// physical row payload cannot be reconstructed safely after restart.
+	RowsAvailable bool
 }
 
 type Job struct {
@@ -172,6 +184,11 @@ func NewConfiguredQueryJob(reference JobReference, configuration QueryConfigurat
 		reference.Location = "US"
 	}
 	configuration = normalizeQueryConfiguration(configuration)
+	mode, parameters, err := normalizeQueryParameters(configuration.ParameterMode, configuration.QueryParameters)
+	if err != nil {
+		return nil, err
+	}
+	configuration.ParameterMode, configuration.QueryParameters = mode, parameters
 	if err := validateQueryJob(reference, configuration); err != nil {
 		return nil, err
 	}
@@ -199,6 +216,7 @@ func normalizeQueryConfiguration(configuration QueryConfiguration) QueryConfigur
 		}
 		configuration.Labels = labels
 	}
+	// Validation below owns parameter normalization because it can fail.
 	if configuration.Destination != nil {
 		destination := *configuration.Destination
 		configuration.Destination = &destination
@@ -229,6 +247,9 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 	if err := validateQueryLabels(configuration.Labels); err != nil {
 		return err
 	}
+	if _, _, err := normalizeQueryParameters(configuration.ParameterMode, configuration.QueryParameters); err != nil {
+		return err
+	}
 	if configuration.DefaultDataset == "" && configuration.DefaultProjectID != "" {
 		return fmt.Errorf("%w: defaultDataset.projectId requires defaultDataset.datasetId", ErrInvalid)
 	}
@@ -241,7 +262,7 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 		}
 	}
 	if configuration.Destination == nil {
-		if configuration.AnonymousDestination {
+		if configuration.AnonymousDestination || configuration.ManagedDestination {
 			return fmt.Errorf("%w: anonymous query destination metadata requires destinationTable", ErrInvalid)
 		}
 		if configuration.WriteDisposition != "" || configuration.CreateDisposition != "" {
@@ -268,7 +289,7 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 	default:
 		return fmt.Errorf("%w: unknown createDisposition %q", ErrInvalid, configuration.CreateDisposition)
 	}
-	if configuration.AnonymousDestination &&
+	if (configuration.AnonymousDestination || configuration.ManagedDestination) &&
 		(configuration.WriteDisposition != WriteEmpty || configuration.CreateDisposition != CreateIfNeeded) {
 		return fmt.Errorf("%w: anonymous query destinations require WRITE_EMPTY and CREATE_IF_NEEDED", ErrInvalid)
 	}
@@ -323,6 +344,8 @@ func (j *Job) Complete(result QueryResult, now time.Time) error {
 		return fmt.Errorf("%w: cannot complete job in state %s", ErrConflict, j.State)
 	}
 	j.State = JobDone
+	result.TotalRows = int64(len(result.Rows))
+	result.RowsAvailable = true
 	j.Result = &result
 	j.EndedAt = &now
 	return nil

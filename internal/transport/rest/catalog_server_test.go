@@ -98,6 +98,58 @@ func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
 	}`, latestETag, http.StatusBadRequest)
 }
 
+func TestCatalogRESTPreservesDecimalParameterPresence(t *testing.T) {
+	warehouse := &catalogTestWarehouse{}
+	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, catalogTestClock{now: time.Now()})
+	server := httptest.NewServer(NewCatalogServer(catalog, warehouse, "").Handler())
+	t.Cleanup(server.Close)
+	request := catalogRequestHelper(t, server.URL)
+
+	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"test-project"}`, http.StatusOK)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets", `{"datasetReference":{"datasetId":"analytics"}}`, http.StatusOK)
+	table := request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"decimals"},
+		"schema":{"fields":[
+			{"name":"numeric_default","type":"NUMERIC"},
+			{"name":"big_explicit","type":"BIGNUMERIC","precision":"38","scale":"18"},
+			{"name":"items","type":"STRUCT","mode":"REPEATED","fields":[
+				{"name":"amount","type":"NUMERIC","precision":"20","scale":"2"}
+			]}
+		]}
+	}`, http.StatusOK)
+
+	fields := table["schema"].(map[string]any)["fields"].([]any)
+	defaultDecimal := fields[0].(map[string]any)
+	if _, present := defaultDecimal["precision"]; present {
+		t.Fatalf("omitted precision was synthesized in REST metadata: %#v", defaultDecimal)
+	}
+	explicitDecimal := fields[1].(map[string]any)
+	if explicitDecimal["precision"] != "38" || explicitDecimal["scale"] != "18" {
+		t.Fatalf("explicit decimal parameters were not preserved: %#v", explicitDecimal)
+	}
+	nested := fields[2].(map[string]any)
+	if nested["mode"] != "REPEATED" || nested["type"] != "STRUCT" {
+		t.Fatalf("nested repeated identity was not preserved: %#v", nested)
+	}
+
+	createdBefore := len(warehouse.tables)
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"too_wide"},
+		"schema":{"fields":[{"name":"amount","type":"BIGNUMERIC","precision":"39","scale":"1"}]}
+	}`, http.StatusBadRequest)
+	if len(warehouse.tables) != createdBefore {
+		t.Fatal("invalid decimal schema reached the physical warehouse")
+	}
+
+	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
+		"tableReference":{"tableId":"places"},
+		"schema":{"fields":[{"name":"location","type":"GEOGRAPHY"}]}
+	}`, http.StatusNotImplemented)
+	if len(warehouse.tables) != createdBefore {
+		t.Fatal("unsupported GEOGRAPHY schema reached the physical warehouse")
+	}
+}
+
 func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	warehouse := &catalogTestWarehouse{}
 	clock := catalogTestClock{now: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)}
@@ -128,6 +180,10 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	if tableMethods["get"].(map[string]any)["parameters"].(map[string]any)["autodetect_schema"] != nil {
 		t.Fatal("tables.get must not advertise the mutation-only autodetect_schema parameter")
 	}
+	tableGetParameters := tableMethods["get"].(map[string]any)["parameters"].(map[string]any)
+	if tableGetParameters["selectedFields"] == nil || tableGetParameters["view"] == nil {
+		t.Fatalf("tables.get discovery is missing selectedFields/view: %#v", tableGetParameters)
+	}
 
 	request(http.MethodPost, "/bqemu/v1/projects", `{"projectId":"test-project","futureProjectField":"ignored"}`, http.StatusOK)
 	projectList := request(http.MethodGet, "/bigquery/v2/projects?maxResults=1", "", http.StatusOK)
@@ -145,6 +201,14 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	if dataset["location"] != "EU" || dataset["id"] != "test-project:analytics" {
 		t.Fatalf("dataset metadata was not preserved: %#v", dataset)
 	}
+	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics?datasetView=METADATA", "", http.StatusOK)
+	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics?datasetView=ACL", "", http.StatusNotImplemented)
+	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics?datasetView=unknown", "", http.StatusBadRequest)
+	filtered := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets?filter=labels.tier%3Atest", "", http.StatusOK)
+	if datasets := filtered["datasets"].([]any); len(datasets) != 1 || datasets[0].(map[string]any)["id"] != "test-project:analytics" {
+		t.Fatalf("label-filtered datasets = %#v", filtered)
+	}
+	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets?filter=tier%3Atest", "", http.StatusBadRequest)
 	firstPage := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets?maxResults=1", "", http.StatusOK)
 	token, ok := firstPage["nextPageToken"].(string)
 	if !ok || token == "" || len(firstPage["datasets"].([]any)) != 1 {
@@ -157,7 +221,7 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
 		"tableReference":{"tableId":"events"},
-		"schema":{"fields":[{"name":"event_id","type":"INT64","mode":"REQUIRED"}]},
+		"schema":{"fields":[{"name":"event_id","type":"INT64","mode":"REQUIRED"},{"name":"payload","type":"STRING"}]},
 		"timePartitioning":{"type":"DAY","expirationMs":"86400000"},
 		"futureTableField":"ignored"
 	}`, http.StatusOK)
@@ -165,6 +229,13 @@ func TestCatalogRESTCreateGetListDeleteAndDiscovery(t *testing.T) {
 	if table["id"] != "test-project:analytics.events" {
 		t.Fatalf("unexpected table: %#v", table)
 	}
+	projected := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events?view=BASIC&selectedFields=payload", "", http.StatusOK)
+	fields := projected["schema"].(map[string]any)["fields"].([]any)
+	if len(fields) != 1 || fields[0].(map[string]any)["name"] != "payload" {
+		t.Fatalf("selectedFields response = %#v", projected)
+	}
+	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events?view=STORAGE_STATS", "", http.StatusNotImplemented)
+	request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events?selectedFields=unknown", "", http.StatusBadRequest)
 	request(http.MethodPost, "/bigquery/v2/projects/test-project/datasets/analytics/tables", `{
 		"tableReference":{"projectId":"other-project","tableId":"bad"},
 		"schema":{"fields":[{"name":"id","type":"INT64"}]}

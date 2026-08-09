@@ -16,20 +16,20 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/observability"
-	writedomain "github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
 )
 
 const (
 	storageWriteInternalSchema = "_bqemu_storage_write"
-	storageWriteReceiptTable   = "pending_receipts"
+	// Retained as a migration guard and for compatibility assertions. New
+	// versions keep receipt metadata exclusively in SQLite.
+	storageWriteReceiptTable = "pending_receipts"
 )
 
 // StorageWriteCoordinatorConfig keeps operation-count queueing independent
@@ -140,22 +140,6 @@ func storageWriteStreamFingerprint(stream string) string {
 	return observability.Digest([]byte(stream))
 }
 
-type stageReceipt struct {
-	streamName        string
-	startOffset       int64
-	rowCount          int64
-	stagedBytes       int64
-	table             writedomain.TableReference
-	schemaFingerprint string
-	payloadDigest     string
-}
-
-func (r stageReceipt) matches(batch writeports.AppendBatch) bool {
-	return r.streamName == batch.StreamName && r.startOffset == batch.StartOffset &&
-		r.rowCount == int64(len(batch.Rows)) && r.table == batch.Table &&
-		r.schemaFingerprint == batch.SchemaFingerprint && r.payloadDigest == batch.PayloadDigest
-}
-
 func (c *StorageWriteCoordinator) initializeStaging(ctx context.Context) (err error) {
 	started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_initialize_staging",
 		"transaction_mode", "explicit")
@@ -163,41 +147,16 @@ func (c *StorageWriteCoordinator) initializeStaging(ctx context.Context) (err er
 		observability.LogSideEffectEnd(ctx, "duckdb", "storage_write_initialize_staging", started, err,
 			"transaction_mode", "explicit")
 	}()
-	tx, err := c.warehouse.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin Storage Write staging initialization: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, "DROP SCHEMA IF EXISTS "+quoteIdentifier(storageWriteInternalSchema)+" CASCADE"); err != nil {
-		return fmt.Errorf("clear stale Storage Write staging: %w", err)
-	}
-	if err := createStorageWriteCatalog(ctx, tx); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit Storage Write staging initialization: %w", err)
-	}
-	return nil
-}
-
-func createStorageWriteCatalog(ctx context.Context, tx *sql.Tx) error {
-	if _, err := tx.ExecContext(ctx, "CREATE SCHEMA "+quoteIdentifier(storageWriteInternalSchema)); err != nil {
+	if _, err := c.warehouse.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoteIdentifier(storageWriteInternalSchema)); err != nil {
 		return fmt.Errorf("create Storage Write internal schema: %w", err)
 	}
-	statement := fmt.Sprintf(`CREATE TABLE %s.%s (
-		stream_name VARCHAR NOT NULL,
-		start_offset BIGINT NOT NULL,
-		row_count BIGINT NOT NULL,
-		staged_bytes BIGINT NOT NULL,
-		project_id VARCHAR NOT NULL,
-		dataset_id VARCHAR NOT NULL,
-		table_id VARCHAR NOT NULL,
-		schema_fingerprint VARCHAR NOT NULL,
-		payload_digest VARCHAR NOT NULL,
-		PRIMARY KEY (stream_name, start_offset)
-	)`, quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-	if _, err := tx.ExecContext(ctx, statement); err != nil {
-		return fmt.Errorf("create Storage Write receipt catalog: %w", err)
+	var legacyReceipts int
+	if err := c.warehouse.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_schema = ? AND table_name = 'pending_receipts'`, storageWriteInternalSchema).Scan(&legacyReceipts); err != nil {
+		return fmt.Errorf("inspect legacy Storage Write metadata: %w", err)
+	}
+	if legacyReceipts != 0 {
+		return fmt.Errorf("Storage Write state drift: DuckDB contains the legacy pending_receipts metadata table; restore a matching SQLite state database or remove both state files")
 	}
 	return nil
 }
@@ -213,29 +172,35 @@ func (c *StorageWriteCoordinator) stagePending(ctx context.Context, batch writep
 		}
 	}()
 
-	receipt, found, err := findStageReceipt(ctx, tx, batch.StreamName, batch.StartOffset)
+	pendingTable := storageWriteStagingTable(batch.StreamName)
+	appliedTable := storageWriteAppliedTable(batch.StreamName)
+	appliedExists, appliedRows, err := storageWritePhysicalTable(ctx, tx, appliedTable)
 	if err != nil {
 		return false, err
 	}
-	if found {
-		// AppendRows offsets are retry tokens. If a worker committed staging but
-		// its acknowledgement was lost, the application ledger is still behind;
-		// the exact receipt must reconcile successfully without inserting again.
-		// https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.AppendRows
-		if receipt.matches(batch) {
+	if appliedExists {
+		if appliedRows == int64(len(batch.Rows)) {
 			return false, nil
 		}
-		return false, fmt.Errorf("coordinator receipt conflict at offset %d for stream fingerprint %s",
-			batch.StartOffset, storageWriteStreamFingerprint(batch.StreamName))
+		return false, fmt.Errorf("Storage Write applied row drift for stream fingerprint %s: got %d rows, expected %d",
+			storageWriteStreamFingerprint(batch.StreamName), appliedRows, len(batch.Rows))
 	}
-
-	nextOffset, streamStagedBytes, err := pendingStreamTotals(ctx, tx, batch.StreamName)
+	pendingExists, nextOffset, err := storageWritePhysicalTable(ctx, tx, pendingTable)
 	if err != nil {
 		return false, err
 	}
-	if batch.StartOffset != nextOffset {
-		return false, fmt.Errorf("coordinator offset invariant: got %d, want %d", batch.StartOffset, nextOffset)
+	if nextOffset == batch.StartOffset+int64(len(batch.Rows)) {
+		return false, nil
 	}
+	if nextOffset != batch.StartOffset {
+		return false, fmt.Errorf("Storage Write physical offset drift for stream fingerprint %s: got %d rows, expected %d",
+			storageWriteStreamFingerprint(batch.StreamName), nextOffset, batch.StartOffset)
+	}
+	if !pendingExists && batch.StartOffset != 0 {
+		return false, fmt.Errorf("Storage Write staging table is missing at offset %d for stream fingerprint %s",
+			batch.StartOffset, storageWriteStreamFingerprint(batch.StreamName))
+	}
+	_, streamStagedBytes := c.stagedSnapshot(batch.StreamName)
 	stagedBytes := batchStagedBytes(batch)
 	if err := c.checkStagedAdmission(streamStagedBytes, stagedBytes); err != nil {
 		return false, err
@@ -244,60 +209,20 @@ func (c *StorageWriteCoordinator) stagePending(ctx context.Context, batch writep
 	if err != nil {
 		return false, err
 	}
-	stagingTable := storageWriteStagingTable(batch.StreamName)
 	destination := quoteIdentifier(physicalSchema(batch.Table.ProjectID, batch.Table.DatasetID)) + "." + quoteIdentifier(batch.Table.TableID)
 	createStatement := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s AS SELECT * FROM %s WHERE FALSE",
-		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(stagingTable), destination)
+		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(pendingTable), destination)
 	if _, err := tx.ExecContext(ctx, createStatement); err != nil {
 		return false, fmt.Errorf("create pending stream staging table: %w", err)
 	}
-	if err := insertPreparedBatchInto(ctx, tx, prepared, storageWriteInternalSchema, stagingTable); err != nil {
+	if err := insertPreparedBatchInto(ctx, tx, prepared, storageWriteInternalSchema, pendingTable); err != nil {
 		return false, err
-	}
-	receiptStatement := fmt.Sprintf(`INSERT INTO %s.%s
-		(stream_name, start_offset, row_count, staged_bytes, project_id, dataset_id, table_id, schema_fingerprint, payload_digest)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-	if _, err := tx.ExecContext(ctx, receiptStatement,
-		batch.StreamName, batch.StartOffset, len(batch.Rows), stagedBytes,
-		batch.Table.ProjectID, batch.Table.DatasetID, batch.Table.TableID,
-		batch.SchemaFingerprint, batch.PayloadDigest,
-	); err != nil {
-		return false, fmt.Errorf("record pending stream receipt: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit pending stage transaction: %w", err)
 	}
 	c.addStagedBytes(batch.StreamName, stagedBytes)
 	return true, nil
-}
-
-func findStageReceipt(ctx context.Context, tx *sql.Tx, stream string, offset int64) (stageReceipt, bool, error) {
-	statement := fmt.Sprintf(`SELECT stream_name, start_offset, row_count, staged_bytes,
-		project_id, dataset_id, table_id, schema_fingerprint, payload_digest
-		FROM %s.%s WHERE stream_name = ? AND start_offset = ?`,
-		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-	var receipt stageReceipt
-	err := tx.QueryRowContext(ctx, statement, stream, offset).Scan(
-		&receipt.streamName, &receipt.startOffset, &receipt.rowCount, &receipt.stagedBytes,
-		&receipt.table.ProjectID, &receipt.table.DatasetID, &receipt.table.TableID,
-		&receipt.schemaFingerprint, &receipt.payloadDigest,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return stageReceipt{}, false, nil
-	}
-	if err != nil {
-		return stageReceipt{}, false, fmt.Errorf("read pending stream receipt: %w", err)
-	}
-	return receipt, true, nil
-}
-
-func pendingStreamTotals(ctx context.Context, tx *sql.Tx, stream string) (rows, bytes int64, err error) {
-	statement := fmt.Sprintf("SELECT COALESCE(SUM(row_count), 0), COALESCE(SUM(staged_bytes), 0) FROM %s.%s WHERE stream_name = ?",
-		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-	if err := tx.QueryRowContext(ctx, statement, stream).Scan(&rows, &bytes); err != nil {
-		return 0, 0, fmt.Errorf("read pending stream totals: %w", err)
-	}
-	return rows, bytes, nil
 }
 
 func (c *StorageWriteCoordinator) checkStagedAdmission(streamUsed, requested int64) error {
@@ -319,6 +244,11 @@ func storageWriteStagingTable(stream string) string {
 	return "stream_" + hex.EncodeToString(sum[:])
 }
 
+func storageWriteAppliedTable(stream string) string {
+	sum := sha256.Sum256([]byte(stream))
+	return "applied_" + hex.EncodeToString(sum[:])
+}
+
 // commitPending uses one transaction for destination inserts, receipt removal,
 // and staging-table removal. A fault or canceled transaction therefore leaves
 // destination visibility and all retry state unchanged.
@@ -332,16 +262,46 @@ func (c *StorageWriteCoordinator) commitPending(ctx context.Context, request wri
 			_ = tx.Rollback()
 		}
 	}()
-	released := make(map[string]int64, len(request.StreamNames))
 	for _, stream := range request.StreamNames {
-		count, bytes, err := pendingStreamReceiptSummary(ctx, tx, stream, request.Parent)
+		expectedRows, ok := request.RowCounts[stream]
+		if !ok || expectedRows < 0 {
+			return fmt.Errorf("expected row count is missing for stream fingerprint %s", storageWriteStreamFingerprint(stream))
+		}
+		stagingTable := storageWriteStagingTable(stream)
+		appliedTable := storageWriteAppliedTable(stream)
+		pendingExists, pendingRows, err := storageWritePhysicalTable(ctx, tx, stagingTable)
 		if err != nil {
 			return err
 		}
-		if count == 0 {
+		appliedExists, appliedRows, err := storageWritePhysicalTable(ctx, tx, appliedTable)
+		if err != nil {
+			return err
+		}
+		if pendingExists && appliedExists {
+			return fmt.Errorf("Storage Write state drift: pending and applied rows both exist for stream fingerprint %s", storageWriteStreamFingerprint(stream))
+		}
+		if appliedExists {
+			if appliedRows != expectedRows {
+				return fmt.Errorf("Storage Write applied row drift for stream fingerprint %s: got %d, expected %d",
+					storageWriteStreamFingerprint(stream), appliedRows, expectedRows)
+			}
 			continue
 		}
-		stagingTable := storageWriteStagingTable(stream)
+		if !pendingExists && expectedRows != 0 {
+			return fmt.Errorf("Storage Write staging rows are missing for stream fingerprint %s: expected %d", storageWriteStreamFingerprint(stream), expectedRows)
+		}
+		if pendingExists && pendingRows != expectedRows {
+			return fmt.Errorf("Storage Write staged row drift for stream fingerprint %s: got %d, expected %d",
+				storageWriteStreamFingerprint(stream), pendingRows, expectedRows)
+		}
+		destination := quoteIdentifier(physicalSchema(request.Parent.ProjectID, request.Parent.DatasetID)) + "." + quoteIdentifier(request.Parent.TableID)
+		if !pendingExists {
+			statement := fmt.Sprintf("CREATE TABLE %s.%s AS SELECT * FROM %s WHERE FALSE",
+				quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(stagingTable), destination)
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("create empty pending stream marker: %w", err)
+			}
+		}
 		columns, err := storageWriteStagingColumns(ctx, tx, stagingTable)
 		if err != nil {
 			return err
@@ -351,21 +311,15 @@ func (c *StorageWriteCoordinator) commitPending(ctx context.Context, request wri
 			quotedColumns[index] = quoteIdentifier(column)
 		}
 		columnList := strings.Join(quotedColumns, ", ")
-		destination := quoteIdentifier(physicalSchema(request.Parent.ProjectID, request.Parent.DatasetID)) + "." + quoteIdentifier(request.Parent.TableID)
 		staging := quoteIdentifier(storageWriteInternalSchema) + "." + quoteIdentifier(stagingTable)
 		statement := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s", destination, columnList, columnList, staging)
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply pending stream staging: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, "DROP TABLE "+staging); err != nil {
-			return fmt.Errorf("drop committed stream staging: %w", err)
+		rename := fmt.Sprintf("ALTER TABLE %s RENAME TO %s", staging, quoteIdentifier(appliedTable))
+		if _, err := tx.ExecContext(ctx, rename); err != nil {
+			return fmt.Errorf("mark committed stream rows as applied: %w", err)
 		}
-		deleteStatement := fmt.Sprintf("DELETE FROM %s.%s WHERE stream_name = ?",
-			quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-		if _, err := tx.ExecContext(ctx, deleteStatement, stream); err != nil {
-			return fmt.Errorf("delete committed stream receipts: %w", err)
-		}
-		released[stream] = bytes
 	}
 	if c.beforeCommit != nil {
 		if err := c.beforeCommit(); err != nil {
@@ -375,29 +329,7 @@ func (c *StorageWriteCoordinator) commitPending(ctx context.Context, request wri
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit pending stream transaction: %w", err)
 	}
-	for stream, bytes := range released {
-		c.releaseStagedBytes(stream, bytes)
-	}
 	return nil
-}
-
-func pendingStreamReceiptSummary(ctx context.Context, tx *sql.Tx, stream string, parent writedomain.TableReference) (count, bytes int64, err error) {
-	wrongTableStatement := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s WHERE stream_name = ?
-		AND (project_id <> ? OR dataset_id <> ? OR table_id <> ?)`,
-		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-	var wrongTable int64
-	if err := tx.QueryRowContext(ctx, wrongTableStatement, stream, parent.ProjectID, parent.DatasetID, parent.TableID).Scan(&wrongTable); err != nil {
-		return 0, 0, fmt.Errorf("validate pending stream destination: %w", err)
-	}
-	if wrongTable != 0 {
-		return 0, 0, fmt.Errorf("stream fingerprint %s belongs to another table", storageWriteStreamFingerprint(stream))
-	}
-	statement := fmt.Sprintf("SELECT COUNT(*), COALESCE(SUM(staged_bytes), 0) FROM %s.%s WHERE stream_name = ?",
-		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-	if err := tx.QueryRowContext(ctx, statement, stream).Scan(&count, &bytes); err != nil {
-		return 0, 0, fmt.Errorf("read pending stream commit summary: %w", err)
-	}
-	return count, bytes, nil
 }
 
 func storageWriteStagingColumns(ctx context.Context, tx *sql.Tx, table string) ([]string, error) {
@@ -434,23 +366,125 @@ func (c *StorageWriteCoordinator) discardPending(ctx context.Context, stream str
 			_ = tx.Rollback()
 		}
 	}()
-	_, bytes, err := pendingStreamTotals(ctx, tx, stream)
-	if err != nil {
-		return err
-	}
 	staging := quoteIdentifier(storageWriteInternalSchema) + "." + quoteIdentifier(storageWriteStagingTable(stream))
 	if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+staging); err != nil {
 		return fmt.Errorf("drop discarded stream staging: %w", err)
 	}
-	statement := fmt.Sprintf("DELETE FROM %s.%s WHERE stream_name = ?",
-		quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
-	if _, err := tx.ExecContext(ctx, statement, stream); err != nil {
-		return fmt.Errorf("delete discarded stream receipts: %w", err)
+	applied := quoteIdentifier(storageWriteInternalSchema) + "." + quoteIdentifier(storageWriteAppliedTable(stream))
+	if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+applied); err != nil {
+		return fmt.Errorf("drop discarded applied stream rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit pending stream discard: %w", err)
 	}
-	c.releaseStagedBytes(stream, bytes)
+	_, stagedBytes := c.stagedSnapshot(stream)
+	c.releaseStagedBytes(stream, stagedBytes)
+	return nil
+}
+
+func storageWritePhysicalTable(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, table string) (bool, int64, error) {
+	var count int
+	if err := queryer.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_schema = ? AND table_name = ?`, storageWriteInternalSchema, table).Scan(&count); err != nil {
+		return false, 0, fmt.Errorf("inspect Storage Write physical table: %w", err)
+	}
+	if count == 0 {
+		return false, 0, nil
+	}
+	var rows int64
+	statement := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(table))
+	if err := queryer.QueryRowContext(ctx, statement).Scan(&rows); err != nil {
+		return false, 0, fmt.Errorf("count Storage Write physical rows: %w", err)
+	}
+	return true, rows, nil
+}
+
+func (c *StorageWriteCoordinator) inspectPhysical(ctx context.Context, expected []writeports.PhysicalExpectation) (map[string]writeports.PhysicalStreamState, error) {
+	knownTables := make(map[string]string, len(expected)*2)
+	for _, item := range expected {
+		knownTables[storageWriteStagingTable(item.StreamName)] = item.StreamName
+		knownTables[storageWriteAppliedTable(item.StreamName)] = item.StreamName
+	}
+	rows, err := c.warehouse.db.QueryContext(ctx, `SELECT table_name FROM information_schema.tables
+		WHERE table_schema = ? ORDER BY table_name`, storageWriteInternalSchema)
+	if err != nil {
+		return nil, fmt.Errorf("list Storage Write physical state: %w", err)
+	}
+	var physicalTables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan Storage Write physical state: %w", err)
+		}
+		physicalTables = append(physicalTables, table)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close Storage Write physical state: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Storage Write physical state: %w", err)
+	}
+	for _, table := range physicalTables {
+		if _, known := knownTables[table]; !known {
+			return nil, fmt.Errorf("Storage Write state drift: DuckDB contains unowned staging table %q; restore the matching SQLite and DuckDB files together", table)
+		}
+	}
+
+	result := make(map[string]writeports.PhysicalStreamState, len(expected))
+	restoredBytes := make(map[string]int64, len(expected))
+	for _, item := range expected {
+		pendingExists, pendingRows, err := storageWritePhysicalTable(ctx, c.warehouse.db, storageWriteStagingTable(item.StreamName))
+		if err != nil {
+			return nil, err
+		}
+		appliedExists, appliedRows, err := storageWritePhysicalTable(ctx, c.warehouse.db, storageWriteAppliedTable(item.StreamName))
+		if err != nil {
+			return nil, err
+		}
+		if pendingExists && appliedExists {
+			return nil, fmt.Errorf("Storage Write state drift: pending and applied rows both exist for stream fingerprint %s", storageWriteStreamFingerprint(item.StreamName))
+		}
+		result[item.StreamName] = writeports.PhysicalStreamState{
+			PendingExists: pendingExists, PendingRows: pendingRows,
+			AppliedExists: appliedExists, AppliedRows: appliedRows,
+		}
+		if pendingExists || appliedExists {
+			restoredBytes[item.StreamName] = item.StagedBytes
+		}
+	}
+	c.resetStagedBytes()
+	for stream, bytes := range restoredBytes {
+		c.addStagedBytes(stream, bytes)
+	}
+	return result, nil
+}
+
+func (c *StorageWriteCoordinator) acknowledgeApplied(ctx context.Context, streams []string) (resultErr error) {
+	tx, err := c.warehouse.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Storage Write acknowledgement: %w", err)
+	}
+	defer func() {
+		if resultErr != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	for _, stream := range streams {
+		table := quoteIdentifier(storageWriteInternalSchema) + "." + quoteIdentifier(storageWriteAppliedTable(stream))
+		if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+			return fmt.Errorf("drop acknowledged Storage Write applied rows: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Storage Write acknowledgement: %w", err)
+	}
+	for _, stream := range streams {
+		_, bytes := c.stagedSnapshot(stream)
+		c.releaseStagedBytes(stream, bytes)
+	}
 	return nil
 }
 

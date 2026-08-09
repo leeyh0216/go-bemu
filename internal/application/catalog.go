@@ -19,6 +19,7 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	"github.com/leeyh0216/go-bemu/internal/state"
 	tabledatabudget "github.com/leeyh0216/go-bemu/internal/tabledata"
 )
 
@@ -30,6 +31,8 @@ type CatalogService struct {
 	catalog                   ports.CatalogRepository
 	warehouse                 ports.WarehouseAdmin
 	tableDataReader           ports.TableDataReader
+	tableDataWriter           ports.TableDataWriter
+	tableDataInsertIDLedger   ports.TableDataInsertIDLedger
 	clock                     ports.Clock
 	defaultLocation           string
 	compensationTimeout       time.Duration
@@ -37,6 +40,7 @@ type CatalogService struct {
 	maxTableDataPageRows      int
 	maxTableDataResponseBytes int64
 	maxTableDataRowBytes      int64
+	mutationJournal           state.CanonicalMutationJournal
 	// The repository port intentionally stays backend-agnostic and has no
 	// compare-and-create primitive. These locks make the two physical/metadata
 	// transactions single-writer within one emulator process.
@@ -82,6 +86,16 @@ func WithTableDataReader(reader ports.TableDataReader) CatalogOption {
 	return func(service *CatalogService) {
 		service.tableDataReader = reader
 	}
+}
+
+// WithTableDataWriter enables tabledata.insertAll after the catalog boundary
+// has resolved the authoritative table schema.
+func WithTableDataWriter(writer ports.TableDataWriter) CatalogOption {
+	return func(service *CatalogService) { service.tableDataWriter = writer }
+}
+
+func WithTableDataInsertIDLedger(ledger ports.TableDataInsertIDLedger) CatalogOption {
+	return func(service *CatalogService) { service.tableDataInsertIDLedger = ledger }
 }
 
 // WithTableDataOperationTimeout bounds admission to the global catalog boundary,
@@ -132,6 +146,9 @@ func NewCatalogService(catalog ports.CatalogRepository, warehouse ports.Warehous
 		defaultLocation: "US", compensationTimeout: 30 * time.Second,
 		tableDataOperationTimeout: 30 * time.Second, maxTableDataPageRows: 10_000,
 		maxTableDataResponseBytes: 10_000_000, maxTableDataRowBytes: 100_000_000,
+	}
+	if journal, ok := catalog.(state.CanonicalMutationJournal); ok {
+		service.mutationJournal = journal
 	}
 	for _, option := range options {
 		option(service)
@@ -332,6 +349,11 @@ func (s *CatalogService) createTable(ctx context.Context, table domain.Table) (d
 	}
 	if table.Type == "" {
 		table.Type = "TABLE"
+	}
+	if planner, ok := s.warehouse.(ports.SchemaPlanner); ok {
+		if err := planner.ValidateSchema(table.Schema); err != nil {
+			return domain.Table{}, err
+		}
 	}
 	now := s.clock.Now()
 	table.Location = dataset.Location

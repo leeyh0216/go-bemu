@@ -56,6 +56,31 @@ logging:
 	}
 }
 
+func TestDefaultsUseFileBackedStateUnlessMemoryIsExplicit(t *testing.T) {
+	cfg := Defaults()
+	if cfg.State.DSN == ":memory:" || strings.Contains(cfg.State.DSN, "mode=memory") {
+		t.Fatalf("state DSN must be file-backed by default: %q", cfg.State.DSN)
+	}
+	if cfg.Database.DSN == ":memory:" {
+		t.Fatalf("warehouse DSN must be file-backed by default: %q", cfg.Database.DSN)
+	}
+	if cfg.State.Synchronous != "FULL" || cfg.State.JournalMode != "WAL" {
+		t.Fatalf("state durability defaults = %#v", cfg.State)
+	}
+
+	result, err := load([]string{
+		"--set", "state.dsn=:memory:",
+		"--set", "state.journalMode=MEMORY",
+		"--set", "database.dsn=:memory:",
+	}, lookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.State.DSN != ":memory:" || result.Config.Database.DSN != ":memory:" {
+		t.Fatalf("explicit memory configuration was not preserved: %#v", result.Config)
+	}
+}
+
 func TestLoadRejectsUnknownFieldsWithStructuredHint(t *testing.T) {
 	path := writeConfig(t, `
 apiVersion: config.bqemu.dev/v1alpha1
@@ -93,32 +118,6 @@ func TestLoadRejectsMultipleDocumentsAndAmbiguousDuration(t *testing.T) {
 	}
 }
 
-func TestPublicAuthenticationConfigurationIsNotPartOfRuntimeContract(t *testing.T) {
-	if _, err := load([]string{"--set", "auth.mode=disabled"}, lookup(nil)); err == nil ||
-		!strings.Contains(err.Error(), `unknown configuration path "auth.mode"`) {
-		t.Fatalf("removed CLI authentication setting error = %v", err)
-	}
-
-	path := writeConfig(t, `
-apiVersion: config.bqemu.dev/v1alpha1
-kind: BQEMUConfig
-auth:
-  mode: disabled
-`)
-	if _, err := load([]string{"--config", path}, lookup(nil)); err == nil ||
-		!strings.Contains(err.Error(), "decode-yaml") {
-		t.Fatalf("removed YAML authentication setting error = %v", err)
-	}
-
-	result, err := load(nil, lookup(map[string]string{"BQEMU_AUTH_MODE": "static"}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(result.EffectiveYAML), "\nauth:") {
-		t.Fatalf("effective configuration retained public authentication: %s", result.EffectiveYAML)
-	}
-}
-
 func TestValidateProtectsRemoteAdminAndAppendBounds(t *testing.T) {
 	for name, override := range map[string][]string{
 		"remote-admin": {"--set", "admin.enabled=true", "--set", "admin.address=0.0.0.0:9051"},
@@ -145,13 +144,14 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"server.http.maxCompressedRequestBytes=1048576", "server.http.maxUncompressedRequestBytes=2097152",
 		"server.grpc.address=127.0.0.1:19060", "server.grpc.maxReceiveMessageBytes=2097152", "server.grpc.maxSendMessageBytes=3145728",
 		"server.tls.certFile=cert.pem", "server.tls.keyFile=key.pem",
+		"state.adapter=sqlite", "state.dsn=:memory:", "state.busyTimeout=2s", "state.journalMode=MEMORY", "state.synchronous=FULL",
 		"database.adapter=duckdb", "database.dsn=:memory:", "database.tempDirectory=/tmp",
 		"runtime.shutdownTimeout=9s", "runtime.serverDrainTimeout=4s", "runtime.storageCloseTimeout=4s",
 		"runtime.jobPollInterval=6ms", "runtime.readSessionTtl=7m", "runtime.cleanupInterval=8s",
-		"query.operationTimeout=45s", "query.compensationTimeout=10s", "query.anonymousResultTtl=12h",
+		"query.operationTimeout=45s", "query.compensationTimeout=10s", "query.anonymousResultTtl=12h", "query.materialization.projectId=result-project", "query.materialization.datasetId=results", "query.materialization.expiration=6h",
 		"tableData.operationTimeout=11s", "tableData.maxPageRows=1234",
 		"tableData.maxResponseBytes=1048576", "tableData.maxRowBytes=2097152",
-		"storage.read.enabled=true", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
+		"storage.read.enabled=true", "storage.read.stateOperationTimeout=3s", "storage.read.maxStreams=16", "storage.read.defaultStreamCount=4",
 		"storage.read.rowsPerResponse=100", "storage.read.maxResponseBytes=1048576", "storage.read.maxSchemaBytes=1048576",
 		"storage.read.maxSessions=8",
 		"storage.read.spillThresholdBytes=524288", "storage.read.maxRowBytes=524288",
@@ -166,7 +166,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"storage.write.maxStagedBytes=8388608", "storage.write.maxStagedBytesPerStream=4194304",
 		"storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
 		"storage.write.protocolModelVersion=test-storage-v1",
-		"load.enabled=true", "load.gcsEndpoint=http://fake-gcs:4443", "load.allowFileSources=true",
+		"load.gcsEndpoint=http://fake-gcs:4443",
 		"load.operationTimeout=30s", "load.maxObjects=20", "load.maxObjectBytes=1048576",
 		"load.maxTotalBytes=2097152", "load.maxMetadataBytes=65536", "load.maxListedObjects=30",
 		"logging.level=debug", "logging.format=text", "logging.unsafePayloads=true",
@@ -183,11 +183,45 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 	}
 }
 
+func TestStatePolicyLoadsFromEnvironmentAndRejectsInvalidValues(t *testing.T) {
+	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_STATE_ADAPTER":      "sqlite",
+		"BQEMU_STATE_DSN":          "file:test-state?mode=memory&cache=shared",
+		"BQEMU_STATE_BUSY_TIMEOUT": "3s",
+		"BQEMU_STATE_JOURNAL_MODE": "MEMORY",
+		"BQEMU_STATE_SYNCHRONOUS":  "FULL",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := result.Config.State
+	if state.Adapter != "sqlite" || state.DSN != "file:test-state?mode=memory&cache=shared" ||
+		state.BusyTimeout.Value() != 3*time.Second || state.JournalMode != "MEMORY" || state.Synchronous != "FULL" {
+		t.Fatalf("state policy = %#v", state)
+	}
+	if result.Config.Storage.Read.StateOperationTimeout.Value() != 5*time.Second {
+		t.Fatalf("SQLite busy timeout changed Storage Read operation timeout: %#v", result.Config.Storage.Read)
+	}
+
+	for _, override := range []string{
+		"state.adapter=memory",
+		"state.dsn=",
+		"state.busyTimeout=0s",
+		"state.journalMode=INVALID",
+		"state.synchronous=INVALID",
+	} {
+		if _, err := load([]string{"--set", override}, lookup(nil)); err == nil {
+			t.Fatalf("expected state validation failure for %s", override)
+		}
+	}
+}
+
 func TestQueryPolicyLoadsFromEnvironmentAndRejectsNonPositiveValues(t *testing.T) {
 	result, err := load(nil, lookup(map[string]string{
-		"BQEMU_QUERY_OPERATION_TIMEOUT":    "45s",
-		"BQEMU_QUERY_COMPENSATION_TIMEOUT": "10s",
-		"BQEMU_QUERY_ANONYMOUS_RESULT_TTL": "12h",
+		"BQEMU_QUERY_OPERATION_TIMEOUT":          "45s",
+		"BQEMU_QUERY_COMPENSATION_TIMEOUT":       "10s",
+		"BQEMU_QUERY_ANONYMOUS_RESULT_TTL":       "12h",
+		"BQEMU_QUERY_MATERIALIZATION_PROJECT_ID": "result-project", "BQEMU_QUERY_MATERIALIZATION_DATASET_ID": "results", "BQEMU_QUERY_MATERIALIZATION_EXPIRATION": "6h",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -197,9 +231,17 @@ func TestQueryPolicyLoadsFromEnvironmentAndRejectsNonPositiveValues(t *testing.T
 		result.Config.Query.AnonymousResultTTL.Value() != 12*time.Hour {
 		t.Fatalf("query policy = %#v", result.Config.Query)
 	}
+	if result.Config.Query.Materialization.ProjectID != "result-project" || result.Config.Query.Materialization.DatasetID != "results" || result.Config.Query.Materialization.Expiration.Value() != 6*time.Hour {
+		t.Fatalf("materialization=%#v", result.Config.Query.Materialization)
+	}
 	for _, path := range []string{"query.operationTimeout", "query.compensationTimeout", "query.anonymousResultTtl"} {
 		if _, err := load([]string{"--set", path + "=0s"}, lookup(nil)); err == nil {
 			t.Fatalf("expected positive-duration validation for %s", path)
+		}
+	}
+	for _, overrides := range [][]string{{"--set", "query.materialization.projectId=p"}, {"--set", "query.materialization.projectId=p", "--set", "query.materialization.datasetId=d", "--set", "query.materialization.expiration=0s"}} {
+		if _, err := load(overrides, lookup(nil)); err == nil {
+			t.Fatal("expected materialization configuration validation failure")
 		}
 	}
 }
@@ -293,6 +335,7 @@ func TestHTTPRequestByteLimitsMustBePositive(t *testing.T) {
 
 func TestStorageReadSnapshotByteLimitsLoadFromEnvironment(t *testing.T) {
 	result, err := load(nil, lookup(map[string]string{
+		"BQEMU_STORAGE_READ_STATE_OPERATION_TIMEOUT":  "7s",
 		"BQEMU_STORAGE_READ_MAX_SNAPSHOT_BYTES":       "268435456",
 		"BQEMU_STORAGE_READ_MAX_TOTAL_SNAPSHOT_BYTES": "1073741824",
 	}))
@@ -300,8 +343,14 @@ func TestStorageReadSnapshotByteLimitsLoadFromEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := result.Config.Storage.Read
-	if read.MaxSnapshotBytes != 256<<20 || read.MaxTotalSnapshotBytes != 1<<30 {
+	if read.StateOperationTimeout.Value() != 7*time.Second || read.MaxSnapshotBytes != 256<<20 || read.MaxTotalSnapshotBytes != 1<<30 {
 		t.Fatalf("unexpected Storage Read snapshot byte limits: %#v", read)
+	}
+	if result.Config.State.BusyTimeout.Value() != 5*time.Second {
+		t.Fatalf("Storage Read state timeout changed SQLite busy timeout: %#v", result.Config.State)
+	}
+	if !strings.Contains(string(result.EffectiveYAML), "stateOperationTimeout: 7s") {
+		t.Fatalf("effective YAML does not contain Storage Read state timeout: %s", result.EffectiveYAML)
 	}
 }
 
@@ -351,10 +400,8 @@ func TestStorageWriteByteLimitRelationshipsAreValidated(t *testing.T) {
 
 func TestLoadConfigurationRequiresExplicitEndpointAndPositiveBounds(t *testing.T) {
 	for name, overrides := range map[string][]string{
-		"missing-endpoint": {"--set", "load.enabled=true"},
-		"relative-endpoint": {
-			"--set", "load.enabled=true", "--set", "load.gcsEndpoint=fake-gcs:4443",
-		},
+		"relative-endpoint": {"--set", "load.gcsEndpoint=fake-gcs:4443"},
+		"empty-endpoint":    {"--set", "load.gcsEndpoint="},
 		"object-over-total": {
 			"--set", "load.maxObjectBytes=2048", "--set", "load.maxTotalBytes=1024",
 		},
@@ -378,6 +425,7 @@ func TestStorageReadConfigurationRejectsUnsafeOrInconsistentLimits(t *testing.T)
 			"--set", "storage.read.maxResponseBytes=1048576", "--set", "storage.read.maxRowBytes=1048577",
 		},
 		"negative-spill":      {"--set", "storage.read.spillThresholdBytes=-1"},
+		"zero-state-timeout":  {"--set", "storage.read.stateOperationTimeout=0s"},
 		"zero-snapshot-bytes": {"--set", "storage.read.maxSnapshotBytes=0"},
 		"snapshot-over-total": {
 			"--set", "storage.read.maxSnapshotBytes=2097152", "--set", "storage.read.maxTotalSnapshotBytes=1048576",

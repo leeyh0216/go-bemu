@@ -13,6 +13,7 @@ concurrency:
 
 env:
   BQEMU_IMAGE: ghcr.io/leeyh0216/go-bemu
+  BQEMU_CONSOLE_IMAGE: ghcr.io/leeyh0216/bqemu-console
 
 jobs:
   publish:
@@ -74,5 +75,41 @@ jobs:
           annotations: ${{ steps.metadata.outputs.annotations }}
           cache-from: type=gha,scope=go-bemu-ghcr
           cache-to: type=gha,mode=max,scope=go-bemu-ghcr
+          provenance: mode=max
+          sbom: true
+
+      - name: Generate console image metadata
+        id: console-metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ${{ env.BQEMU_CONSOLE_IMAGE }}
+          flavor: latest=auto
+          tags: |
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.title=bqemu-console
+            org.opencontainers.image.description=BigQuery emulator console frontend
+            org.opencontainers.image.source=https://github.com/leeyh0216/go-bemu
+            org.opencontainers.image.url=https://github.com/leeyh0216/go-bemu
+
+      - name: Build and publish console image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          pull: true
+          push: true
+          tags: ${{ steps.console-metadata.outputs.tags }}
+          labels: ${{ steps.console-metadata.outputs.labels }}
+          annotations: ${{ steps.console-metadata.outputs.annotations }}
+          cache-from: type=gha,scope=go-bemu-console-ghcr
+          cache-to: type=gha,mode=max,scope=go-bemu-console-ghcr
           provenance: mode=max
           sbom: true

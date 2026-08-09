@@ -26,7 +26,8 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
-	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
+	stateadapter "github.com/leeyh0216/go-bemu/internal/adapters/sqlite"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/admin"
 	"github.com/leeyh0216/go-bemu/internal/application"
@@ -86,6 +87,21 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := prepareDirectory(ctx, cfg.Database.TempDirectory); err != nil {
 		return err
 	}
+	stateStore, err := stateadapter.Open(ctx, stateadapter.Config{
+		DataSourceName: cfg.State.DSN,
+		BusyTimeout:    cfg.State.BusyTimeout.Value(),
+		JournalMode:    cfg.State.JournalMode,
+		Synchronous:    cfg.State.Synchronous,
+	})
+	if err != nil {
+		return fmt.Errorf("open BQEMU state store: %w", err)
+	}
+	closeState := true
+	defer func() {
+		if closeState {
+			_ = stateStore.Close()
+		}
+	}()
 	warehouse, err := duckdb.New(cfg.Database.DSN)
 	if err != nil {
 		return err
@@ -97,30 +113,49 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}()
 
-	catalogRepository := memory.NewCatalogRepository()
-	jobRepository := memory.NewJobRepository()
 	clock := system.Clock{}
-	catalogService := composeCatalogService(cfg, catalogRepository, warehouse, clock)
-	if _, err := catalogService.CreateProject(ctx, domain.Project{
-		ID: cfg.Defaults.ProjectID, FriendlyName: "BQEMU default project",
-	}); err != nil {
+	catalogService := composeCatalogService(cfg, stateStore, warehouse, clock)
+	if err := catalogService.RecoverCatalogState(ctx); err != nil {
+		return fmt.Errorf("recover canonical catalog state: %w", err)
+	}
+	if err := ensureDefaultProject(ctx, catalogService, cfg.Defaults.ProjectID); err != nil {
 		return fmt.Errorf("initialize default project: %w", err)
 	}
+	if err := bootstrapCatalog(ctx, catalogService, cfg.Bootstrap); err != nil {
+		return fmt.Errorf("bootstrap catalog: %w", err)
+	}
+	if err := verifyMaterializationTarget(ctx, catalogService, cfg.Query.Materialization); err != nil {
+		return fmt.Errorf("verify query materialization target: %w", err)
+	}
+	if _, err := stateStore.ReconcileInterruptedJobs(ctx, clock.Now()); err != nil {
+		return fmt.Errorf("reconcile interrupted jobs: %w", err)
+	}
+	ddlParser, err := googlesqladapter.NewParser()
+	if err != nil {
+		return fmt.Errorf("initialize GoogleSQL DDL parser: %w", err)
+	}
+	jobRepository := stateadapter.NewQueryJobRepository(stateStore)
 	queryService := application.NewQueryService(
 		jobRepository, warehouse, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
 		application.WithQueryAnalyzer(warehouse),
 		application.WithQueryMaterializer(warehouse),
 		application.WithQueryDestinationCatalog(catalogService),
+		application.WithQueryDDLParser(ddlParser), application.WithQueryParameterValidator(ddlParser),
+		application.WithQueryDDLExecutor(catalogService),
 		application.WithQueryOperationTimeout(cfg.Query.OperationTimeout.Value()),
 		application.WithQueryCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
 		application.WithAnonymousQueryTTL(cfg.Query.AnonymousResultTTL.Value()),
+		application.WithQueryMaterializationTarget(application.MaterializationTarget{ProjectID: cfg.Query.Materialization.ProjectID, DatasetID: cfg.Query.Materialization.DatasetID, TTL: cfg.Query.Materialization.Expiration.Value()}),
 	)
-	loadService, err := composeLoadJobs(cfg, catalogService, warehouse, clock, system.IDGenerator{})
+	loadService, err := composeLoadJobs(
+		cfg, stateadapter.NewLoadJobRepository(stateStore), catalogService,
+		warehouse, clock, system.IDGenerator{},
+	)
 	if err != nil {
 		return err
 	}
-	readRuntime, err := composeStorageRead(cfg, warehouse, catalogService, clock, system.IDGenerator{}, logger)
+	readRuntime, err := composeStorageRead(cfg, warehouse, catalogService, clock, system.IDGenerator{}, logger, stateStore)
 	if err != nil {
 		return fmt.Errorf("configure Storage Read: %w", err)
 	}
@@ -131,7 +166,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			_ = readRuntime.Close(closeContext)
 		}
 	}()
-	writeRuntime, err := composeStorageWrite(ctx, cfg, warehouse, clock, system.IDGenerator{}, logger)
+	writeRuntime, err := composeStorageWrite(ctx, cfg, warehouse, catalogService, stateStore, clock, system.IDGenerator{}, logger)
 	if err != nil {
 		return fmt.Errorf("configure Storage Write: %w", err)
 	}
@@ -147,16 +182,18 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	restOptions = append(restOptions, rest.WithRequestBodyLimits(
 		cfg.Server.HTTP.MaxCompressedRequestBytes, cfg.Server.HTTP.MaxUncompressedRequestBytes,
 	))
+	restOptions = append(restOptions, rest.WithMediaUploadMaxBytes(cfg.Load.MaxObjectBytes))
 	restOptions = append(restOptions, rest.WithTableDataAPI(catalogService))
 	if cfg.UI.Enabled {
 		restOptions = append(restOptions, rest.WithConsoleDirectory(cfg.UI.Directory))
 	}
+	readiness := compositeHealthChecker{stateStore, warehouse}
 	var restServer *rest.Server
 	if loadService == nil {
-		restServer = rest.NewServer(catalogService, queryService, warehouse, cfg.Server.HTTP.PublicURL, restOptions...)
+		restServer = rest.NewServer(catalogService, queryService, readiness, cfg.Server.HTTP.PublicURL, restOptions...)
 	} else {
 		restServer = rest.NewServerWithLoadJobs(
-			catalogService, queryService, loadService, warehouse, cfg.Server.HTTP.PublicURL, restOptions...,
+			catalogService, queryService, loadService, readiness, cfg.Server.HTTP.PublicURL, restOptions...,
 		)
 	}
 	publicHTTP := &http.Server{
@@ -285,6 +322,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	// resources to OS teardown rather than crossing the still-active boundary.
 	if queryCloseErr != nil {
 		closeWarehouse = false
+		closeState = false
 	}
 	if servingFailure != nil {
 		return errors.Join(servingFailure, shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
@@ -292,21 +330,116 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	return errors.Join(shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
 }
 
+func ensureDefaultProject(ctx context.Context, service *application.CatalogService, projectID string) error {
+	if _, err := service.GetProject(ctx, projectID); err == nil {
+		return nil
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+	_, err := service.CreateProject(ctx, domain.Project{
+		ID: projectID, FriendlyName: "BQEMU default project",
+	})
+	return err
+}
+
+func bootstrapCatalog(ctx context.Context, service *application.CatalogService, bootstrap config.BootstrapConfig) error {
+	for _, project := range bootstrap.Projects {
+		if _, err := service.GetProject(ctx, project.ID); errors.Is(err, domain.ErrNotFound) {
+			if _, createErr := service.CreateProject(ctx, domain.Project{ID: project.ID}); createErr != nil {
+				return createErr
+			}
+		} else if err != nil {
+			return err
+		}
+		for _, dataset := range project.Datasets {
+			existing, err := service.GetDataset(ctx, project.ID, dataset.ID)
+			if errors.Is(err, domain.ErrNotFound) {
+				_, err = service.CreateDataset(ctx, domain.Dataset{ProjectID: project.ID, ID: dataset.ID, Location: dataset.Location, Description: dataset.Description, Labels: dataset.Labels, DefaultTableExpirationMs: dataset.DefaultTableExpirationMs, DefaultPartitionExpirationMs: dataset.DefaultPartitionExpirationMs})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !strings.EqualFold(existing.Location, dataset.Location) || existing.Description != dataset.Description || !equalStringMap(existing.Labels, dataset.Labels) || !equalInt64Pointer(existing.DefaultTableExpirationMs, dataset.DefaultTableExpirationMs) || !equalInt64Pointer(existing.DefaultPartitionExpirationMs, dataset.DefaultPartitionExpirationMs) {
+				return fmt.Errorf("%w: bootstrap dataset %s/%s declaration differs", domain.ErrConflict, project.ID, dataset.ID)
+			}
+		}
+	}
+	return nil
+}
+
+// verifyMaterializationTarget makes the configured result dataset part of the
+// startup contract. bootstrapCatalog runs first, so a declared bootstrap
+// dataset can satisfy the target on a fresh process and after a SQLite restart.
+// Per-query location matching remains in QueryService because source datasets
+// can determine a query location that is different from the server default.
+func verifyMaterializationTarget(ctx context.Context, service *application.CatalogService, target config.MaterializationConfig) error {
+	if target.ProjectID == "" {
+		return nil
+	}
+	if _, err := service.GetDataset(ctx, target.ProjectID, target.DatasetID); err != nil {
+		return fmt.Errorf("configured dataset %s/%s: %w", target.ProjectID, target.DatasetID, err)
+	}
+	return nil
+}
+
+func equalStringMap(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func equalInt64Pointer(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
 type catalogWarehouse interface {
 	ports.WarehouseAdmin
 	ports.TableDataReader
+	ports.TableDataWriter
+}
+
+type compositeHealthChecker []ports.HealthChecker
+
+func (checks compositeHealthChecker) Ping(ctx context.Context) error {
+	for index, check := range checks {
+		if check == nil {
+			return fmt.Errorf("readiness dependency %d is not configured", index)
+		}
+		if err := check.Ping(ctx); err != nil {
+			return fmt.Errorf("readiness dependency %d: %w", index, err)
+		}
+	}
+	return nil
 }
 
 func composeCatalogService(cfg config.Config, repository ports.CatalogRepository, warehouse catalogWarehouse, clock ports.Clock) *application.CatalogService {
-	return application.NewCatalogService(
-		repository, warehouse, clock, application.WithDefaultLocation(cfg.Defaults.Location),
+	options := []application.CatalogOption{
+		application.WithDefaultLocation(cfg.Defaults.Location),
 		application.WithCatalogCompensationTimeout(cfg.Query.CompensationTimeout.Value()),
 		application.WithTableDataReader(warehouse),
+		application.WithTableDataWriter(warehouse),
 		application.WithTableDataOperationTimeout(cfg.TableData.OperationTimeout.Value()),
 		application.WithMaxTableDataPageRows(cfg.TableData.MaxPageRows),
 		application.WithMaxTableDataResponseBytes(cfg.TableData.MaxResponseBytes),
 		application.WithMaxTableDataRowBytes(cfg.TableData.MaxRowBytes),
-	)
+	}
+	if ledger, ok := repository.(ports.TableDataInsertIDLedger); ok {
+		options = append(options, application.WithTableDataInsertIDLedger(ledger))
+	}
+	return application.NewCatalogService(repository, warehouse, clock, options...)
 }
 
 type runtimeCloser interface {

@@ -16,8 +16,8 @@ func TestSparkCapabilityMatrixIsCompleteAndClassified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matrices) != 2 {
-		t.Fatalf("matrix count = %d, want DSv1 and raw DSv2", len(matrices))
+	if len(matrices) != 3 {
+		t.Fatalf("matrix count = %d, want DSv1, raw DSv2, and DSv2 overlay", len(matrices))
 	}
 	matrix := matrixByArtifactVariant(t, matrices, "dsv1-with-dependencies-2.12")
 
@@ -125,7 +125,7 @@ func TestSparkEvidenceMatchesCommittedBytes(t *testing.T) {
 		for _, entry := range matrix.Entries {
 			for _, evidence := range entry.Evidence {
 				clean := filepath.ToSlash(filepath.Clean(evidence.Ref))
-				allowedLock := clean == "tests/spark/artifacts.lock.json" || clean == "tests/spark/artifacts-dsv2.lock.json"
+				allowedLock := clean == "tests/spark/artifacts.lock.json" || clean == "tests/spark/artifacts-dsv2.lock.json" || clean == "tests/spark/artifacts-dsv2-overlay.lock.json"
 				if strings.HasPrefix(clean, "../") || (!strings.HasPrefix(clean, "tests/spark/evidence/") && !allowedLock) {
 					t.Fatalf("%s evidence escapes reviewed Spark paths: %q", entry.ID, evidence.Ref)
 				}
@@ -148,8 +148,9 @@ func TestSparkArtifactVariantsRemainDistinct(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"dsv1-with-dependencies-2.12": "spark-bigquery-with-dependencies_2.12",
-		"dsv2-spark-3.5-raw":          "spark-3.5-bigquery-raw",
+		"dsv1-with-dependencies-2.12":                 "spark-bigquery-with-dependencies_2.12",
+		"dsv2-spark-3.5-raw":                          "spark-3.5-bigquery-raw",
+		"dsv2-spark-3.5-streaming-visibility-overlay": "spark-3.5-bigquery-streaming-visibility-overlay",
 	}
 	for _, matrix := range matrices {
 		if want[matrix.ArtifactVariant] != matrix.Connector.Name {
@@ -202,6 +203,47 @@ func TestRawDSv2MatrixCoversExactAndAtLeastOnceStreaming(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("raw DSv2 matrix is missing rows: %v", sortedKeysString(want))
+	}
+}
+
+func TestDSv2OverlayMatrixSeparatesNormalPathEvidenceFromStrictGaps(t *testing.T) {
+	matrices, err := SparkCapabilityMatrices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := matrixByArtifactVariant(t, matrices, "dsv2-spark-3.5-streaming-visibility-overlay")
+	wantGaps := map[string]string{
+		"SBQ-DSV2-OVERLAY-SAME-EPOCH-REPLAY-V1":         "write-streaming-epoch-replay",
+		"SBQ-DSV2-OVERLAY-CHECKPOINT-FAILURE-REPLAY-V1": "write-streaming-checkpoint-recovery",
+		"SBQ-DSV2-OVERLAY-PARTIAL-ABORT-V1":             "write-streaming-partial-abort",
+		"SBQ-DSV2-OVERLAY-NEW-TABLE-ABORT-V1":           "write-streaming-new-table-abort",
+	}
+	verified := make(map[string]bool)
+	for _, entry := range overlay.Entries {
+		switch entry.ID {
+		case "SBQ-DSV2-OVERLAY-ARTIFACT-GUARD-V1":
+			if entry.State != MatrixVerified || entry.Flow != "artifact-bootstrap" || len(entry.Evidence) != 2 {
+				t.Fatalf("overlay artifact guard is not evidence-bound: %#v", entry)
+			}
+			verified[entry.ID] = true
+		case "SBQ-DSV2-OVERLAY-STREAM-NORMAL-APPEND-V1":
+			if entry.State != MatrixVerified || entry.Flow != "write-structured-streaming" ||
+				entry.Axes.Delivery != "normal-path-only" || len(entry.Evidence) != 2 ||
+				!strings.Contains(entry.Limitation, "not an exactly-once claim") {
+				t.Fatalf("overlay normal path is overclaimed or lacks evidence: %#v", entry)
+			}
+			verified[entry.ID] = true
+		default:
+			flow, ok := wantGaps[entry.ID]
+			if !ok || entry.State != MatrixGap || entry.Flow != flow ||
+				entry.IssueRef != "dsv2-streaming" || entry.Limitation == "" || len(entry.Evidence) != 0 {
+				t.Fatalf("overlay replay/abort gap is not strict: %#v", entry)
+			}
+			delete(wantGaps, entry.ID)
+		}
+	}
+	if len(verified) != 2 || len(wantGaps) != 0 {
+		t.Fatalf("overlay matrix inventory mismatch: verified=%v missing_gaps=%v", verified, sortedKeysString(wantGaps))
 	}
 }
 

@@ -3,12 +3,17 @@ package main
 import (
 	"io"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
+	stateadapter "github.com/leeyh0216/go-bemu/internal/adapters/sqlite"
 	"github.com/leeyh0216/go-bemu/internal/adapters/system"
 	"github.com/leeyh0216/go-bemu/internal/config"
+	readdomain "github.com/leeyh0216/go-bemu/internal/storageread/domain"
 )
 
 func TestComposeStorageReadSupportsExplicitDisableAndCleanClose(t *testing.T) {
@@ -31,9 +36,31 @@ func TestComposeStorageReadSupportsExplicitDisableAndCleanClose(t *testing.T) {
 	}
 
 	cfg.Storage.Read.Enabled = true
-	runtime, err := composeStorageRead(cfg, warehouse, resolver, system.Clock{}, system.IDGenerator{}, logger)
+	stateStore, err := stateadapter.Open(ctx, stateadapter.DefaultConfig(filepath.Join(t.TempDir(), "state.sqlite")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stateStore.Close() })
+	createdAt := time.Now().UTC().Add(-time.Minute)
+	staleSession := "projects/reader/locations/US/sessions/stale"
+	staleStream := staleSession + "/streams/0"
+	if err := stateStore.CreateSession(ctx, readdomain.SessionRecord{
+		Name: staleSession, Table: "projects/data/datasets/analytics/tables/events",
+		Format: readdomain.FormatArrow, Streams: []readdomain.Stream{{Name: staleStream}},
+		RowRestrictionDigest: "sha256:" + strings.Repeat("a", 64),
+		SchemaFingerprint:    "sha256:" + strings.Repeat("b", 64),
+		CreatedAt:            createdAt, ExpireTime: createdAt.Add(time.Hour),
+		Lifecycle: readdomain.SessionActive, LifecycleUpdatedAt: createdAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := composeStorageRead(cfg, warehouse, resolver, system.Clock{}, system.IDGenerator{}, logger, stateStore)
 	if err != nil || runtime.Service == nil {
 		t.Fatalf("enabled Storage Read = %#v, %v", runtime, err)
+	}
+	persisted, err := stateStore.GetStream(ctx, staleStream)
+	if err != nil || persisted.Lifecycle != readdomain.SessionUnavailable {
+		t.Fatalf("startup reconciliation = %#v, %v", persisted, err)
 	}
 	if err := runtime.Close(ctx); err != nil {
 		t.Fatal(err)

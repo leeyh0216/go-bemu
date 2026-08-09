@@ -77,6 +77,28 @@ repository checks before committing. Generated manifests, documentation, and
 evidence belong in the same commit as their source. CI rejects stale generated
 artifacts.
 
+<!-- section: integration-contract -->
+## Integration Contract Annotations
+
+Each externally executed Python integration operation has one literal source
+annotation, for example:
+
+```python
+# bqemu:operation bigquery.jobs.query.parameters scenario=query-parameters
+```
+
+Register that exact operation ID in the scenario selector in
+`cmd/integration-contract/main.go`, then run:
+
+```bash
+make integration-contract-check
+```
+
+The check regenerates `contract/generated/integration-consumer-contract.json`
+and fails on duplicate, unknown, mismatched, or unselected operations. Do not
+add a second hand-maintained coverage JSON; the generated manifest is the
+reviewable source-to-scenario record.
+
 <!-- section: evolution-pipeline -->
 ## Compatibility Evolution Pipeline
 

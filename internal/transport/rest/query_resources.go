@@ -36,6 +36,16 @@ type queryRequest struct {
 	MaximumBytesBilled json.RawMessage    `json:"maximumBytesBilled,omitempty"`
 }
 
+type queryParameterWire struct {
+	Name          string `json:"name,omitempty"`
+	ParameterType struct {
+		Type string `json:"type"`
+	} `json:"parameterType"`
+	ParameterValue struct {
+		Value string `json:"value"`
+	} `json:"parameterValue"`
+}
+
 // DataFormatOptions is emitted by google-cloud-bigquery's query_and_wait
 // helper. The current query row encoder has no timestamp-specific branch, so
 // this option is accepted as wire-compatible metadata and covered by the type
@@ -58,17 +68,17 @@ type jobStatusResource struct {
 }
 
 type jobConfigurationQuery struct {
-	Query              string            `json:"query"`
-	UseLegacySQL       bool              `json:"useLegacySql"`
-	DefaultDataset     *datasetReference `json:"defaultDataset,omitempty"`
-	DestinationTable   *tableReference   `json:"destinationTable,omitempty"`
-	WriteDisposition   string            `json:"writeDisposition,omitempty"`
-	CreateDisposition  string            `json:"createDisposition,omitempty"`
-	Priority           string            `json:"priority,omitempty"`
-	ParameterMode      json.RawMessage   `json:"parameterMode,omitempty"`
-	QueryParameters    json.RawMessage   `json:"queryParameters,omitempty"`
-	UseQueryCache      json.RawMessage   `json:"useQueryCache,omitempty"`
-	MaximumBytesBilled json.RawMessage   `json:"maximumBytesBilled,omitempty"`
+	Query              string               `json:"query"`
+	UseLegacySQL       bool                 `json:"useLegacySql"`
+	DefaultDataset     *datasetReference    `json:"defaultDataset,omitempty"`
+	DestinationTable   *tableReference      `json:"destinationTable,omitempty"`
+	WriteDisposition   string               `json:"writeDisposition,omitempty"`
+	CreateDisposition  string               `json:"createDisposition,omitempty"`
+	Priority           string               `json:"priority,omitempty"`
+	ParameterMode      string               `json:"parameterMode,omitempty"`
+	QueryParameters    []queryParameterWire `json:"queryParameters,omitempty"`
+	UseQueryCache      json.RawMessage      `json:"useQueryCache,omitempty"`
+	MaximumBytesBilled json.RawMessage      `json:"maximumBytesBilled,omitempty"`
 }
 
 type jobConfiguration struct {
@@ -132,6 +142,10 @@ func jobFromDomain(job *domain.Job) jobResource {
 		WriteDisposition: string(query.WriteDisposition), CreateDisposition: string(query.CreateDisposition),
 		Priority: string(query.Priority),
 	}
+	if query.ParameterMode != "" {
+		wireQuery.ParameterMode = string(query.ParameterMode)
+		wireQuery.QueryParameters = queryParametersToWire(query.QueryParameters)
+	}
 	if query.DefaultDataset != "" {
 		projectID := query.DefaultProjectID
 		if projectID == "" {
@@ -182,6 +196,24 @@ func jobFromDomain(job *domain.Job) jobResource {
 		resource.Status.Errors = []errorProto{jobError}
 	}
 	return resource
+}
+
+func queryParametersToWire(parameters []domain.QueryParameter) []queryParameterWire {
+	result := make([]queryParameterWire, len(parameters))
+	for i, parameter := range parameters {
+		result[i].Name = parameter.Name
+		result[i].ParameterType.Type = parameter.Type
+		result[i].ParameterValue.Value = parameter.Value
+	}
+	return result
+}
+
+func queryParametersFromWire(mode string, parameters []queryParameterWire) (domain.QueryParameterMode, []domain.QueryParameter) {
+	result := make([]domain.QueryParameter, len(parameters))
+	for i, parameter := range parameters {
+		result[i] = domain.QueryParameter{Name: parameter.Name, Type: parameter.ParameterType.Type, Value: parameter.ParameterValue.Value}
+	}
+	return domain.QueryParameterMode(mode), result
 }
 
 func statementType(sql string) string {
@@ -246,7 +278,7 @@ func queryResponseFromDomain(job *domain.Job, startIndex, endIndex int, nextPage
 		}
 		response.Rows = append(response.Rows, tableRow{Fields: cells})
 	}
-	response.TotalRows = strconv.Itoa(len(job.Result.Rows))
+	response.TotalRows = strconv.Itoa(queryResultRowCount(job.Result))
 	response.PageToken = nextPageToken
 	if job.Result.AffectedRows != 0 {
 		response.NumDMLAffectedRows = strconv.FormatInt(job.Result.AffectedRows, 10)

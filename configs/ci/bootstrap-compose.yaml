@@ -1,0 +1,18 @@
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+
+defaults:
+  projectId: local-project
+  location: US
+
+# The Compose smoke suite restarts the same named volume and verifies that
+# these resources remain present without a duplicate bootstrap mutation.
+bootstrap:
+  projects:
+    - id: bootstrap-project
+      datasets:
+        - id: bootstrap_us
+          location: US
+          description: Compose restart fixture
+          labels:
+            owner: ci

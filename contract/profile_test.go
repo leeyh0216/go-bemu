@@ -38,6 +38,44 @@ func TestRegistryResolvesDSv2ByArtifactIdentity(t *testing.T) {
 	); ok {
 		t.Fatal("unqualified DSv2 coordinate must not silently select an artifact profile")
 	}
+	overlay, ok := registry.ForConsumerVersion(
+		"connector-artifact", "spark-3.5-bigquery-streaming-visibility-overlay", "0.44.2",
+	)
+	if !ok || overlay.ID != "spark-bigquery-connector-dsv2-overlay-0.44.2" {
+		t.Fatalf("DSv2 overlay identity resolved to %#v, %t", overlay, ok)
+	}
+}
+
+func TestDSv2OverlayProfileClaimsOnlyNormalPathVisibility(t *testing.T) {
+	profile, ok := DefaultRegistry().ForConsumerVersion(
+		"connector-artifact", "spark-3.5-bigquery-streaming-visibility-overlay", "0.44.2",
+	)
+	if !ok {
+		t.Fatal("DSv2 overlay profile is missing")
+	}
+	if profile.Capabilities["dsv2.streaming.normal_path_visibility"] != CapabilityVerified ||
+		profile.Capabilities["dsv2.streaming.exactly_once"] != CapabilityPlanned ||
+		profile.Capabilities["dsv2.streaming.abort_recovery"] != CapabilityPlanned {
+		t.Fatalf("overlay delivery claims are too broad: %#v", profile.Capabilities)
+	}
+	flow := profile.Flows["dsv2-direct-streaming-overlay-normal-path"]
+	wantStages := []string{
+		"destination_metadata", "create_pending_stream", "append_rows", "finalize_stream", "batch_commit_epoch",
+	}
+	if len(flow) != len(wantStages) {
+		t.Fatalf("overlay flow has %d calls, want %d", len(flow), len(wantStages))
+	}
+	for index, call := range flow {
+		if call.Stage != wantStages[index] {
+			t.Fatalf("overlay stage[%d]=%q, want %q", index, call.Stage, wantStages[index])
+		}
+		if strings.HasSuffix(call.Target, "/GetWriteStream") {
+			t.Fatal("exact PENDING streams must not introduce GetWriteStream")
+		}
+	}
+	if !strings.HasSuffix(flow[len(flow)-1].Target, "/BatchCommitWriteStreams") {
+		t.Fatal("overlay normal-path flow must terminate in one epoch commit")
+	}
 }
 
 func TestRegistryResolvesPinnedPythonClientVersion(t *testing.T) {

@@ -157,6 +157,8 @@ func copyFields(fields []domain.Field) []domain.Field {
 	clone := make([]domain.Field, len(fields))
 	for index, field := range fields {
 		clone[index] = field
+		clone[index].Precision = copyInt64Pointer(field.Precision)
+		clone[index].Scale = copyInt64Pointer(field.Scale)
 		clone[index].Fields = copyFields(field.Fields)
 	}
 	return clone

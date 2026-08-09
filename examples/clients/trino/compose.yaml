@@ -1,0 +1,10 @@
+services:
+  trino-client:
+    image: trinodb/trino:476
+    depends_on:
+      bqemu:
+        condition: service_healthy
+    environment:
+      BQEMU_REST_ENDPOINT: http://bqemu:9050
+      BQEMU_STORAGE_GRPC_ENDPOINT: bqemu:9060
+    entrypoint: ["/bin/sh", "-c", "sleep infinity"]

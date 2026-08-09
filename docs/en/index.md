@@ -5,11 +5,31 @@
 
 # Documentation Index
 
+<!-- section: start-here -->
+## Start Here
+
+- [Overview](../../README.md): supported local BigQuery API boundary and the
+  shortest path to a running emulator.
+- [Getting started](../../README.md#start-with-docker-compose): start the service, check
+  readiness, and run a first query.
+- [Execution locations and clients](client-interactions.md): host Compose,
+  Dev Container/same-network endpoints, TLS trust, fake-GCS access, and
+  executable labs for Python, Spark, Trino, AWS, and `bq`.
+- [Configuration](operations.md#configuration-contract): precedence, complete runtime
+  behavior, and operations-oriented configuration guidance.
+- [Compatibility](compatibility.md): supported behavior, explicit gaps, and
+  known limits before selecting an API path.
+- [Operations](operations.md): health, shutdown, containers, and diagnostics.
+
 <!-- section: guides -->
-## Guides
+## Maintainer Guides
 
 - [Architecture](architecture.md): dependency rules, runtime composition,
   persistence boundaries, and replacement points.
+- [Storage engine adapter implementation](storage-engine-adapter.md): canonical
+  state ownership, engine ports, schema planning, recovery, and conformance.
+- [GoogleSQL boundary and support](google-sql-boundary.md): exact lexical and
+  connector translations, semantic DDL, and current unsupported forms.
 - [BigQuery and connector internals](bigquery-internals.md): REST jobs, Storage
   Read/Write, indirect load, MERGE, types, and authentication flows.
 - [Compatibility](compatibility.md): implemented, partial, registered, planned,
@@ -22,6 +42,11 @@
   onboarding, drift diagnosis, and release runbooks.
 - [Configuration and operations](operations.md): precedence, container hardening,
   health/shutdown, test timeouts, and diagnostics endpoint design.
+- [Local client credentials and TLS](client-credentials-and-tls.md): generate
+  service-account, authorized-user, and WIF files; run the loopback token issuer;
+  and configure client trust.
+- [Client interaction guide](client-interactions.md): endpoint, API surface,
+  and executable-evidence map for Python, Spark, Trino, AWS, and `bq`.
 - [Architecture decisions](adr/): decisions that constrain implementation.
 
 <!-- section: reading-contract -->

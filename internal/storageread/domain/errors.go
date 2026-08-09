@@ -21,6 +21,7 @@ const (
 	ErrorFailedPrecondition ErrorCode = "FAILED_PRECONDITION"
 	ErrorResourceExhausted  ErrorCode = "RESOURCE_EXHAUSTED"
 	ErrorUnimplemented      ErrorCode = "UNIMPLEMENTED"
+	ErrorUnavailable        ErrorCode = "UNAVAILABLE"
 	ErrorInternal           ErrorCode = "INTERNAL"
 )
 

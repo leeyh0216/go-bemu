@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,7 +22,37 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	loadApplication "github.com/leeyh0216/go-bemu/internal/loadjob/application"
+	loadDomain "github.com/leeyh0216/go-bemu/internal/loadjob/domain"
+	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 )
+
+// fixtureObjectStore is test-only. It models immutable gs:// objects without
+// reintroducing the product file:// adapter into REST contract tests.
+type fixtureObjectStore struct{ files map[string]string }
+
+func (s fixtureObjectStore) Get(_ context.Context, uri string) (loadports.ObjectInfo, error) {
+	path, ok := s.files[uri]
+	if !ok {
+		return loadports.ObjectInfo{}, loadDomain.ErrNotFound
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return loadports.ObjectInfo{}, err
+	}
+	return loadports.ObjectInfo{URI: uri, Size: info.Size(), Generation: "fixture"}, nil
+}
+
+func (s fixtureObjectStore) List(context.Context, string) ([]loadports.ObjectInfo, error) {
+	return nil, loadDomain.ErrUnsupported
+}
+
+func (s fixtureObjectStore) Open(_ context.Context, object loadports.ObjectInfo) (io.ReadCloser, error) {
+	path, ok := s.files[object.URI]
+	if !ok {
+		return nil, loadDomain.ErrNotFound
+	}
+	return os.Open(path)
+}
 
 func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	ctx := context.Background()
@@ -87,7 +118,7 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 
 	body := fmt.Sprintf(`{
 		"jobReference":{"projectId":"test-project","jobId":"load-one","location":"US"},
-		"configuration":{"load":{
+		"configuration":{"labels":{"consumer":"python"},"load":{
 			"sourceUris":[%q],
 			"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},
 			"sourceFormat":"PARQUET","writeDisposition":"WRITE_APPEND",
@@ -100,6 +131,9 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	status := job["status"].(map[string]any)
 	if status["errorResult"] != nil {
 		t.Fatalf("load job failed: %#v", job)
+	}
+	if labels := job["configuration"].(map[string]any)["labels"].(map[string]any); labels["consumer"] != "python" {
+		t.Fatalf("load job labels did not round-trip: %#v", job)
 	}
 	statistics := job["statistics"].(map[string]any)["load"].(map[string]any)
 	if statistics["inputFiles"] != "1" || statistics["inputFileBytes"] != fmt.Sprint(len(parquetPayload)) ||
@@ -138,7 +172,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	_, _ = catalog.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: "events", Schema: []domain.Field{{Name: "id", Type: "INT64"}}})
 	config := loadApplication.DefaultConfig()
 	config.TempDirectory = t.TempDir()
-	loads, err := loadApplication.NewService(loadApplication.NewMemoryJobRepository(), objectstore.FileSystem{}, NewLoadTableCatalog(catalog), warehouse, clock, ids, config)
+	loads, err := loadApplication.NewService(loadApplication.NewMemoryJobRepository(), fixtureObjectStore{}, NewLoadTableCatalog(catalog), warehouse, clock, ids, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +180,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	server := httptest.NewServer(NewServerWithLoadJobs(catalog, queries, loads, warehouse, "").Handler())
 	t.Cleanup(server.Close)
 
-	body := `{"jobReference":{"jobId":"avro-gap","location":"US"},"configuration":{"load":{"sourceUris":["file:///does-not-exist.avro"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"AVRO"}}}`
+	body := `{"jobReference":{"jobId":"avro-gap","location":"US"},"configuration":{"load":{"sourceUris":["gs://bucket/does-not-exist.avro"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"AVRO"}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", body, http.StatusOK)
 	job := waitForRESTLoad(t, server.URL, "avro-gap")
 	errorResult := job["status"].(map[string]any)["errorResult"].(map[string]any)
@@ -157,7 +191,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 		t.Fatalf("failed load exposed successful outputBytes: %#v", job)
 	}
 
-	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["file:///does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enableListInference":true}}}}`
+	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["gs://bucket/does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enumAsString":true}}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", activeOption, http.StatusOK)
 	job = waitForRESTLoad(t, server.URL, "parquet-option-gap")
 	errorResult = job["status"].(map[string]any)["errorResult"].(map[string]any)
@@ -165,19 +199,88 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 		t.Fatalf("active Parquet option did not remain an explicit gap: %#v", job)
 	}
 
-	malformedOption := `{"configuration":{"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":[]}}}`
+	malformedOption := `{"configuration":{"load":{"sourceUris":["gs://bucket/x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":[]}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", malformedOption, http.StatusBadRequest)
 
-	both := `{"configuration":{"query":{"query":"SELECT 1"},"load":{"sourceUris":["file:///x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
+	both := `{"configuration":{"query":{"query":"SELECT 1"},"load":{"sourceUris":["gs://bucket/x"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET"}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", both, http.StatusBadRequest)
+}
+
+func TestCombinedJobsAPICreatesParquetDestinationFromExplicitSchema(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := duckdb.New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	clock := testClock{value: time.Now().UTC()}
+	ids := &testIDs{}
+	catalog := application.NewCatalogService(memory.NewCatalogRepository(), warehouse, clock)
+	if _, err := catalog.CreateProject(ctx, domain.Project{ID: "test-project"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.CreateDataset(ctx, domain.Dataset{ProjectID: "test-project", ID: "analytics", Location: "US"}); err != nil {
+		t.Fatal(err)
+	}
+	config := loadApplication.DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	config.OperationTimeout = 5 * time.Second
+	parquet := createRESTParquet(t, "SELECT 7::BIGINT AS id, 'new'::VARCHAR AS name")
+	source := "gs://fixture/created.parquet"
+	objects := fixtureObjectStore{files: map[string]string{source: parquet}}
+	loads, err := loadApplication.NewService(loadApplication.NewMemoryJobRepository(), objects, NewLoadTableCatalog(catalog), warehouse, clock, ids, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := application.NewQueryService(memory.NewJobRepository(), warehouse, clock, ids)
+	server := httptest.NewServer(NewServerWithLoadJobs(catalog, queries, loads, warehouse, "").Handler())
+	t.Cleanup(server.Close)
+	body := fmt.Sprintf(`{"jobReference":{"jobId":"create-target","location":"US"},"configuration":{"load":{"sourceUris":[%q],"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"created"},"sourceFormat":"PARQUET","createDisposition":"CREATE_IF_NEEDED","schema":{"fields":[{"name":"id","type":"INT64","mode":"NULLABLE"},{"name":"name","type":"STRING","mode":"NULLABLE"}]}}}}`, source)
+	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", body, http.StatusOK)
+	job := waitForRESTLoad(t, server.URL, "create-target")
+	if job["status"].(map[string]any)["errorResult"] != nil {
+		t.Fatalf("job=%#v", job)
+	}
+	table, err := catalog.GetTable(ctx, "test-project", "analytics", "created")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Schema) != 2 || table.Schema[0].Name != "id" {
+		t.Fatalf("table=%+v", table)
+	}
+	result := restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/queries", `{"query":"SELECT id, name FROM `+"`test-project.analytics.created`"+`","useLegacySql":false}`, http.StatusOK)
+	if result["totalRows"] != "1" {
+		t.Fatalf("result=%#v", result)
+	}
+	updatedParquet := createRESTParquet(t, "SELECT 8::BIGINT AS id, 'updated'::VARCHAR AS name, 'added by load'::VARCHAR AS note")
+	updatedSource := "gs://fixture/updated.parquet"
+	objects.files[updatedSource] = updatedParquet
+	updatedBody := fmt.Sprintf(`{"jobReference":{"jobId":"add-load-field","location":"US"},"configuration":{"load":{"sourceUris":[%q],"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"created"},"sourceFormat":"PARQUET","writeDisposition":"WRITE_APPEND","schemaUpdateOptions":["ALLOW_FIELD_ADDITION"],"schema":{"fields":[{"name":"id","type":"INT64","mode":"NULLABLE"},{"name":"name","type":"STRING","mode":"NULLABLE"},{"name":"note","type":"STRING","mode":"NULLABLE"}]}}}}`, updatedSource)
+	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", updatedBody, http.StatusOK)
+	updatedJob := waitForRESTLoad(t, server.URL, "add-load-field")
+	if updatedJob["status"].(map[string]any)["errorResult"] != nil {
+		t.Fatalf("updated job=%#v", updatedJob)
+	}
+	table, err = catalog.GetTable(ctx, "test-project", "analytics", "created")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Schema) != 3 || table.Schema[2].Name != "note" {
+		t.Fatalf("updated table=%+v", table)
+	}
+	result = restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/queries", `{"query":"SELECT note FROM `+"`test-project.analytics.created`"+` WHERE id = 8","useLegacySql":false}`, http.StatusOK)
+	if result["totalRows"] != "1" || result["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "added by load" {
+		t.Fatalf("updated result=%#v", result)
+	}
 }
 
 func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
 	accepted := map[string]string{
-		"absent":          `{}`,
-		"spark empty":     `{"parquetOptions":{}}`,
-		"explicit false":  `{"parquetOptions":{"enableListInference":false,"enumAsString":false}}`,
-		"bq cli defaults": `{"decimalTargetTypes":null,"nullMarkers":[],"projectionFields":[],"timestampTargetPrecision":[]}`,
+		"absent":                `{}`,
+		"spark empty":           `{"parquetOptions":{}}`,
+		"explicit false":        `{"parquetOptions":{"enableListInference":false,"enumAsString":false}}`,
+		"python list inference": `{"parquetOptions":{"enableListInference":true}}`,
+		"bq cli defaults":       `{"decimalTargetTypes":null,"nullMarkers":[],"projectionFields":[],"timestampTargetPrecision":[]}`,
 	}
 	for name, payload := range accepted {
 		t.Run("accept "+name, func(t *testing.T) {
@@ -200,7 +303,6 @@ func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
 		field   string
 	}{
 		"null parquet object":  {payload: `{"parquetOptions":null}`, field: "parquetOptions:"},
-		"list inference":       {payload: `{"parquetOptions":{"enableListInference":true}}`, field: "parquetOptions.enableListInference:"},
 		"enum as string":       {payload: `{"parquetOptions":{"enumAsString":true}}`, field: "parquetOptions.enumAsString:"},
 		"null parquet flag":    {payload: `{"parquetOptions":{"enumAsString":null}}`, field: "parquetOptions.enumAsString:"},
 		"map target":           {payload: `{"parquetOptions":{"mapTargetType":"ARRAY_OF_STRUCT"}}`, field: "parquetOptions.mapTargetType:"},
@@ -225,6 +327,26 @@ func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
 			}
 			if len(unsupported) != 1 || !strings.HasPrefix(unsupported[0], test.field) {
 				t.Fatalf("unsupported options = %v, want one %q fingerprint", unsupported, test.field)
+			}
+		})
+	}
+}
+
+func TestValidatePublicLoadSourceURIsRejectsNonGCSBeforeSubmission(t *testing.T) {
+	for name, test := range map[string]struct {
+		uris []string
+		want error
+	}{
+		"GCS":          {uris: []string{"gs://bucket/data.parquet"}},
+		"file":         {uris: []string{"file:///tmp/data.parquet"}, want: loadDomain.ErrUnsupported},
+		"HTTP":         {uris: []string{"http://example.test/data.parquet"}, want: loadDomain.ErrUnsupported},
+		"empty scheme": {uris: []string{"data.parquet"}, want: loadDomain.ErrInvalid},
+		"missing path": {uris: []string{"gs://bucket"}, want: loadDomain.ErrInvalid},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validatePublicLoadSourceURIs(test.uris)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("validatePublicLoadSourceURIs(%v) = %v, want %v", test.uris, err, test.want)
 			}
 		})
 	}

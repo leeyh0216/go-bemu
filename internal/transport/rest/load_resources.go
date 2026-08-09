@@ -48,12 +48,14 @@ type parquetOptionsResource struct {
 type loadJobRequest struct {
 	JobReference  jobReferenceResource `json:"jobReference"`
 	Configuration struct {
-		Load json.RawMessage `json:"load"`
+		Load   json.RawMessage    `json:"load"`
+		Labels *map[string]string `json:"labels,omitempty"`
 	} `json:"configuration"`
 }
 
 type loadJobConfigurationResource struct {
-	Load loadConfigurationResource `json:"load"`
+	Load   loadConfigurationResource `json:"load"`
+	Labels *map[string]string        `json:"labels,omitempty"`
 }
 
 type loadJobStatusResource struct {
@@ -107,7 +109,7 @@ func loadJobFromDomain(job *loadDomain.Job) loadJobResource {
 		JobReference: jobReferenceResource{
 			ProjectID: job.Reference.ProjectID, Location: job.Reference.Location, JobID: job.Reference.JobID,
 		},
-		Configuration: loadJobConfigurationResource{Load: load},
+		Configuration: loadJobConfigurationResource{Load: load, Labels: cloneLoadLabels(configuration.Labels)},
 		Status:        loadJobStatusResource{State: job.State},
 		Statistics: loadJobStatisticsResource{
 			CreationTime: millis(job.CreatedAt),
@@ -137,6 +139,17 @@ func loadJobFromDomain(job *loadDomain.Job) loadJobResource {
 		resource.Status.Errors = []errorProto{jobError}
 	}
 	return resource
+}
+
+func cloneLoadLabels(labels map[string]string) *map[string]string {
+	if labels == nil {
+		return nil
+	}
+	copy := make(map[string]string, len(labels))
+	for key, value := range labels {
+		copy[key] = value
+	}
+	return &copy
 }
 
 func loadFieldsToWire(fields []loadDomain.Field) []tableFieldSchema {

@@ -70,7 +70,9 @@ type Config struct {
 	APIVersion string          `yaml:"apiVersion" json:"apiVersion"`
 	Kind       string          `yaml:"kind" json:"kind"`
 	Defaults   DefaultsConfig  `yaml:"defaults" json:"defaults"`
+	Bootstrap  BootstrapConfig `yaml:"bootstrap" json:"bootstrap"`
 	Server     ServerConfig    `yaml:"server" json:"server"`
+	State      StateConfig     `yaml:"state" json:"state"`
 	Database   DatabaseConfig  `yaml:"database" json:"database"`
 	Runtime    RuntimeConfig   `yaml:"runtime" json:"runtime"`
 	Query      QueryConfig     `yaml:"query" json:"query"`
@@ -86,6 +88,21 @@ type Config struct {
 type DefaultsConfig struct {
 	ProjectID string `yaml:"projectId" json:"projectId"`
 	Location  string `yaml:"location" json:"location"`
+}
+type BootstrapConfig struct {
+	Projects []BootstrapProject `yaml:"projects" json:"projects"`
+}
+type BootstrapProject struct {
+	ID       string             `yaml:"id" json:"id"`
+	Datasets []BootstrapDataset `yaml:"datasets" json:"datasets"`
+}
+type BootstrapDataset struct {
+	ID                           string            `yaml:"id" json:"id"`
+	Location                     string            `yaml:"location" json:"location"`
+	Description                  string            `yaml:"description" json:"description"`
+	Labels                       map[string]string `yaml:"labels" json:"labels"`
+	DefaultTableExpirationMs     *int64            `yaml:"defaultTableExpirationMs" json:"defaultTableExpirationMs"`
+	DefaultPartitionExpirationMs *int64            `yaml:"defaultPartitionExpirationMs" json:"defaultPartitionExpirationMs"`
 }
 
 type ServerConfig struct {
@@ -124,6 +141,16 @@ type TLSConfig struct {
 	KeyFile  string `yaml:"keyFile" json:"keyFile"`
 }
 
+// StateConfig owns BQEMU's canonical control-plane metadata. The query engine
+// remains responsible only for physical tables and rows.
+type StateConfig struct {
+	Adapter     string   `yaml:"adapter" json:"adapter"`
+	DSN         string   `yaml:"dsn" json:"dsn"`
+	BusyTimeout Duration `yaml:"busyTimeout" json:"busyTimeout"`
+	JournalMode string   `yaml:"journalMode" json:"journalMode"`
+	Synchronous string   `yaml:"synchronous" json:"synchronous"`
+}
+
 type DatabaseConfig struct {
 	Adapter       string `yaml:"adapter" json:"adapter"`
 	DSN           string `yaml:"dsn" json:"dsn"`
@@ -156,9 +183,16 @@ type RuntimeConfig struct {
 //   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms
 //   - https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored
 type QueryConfig struct {
-	OperationTimeout    Duration `yaml:"operationTimeout" json:"operationTimeout"`
-	CompensationTimeout Duration `yaml:"compensationTimeout" json:"compensationTimeout"`
-	AnonymousResultTTL  Duration `yaml:"anonymousResultTtl" json:"anonymousResultTtl"`
+	OperationTimeout    Duration              `yaml:"operationTimeout" json:"operationTimeout"`
+	CompensationTimeout Duration              `yaml:"compensationTimeout" json:"compensationTimeout"`
+	AnonymousResultTTL  Duration              `yaml:"anonymousResultTtl" json:"anonymousResultTtl"`
+	Materialization     MaterializationConfig `yaml:"materialization" json:"materialization"`
+}
+
+type MaterializationConfig struct {
+	ProjectID  string   `yaml:"projectId" json:"projectId"`
+	DatasetID  string   `yaml:"datasetId" json:"datasetId"`
+	Expiration Duration `yaml:"expiration" json:"expiration"`
 }
 
 // TableDataConfig bounds the REST tabledata.list adapter independently from
@@ -192,20 +226,21 @@ type StorageConfig struct {
 //   - session lifetime: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readsession
 //   - response size behavior: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#readrows
 type StorageReadConfig struct {
-	Enabled               bool   `yaml:"enabled" json:"enabled"`
-	MaxStreams            int    `yaml:"maxStreams" json:"maxStreams"`
-	DefaultStreamCount    int    `yaml:"defaultStreamCount" json:"defaultStreamCount"`
-	RowsPerResponse       int    `yaml:"rowsPerResponse" json:"rowsPerResponse"`
-	MaxResponseBytes      int    `yaml:"maxResponseBytes" json:"maxResponseBytes"`
-	MaxSchemaBytes        int    `yaml:"maxSchemaBytes" json:"maxSchemaBytes"`
-	MaxSessions           int    `yaml:"maxSessions" json:"maxSessions"`
-	SpillThresholdBytes   int64  `yaml:"spillThresholdBytes" json:"spillThresholdBytes"`
-	MaxRowBytes           int64  `yaml:"maxRowBytes" json:"maxRowBytes"`
-	MaxSnapshotBytes      int64  `yaml:"maxSnapshotBytes" json:"maxSnapshotBytes"`
-	MaxTotalSnapshotBytes int64  `yaml:"maxTotalSnapshotBytes" json:"maxTotalSnapshotBytes"`
-	MaxSnapshotRows       int64  `yaml:"maxSnapshotRows" json:"maxSnapshotRows"`
-	TempFilePattern       string `yaml:"tempFilePattern" json:"tempFilePattern"`
-	ProtocolModelVersion  string `yaml:"protocolModelVersion" json:"protocolModelVersion"`
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	StateOperationTimeout Duration `yaml:"stateOperationTimeout" json:"stateOperationTimeout"`
+	MaxStreams            int      `yaml:"maxStreams" json:"maxStreams"`
+	DefaultStreamCount    int      `yaml:"defaultStreamCount" json:"defaultStreamCount"`
+	RowsPerResponse       int      `yaml:"rowsPerResponse" json:"rowsPerResponse"`
+	MaxResponseBytes      int      `yaml:"maxResponseBytes" json:"maxResponseBytes"`
+	MaxSchemaBytes        int      `yaml:"maxSchemaBytes" json:"maxSchemaBytes"`
+	MaxSessions           int      `yaml:"maxSessions" json:"maxSessions"`
+	SpillThresholdBytes   int64    `yaml:"spillThresholdBytes" json:"spillThresholdBytes"`
+	MaxRowBytes           int64    `yaml:"maxRowBytes" json:"maxRowBytes"`
+	MaxSnapshotBytes      int64    `yaml:"maxSnapshotBytes" json:"maxSnapshotBytes"`
+	MaxTotalSnapshotBytes int64    `yaml:"maxTotalSnapshotBytes" json:"maxTotalSnapshotBytes"`
+	MaxSnapshotRows       int64    `yaml:"maxSnapshotRows" json:"maxSnapshotRows"`
+	TempFilePattern       string   `yaml:"tempFilePattern" json:"tempFilePattern"`
+	ProtocolModelVersion  string   `yaml:"protocolModelVersion" json:"protocolModelVersion"`
 }
 
 // StorageWriteConfig separates the count-bounded coordinator queue from byte
@@ -234,17 +269,14 @@ type StorageWriteConfig struct {
 }
 
 // LoadConfig bounds every network and filesystem side effect of a load job.
-// GCS sources use the JSON objects.get/list protocol; file sources are an
-// explicit local-only opt-in because they can read host-mounted paths.
+// Public sources always use the GCS JSON objects.get/list protocol.
 //
 // Official contracts:
 //   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad
 //   - https://cloud.google.com/storage/docs/json_api/v1/objects/get
 //   - https://cloud.google.com/storage/docs/json_api/v1/objects/list
 type LoadConfig struct {
-	Enabled          bool     `yaml:"enabled" json:"enabled"`
 	GCSEndpoint      string   `yaml:"gcsEndpoint" json:"gcsEndpoint"`
-	AllowFileSources bool     `yaml:"allowFileSources" json:"allowFileSources"`
 	OperationTimeout Duration `yaml:"operationTimeout" json:"operationTimeout"`
 	MaxObjects       int      `yaml:"maxObjects" json:"maxObjects"`
 	MaxObjectBytes   int64    `yaml:"maxObjectBytes" json:"maxObjectBytes"`
@@ -323,7 +355,11 @@ func Defaults() Config {
 			},
 			GRPC: GRPCConfig{Address: ":9060", MaxReceiveMessageBytes: 32 << 20, MaxSendMessageBytes: 32 << 20},
 		},
-		Database: DatabaseConfig{Adapter: "duckdb", DSN: ":memory:", TempDirectory: os.TempDir()},
+		State: StateConfig{
+			Adapter: "sqlite", DSN: "bqemu-state.sqlite", BusyTimeout: Duration(5 * time.Second),
+			JournalMode: "WAL", Synchronous: "FULL",
+		},
+		Database: DatabaseConfig{Adapter: "duckdb", DSN: "bqemu.duckdb", TempDirectory: os.TempDir()},
 		Runtime: RuntimeConfig{
 			ShutdownTimeout: Duration(10 * time.Second), ServerDrainTimeout: Duration(5 * time.Second),
 			StorageCloseTimeout: Duration(4 * time.Second), JobPollInterval: Duration(100 * time.Millisecond),
@@ -339,7 +375,7 @@ func Defaults() Config {
 		},
 		Storage: StorageConfig{
 			Read: StorageReadConfig{
-				Enabled: true, MaxStreams: 64, DefaultStreamCount: 4,
+				Enabled: true, StateOperationTimeout: Duration(5 * time.Second), MaxStreams: 64, DefaultStreamCount: 4,
 				RowsPerResponse: 10_000, MaxResponseBytes: 16 << 20, MaxSchemaBytes: 1 << 20, MaxSessions: 128,
 				SpillThresholdBytes: 64 << 20, MaxRowBytes: 8 << 20,
 				MaxSnapshotBytes: 512 << 20, MaxTotalSnapshotBytes: 4 << 30, MaxSnapshotRows: 10_000_000,
@@ -357,7 +393,7 @@ func Defaults() Config {
 			},
 		},
 		Load: LoadConfig{
-			OperationTimeout: Duration(2 * time.Minute), MaxObjects: 1_000,
+			GCSEndpoint: "http://fake-gcs:4443", OperationTimeout: Duration(2 * time.Minute), MaxObjects: 1_000,
 			MaxObjectBytes: 1 << 30, MaxTotalBytes: 4 << 30,
 			MaxMetadataBytes: 8 << 20, MaxListedObjects: 10_000,
 		},
@@ -487,19 +523,23 @@ var environmentOverrides = []environmentOverride{
 	{"BQEMU_GRPC_ADDRESS", "server.grpc.address"}, {"BQEMU_TLS_CERT_FILE", "server.tls.certFile"},
 	{"BQEMU_TLS_KEY_FILE", "server.tls.keyFile"}, {"BQEMU_DATABASE_ADAPTER", "database.adapter"},
 	{"BQEMU_DATABASE_DSN", "database.dsn"}, {"BQEMU_TEMP_DIRECTORY", "database.tempDirectory"},
+	{"BQEMU_STATE_ADAPTER", "state.adapter"}, {"BQEMU_STATE_DSN", "state.dsn"},
+	{"BQEMU_STATE_BUSY_TIMEOUT", "state.busyTimeout"}, {"BQEMU_STATE_JOURNAL_MODE", "state.journalMode"},
+	{"BQEMU_STATE_SYNCHRONOUS", "state.synchronous"},
 	{"BQEMU_QUERY_OPERATION_TIMEOUT", "query.operationTimeout"},
 	{"BQEMU_QUERY_COMPENSATION_TIMEOUT", "query.compensationTimeout"},
 	{"BQEMU_QUERY_ANONYMOUS_RESULT_TTL", "query.anonymousResultTtl"},
+	{"BQEMU_QUERY_MATERIALIZATION_PROJECT_ID", "query.materialization.projectId"}, {"BQEMU_QUERY_MATERIALIZATION_DATASET_ID", "query.materialization.datasetId"}, {"BQEMU_QUERY_MATERIALIZATION_EXPIRATION", "query.materialization.expiration"},
 	{"BQEMU_TABLE_DATA_OPERATION_TIMEOUT", "tableData.operationTimeout"},
 	{"BQEMU_TABLE_DATA_MAX_PAGE_ROWS", "tableData.maxPageRows"},
 	{"BQEMU_TABLE_DATA_MAX_RESPONSE_BYTES", "tableData.maxResponseBytes"},
 	{"BQEMU_TABLE_DATA_MAX_ROW_BYTES", "tableData.maxRowBytes"},
-	{"BQEMU_LOAD_ENABLED", "load.enabled"}, {"BQEMU_LOAD_GCS_ENDPOINT", "load.gcsEndpoint"},
-	{"BQEMU_LOAD_ALLOW_FILE_SOURCES", "load.allowFileSources"},
+	{"BQEMU_LOAD_GCS_ENDPOINT", "load.gcsEndpoint"},
 	{"BQEMU_LOAD_OPERATION_TIMEOUT", "load.operationTimeout"}, {"BQEMU_LOAD_MAX_OBJECTS", "load.maxObjects"},
 	{"BQEMU_LOAD_MAX_OBJECT_BYTES", "load.maxObjectBytes"}, {"BQEMU_LOAD_MAX_TOTAL_BYTES", "load.maxTotalBytes"},
 	{"BQEMU_LOAD_MAX_METADATA_BYTES", "load.maxMetadataBytes"}, {"BQEMU_LOAD_MAX_LISTED_OBJECTS", "load.maxListedObjects"},
 	{"BQEMU_STORAGE_READ_ENABLED", "storage.read.enabled"},
+	{"BQEMU_STORAGE_READ_STATE_OPERATION_TIMEOUT", "storage.read.stateOperationTimeout"},
 	{"BQEMU_STORAGE_READ_MAX_STREAMS", "storage.read.maxStreams"},
 	{"BQEMU_STORAGE_READ_DEFAULT_STREAM_COUNT", "storage.read.defaultStreamCount"},
 	{"BQEMU_STORAGE_READ_ROWS_PER_RESPONSE", "storage.read.rowsPerResponse"},
@@ -600,6 +640,16 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setString(&cfg.Server.TLS.CertFile)
 	case "server.tls.keyFile":
 		return setString(&cfg.Server.TLS.KeyFile)
+	case "state.adapter":
+		return setString(&cfg.State.Adapter)
+	case "state.dsn":
+		return setString(&cfg.State.DSN)
+	case "state.busyTimeout":
+		return setDuration(&cfg.State.BusyTimeout)
+	case "state.journalMode":
+		return setString(&cfg.State.JournalMode)
+	case "state.synchronous":
+		return setString(&cfg.State.Synchronous)
 	case "database.adapter":
 		return setString(&cfg.Database.Adapter)
 	case "database.dsn":
@@ -624,6 +674,12 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setDuration(&cfg.Query.CompensationTimeout)
 	case "query.anonymousResultTtl":
 		return setDuration(&cfg.Query.AnonymousResultTTL)
+	case "query.materialization.projectId":
+		return setString(&cfg.Query.Materialization.ProjectID)
+	case "query.materialization.datasetId":
+		return setString(&cfg.Query.Materialization.DatasetID)
+	case "query.materialization.expiration":
+		return setDuration(&cfg.Query.Materialization.Expiration)
 	case "tableData.operationTimeout":
 		return setDuration(&cfg.TableData.OperationTimeout)
 	case "tableData.maxPageRows":
@@ -634,6 +690,8 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setInt64(&cfg.TableData.MaxRowBytes)
 	case "storage.read.enabled":
 		return setBool(&cfg.Storage.Read.Enabled)
+	case "storage.read.stateOperationTimeout":
+		return setDuration(&cfg.Storage.Read.StateOperationTimeout)
 	case "storage.read.maxStreams":
 		return setInt(&cfg.Storage.Read.MaxStreams)
 	case "storage.read.defaultStreamCount":
@@ -690,12 +748,8 @@ func applyOverride(cfg *Config, path, value string) error {
 		return setDuration(&cfg.Storage.Write.CleanupInterval)
 	case "storage.write.protocolModelVersion":
 		return setString(&cfg.Storage.Write.ProtocolModelVersion)
-	case "load.enabled":
-		return setBool(&cfg.Load.Enabled)
 	case "load.gcsEndpoint":
 		return setString(&cfg.Load.GCSEndpoint)
-	case "load.allowFileSources":
-		return setBool(&cfg.Load.AllowFileSources)
 	case "load.operationTimeout":
 		return setDuration(&cfg.Load.OperationTimeout)
 	case "load.maxObjects":
@@ -748,6 +802,28 @@ func (cfg Config) Validate() error {
 	if strings.TrimSpace(cfg.Defaults.Location) == "" {
 		return errors.New("defaults.location is required")
 	}
+	bootstrapProjects := map[string]struct{}{}
+	for _, project := range cfg.Bootstrap.Projects {
+		projectID := strings.TrimSpace(project.ID)
+		if projectID == "" {
+			return errors.New("bootstrap.projects[].id is required")
+		}
+		if _, exists := bootstrapProjects[projectID]; exists {
+			return fmt.Errorf("duplicate bootstrap project %q", projectID)
+		}
+		bootstrapProjects[projectID] = struct{}{}
+		datasets := map[string]struct{}{}
+		for _, dataset := range project.Datasets {
+			id := strings.TrimSpace(dataset.ID)
+			if id == "" || strings.TrimSpace(dataset.Location) == "" {
+				return fmt.Errorf("bootstrap dataset %q requires id and location", id)
+			}
+			if _, exists := datasets[id]; exists {
+				return fmt.Errorf("duplicate bootstrap dataset %q in project %q", id, projectID)
+			}
+			datasets[id] = struct{}{}
+		}
+	}
 	if err := validateAddress("server.http.address", cfg.Server.HTTP.Address); err != nil {
 		return err
 	}
@@ -787,6 +863,13 @@ func (cfg Config) Validate() error {
 			return fmt.Errorf("%s must be positive", name)
 		}
 	}
+	materialization := cfg.Query.Materialization
+	if (strings.TrimSpace(materialization.ProjectID) == "") != (strings.TrimSpace(materialization.DatasetID) == "") {
+		return errors.New("query.materialization.projectId and query.materialization.datasetId must be configured together")
+	}
+	if materialization.ProjectID != "" && materialization.Expiration.Value() <= 0 {
+		return errors.New("query.materialization.expiration must be positive when materialization is configured")
+	}
 	if cfg.TableData.MaxPageRows < 1 || cfg.TableData.MaxPageRows > 100_000 {
 		return errors.New("tableData.maxPageRows must be between 1 and the BigQuery tabledata.list limit of 100000")
 	}
@@ -802,6 +885,21 @@ func (cfg Config) Validate() error {
 	if cfg.Server.GRPC.MaxReceiveMessageBytes < 1<<20 || cfg.Server.GRPC.MaxSendMessageBytes < 1<<20 {
 		return errors.New("gRPC message limits must be at least 1 MiB")
 	}
+	if cfg.State.Adapter != "sqlite" {
+		return fmt.Errorf("state.adapter %q is not registered", cfg.State.Adapter)
+	}
+	if strings.TrimSpace(cfg.State.DSN) == "" {
+		return errors.New("state.dsn is required")
+	}
+	if cfg.State.BusyTimeout.Value() <= 0 {
+		return errors.New("state.busyTimeout must be positive")
+	}
+	if !oneOf(strings.ToUpper(cfg.State.JournalMode), "DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF") {
+		return fmt.Errorf("state.journalMode %q is not supported", cfg.State.JournalMode)
+	}
+	if !oneOf(strings.ToUpper(cfg.State.Synchronous), "OFF", "NORMAL", "FULL", "EXTRA") {
+		return fmt.Errorf("state.synchronous %q is not supported", cfg.State.Synchronous)
+	}
 	if cfg.Database.Adapter != "duckdb" {
 		return fmt.Errorf("database.adapter %q is not registered", cfg.Database.Adapter)
 	}
@@ -814,6 +912,9 @@ func (cfg Config) Validate() error {
 	if cfg.Storage.Read.MaxStreams < 1 || cfg.Storage.Read.MaxStreams > storageReadSystemMaxStreams ||
 		cfg.Storage.Read.DefaultStreamCount < 1 || cfg.Storage.Read.DefaultStreamCount > cfg.Storage.Read.MaxStreams {
 		return fmt.Errorf("storage.read stream counts must be positive, defaultStreamCount must not exceed maxStreams, and maxStreams must not exceed the protocol system max %d", storageReadSystemMaxStreams)
+	}
+	if cfg.Storage.Read.StateOperationTimeout.Value() <= 0 {
+		return errors.New("storage.read.stateOperationTimeout must be positive")
 	}
 	if cfg.Storage.Read.RowsPerResponse < 1 || cfg.Storage.Read.MaxResponseBytes < 1<<20 || cfg.Storage.Read.MaxSchemaBytes < 1 ||
 		cfg.Storage.Read.MaxSessions < 1 || cfg.Storage.Read.SpillThresholdBytes < 0 ||
@@ -875,11 +976,9 @@ func (cfg Config) Validate() error {
 	if cfg.Load.MaxObjectBytes > cfg.Load.MaxTotalBytes {
 		return errors.New("load.maxObjectBytes must not exceed load.maxTotalBytes")
 	}
-	if cfg.Load.Enabled {
-		endpoint, err := url.Parse(cfg.Load.GCSEndpoint)
-		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-			return errors.New("load.gcsEndpoint must be an absolute HTTP(S) URL when load is enabled")
-		}
+	endpoint, err := url.Parse(cfg.Load.GCSEndpoint)
+	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+		return errors.New("load.gcsEndpoint must be an absolute HTTP(S) URL")
 	}
 	if !oneOf(cfg.Logging.Level, "debug", "info", "warn", "error") {
 		return fmt.Errorf("unsupported logging.level %q", cfg.Logging.Level)

@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	writedomain "github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
@@ -35,10 +36,18 @@ import (
 
 var (
 	_ writeports.Coordinator                    = (*StorageWriteCoordinator)(nil)
+	_ writeports.DurableCoordinator             = (*StorageWriteCoordinator)(nil)
 	_ interface{ Close(context.Context) error } = (*StorageWriteCoordinator)(nil)
 )
 
 var errStorageWriteCoordinatorClosed = errors.New("DuckDB Storage Write coordinator is closed")
+
+// StorageWriteTableSchemaResolver supplies the canonical BigQuery table
+// metadata. DuckDB owns physical rows and types, but never reconstructs a
+// logical BigQuery schema from its catalog.
+type StorageWriteTableSchemaResolver interface {
+	GetTable(context.Context, string, string, string) (catalogdomain.Table, error)
+}
 
 // StorageWriteCoordinator presents concurrent logical operations to callers but
 // executes all DuckDB work on one queue. This is an implementation constraint,
@@ -46,6 +55,7 @@ var errStorageWriteCoordinatorClosed = errors.New("DuckDB Storage Write coordina
 // parallel while database transactions remain serialized.
 type StorageWriteCoordinator struct {
 	warehouse   *Warehouse
+	resolver    StorageWriteTableSchemaResolver
 	config      StorageWriteCoordinatorConfig
 	admission   *storageWriteByteAdmission
 	queue       chan coordinatorOperation
@@ -100,19 +110,22 @@ type columnLayout struct {
 	isNullable bool
 }
 
-func NewStorageWriteCoordinator(ctx context.Context, warehouse *Warehouse, config StorageWriteCoordinatorConfig) (*StorageWriteCoordinator, error) {
+func NewStorageWriteCoordinator(ctx context.Context, warehouse *Warehouse, resolver StorageWriteTableSchemaResolver, config StorageWriteCoordinatorConfig) (*StorageWriteCoordinator, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("initialization context is required")
 	}
 	if warehouse == nil {
 		return nil, fmt.Errorf("warehouse is required")
 	}
+	if resolver == nil {
+		return nil, fmt.Errorf("Storage Write table schema resolver is required")
+	}
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
 	workerContext, cancel := context.WithCancel(context.Background())
 	coordinator := &StorageWriteCoordinator{
-		warehouse: warehouse, config: config, admission: newStorageWriteByteAdmission(config),
+		warehouse: warehouse, resolver: resolver, config: config, admission: newStorageWriteByteAdmission(config),
 		queue: make(chan coordinatorOperation, config.QueueCapacity), stop: cancel, done: make(chan struct{}),
 		stagedByStream: make(map[string]int64),
 		scheduleTimeout: func(timeout time.Duration, expire func()) func() {
@@ -158,26 +171,35 @@ func (c *StorageWriteCoordinator) AppendDefault(ctx context.Context, batch write
 			"transaction_mode", "explicit")
 	}()
 	_, err = c.submitBatch(ctx, batch, func(operationContext context.Context) (_ any, resultErr error) {
-		prepared, prepareErr := c.prepareBatch(operationContext, c.warehouse.db, batch)
-		if prepareErr != nil {
-			return nil, prepareErr
+		physicalBatch := batch
+		physicalBatch.StartOffset = 0
+		if _, stageErr := c.stagePending(operationContext, physicalBatch); stageErr != nil {
+			return nil, stageErr
 		}
-		tx, beginErr := c.warehouse.db.BeginTx(operationContext, nil)
-		if beginErr != nil {
-			return nil, fmt.Errorf("begin default append transaction: %w", beginErr)
+		if c.afterStage != nil {
+			c.afterStage()
 		}
-		defer func() {
-			if resultErr != nil {
-				_ = tx.Rollback()
-			}
-		}()
-		if insertErr := insertPreparedBatch(operationContext, tx, prepared); insertErr != nil {
-			return nil, insertErr
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, fmt.Errorf("commit default append transaction: %w", commitErr)
-		}
-		return nil, nil
+		return nil, c.commitPending(operationContext, writeports.CommitRequest{
+			Parent: batch.Table, StreamNames: []string{batch.StreamName},
+			RowCounts: map[string]int64{batch.StreamName: int64(len(batch.Rows))},
+		})
+	})
+	return err
+}
+
+func (c *StorageWriteCoordinator) InspectPhysical(ctx context.Context, expected []writeports.PhysicalExpectation) (map[string]writeports.PhysicalStreamState, error) {
+	value, err := c.submit(ctx, func(operationContext context.Context) (any, error) {
+		return c.inspectPhysical(operationContext, expected)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return value.(map[string]writeports.PhysicalStreamState), nil
+}
+
+func (c *StorageWriteCoordinator) AcknowledgeApplied(ctx context.Context, streams []string) error {
+	_, err := c.submit(ctx, func(operationContext context.Context) (any, error) {
+		return nil, c.acknowledgeApplied(operationContext, streams)
 	})
 	return err
 }
@@ -259,13 +281,13 @@ func (c *StorageWriteCoordinator) Close(ctx context.Context) error {
 		c.submissionMu.Lock()
 		c.closed.Store(true)
 		c.submissionMu.Unlock()
-		started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_cleanup_staging",
-			"global_staged_bytes", c.stagedBytes.Load(), "transaction_mode", "explicit")
+		started := observability.LogSideEffectStart(ctx, "duckdb", "storage_write_close",
+			"global_staged_bytes", c.stagedBytes.Load(), "transaction_mode", "barrier")
 		_, c.closeErr = c.submitInternal(ctx, func(operationContext context.Context) (any, error) {
-			return nil, c.cleanupAllStaging(operationContext)
+			return nil, operationContext.Err()
 		})
-		observability.LogSideEffectEnd(ctx, "duckdb", "storage_write_cleanup_staging", started, c.closeErr,
-			"global_staged_bytes", c.stagedBytes.Load(), "transaction_mode", "explicit")
+		observability.LogSideEffectEnd(ctx, "duckdb", "storage_write_close", started, c.closeErr,
+			"global_staged_bytes", c.stagedBytes.Load(), "transaction_mode", "barrier")
 		c.stop()
 	})
 	select {
@@ -483,6 +505,26 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer stor
 }
 
 func (c *StorageWriteCoordinator) describeTable(ctx context.Context, queryer storageWriteQueryer, table writedomain.TableReference) (tableLayout, error) {
+	catalogTable, err := c.resolver.GetTable(ctx, table.ProjectID, table.DatasetID, table.TableID)
+	if err != nil {
+		if errors.Is(err, catalogdomain.ErrNotFound) {
+			return tableLayout{}, fmt.Errorf("%w: %s", writeports.ErrTableNotFound, table.Name())
+		}
+		return tableLayout{}, fmt.Errorf("resolve canonical Storage Write destination: %w", err)
+	}
+	if catalogTable.ProjectID != table.ProjectID || catalogTable.DatasetID != table.DatasetID || catalogTable.ID != table.TableID {
+		return tableLayout{}, fmt.Errorf(
+			"canonical Storage Write resolver returned %s:%s.%s for %s",
+			catalogTable.ProjectID, catalogTable.DatasetID, catalogTable.ID, table.Name(),
+		)
+	}
+	if catalogTable.Type != "" && !strings.EqualFold(catalogTable.Type, "TABLE") {
+		return tableLayout{}, fmt.Errorf("Storage Write destination %s has unsupported table type %q", table.Name(), catalogTable.Type)
+	}
+	if err := catalogTable.Validate(); err != nil {
+		return tableLayout{}, fmt.Errorf("validate canonical Storage Write destination: %w", err)
+	}
+
 	rows, err := queryer.QueryContext(ctx, `
 		SELECT column_name, data_type, is_nullable
 		FROM information_schema.columns
@@ -491,26 +533,159 @@ func (c *StorageWriteCoordinator) describeTable(ctx context.Context, queryer sto
 	if err != nil {
 		return tableLayout{}, fmt.Errorf("describe Storage Write destination: %w", err)
 	}
-	defer rows.Close()
-	var layout tableLayout
+	type physicalColumn struct {
+		name, dataType, nullable string
+	}
+	physicalColumns := make([]physicalColumn, 0, len(catalogTable.Schema))
 	for rows.Next() {
 		var name, dataType, nullable string
 		if err := rows.Scan(&name, &dataType, &nullable); err != nil {
+			_ = rows.Close()
 			return tableLayout{}, fmt.Errorf("scan Storage Write destination schema: %w", err)
 		}
-		field := duckDBStorageWriteField(name, dataType, nullable)
-		layout.schema.Fields = append(layout.schema.Fields, field)
-		layout.columns = append(layout.columns, columnLayout{
-			field: field, duckDBType: dataType, isNullable: strings.EqualFold(nullable, "YES"),
-		})
+		physicalColumns = append(physicalColumns, physicalColumn{name: name, dataType: dataType, nullable: nullable})
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return tableLayout{}, fmt.Errorf("read Storage Write destination schema: %w", err)
 	}
-	if len(layout.columns) == 0 {
+	if err := rows.Close(); err != nil {
+		return tableLayout{}, fmt.Errorf("close Storage Write destination schema: %w", err)
+	}
+	if len(physicalColumns) == 0 {
 		return tableLayout{}, fmt.Errorf("%w: %s", writeports.ErrTableNotFound, table.Name())
 	}
+	if len(physicalColumns) != len(catalogTable.Schema) {
+		return tableLayout{}, fmt.Errorf(
+			"canonical/physical Storage Write schema mismatch for %s: catalog has %d columns, DuckDB has %d",
+			table.Name(), len(catalogTable.Schema), len(physicalColumns),
+		)
+	}
+
+	expectedTypes, err := canonicalDuckDBStorageWriteTypes(ctx, queryer, catalogTable.Schema)
+	if err != nil {
+		return tableLayout{}, err
+	}
+	layout := tableLayout{schema: writedomain.TableSchema{Fields: make([]writedomain.Field, 0, len(catalogTable.Schema))}}
+	for index, catalogField := range catalogTable.Schema {
+		physical := physicalColumns[index]
+		if !strings.EqualFold(physical.name, catalogField.Name) {
+			return tableLayout{}, fmt.Errorf(
+				"canonical/physical Storage Write schema mismatch for %s column %d: catalog name %q, DuckDB name %q",
+				table.Name(), index+1, catalogField.Name, physical.name,
+			)
+		}
+		if !equalDuckDBTypeName(physical.dataType, expectedTypes[index]) {
+			return tableLayout{}, fmt.Errorf(
+				"canonical/physical Storage Write schema mismatch for %s column %q: catalog physical type %q, DuckDB type %q",
+				table.Name(), catalogField.Name, expectedTypes[index], physical.dataType,
+			)
+		}
+		actualNullable := strings.EqualFold(physical.nullable, "YES")
+		if !actualNullable && !strings.EqualFold(physical.nullable, "NO") {
+			return tableLayout{}, fmt.Errorf("DuckDB returned unknown nullability %q for %s column %q", physical.nullable, table.Name(), catalogField.Name)
+		}
+		expectedNullable := !strings.EqualFold(catalogField.Mode, "REQUIRED")
+		if actualNullable != expectedNullable {
+			return tableLayout{}, fmt.Errorf(
+				"canonical/physical Storage Write schema mismatch for %s column %q: catalog nullable %t, DuckDB nullable %t",
+				table.Name(), catalogField.Name, expectedNullable, actualNullable,
+			)
+		}
+		field, err := canonicalStorageWriteField(catalogField)
+		if err != nil {
+			return tableLayout{}, fmt.Errorf("convert canonical Storage Write column %q: %w", catalogField.Name, err)
+		}
+		layout.schema.Fields = append(layout.schema.Fields, field)
+		layout.columns = append(layout.columns, columnLayout{field: field, duckDBType: physical.dataType, isNullable: actualNullable})
+	}
 	return layout, nil
+}
+
+func canonicalDuckDBStorageWriteTypes(ctx context.Context, queryer storageWriteQueryer, fields []catalogdomain.Field) ([]string, error) {
+	expressions := make([]string, len(fields))
+	for index, field := range fields {
+		dataType, err := duckDBType(field)
+		if err != nil {
+			return nil, fmt.Errorf("map canonical Storage Write column %q: %w", field.Name, err)
+		}
+		expressions[index] = "typeof(CAST(NULL AS " + dataType + "))"
+	}
+	rows, err := queryer.QueryContext(ctx, "SELECT "+strings.Join(expressions, ", "))
+	if err != nil {
+		return nil, fmt.Errorf("normalize canonical Storage Write physical types: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("normalize canonical Storage Write physical types: %w", err)
+		}
+		return nil, fmt.Errorf("DuckDB returned no canonical Storage Write type row")
+	}
+	result := make([]string, len(fields))
+	destinations := make([]any, len(fields))
+	for index := range result {
+		destinations[index] = &result[index]
+	}
+	if err := rows.Scan(destinations...); err != nil {
+		return nil, fmt.Errorf("scan canonical Storage Write physical types: %w", err)
+	}
+	if rows.Next() {
+		return nil, fmt.Errorf("DuckDB returned multiple canonical Storage Write type rows")
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read canonical Storage Write physical types: %w", err)
+	}
+	return result, nil
+}
+
+func equalDuckDBTypeName(left, right string) bool {
+	normalize := func(value string) string {
+		return strings.ToUpper(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+	}
+	return normalize(left) == normalize(right)
+}
+
+func canonicalStorageWriteField(field catalogdomain.Field) (writedomain.Field, error) {
+	if err := field.Validate(); err != nil {
+		return writedomain.Field{}, err
+	}
+	fieldType := strings.ToUpper(field.Type)
+	switch fieldType {
+	case "BOOLEAN":
+		fieldType = "BOOL"
+	case "INTEGER":
+		fieldType = "INT64"
+	case "FLOAT":
+		fieldType = "FLOAT64"
+	case "RECORD":
+		fieldType = "STRUCT"
+	}
+	mode := strings.ToUpper(field.Mode)
+	if mode == "" {
+		mode = "NULLABLE"
+	}
+	result := writedomain.Field{
+		Name: field.Name, Type: fieldType, Mode: mode, Description: field.Description,
+		Precision: cloneInt64(field.Precision), Scale: cloneInt64(field.Scale),
+		Fields: make([]writedomain.Field, 0, len(field.Fields)),
+	}
+	for _, nested := range field.Fields {
+		converted, err := canonicalStorageWriteField(nested)
+		if err != nil {
+			return writedomain.Field{}, err
+		}
+		result.Fields = append(result.Fields, converted)
+	}
+	return result, nil
+}
+
+func cloneInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func messageDescriptor(serialized []byte) (protoreflect.MessageDescriptor, error) {
@@ -538,6 +713,10 @@ func messageDescriptor(serialized []byte) (protoreflect.MessageDescriptor, error
 }
 
 func convertProtoValue(field protoreflect.FieldDescriptor, value protoreflect.Value, target columnLayout) (any, error) {
+	targetRepeated := strings.EqualFold(target.field.Mode, "REPEATED")
+	if field.IsList() != targetRepeated {
+		return nil, fmt.Errorf("protobuf repeated mode does not match destination mode %s", target.field.Mode)
+	}
 	if field.IsList() {
 		list := value.List()
 		result := make([]any, list.Len())
@@ -556,22 +735,49 @@ func convertProtoValue(field protoreflect.FieldDescriptor, value protoreflect.Va
 func convertProtoScalar(field protoreflect.FieldDescriptor, value protoreflect.Value, target columnLayout) (any, error) {
 	targetType := strings.ToUpper(target.field.Type)
 	if field.Kind() == protoreflect.MessageKind {
+		if targetType != "STRUCT" && targetType != "RECORD" {
+			return nil, fmt.Errorf("protobuf message does not match destination type %s", target.field.Type)
+		}
 		message := value.Message()
-		result := make(map[string]any, message.Descriptor().Fields().Len())
+		canonicalByName := make(map[string]writedomain.Field, len(target.field.Fields))
+		seenCanonical := make(map[string]struct{}, len(target.field.Fields))
+		result := make(map[string]any, len(target.field.Fields))
+		for _, nested := range target.field.Fields {
+			canonicalByName[strings.ToLower(nested.Name)] = nested
+			result[nested.Name] = nil
+		}
 		for index := 0; index < message.Descriptor().Fields().Len(); index++ {
 			nested := message.Descriptor().Fields().Get(index)
+			canonical, exists := canonicalByName[strings.ToLower(string(nested.Name()))]
+			if !exists {
+				return nil, fmt.Errorf("protobuf field %q is absent from destination STRUCT %q", nested.Name(), target.field.Name)
+			}
+			seenCanonical[strings.ToLower(canonical.Name)] = struct{}{}
+			nestedTarget := columnLayout{field: canonical, isNullable: !strings.EqualFold(canonical.Mode, "REQUIRED")}
 			if !nested.IsList() && !message.Has(nested) {
-				result[string(nested.Name())] = nil
+				if !nestedTarget.isNullable {
+					return nil, fmt.Errorf("required destination STRUCT field %q is absent", canonical.Name)
+				}
 				continue
 			}
-			nestedTarget := columnLayout{field: writedomain.Field{Name: string(nested.Name()), Type: protoKindFallbackType(nested.Kind()), Mode: "NULLABLE"}, isNullable: true}
 			converted, err := convertProtoValue(nested, message.Get(nested), nestedTarget)
 			if err != nil {
 				return nil, err
 			}
-			result[string(nested.Name())] = converted
+			result[canonical.Name] = converted
+		}
+		for _, canonical := range target.field.Fields {
+			if !strings.EqualFold(canonical.Mode, "REQUIRED") {
+				continue
+			}
+			if _, exists := seenCanonical[strings.ToLower(canonical.Name)]; !exists {
+				return nil, fmt.Errorf("ProtoSchema omits required destination STRUCT field %q", canonical.Name)
+			}
 		}
 		return result, nil
+	}
+	if targetType == "STRUCT" || targetType == "RECORD" {
+		return nil, fmt.Errorf("destination type %s requires a protobuf message", target.field.Type)
 	}
 	switch targetType {
 	case "DATE":
@@ -683,63 +889,6 @@ func insertPreparedBatchInto(ctx context.Context, executor interface {
 		}
 	}
 	return nil
-}
-
-func duckDBStorageWriteField(name, dataType, nullable string) writedomain.Field {
-	mode := "REQUIRED"
-	if strings.EqualFold(nullable, "YES") {
-		mode = "NULLABLE"
-	}
-	normalized := strings.ToUpper(strings.TrimSpace(dataType))
-	if strings.HasSuffix(normalized, "[]") {
-		mode = "REPEATED"
-		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, "[]"))
-	}
-	fieldType := "STRING"
-	switch {
-	case normalized == "BOOLEAN" || normalized == "BOOL":
-		fieldType = "BOOL"
-	case strings.Contains(normalized, "INT"):
-		fieldType = "INT64"
-	case normalized == "DOUBLE" || normalized == "FLOAT" || normalized == "REAL":
-		fieldType = "FLOAT64"
-	case strings.HasPrefix(normalized, "DECIMAL") || strings.HasPrefix(normalized, "NUMERIC"):
-		fieldType = "NUMERIC"
-	case normalized == "BLOB" || normalized == "BYTEA":
-		fieldType = "BYTES"
-	case normalized == "DATE":
-		fieldType = "DATE"
-	case normalized == "TIME":
-		fieldType = "TIME"
-	case strings.Contains(normalized, "TIMESTAMP WITH TIME ZONE") || normalized == "TIMESTAMPTZ":
-		fieldType = "TIMESTAMP"
-	case strings.HasPrefix(normalized, "TIMESTAMP"):
-		fieldType = "DATETIME"
-	case normalized == "JSON":
-		fieldType = "JSON"
-	case strings.HasPrefix(normalized, "STRUCT"):
-		fieldType = "STRUCT"
-	}
-	return writedomain.Field{Name: name, Type: fieldType, Mode: mode}
-}
-
-func protoKindFallbackType(kind protoreflect.Kind) string {
-	switch kind {
-	case protoreflect.BoolKind:
-		return "BOOL"
-	case protoreflect.BytesKind:
-		return "BYTES"
-	case protoreflect.DoubleKind, protoreflect.FloatKind:
-		return "FLOAT64"
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		return "INT64"
-	case protoreflect.MessageKind:
-		return "STRUCT"
-	default:
-		return "STRING"
-	}
 }
 
 func serializedRowsBytes(rows [][]byte) int {

@@ -20,6 +20,20 @@ overridden with typed `--set`; common settings also have named `BQEMU_*`
 environment mappings. The complete Docker-oriented example is
 [`configs/bqemu.yaml`](../../configs/bqemu.yaml).
 
+### Bootstrap projects and datasets
+
+`defaults.projectId` remains the compatible single default project. To create
+additional resources before listeners accept traffic, declare
+`bootstrap.projects`: each project has an `id` and optional `datasets` with an
+`id`, `location`, `description`, `labels`, `defaultTableExpirationMs`, and
+`defaultPartitionExpirationMs`. Reapplying the same declaration
+is idempotent. An existing dataset with a different location fails startup
+before any listener is opened.
+
+Existing single-project configurations need no migration: retain
+`defaults.projectId` and leave `bootstrap.projects` empty. Add only the
+additional projects and datasets that must exist before traffic is accepted.
+
 | Layer | Selector | Contract |
 | --- | --- | --- |
 | compiled defaults | none | complete valid in-memory model |
@@ -40,10 +54,30 @@ table expiration. Both values must be positive and can be overridden in the
 configuration file or with `--set`. Their protocol basis is official
 [`jobTimeoutMs`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfiguration.FIELDS.job_timeout_ms)
 and [anonymous cached-result lifetime](https://cloud.google.com/bigquery/docs/cached-results#how_cached_results_are_stored).
+
+Optionally set `query.materialization.projectId`, `datasetId`, and `expiration`
+together to place server-generated row-producing query results in that existing
+dataset. An explicit `destinationTable` always wins. The configured dataset must
+exist and have the query location; the generated tables receive the configured
+expiration and remain server-managed.
 `query.compensationTimeout` (default `30s`, environment
 `BQEMU_QUERY_COMPENSATION_TIMEOUT`) separately bounds physical cleanup after a
 metadata publication failure; it is detached from the cancelled request but is
 never deadline-free.
+
+The checked-in container profile separates BQEMU state from physical storage:
+
+| Setting | Container path | Ownership |
+| --- | --- | --- |
+| `state.dsn` | `/data/bqemu-state.sqlite` | canonical projects, datasets, tables, schemas, and durable mutation-journal primitives |
+| `database.dsn` | `/data/bqemu.duckdb` | physical tables, rows, staging relations, and snapshots only |
+
+`state.adapter` is `sqlite`; `state.busyTimeout`, `state.journalMode`, and
+`state.synchronous` configure its lock and durability policy. `database.adapter`
+is `duckdb`. Local `make run` overrides both container paths with files under
+the repository `data` directory. Query/load job repositories, read sessions,
+write-stream ledgers, and load idempotency records are not selected by either
+DSN and remain process-local.
 `tableData.operationTimeout` (default `30s`, environment
 `BQEMU_TABLE_DATA_OPERATION_TIMEOUT`) starts before admission to the global
 catalog mutation boundary and bounds that wait, live metadata/TTL resolution,
@@ -101,22 +135,26 @@ The exact pinned client source is retained in the
 `BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`) is acquired before gRPC
 `Recv`, bounding concurrent protobuf decode, clone, and digest memory across
 bidi streams before weighted coordinator admission begins.
-`load.enabled`
-requires an absolute `load.gcsEndpoint`; `load.allowFileSources` defaults false,
-and object/list/download limits are enforced. Runtime contract-profile
-negotiation remains uncomposed. A valid setting is not a claim beyond each
-Partial capability.
+Parquet load jobs are always available. `load.gcsEndpoint` is a required
+absolute HTTP(S) fake-GCS-compatible JSON endpoint and direct REST sources
+must use `gs://`; `file://`, `http://`, and bare paths are rejected before a
+job is stored. Media uploads use a server-owned immutable object store. The
+default Compose network uses `http://fake-gcs:4443`; for host execution,
+override it with the published fake-GCS address, such as
+`http://127.0.0.1:4443`. Object/list/download limits are enforced.
 
-The BigQuery-compatible REST and gRPC listeners do not authenticate or authorize
-requests. They ignore missing, arbitrary, malformed, duplicate, and
-expired-looking `Authorization` values. There is no public `auth.*` configuration
-or `BQEMU_AUTH_*` environment contract. Unknown YAML and `--set` paths still fail
-strict configuration validation.
+BQEMU does not authenticate or authorize requests to its BigQuery-compatible
+REST and gRPC listeners. Missing, arbitrary, malformed, duplicate, and
+expired-looking `Authorization` values are ignored. There is no public `auth.*`
+configuration or `BQEMU_AUTH_*` environment contract. Unknown YAML and `--set`
+paths still fail strict configuration validation.
 
-TLS remains independent transport protection. Client libraries may require a
-credential before making a request, but token acquisition is outside this
-runtime. `admin.tokenFile` is a separate option for the diagnostics listener and
-does not protect BigQuery-compatible endpoints.
+TLS remains independent transport protection. Client libraries may still
+require credential parsing and token acquisition before they call an emulator.
+The repository-local generator and loopback OAuth/STS issuer are documented in
+[Local client credentials and TLS](client-credentials-and-tls.md).
+`admin.tokenFile` protects only the optional diagnostics listener and does not
+add an authentication boundary to BigQuery-compatible endpoints.
 
 The HTTP edge accepts `identity` and `gzip` request bodies.
 `server.http.maxCompressedRequestBytes` bounds bytes read from the wire before
@@ -195,8 +233,9 @@ curl --fail http://localhost:9050/readyz
 
 Direnv is optional and never auto-loads secrets. The checked-in `.envrc` sources
 `.envrc.example`, then loads the ignored `.envrc.local` when present. The example
-selects `configs/bqemu.yaml`, overrides its container database/temp paths for the
-host, and sets bounded Go, Python, and Docker test budgets. Put only
+selects `configs/bqemu.yaml`, while `make run` overrides its container state,
+database, and temp paths for the host and sets bounded Go, Python, and Docker
+test budgets. Put only
 machine-specific non-production overrides in `.envrc.local`. Inspect the merge
 without starting listeners with:
 
@@ -205,8 +244,8 @@ go run ./cmd/emulator --print-effective-config
 go run ./cmd/emulator --set logging.level=debug --print-effective-config
 ```
 
-Liveness proves the process can answer; readiness also pings the warehouse. gRPC
-exposes the standard health service. Enabled Storage Read/Write services report
+Liveness proves the process can answer; readiness also pings SQLite state and
+the warehouse. gRPC exposes the standard health service. Enabled Storage Read/Write services report
 `SERVING`, disabled services report `NOT_SERVING`, and every gRPC health entry is
 switched to `NOT_SERVING` before transport draining. Canonical Storage services
 are listed in the [Storage RPC
@@ -241,10 +280,20 @@ explicit override may instead bind a readable file to
 `/etc/bqemu/bqemu.yaml:ro`; its behavior follows the [bind mounts
 documentation](https://docs.docker.com/engine/storage/bind-mounts/).
 
-Persist the database only through the named volume owned by container UID
-`65532`. A built config must contain paths and non-secret settings only. Mount
-TLS/token files separately and read-only; never copy their contents into an
-image layer.
+Persist both `/data/bqemu-state.sqlite` and `/data/bqemu.duckdb` through the same
+user-owned volume. The image runs with UID/GID `65532`; a named volume must retain
+that ownership, and a host bind must be prepared so that identity can create and
+replace both files plus SQLite journal files. Do not start the container with a
+root-owned or read-only `/data` and do not split the two database files across
+independently managed volumes.
+
+Stop the process cleanly before copying or restoring the pair. The files do not
+share a transaction, and the durable mutation journal is not yet connected to
+startup reconciliation, so even a paired copy is not a claim of cross-store
+crash atomicity. Process-local job, session, stream, and idempotency ledgers are
+not included. A built config must contain paths and non-secret settings only.
+Mount TLS/token files separately and read-only; never copy their contents into
+an image layer.
 
 The checked-in Compose profile sets a read-only root filesystem,
 `no-new-privileges`, a dedicated `/tmp/bqemu` tmpfs, readiness health check, and
@@ -269,9 +318,11 @@ of racing an active query; process teardown owns those remaining resources.
 `runtime.shutdownTimeout` (default `10s`) remains the fallback for deferred
 Storage cleanup during startup or early-return paths. HTTP readiness does not
 flip to false before draining, outstanding operation counts are not reported,
-and a second signal has no dedicated immediate-exit path. Abrupt termination can
-lose the process-local catalog, jobs, Read sessions, Write streams, and load
-idempotency records even when the DuckDB file persists.
+and a second signal has no dedicated immediate-exit path. Abrupt termination
+retains the SQLite catalog and committed DuckDB rows when their files survive,
+but can leave an unreconciled cross-store mutation. It loses process-local
+query/load jobs, Read sessions, Write stream ledgers, and load idempotency
+records.
 
 Tests cover query admission rejection, active sync/async cancellation, bounded
 query drain, and query-before-Storage close order. Idle shutdown, an active REST

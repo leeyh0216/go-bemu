@@ -22,7 +22,7 @@ placement, or production availability is out of scope.
 ```text
 transport/rest, transport/grpc  ->  application  ->  domain + ports
                                                   ^
-adapters/duckdb, memory, objectstore, system  ----|
+adapters/duckdb, sqlite, memory, objectstore, system  ----|
 ```
 
 The arrows are source dependencies. Domain values contain no Google JSON,
@@ -38,8 +38,9 @@ types. Adapters implement outbound side effects.
 | `internal/domain` | identities, canonical schemas, job states, domain errors | HTTP, protobuf, DuckDB |
 | `internal/application` | use cases, ordering, compensation | routes, generated wire types, SQL syntax |
 | `internal/ports` | inbound/outbound contracts | concrete clients |
+| `internal/adapters/sqlite` | canonical catalog and durable BQEMU state primitives | physical rows, query semantics |
 | `internal/adapters/duckdb` | physical names, type mapping, SQL execution | REST resources, job lifecycle |
-| `internal/adapters/memory` | process-local repositories | query semantics |
+| `internal/adapters/memory` | process-local job repositories | canonical catalog persistence, query semantics |
 | `internal/transport/*` | public REST/gRPC boundary | database imports |
 | `cmd/emulator` | composition and lifecycle | business rules |
 
@@ -70,18 +71,22 @@ durable staging.
 <!-- section: catalog-physical-model -->
 ## Catalog and Physical Model
 
-Canonical resources retain BigQuery project, dataset, table, field, partition,
-and clustering metadata. The DuckDB adapter maps `project.dataset.table` to a
-hex-encoded physical schema plus a quoted table identifier. DuckDB's catalog and
-SQL behavior are documented in [DuckDB CREATE
+SQLite is the canonical source for BigQuery project, dataset, table, field,
+partition, clustering, expiration, and hidden-result metadata. The container
+stores this BQEMU state at `/data/bqemu-state.sqlite`. DuckDB owns physical
+objects and rows only; its configured file is `/data/bqemu.duckdb`. The adapter
+maps `project.dataset.table` to a hex-encoded physical schema plus a quoted
+table identifier. DuckDB's physical catalog and SQL behavior are documented in [DuckDB CREATE
 SCHEMA](https://duckdb.org/docs/stable/sql/statements/create_schema) and [identifier
 rules](https://duckdb.org/docs/stable/sql/dialect/keywords_and_identifiers).
 
-The metadata repository and engine catalog are currently separate. Create uses
-physical DDL followed by metadata persistence with compensation. Delete performs
-physical deletion before metadata deletion. A crash between steps can create
-drift. Durable metadata and one transaction boundary are required before restart
-or atomic catalog claims.
+The two databases remain separate transaction domains. Create uses physical DDL
+followed by SQLite publication with compensation. Delete performs physical
+deletion before SQLite deletion. The durable mutation-journal schema and port
+exist, but catalog workflows and startup recovery do not yet reconcile pending
+intents. A crash between steps can therefore leave canonical and physical state
+inconsistent. See the [storage engine adapter implementation
+guide](storage-engine-adapter.md) for the ownership and recovery contract.
 
 Anonymous query results reuse one emulator-owned hidden dataset per
 project/location and one collision-resistant table identity per job. Metadata
@@ -107,7 +112,8 @@ PENDING -> RUNNING -> DONE(result)
 BigQuery reports both successful and failed jobs as `DONE`; clients inspect
 `status.errorResult`, per the official [JobStatus
 resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatus).
-The current repository stores state and materialized results in memory.
+The current query-job repository stores job state and materialized results in
+memory. This is separate from the durable SQLite catalog.
 Query job identity is `(project, location, jobId)` plus a canonical configuration
 fingerprint. Every reused ID returns `409 duplicate`; the fingerprint only makes
 same-versus-different configuration drift visible without logging SQL. This
@@ -187,7 +193,9 @@ dataset is configured.
 ## Transactions and Visibility
 
 An engine statement transaction is not automatically a BigQuery operation
-transaction. Metadata plus physical DDL still spans separate stores. An explicit
+transaction. Canonical SQLite state plus physical DDL still spans separate
+stores, and the durable mutation journal is not yet connected to end-to-end
+recovery. An explicit
 query destination evaluates once into a DuckDB staging table and applies
 `WRITE_EMPTY`, `WRITE_APPEND`, or exact-schema `WRITE_TRUNCATE` in the same
 transaction, following
@@ -208,25 +216,30 @@ restart-durable, and object download is deliberately outside the load commit.
 <!-- section: sql-boundary -->
 ## SQL Dialect Boundary
 
-Backtick reference rewriting is a temporary adapter concern. The current lexical
-scanner distinguishes relation positions from quoted columns, strings, and
-comments, but is not a complete parser for scripts, table decorators, function
-arguments, or every unquoted path. General compatibility requires a structural
-GoogleSQL parser/semantic adapter. The authoritative syntax is the
+The current lexical scanner distinguishes supported relation positions from
+quoted columns, strings, and comments, but is not a complete parser for scripts,
+table decorators, function arguments, or every unquoted path. General
+compatibility still requires a structural GoogleSQL parser and semantic adapter.
+The authoritative syntax is the
 [GoogleSQL lexical structure](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)
 and [query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax).
 Unknown or unsupported forms must fail explicitly rather than be approximately
 rewritten.
-The analyzer marks catalog-mutating DDL and the application rejects `CREATE`,
-`ALTER`, `DROP`, and `TRUNCATE` before job creation or engine execution under
-`query.ddl.catalog-sync-v1`. Implementing DDL requires an atomic canonical
-catalog reconciliation port, not direct DuckDB execution.
+
+Catalog DDL never falls through to DuckDB. The application executes
+`CREATE TABLE`, `DROP TABLE`, top-level scalar `ADD COLUMN`, and `RENAME COLUMN`
+as semantic commands across physical storage and SQLite. `DROP COLUMN` and
+`SET DATA TYPE` are recognized but fail before physical mutation until durable
+journal reconciliation is connected. `TRUNCATE` and all other DDL forms remain
+unsupported.
+
 The same boundary permits only one statement plus an optional trailing
 semicolon. A literal/comment-aware scan rejects all [multi-statement
 queries](https://cloud.google.com/bigquery/docs/multi-statement-queries) before
-job or engine side effects under `query.scripts.unsupported-v1`. Full script
-support requires statement-by-statement semantic analysis, variables, control
-flow, temporary objects, and job-level transaction semantics; passing an opaque
+job or engine side effects under `query.scripts.unsupported-v1`, except for the
+source-pinned dynamic time-partition overwrite operation. Full script support
+requires statement-by-statement semantic analysis, variables, control flow,
+temporary objects, and job-level transaction semantics; passing an opaque
 script to DuckDB is never an acceptable fallback.
 
 The verified static unpartitioned overwrite path is intentionally structural and
@@ -236,28 +249,32 @@ that recognizes the source-derived shape from
 applies the constant-false [BigQuery `MERGE`
 contract](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),
 and executes one atomic [DuckDB `MERGE
-INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). It does not
-generalize to dynamic time/range partition overwrite or arbitrary `MERGE`; those
-remain explicit gaps.
+INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). A separate
+source-pinned semantic adapter supports the connector's dynamic time-partition
+overwrite for validated canonical time-partition metadata. It does not
+generalize to dynamic range partition overwrite, arbitrary scripts, or general
+BigQuery `MERGE`. The exact translations and unsupported clauses are listed in
+the [GoogleSQL boundary guide](google-sql-boundary.md).
 
 <!-- section: runtime-security -->
-## Runtime, TLS, and Public Access
+## Runtime, TLS, and Identity
 
-The process composes one warehouse, process-local catalog/job repositories,
-system clock/ID adapters, application services, public REST/gRPC listeners, and
-the optional separate admin listener. One certificate pair enables TLS on the
-public listeners and on admin when enabled.
+The process composes one SQLite catalog, one warehouse, a process-local job
+repository, system clock/ID adapters, application services, public REST/gRPC
+listeners, and the optional separate administration listener. One certificate pair enables TLS on the
+public listeners and on administration when enabled. BQEMU does not compose an
+authentication service for BigQuery-compatible endpoints: REST and gRPC accept
+requests without credentials and ignore credentials when supplied.
 
-BigQuery-compatible REST and gRPC endpoints do not authenticate or authorize
-callers. Missing, arbitrary, malformed, and expired-looking `Authorization`
-values reach the same protocol handlers. The public runtime neither parses
-credentials nor propagates a caller principal. Boundary observability records
-only the redacted metadata key, never its value.
-
-TLS protects transport without adding caller identity. Client-side token
-acquisition remains outside the emulator runtime. `admin.tokenFile` is an
-independent option that protects only the separate diagnostics listener; it is
-not a public BigQuery authentication policy.
+Transport security and client credential acquisition remain separate from the
+emulator request path. The repository-local generator can create
+service-account, authorized-user ADC, and external-account WIF files, and its
+loopback issuer can satisfy their token acquisition requests. This support is
+documented in [Local client credentials and
+TLS](client-credentials-and-tls.md). It does not implement Google identity,
+signature trust, or IAM authorization described by [Google Cloud
+authentication](https://cloud.google.com/docs/authentication). The separate
+`admin.tokenFile` setting protects only the optional administration listener.
 
 <!-- section: observability -->
 ## Capabilities and Observability
@@ -277,8 +294,8 @@ that every flow succeeds.
 <!-- section: replacement-roadmap -->
 ## Replacement Roadmap
 
-1. Persist canonical metadata, jobs, read sessions, and write/load ledgers in
-   transactional system tables.
+1. Persist query/load jobs, read sessions, and write/load ledgers behind BQEMU
+   state ports, and connect the existing mutation journal to startup recovery.
 2. Replace broad regex SQL translation with structural adapters without
    generalizing the pinned static-overwrite shape.
 3. Add Storage Read split/compression, historical snapshot support, nested

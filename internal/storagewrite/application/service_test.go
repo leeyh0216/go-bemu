@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	writememory "github.com/leeyh0216/go-bemu/internal/storagewrite/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 	"github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
 )
@@ -104,6 +105,22 @@ func (c *fakeCoordinator) DiscardPending(_ context.Context, name string) error {
 	return nil
 }
 
+func (c *fakeCoordinator) InspectPhysical(_ context.Context, expected []ports.PhysicalExpectation) (map[string]ports.PhysicalStreamState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := make(map[string]ports.PhysicalStreamState, len(expected))
+	for _, item := range expected {
+		var rows int64
+		for _, batch := range c.staged[item.StreamName] {
+			rows += int64(len(batch.Rows))
+		}
+		result[item.StreamName] = ports.PhysicalStreamState{PendingExists: rows != 0, PendingRows: rows}
+	}
+	return result, nil
+}
+
+func (c *fakeCoordinator) AcknowledgeApplied(context.Context, []string) error { return nil }
+
 func newTestService(t *testing.T, maxStreams int) (*Service, *fakeCoordinator, *fakeClock) {
 	t.Helper()
 	coordinator := newFakeCoordinator()
@@ -112,7 +129,7 @@ func newTestService(t *testing.T, maxStreams int) (*Service, *fakeCoordinator, *
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
 		MaxStreams: maxStreams, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 4,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
-	}, coordinator, clock, &sequenceIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, coordinator, writememory.NewRepository(), clock, &sequenceIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +391,7 @@ func TestStorageWriteLogsFingerprintWithoutRawStreamOrRows(t *testing.T) {
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
 		MaxStreams: 1, MaxAppendBytes: 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 1,
 		OrphanTTL: time.Minute, CleanupInterval: time.Second,
-	}, coordinator, clock, &sequenceIDs{}, slog.New(slog.NewJSONHandler(&output, nil)))
+	}, coordinator, writememory.NewRepository(), clock, &sequenceIDs{}, slog.New(slog.NewJSONHandler(&output, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

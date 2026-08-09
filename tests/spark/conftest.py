@@ -31,6 +31,7 @@ from artifact_variants import (
     DSV1_VARIANT,
     DSV2_RAW_VARIANT,
     enforce_connector_classpath,
+    enforce_overlay_classpath,
 )
 
 
@@ -45,6 +46,9 @@ MATRIX_PATHS = tuple(
 ARTIFACT_LOCK_PATH = REPOSITORY_ROOT / "tests" / "spark" / "artifacts.lock.json"
 DSV2_ARTIFACT_LOCK_PATH = (
     REPOSITORY_ROOT / "tests" / "spark" / "artifacts-dsv2.lock.json"
+)
+DSV2_OVERLAY_ARTIFACT_LOCK_PATH = (
+    REPOSITORY_ROOT / "tests" / "spark" / "artifacts-dsv2-overlay.lock.json"
 )
 STATIC_ACCESS_TOKEN = "bqemu-spark-e2e-static-token"
 TRUSTSTORE_PASSWORD = "bqemu-test-only"
@@ -631,6 +635,7 @@ def observe_dsv2_exact_streaming_flow(
     append_offsets: list[int] = []
     commit_calls = 0
     committed_rows = 0
+    commit_transactions: list[tuple[int, int, str]] = []
     for encoded in encoded_lines:
         try:
             event = json.loads(encoded)
@@ -715,8 +720,16 @@ def observe_dsv2_exact_streaming_flow(
             and event.get("success") is True
         ):
             row_count = event.get("row_count")
+            stream_count = event.get("stream_count")
+            tx_state = event.get("tx_state")
             if isinstance(row_count, int):
                 committed_rows += row_count
+            if (
+                isinstance(stream_count, int)
+                and isinstance(row_count, int)
+                and tx_state == "committed"
+            ):
+                commit_transactions.append((stream_count, row_count, tx_state))
 
     counts = {operation: sequence.count(operation) for operation in set(sequence)}
     return {
@@ -729,6 +742,7 @@ def observe_dsv2_exact_streaming_flow(
         "append_offsets": tuple(append_offsets),
         "batch_commit_calls": commit_calls,
         "committed_rows": committed_rows,
+        "commit_transactions": tuple(commit_transactions),
         "stream_lifecycle_correlated": (
             len(created) > 0 and created == appended == finalized
         ),
@@ -1036,6 +1050,40 @@ def dsv2_connector_jar(test_timeout: float) -> Path:
 
 
 @pytest.fixture(scope="session")
+def dsv2_overlay_jar(dsv2_connector_jar: Path, test_timeout: float) -> Path:
+    configured = os.getenv("BQEMU_SPARK_DSV2_OVERLAY_JAR")
+    if configured:
+        target = Path(configured).resolve()
+    else:
+        with DSV2_OVERLAY_ARTIFACT_LOCK_PATH.open("r", encoding="utf-8") as stream:
+            lock = json.load(stream)
+        target = (
+            REPOSITORY_ROOT
+            / ".artifacts"
+            / "spark"
+            / lock["overlayArtifact"]["output"]
+        )
+        _run(
+            [
+                os.getenv("PYTHON", os.sys.executable),
+                str(REPOSITORY_ROOT / "tools" / "dsv2-overlay" / "build.py"),
+                "--input",
+                str(dsv2_connector_jar),
+                "--output",
+                str(target),
+            ],
+            cwd=REPOSITORY_ROOT,
+            timeout=_positive_timeout(
+                "BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS", "120"
+            ),
+            stage="build-dsv2-overlay-jar",
+        )
+    return enforce_overlay_classpath(
+        [target], repository_root=REPOSITORY_ROOT
+    ).path
+
+
+@pytest.fixture(scope="session")
 def public_edge(
     tmp_path_factory: pytest.TempPathFactory, test_timeout: float
 ) -> Iterator[PublicEdge]:
@@ -1063,6 +1111,10 @@ def public_edge(
             },
             "grpc": {"address": f"127.0.0.1:{grpc_port}"},
             "tls": {"certFile": str(certificate), "keyFile": str(private_key)},
+        },
+        "state": {
+            "adapter": "sqlite",
+            "dsn": str(work / "bqemu-state.sqlite"),
         },
         "database": {
             "adapter": "duckdb",

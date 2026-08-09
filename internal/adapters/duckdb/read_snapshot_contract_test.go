@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -50,7 +51,7 @@ func TestArrowReferenceSchemaPreservesOfficialTypesModesOrderAndMetadata(t *test
 	wantTypes := []arrow.Type{
 		arrow.BOOL, arrow.INT64, arrow.FLOAT64, arrow.DECIMAL128, arrow.DECIMAL256,
 		arrow.STRING, arrow.BINARY, arrow.DATE32, arrow.TIMESTAMP, arrow.TIME64,
-		arrow.TIMESTAMP, arrow.STRING, arrow.STRING, arrow.STRUCT, arrow.LIST,
+		arrow.TIMESTAMP, arrow.STRING, arrow.STRUCT, arrow.LIST,
 	}
 	for index, want := range wantTypes {
 		got := schema.Field(index)
@@ -70,16 +71,16 @@ func TestArrowReferenceSchemaPreservesOfficialTypesModesOrderAndMetadata(t *test
 	if !schema.Field(1).Nullable {
 		t.Fatal("default mode must be nullable")
 	}
-	list, ok := schema.Field(14).Type.(*arrow.ListType)
-	if !ok || schema.Field(14).Nullable || list.ElemField().Nullable {
-		t.Fatalf("REPEATED mapping = %#v; want non-null list and element", schema.Field(14))
+	list, ok := schema.Field(13).Type.(*arrow.ListType)
+	if !ok || schema.Field(13).Nullable || list.ElemField().Nullable {
+		t.Fatalf("REPEATED mapping = %#v; want non-null list and element", schema.Field(13))
 	}
 	decimal128Type := schema.Field(3).Type.(*arrow.Decimal128Type)
 	if decimal128Type.Precision != 38 || decimal128Type.Scale != 9 {
 		t.Fatalf("NUMERIC Arrow type = %v", decimal128Type)
 	}
 	decimal256Type := schema.Field(4).Type.(*arrow.Decimal256Type)
-	if decimal256Type.Precision != 76 || decimal256Type.Scale != 38 {
+	if decimal256Type.Precision != 38 || decimal256Type.Scale != 18 {
 		t.Fatalf("BIGNUMERIC Arrow type = %v", decimal256Type)
 	}
 	dateTimeType := schema.Field(8).Type.(*arrow.TimestampType)
@@ -92,8 +93,7 @@ func TestArrowReferenceSchemaPreservesOfficialTypesModesOrderAndMetadata(t *test
 	}
 	wantExtensions := map[int]string{
 		8:  "google:sqlType:datetime",
-		11: "google:sqlType:geography",
-		12: "google:sqlType:json",
+		11: "google:sqlType:json",
 	}
 	for index, want := range wantExtensions {
 		if extension, ok := schema.Field(index).Metadata.GetValue("ARROW:extension:name"); !ok || extension != want {
@@ -140,21 +140,55 @@ func TestAvroReferenceSchemaPreservesOfficialTypesAndNullFirstUnion(t *testing.T
 	}
 	checks := map[int][]string{
 		3:  {`"logicalType":"decimal"`, `"precision":38`, `"scale":9`},
-		4:  {`"logicalType":"decimal"`, `"precision":77`, `"scale":38`},
+		4:  {`"logicalType":"decimal"`, `"precision":38`, `"scale":18`},
 		7:  {`"logicalType":"date"`},
 		8:  {`"logicalType":"datetime"`},
 		9:  {`"logicalType":"time-micros"`},
 		10: {`"logicalType":"timestamp-micros"`},
-		11: {`"sqlType":"GEOGRAPHY"`},
-		12: {`"sqlType":"JSON"`},
-		13: {`"type":"record"`},
-		14: {`"type":"array"`},
+		11: {`"sqlType":"JSON"`},
+		12: {`"type":"record"`},
+		13: {`"type":"array"`},
 	}
 	for index, fragments := range checks {
 		for _, fragment := range fragments {
 			if !strings.Contains(string(schema.Fields[index].Type), fragment) {
 				t.Errorf("Avro field %q lacks %s: %s", fields[index].Name, fragment, schema.Fields[index].Type)
 			}
+		}
+	}
+}
+
+func TestReferenceSchemasPreserveExplicitDecimalParameters(t *testing.T) {
+	precision20, scale4 := int64(20), int64(4)
+	precision38, scale12 := int64(38), int64(12)
+	fields := []catalogdomain.Field{
+		{Name: "numeric_value", Type: "NUMERIC", Precision: &precision20, Scale: &scale4},
+		{Name: "bignumeric_value", Type: "BIGNUMERIC", Precision: &precision38, Scale: &scale12},
+	}
+
+	arrowSchema, _, err := buildArrowReferenceSchema(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	numericType := arrowSchema.Field(0).Type.(*arrow.Decimal128Type)
+	if numericType.Precision != 20 || numericType.Scale != 4 {
+		t.Fatalf("explicit NUMERIC Arrow type = %v", numericType)
+	}
+	bignumericType := arrowSchema.Field(1).Type.(*arrow.Decimal256Type)
+	if bignumericType.Precision != 38 || bignumericType.Scale != 12 {
+		t.Fatalf("explicit BIGNUMERIC Arrow type = %v", bignumericType)
+	}
+
+	avroSchema, err := buildAvroReferenceSchema(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`"precision":20,"scale":4`,
+		`"precision":38,"scale":12`,
+	} {
+		if !strings.Contains(string(avroSchema), fragment) {
+			t.Fatalf("Avro decimal schema lacks %s: %s", fragment, avroSchema)
 		}
 	}
 }
@@ -224,14 +258,13 @@ func TestDuckDBReadSnapshotEncodesEverySupportedDriverTypeInBothFormats(t *testi
 		"-42",
 		"1.25",
 		"CAST('123.456789012' AS DECIMAL(38,9))",
-		"'1.00000000000000000000000000000000000000'",
+		"CAST('1.000000000000000000' AS DECIMAL(38,18))",
 		"'text-value'",
 		"from_hex('00ff')",
 		"DATE '2026-08-08'",
 		"TIMESTAMP '2026-08-08 12:34:56.123456'",
 		"TIME '12:34:56.123456'",
 		"TIMESTAMPTZ '2026-08-08 12:34:56.123456+00'",
-		"'POINT(1 2)'",
 		"'{\"answer\":42}'",
 		"{'child':'nested-value'}",
 		"[1, 2, 3]",
@@ -348,9 +381,10 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 	schema := []catalogdomain.Field{
 		{Name: "id", Type: "INT64"},
 		{Name: "active", Type: "BOOL"},
+		{Name: "name", Type: "STRING"},
 		{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "rank", Type: "FLOAT64"}}},
 	}
-	sql, args, err := compileRowRestriction("NOT (id < 2 OR profile.rank >= 3.5) AND active = TRUE", schema)
+	sql, args, shape, err := compileRowRestrictionWithShape("NOT (id < 2 OR profile.rank >= 3.5) AND active = TRUE", schema)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,19 +394,115 @@ func TestRowRestrictionParserParameterizesDocumentedSubset(t *testing.T) {
 	if strings.Count(sql, "?") != 3 || len(args) != 3 {
 		t.Fatalf("parameterized restriction = %s args=%v", sql, args)
 	}
+	if shape.PredicateCount != 3 || shape.LogicalOperatorCount != 3 {
+		t.Fatalf("restriction shape = %#v, want 3 predicates and 3 logical operators", shape)
+	}
 	wantArgs := []any{int64(2), 3.5, true}
 	for index := range wantArgs {
 		if args[index] != wantArgs[index] {
 			t.Errorf("arg %d = %#v, want %#v", index, args[index], wantArgs[index])
 		}
 	}
-	for _, unsupported := range []string{"id IN (1)", "CAST(id AS STRING) = '1'", "id BETWEEN 1 AND 2", "id = 1; SELECT 1"} {
+	for _, supported := range []string{"id IN (1, 2)", "id BETWEEN 1 AND 2", "id = -1", "DATE '2026-08-09' < DATE '2026-08-10'", "TIMESTAMP '2026-08-09 00:00:00+00' < TIMESTAMP '2026-08-10 00:00:00+00'"} {
+		sql, args, err := compileRowRestriction(supported, schema)
+		if err != nil {
+			t.Errorf("supported restriction %q: %v", supported, err)
+			continue
+		}
+		if strings.Contains(sql, "2026") || len(args) == 0 {
+			t.Errorf("restriction %q was not parameterized: sql=%q args=%v", supported, sql, args)
+		}
+	}
+	for _, supported := range []string{"CAST(id AS STRING) = '1'", "LOWER(name) = 'alice'", "STARTS_WITH(LOWER(name), 'a')"} {
+		sql, args, err := compileRowRestriction(supported, schema)
+		if err != nil {
+			t.Errorf("supported restriction %q: %v", supported, err)
+			continue
+		}
+		if strings.Contains(sql, "ALICE") || strings.Contains(sql, "'a'") || len(args) == 0 {
+			t.Errorf("restriction %q was not parameterized: sql=%q args=%v", supported, sql, args)
+		}
+	}
+	for _, unsupported := range []string{"FORMAT('%d', id) = '1'", "id = 1; SELECT 1"} {
 		if _, _, err := compileRowRestriction(unsupported, schema); err == nil {
 			t.Errorf("unsupported restriction %q unexpectedly accepted", unsupported)
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStorageReadGoogleSQLRestrictionFixtures(t *testing.T) {
+	contents, err := os.ReadFile("testdata/storage_read_google_sql_restrictions.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures struct {
+		SchemaVersion int `json:"schemaVersion"`
+		Cases         []struct {
+			CaseID         string  `json:"caseId"`
+			RowRestriction string  `json:"rowRestriction"`
+			ExpectedIDs    []int64 `json:"expectedIds"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(contents, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	if fixtures.SchemaVersion != 1 || len(fixtures.Cases) == 0 {
+		t.Fatalf("invalid restriction fixture metadata: %#v", fixtures)
+	}
+
+	for _, fixture := range fixtures.Cases {
+		fixture := fixture
+		t.Run(fixture.CaseID, func(t *testing.T) {
+			ctx, cancel := duckDBReadTestContext(t)
+			defer cancel()
+			table := catalogdomain.Table{
+				ProjectID: "fixture-project", DatasetID: "fixture_dataset", ID: "events", Type: "TABLE",
+				Schema: []catalogdomain.Field{
+					{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+					{Name: "name", Type: "STRING"},
+					{Name: "active", Type: "BOOL"},
+					{Name: "profile", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "rank", Type: "FLOAT64"}}},
+					{Name: "created_at", Type: "TIMESTAMP"},
+				},
+			}
+			warehouse := newReadTestWarehouse(t, ctx, table)
+			insertReadTestRows(t, ctx, warehouse, table, "(1, 'skip', TRUE, {'rank':2.0}, TIMESTAMPTZ '2026-08-08 00:00:00+00'), (2, 'two', TRUE, {'rank':3.0}, TIMESTAMPTZ '2026-08-08 00:00:00+00'), (3, 'three', FALSE, {'rank':3.0}, TIMESTAMPTZ '2026-08-09 00:00:00+00'), (4, 'FOUR', TRUE, {'rank':4.0}, TIMESTAMPTZ '2026-08-10 00:00:00+00')")
+			materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+			snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+				Table: readTestTableResource(table), Format: readdomain.FormatArrow,
+				SelectedFields: []string{"id", "name"}, RowRestriction: fixture.RowRestriction,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := snapshotPort.(*duckDBReadSnapshot)
+			defer closeReadSnapshot(t, snapshot)
+			iterator, err := snapshot.OpenRange(ctx, 0, snapshot.Metadata().RowCount, 128)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var batches [][]byte
+			for {
+				batch, err := iterator.Next(ctx)
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				batches = append(batches, batch.SerializedRows)
+			}
+			if err := iterator.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ids, _ := decodeProjectedArrowRows(t, snapshot.Metadata().Schema.Serialized, batches)
+			if !slices.Equal(ids, fixture.ExpectedIDs) {
+				t.Fatalf("fixture %q ids=%v want=%v", fixture.CaseID, ids, fixture.ExpectedIDs)
+			}
+		})
 	}
 }
 
@@ -389,7 +519,6 @@ func readContractFields() []catalogdomain.Field {
 		{Name: "datetime_value", Type: "DATETIME"},
 		{Name: "time_value", Type: "TIME"},
 		{Name: "timestamp_value", Type: "TIMESTAMP"},
-		{Name: "geography_value", Type: "GEOGRAPHY"},
 		{Name: "json_value", Type: "JSON"},
 		{Name: "record_value", Type: "RECORD", Fields: []catalogdomain.Field{{Name: "child", Type: "STRING"}}},
 		{Name: "repeated_value", Type: "INT64", Mode: "REPEATED"},

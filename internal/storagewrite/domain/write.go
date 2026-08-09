@@ -25,6 +25,29 @@ const (
 	StreamStateOpen      StreamState = "OPEN"
 	StreamStateFinalized StreamState = "FINALIZED"
 	StreamStateCommitted StreamState = "COMMITTED"
+	StreamStateFailed    StreamState = "FAILED"
+)
+
+type StreamOperation string
+
+const (
+	StreamOperationNone   StreamOperation = ""
+	StreamOperationAppend StreamOperation = "APPEND"
+	StreamOperationCommit StreamOperation = "COMMIT"
+)
+
+type CleanupState string
+
+const (
+	CleanupStateActive  CleanupState = "ACTIVE"
+	CleanupStatePending CleanupState = "PENDING"
+)
+
+type AppendReceiptState string
+
+const (
+	AppendReceiptPrepared AppendReceiptState = "PREPARED"
+	AppendReceiptApplied  AppendReceiptState = "APPLIED"
 )
 
 type Field struct {
@@ -32,6 +55,8 @@ type Field struct {
 	Type        string
 	Mode        string
 	Description string
+	Precision   *int64
+	Scale       *int64
 	Fields      []Field
 }
 
@@ -101,7 +126,37 @@ type WriteStream struct {
 	RowCount          int64
 	NextOffset        int64
 	SchemaFingerprint string
+	TableFingerprint  string
 	LastActivity      time.Time
+	FailureCode       string
+	FailureDigest     string
+}
+
+// StreamRecord is the canonical Storage Write ledger entry. WriterDescriptor
+// is schema metadata, not row payload. Operation and Revision support bounded
+// compare-and-swap transitions across emulator processes.
+type StreamRecord struct {
+	Stream           WriteStream
+	WriterDescriptor []byte
+	Operation        StreamOperation
+	OperationToken   string
+	CleanupState     CleanupState
+	CleanupAttempts  uint64
+	Revision         int64
+}
+
+// AppendReceipt contains only retry identity and accounting metadata. Raw
+// ProtoRows remain exclusively in the physical storage adapter.
+type AppendReceipt struct {
+	StreamName        string
+	StartOffset       int64
+	RowCount          int64
+	StagedBytes       int64
+	SchemaFingerprint string
+	PayloadDigest     string
+	State             AppendReceiptState
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type CreateStreamRequest struct {

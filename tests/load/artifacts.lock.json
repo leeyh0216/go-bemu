@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "bqemu-load-e2e-artifacts/v1",
+  "fakeGCS": {
+    "image": "fsouza/fake-gcs-server@sha256:91afded49de804aa61b5f3eb6c7cd65205acf9e5c5e047cf0ba7d9507af806c8",
+    "version": "1.55.1",
+    "revision": "5fd3ba18c55287fde0a0dcff903c822eb80c709a",
+    "source": "https://github.com/fsouza/fake-gcs-server/tree/v1.55.1"
+  },
+  "pythonClient": {
+    "distribution": "google-cloud-bigquery",
+    "version": "3.43.0",
+    "requirementsLock": "tests/python/requirements.lock",
+    "requirementsLockSha256": "2c8b470865778810d0024b5ddda577dedf3f54260917ee12f8af6e40938f15bd",
+    "contractProfile": "contract/profiles/google-cloud-bigquery-python-3.43.0.json",
+    "contractProfileSha256": "e43ff64166e5f80926f02347cd4364720ecdab10c324dbb84dda745c1deb2ddc",
+    "source": "https://pypi.org/project/google-cloud-bigquery/3.43.0/"
+  },
+  "bqCLI": {
+    "version": "2.1.31",
+    "cloudSDKVersion": "566.0.0",
+    "componentManifestSha256": "9d0b36c77b2333e2a41a30bfdda0606cc567d6837b8df2d8b41d3ad35d0971bd",
+    "versionFileSha256": "c53aa8e437efa6f3c36b595cd3c13321956e59bc2c695d3ccb34d37d0f3c8f3b",
+    "entrypointSha256": "14d442bc52fddd9ccbee2eb4eb0752418d4a8239f87d234a1aae6091c0dd5b73",
+    "contractProfile": "contract/profiles/bq-cli-2.1.31.json",
+    "contractProfileSha256": "2bd22d75d15961ad2134103a5bfb88d49a2b31f2a36d6c6df64ce1c049d08b9b",
+    "source": "https://cloud.google.com/sdk/docs/downloads-versioned-archives"
+  }
+}

@@ -432,6 +432,7 @@ func newAdmissionTestService(t *testing.T, materializer ports.SnapshotMaterializ
 		SessionTTL: 30 * time.Minute, CleanupInterval: time.Minute,
 		MaxRowsPerResponse: 2, MaxSessions: 32,
 		MaxSnapshotBytes: 1 << 20, MaxTotalSnapshotBytes: 32 << 20,
+		StateOperationTimeout: time.Second,
 	}
 	if overrides.SessionTTL != 0 {
 		config.SessionTTL = overrides.SessionTTL

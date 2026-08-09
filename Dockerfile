@@ -8,7 +8,8 @@ RUN go mod download
 COPY contract ./contract
 COPY internal ./internal
 COPY cmd ./cmd
-RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/go-bemu ./cmd/emulator
+RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/go-bemu ./cmd/emulator \
+    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/bqemu-auth-fixture ./cmd/bqemu-auth-fixture
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 LABEL org.opencontainers.image.source="https://github.com/leeyh0216/go-bemu"
@@ -21,6 +22,7 @@ RUN apt-get update \
     && install -d -o bqemu -g bqemu /data /tmp/bqemu /etc/bqemu
 
 COPY --from=build /out/go-bemu /usr/local/bin/go-bemu
+COPY --from=build /out/bqemu-auth-fixture /usr/local/bin/bqemu-auth-fixture
 COPY --chown=root:bqemu --chmod=0440 ${BQEMU_CONFIG_SOURCE} /etc/bqemu/bqemu.yaml
 
 USER 65532:65532

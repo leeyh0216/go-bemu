@@ -5,11 +5,31 @@
 
 # 문서 색인
 
+<!-- section: start-here -->
+## 시작하기
+
+- [개요](../../README.ko.md): 지원하는 로컬 BigQuery API 경계와 에뮬레이터를
+  실행하는 가장 짧은 경로를 안내합니다.
+- [빠른 시작](../../README.ko.md#docker-compose로-시작하기): 서비스를 시작하고 readiness를 확인한 뒤
+  첫 query를 실행합니다.
+- [실행 위치와 클라이언트](client-interactions.md): host Compose,
+  Dev Container/동일 network endpoint, TLS 신뢰, fake-GCS 접근과 Python, Spark,
+  Trino, AWS, `bq` 실행 lab을 안내합니다.
+- [설정](operations.md#설정-규칙): 우선순위, 전체 runtime 동작과 운영 중심 설정 안내를
+  제공합니다.
+- [호환성](compatibility.md): API 경로를 선택하기 전에 지원 동작, 명시적 남은 차이, 알려진
+  제한을 확인합니다.
+- [운영](operations.md): health, shutdown, container와 diagnostics를 설명합니다.
+
 <!-- section: guides -->
-## 안내서
+## 유지보수 안내서
 
 - [아키텍처](architecture.md): 의존성 규칙, 실행 환경 구성, 영속성 경계와 구현체
   교체 지점을 설명합니다.
+- [저장 엔진 어댑터 구현](storage-engine-adapter.md): 기준 상태의 소유권, 엔진 포트,
+  스키마 계획, 복구와 계약 검증 방법을 설명합니다.
+- [GoogleSQL 경계와 지원 범위](google-sql-boundary.md): 실제 어휘 및 커넥터 변환,
+  의미 기반 DDL과 현재 지원하지 않는 형식을 설명합니다.
 - [BigQuery와 커넥터 내부 동작](bigquery-internals.md): REST 작업, Storage
   Read/Write, 간접 로드, `MERGE`, 자료형과 인증 흐름을 설명합니다.
 - [호환성](compatibility.md): 기능별 구현 상태와 제한 사항을 정리합니다.
@@ -21,6 +41,11 @@
   버전 추가, 호환성 차이 진단과 릴리스 절차를 설명합니다.
 - [설정과 운영](operations.md): 설정 우선순위, 컨테이너 보안, 상태 확인과 종료,
   테스트 제한 시간, 진단용 API를 설명합니다.
+- [로컬 클라이언트 인증 파일과 TLS](client-credentials-and-tls.md): 서비스 계정,
+  사용자 계정, WIF 파일 생성과 루프백 토큰 발급 서버, 클라이언트의 인증서 신뢰
+  설정을 설명합니다.
+- [클라이언트 상호작용 안내](client-interactions.md): Python, Spark, Trino, AWS,
+  `bq`의 endpoint, API 경계와 실행 증거 위치를 정리합니다.
 - [아키텍처 결정](adr/): 구현에서 지켜야 하는 설계 결정을 기록합니다.
 
 <!-- section: reading-contract -->

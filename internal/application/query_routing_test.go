@@ -18,6 +18,35 @@ func (analyzer staticQueryAnalyzer) AnalyzeQuery(context.Context, ports.QueryReq
 	return analyzer.analysis, nil
 }
 
+type materializationCatalog struct {
+	dataset domain.Dataset
+	err     error
+}
+
+func (c materializationCatalog) GetDataset(context.Context, string, string) (domain.Dataset, error) {
+	return c.dataset, c.err
+}
+func (materializationCatalog) GetTable(context.Context, string, string, string) (domain.Table, error) {
+	return domain.Table{}, domain.ErrNotFound
+}
+func (materializationCatalog) EnsureAnonymousDataset(context.Context, string, string, string) (domain.Dataset, error) {
+	return domain.Dataset{}, domain.ErrNotFound
+}
+func (materializationCatalog) PublishMaterializedTable(context.Context, domain.Table) error {
+	return nil
+}
+
+type recordingMaterializationCatalog struct {
+	materializationCatalog
+	published *domain.Table
+}
+
+func (c *recordingMaterializationCatalog) PublishMaterializedTable(_ context.Context, table domain.Table) error {
+	copy := table
+	c.published = &copy
+	return nil
+}
+
 func TestQueryCatalogDDLIsRejectedBeforeJobAndEngineSideEffects(t *testing.T) {
 	ctx, cancel := queryApplicationTestContext(t)
 	defer cancel()
@@ -303,6 +332,79 @@ func TestAnonymousDestinationIdentityIsGeneratedBeforeJobInsertion(t *testing.T)
 		job.Configuration.WriteDisposition != domain.WriteEmpty ||
 		job.Configuration.CreateDisposition != domain.CreateIfNeeded {
 		t.Fatalf("generated destination = %#v configuration=%#v", destination, job.Configuration)
+	}
+}
+
+func TestConfiguredMaterializationTargetReplacesAnonymousDataset(t *testing.T) {
+	ctx, cancel := queryApplicationTestContext(t)
+	defer cancel()
+	service := NewQueryService(memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"),
+		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
+		WithQueryMaterializer(&compensatingMaterializer{}), WithQueryDestinationCatalog(failedPublicationCatalog{}),
+		WithQueryMaterializationTarget(MaterializationTarget{ProjectID: "result-project", DatasetID: "results", TTL: time.Hour}),
+	)
+	job, created, err := service.newJob(ctx, QueryInput{ProjectID: "test-project", JobID: "configured-materialization", SQL: "SELECT 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || job.Configuration.Destination == nil || job.Configuration.AnonymousDestination || !job.Configuration.ManagedDestination {
+		t.Fatalf("configuration=%#v", job.Configuration)
+	}
+	destination := *job.Configuration.Destination
+	if destination.ProjectID != "result-project" || destination.DatasetID != "results" || !strings.HasPrefix(destination.TableID, "_bqemu_query_") {
+		t.Fatalf("destination=%#v", destination)
+	}
+}
+
+func TestConfiguredMaterializationTargetPublishesManagedResultWithConfiguredTTL(t *testing.T) {
+	ctx, cancel := queryApplicationTestContext(t)
+	defer cancel()
+	now := time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
+	catalog := &recordingMaterializationCatalog{materializationCatalog: materializationCatalog{
+		dataset: domain.Dataset{ProjectID: "result-project", ID: "results", Location: "US"},
+	}}
+	service := NewQueryService(memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: now}, fixedQueryID("generated"),
+		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
+		WithQueryMaterializer(&compensatingMaterializer{}), WithQueryDestinationCatalog(catalog),
+		WithQueryMaterializationTarget(MaterializationTarget{ProjectID: "result-project", DatasetID: "results", TTL: 2 * time.Hour}),
+	)
+	job, err := service.RunSync(ctx, QueryInput{ProjectID: "test-project", JobID: "managed-result", SQL: "SELECT 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Error != nil || !job.Configuration.ManagedDestination || job.Configuration.AnonymousDestination {
+		t.Fatalf("job configuration=%#v error=%#v", job.Configuration, job.Error)
+	}
+	if catalog.published == nil {
+		t.Fatal("managed result was not published")
+	}
+	published := *catalog.published
+	if published.ProjectID != "result-project" || published.DatasetID != "results" || published.ExpirationTime == nil {
+		t.Fatalf("published table=%#v", published)
+	}
+	if want := now.Add(2 * time.Hour); !published.ExpirationTime.Equal(want) {
+		t.Fatalf("expiration=%s, want %s", published.ExpirationTime, want)
+	}
+}
+
+func TestConfiguredMaterializationValidatesDatasetBeforeMaterializer(t *testing.T) {
+	ctx, cancel := queryApplicationTestContext(t)
+	defer cancel()
+	for name, catalog := range map[string]materializationCatalog{
+		"missing":  {err: domain.ErrNotFound},
+		"location": {dataset: domain.Dataset{ProjectID: "result-project", ID: "results", Location: "EU"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			materializer := &compensatingMaterializer{}
+			service := NewQueryService(memory.NewJobRepository(), &countingQueryEngine{}, fixedClock{now: time.Unix(1, 0)}, fixedQueryID("generated"), WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}), WithQueryMaterializer(materializer), WithQueryDestinationCatalog(catalog), WithQueryMaterializationTarget(MaterializationTarget{ProjectID: "result-project", DatasetID: "results", TTL: time.Hour}))
+			job, err := service.RunSync(ctx, QueryInput{ProjectID: "test-project", Location: "US", JobID: "materialization-" + name, SQL: "SELECT 1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.Error == nil || materializer.drops.Load() != 0 {
+				t.Fatalf("job=%#v drops=%d", job, materializer.drops.Load())
+			}
+		})
 	}
 }
 

@@ -63,11 +63,75 @@ func (c testCatalog) GetTable(_ context.Context, reference domain.TableReference
 	return c.table, nil
 }
 
+type lifecycleTestCatalog struct {
+	mu      sync.Mutex
+	table   domain.Table
+	exists  bool
+	creates int
+	deletes int
+	updates int
+}
+
+func (c *lifecycleTestCatalog) GetTable(_ context.Context, reference domain.TableReference) (domain.Table, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.exists || reference != c.table.Reference {
+		return domain.Table{}, domain.ErrNotFound
+	}
+	return c.table, nil
+}
+func (c *lifecycleTestCatalog) CreateTable(_ context.Context, table domain.Table) (domain.Table, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.exists {
+		return domain.Table{}, domain.ErrConflict
+	}
+	c.table = table
+	c.exists = true
+	c.creates++
+	return table, nil
+}
+func (c *lifecycleTestCatalog) DeleteTable(_ context.Context, reference domain.TableReference) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.exists || reference != c.table.Reference {
+		return domain.ErrNotFound
+	}
+	c.exists = false
+	c.deletes++
+	return nil
+}
+func (c *lifecycleTestCatalog) UpdateSchema(_ context.Context, reference domain.TableReference, schema []domain.Field) (domain.Table, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.exists || reference != c.table.Reference {
+		return domain.Table{}, domain.ErrNotFound
+	}
+	c.table.Schema = cloneLoadFields(schema)
+	c.updates++
+	return c.table, nil
+}
+
+func cloneLoadFields(fields []domain.Field) []domain.Field {
+	result := make([]domain.Field, len(fields))
+	for index, field := range fields {
+		result[index] = field
+		result[index].Fields = cloneLoadFields(field.Fields)
+	}
+	return result
+}
+
 type testLoader struct {
 	mu    sync.Mutex
 	calls int
 	paths []string
 	block bool
+}
+
+type failingLoader struct{}
+
+func (failingLoader) Load(context.Context, ports.LoadRequest) (ports.LoadResult, error) {
+	return ports.LoadResult{}, errors.New("load failed")
 }
 
 type gatedLoader struct {
@@ -303,6 +367,131 @@ func TestServicePersistsTimeoutAsTerminalError(t *testing.T) {
 	if job.Error == nil || job.Error.Reason != "backendError" {
 		t.Fatalf("job = %+v", job)
 	}
+}
+
+func TestServiceCreatesMissingDestinationFromExplicitSchema(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	catalog := &lifecycleTestCatalog{}
+	service := newLifecycleTestService(t, objects, &testLoader{}, catalog)
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Schema = []domain.Field{{Name: "id", Type: "INT64"}}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "create-destination"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error != nil {
+		t.Fatalf("job=%+v", job)
+	}
+	catalog.mu.Lock()
+	defer catalog.mu.Unlock()
+	if !catalog.exists || catalog.creates != 1 || catalog.table.Location != "US" || !schemasEqual(catalog.table.Schema, configuration.Schema) {
+		t.Fatalf("catalog=%+v", catalog)
+	}
+}
+
+func TestServiceHonorsCreateNeverForMissingDestination(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	catalog := &lifecycleTestCatalog{}
+	service := newLifecycleTestService(t, objects, &testLoader{}, catalog)
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.CreateDisposition = domain.CreateNever
+	configuration.Schema = []domain.Field{{Name: "id", Type: "INT64"}}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "create-never"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "notFound" {
+		t.Fatalf("job=%+v", job)
+	}
+	catalog.mu.Lock()
+	defer catalog.mu.Unlock()
+	if catalog.creates != 0 || catalog.exists {
+		t.Fatalf("catalog=%+v", catalog)
+	}
+}
+
+func TestServiceCompensatesCreatedDestinationWhenLoadFails(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	catalog := &lifecycleTestCatalog{}
+	service := newLifecycleTestService(t, objects, failingLoader{}, catalog)
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Schema = []domain.Field{{Name: "id", Type: "INT64"}}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "create-compensate"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil {
+		t.Fatalf("job=%+v", job)
+	}
+	catalog.mu.Lock()
+	defer catalog.mu.Unlock()
+	if catalog.exists || catalog.creates != 1 || catalog.deletes != 1 {
+		t.Fatalf("catalog=%+v", catalog)
+	}
+}
+
+func TestServiceAppliesExplicitAdditiveSchemaUpdateBeforeLoad(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	catalog := &lifecycleTestCatalog{exists: true, table: domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Location: "US",
+		Schema: []domain.Field{{Name: "id", Type: "INT64"}},
+	}}
+	service := newLifecycleTestService(t, objects, &testLoader{}, catalog)
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Schema = []domain.Field{{Name: "id", Type: "INT64"}, {Name: "note", Type: "STRING", Mode: "NULLABLE"}}
+	configuration.SchemaUpdateOptions = []string{"ALLOW_FIELD_ADDITION"}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "additive-schema"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error != nil {
+		t.Fatalf("job=%+v", job)
+	}
+	catalog.mu.Lock()
+	defer catalog.mu.Unlock()
+	if catalog.updates != 1 || !schemasEqual(catalog.table.Schema, configuration.Schema) {
+		t.Fatalf("catalog=%+v", catalog)
+	}
+}
+
+func TestServiceRejectsUnsupportedSchemaUpdateOptionWithoutSideEffects(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	loader := &testLoader{}
+	service := newTestService(t, objects, loader, time.Second)
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Schema = []domain.Field{{Name: "id", Type: "INT64"}, {Name: "note", Type: "STRING"}}
+	configuration.SchemaUpdateOptions = []string{"ALLOW_FIELD_RELAXATION"}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "unsupported-schema-option"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "notImplemented" {
+		t.Fatalf("job=%+v", job)
+	}
+	objects.mu.Lock()
+	defer objects.mu.Unlock()
+	if objects.opens != 0 || loader.calls != 0 {
+		t.Fatalf("unsupported schema option performed side effects: opens=%d loads=%d", objects.opens, loader.calls)
+	}
+}
+
+func newLifecycleTestService(t *testing.T, objects ports.ObjectStore, loader ports.Loader, catalog *lifecycleTestCatalog) *Service {
+	t.Helper()
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	config.OperationTimeout = time.Second
+	config.MaxObjectBytes = 1024
+	config.MaxTotalBytes = 2048
+	service, err := NewService(NewMemoryJobRepository(), objects, catalog, loader, testClock{value: time.Unix(1, 0)}, testIDs{}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
 }
 
 func newTestService(t *testing.T, objects ports.ObjectStore, loader ports.Loader, timeout time.Duration) *Service {

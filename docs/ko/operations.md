@@ -21,6 +21,18 @@
 항목에는 `BQEMU_*` 환경 변수도 제공합니다. Docker용 전체 예시는
 [`configs/bqemu.yaml`](../../configs/bqemu.yaml)에 있습니다.
 
+### 초기 프로젝트와 데이터셋
+
+`defaults.projectId`는 기존 단일 기본 project 호환성을 유지합니다. listener가
+요청을 받기 전에 추가 resource를 만들려면 `bootstrap.projects`를 선언합니다. 각
+project에는 `id`, 선택적인 `datasets`에는 `id`, `location`, `description`,
+`labels`, `defaultTableExpirationMs`, `defaultPartitionExpirationMs`를 설정합니다. 같은 선언을 다시 적용해도 멱등이며, 기존 dataset의
+location이 다르면 listener를 열기 전에 startup이 실패합니다.
+
+기존 단일 project 설정은 migration이 필요 없습니다. `defaults.projectId`를
+유지하고 `bootstrap.projects`를 비워 두면 됩니다. listener가 요청을 받기 전에
+필요한 추가 project와 dataset만 선언합니다.
+
 | 설정 계층 | 지정 방법 | 규칙 |
 | --- | --- | --- |
 | 컴파일 기본값 | 없음 | 메모리에 완전하고 유효한 모델을 만듭니다. |
@@ -31,6 +43,19 @@
 구성 진입점에서는 기본값과 HTTP, gRPC, TLS 제한을 읽습니다. 데이터베이스와 임시
 디렉터리 경로, 종료 제한 시간, 로그, 관리 API, UI, 두 Storage 서비스, 선택형 로드
 기능의 설정도 이곳에서 사용합니다.
+
+저장소에 포함한 컨테이너 설정은 BQEMU 상태와 물리 저장소를 분리합니다.
+
+| 설정 | 컨테이너 경로 | 소유하는 정보 |
+| --- | --- | --- |
+| `state.dsn` | `/data/bqemu-state.sqlite` | 기준 프로젝트, 데이터 세트, 테이블, 스키마와 영속 변경 기록 기본 기능 |
+| `database.dsn` | `/data/bqemu.duckdb` | 물리 테이블, 행, 준비용 릴레이션과 스냅샷만 저장합니다. |
+
+`state.adapter`는 `sqlite`입니다. `state.busyTimeout`, `state.journalMode`,
+`state.synchronous`로 잠금 대기와 영속성 정책을 설정합니다. `database.adapter`는
+`duckdb`입니다. 로컬 `make run`은 두 컨테이너 경로를 저장소의 `data` 디렉터리 아래
+파일로 바꿉니다. 쿼리·로드 작업 저장소, 읽기 세션, 쓰기 스트림 기록과 로드 중복 방지
+기록은 어느 DSN에도 저장하지 않으며 아직 프로세스 안에만 있습니다.
 
 ### Storage Read 스냅샷 제한
 
@@ -138,24 +163,28 @@ HTTP 경계에서 실제로 쓴 바이트의 해시만 기록합니다. 메모�
 
 ### 로드 설정
 
-`load.enabled`를 사용하려면 `load.gcsEndpoint`에 절대 URL을 지정해야 합니다.
-`load.allowFileSources`의 기본값은 `false`입니다. 객체 목록 조회와 다운로드에는
-설정된 제한을 적용합니다.
+Parquet load job은 항상 사용할 수 있습니다. `load.gcsEndpoint`는 필수 절대
+HTTP(S) fake-GCS 호환 JSON endpoint이며 직접 REST source는 `gs://`만 사용할 수
+있습니다. `file://`, `http://`, bare path는 job 저장 전에 거부됩니다. media upload는
+서버 소유의 불변 object store를 사용합니다. 기본 Compose 네트워크는
+`http://fake-gcs:4443`을 사용하며, 호스트에서 실행할 때는 공개된 fake-GCS 주소(예:
+`http://127.0.0.1:4443`)로 override하십시오. 객체 목록 조회와 다운로드에는 설정된
+제한을 적용합니다.
 
 실행 중에 프로토콜 기준 버전을 협상하는 기능은 아직 구성하지 않았습니다. 설정값이
 유효하더라도 부분 지원 기능의 범위가 넓어지는 것은 아닙니다.
 
-### 공개 접근
+### 인증 설정
 
-BigQuery 호환 REST와 gRPC 수신기는 요청을 인증하거나 인가하지 않습니다.
-`Authorization` 값이 없거나, 임의 값이거나, 형식이 잘못되었거나, 중복되었거나,
-만료된 형태여도 무시합니다. 공개 요청 인증을 위한 `auth.*` 설정과 `BQEMU_AUTH_*`
-환경 변수 계약은 없습니다. 알 수 없는 YAML 필드와 `--set` 경로는 기존과 같이 엄격한
-설정 검증에서 거부합니다.
+BQEMU는 BigQuery 호환 REST와 gRPC 요청을 인증하거나 인가하지 않습니다. 인증 정보가
+없는 요청도 허용하며, `Authorization` 헤더나 gRPC authorization 메타데이터가 있어도
+무시합니다. 공개 요청 인증을 위한 실행 설정은 없습니다. `admin.tokenFile`은 별도
+설정이며 선택형 관리 수신기만 보호합니다.
 
-TLS는 별도의 전송 보안 설정입니다. 클라이언트 라이브러리가 요청 전에 인증 정보를
-요구할 수 있지만 토큰 획득은 이 실행 환경의 책임이 아닙니다. `admin.tokenFile`은
-진단용 관리 수신기만 보호하며 BigQuery 호환 엔드포인트에는 적용하지 않습니다.
+Google 클라이언트 라이브러리는 에뮬레이터 호출 전에 인증 파일 해석과 토큰 발급을
+요구할 수 있습니다. 이 저장소에서 제공하는 생성기와 루프백 OAuth/STS 발급 서버는
+[로컬 클라이언트 인증 파일과 TLS](client-credentials-and-tls.md)에 설명되어 있습니다.
+이 클라이언트 지원 기능은 BQEMU 요청에 인증 경계를 추가하지 않습니다.
 
 ### HTTP 요청 본문 제한
 
@@ -246,9 +275,10 @@ curl --fail http://localhost:9050/readyz
 
 Direnv는 선택 사항이며 민감정보를 자동으로 불러오지 않습니다. 저장소의 `.envrc`는
 `.envrc.example`을 불러온 뒤, 파일이 있으면 Git에서 제외한 `.envrc.local`도
-불러옵니다. 예제는 `configs/bqemu.yaml`을 선택합니다. 컨테이너용 데이터베이스와 임시
-디렉터리 경로는 호스트용으로 바꾸고, Go, Python, Docker 테스트에는 제한 시간을
-설정합니다. 컴퓨터마다 다른 개발용 설정만 `.envrc.local`에 넣습니다.
+불러옵니다. 예제는 `configs/bqemu.yaml`을 선택합니다. `make run`은 컨테이너용 상태,
+데이터베이스와 임시 디렉터리 경로를 호스트용으로 바꾸고, Go, Python, Docker
+테스트에는 제한 시간을 설정합니다. 컴퓨터마다 다른 개발용 설정만 `.envrc.local`에
+넣습니다.
 
 리스너를 시작하지 않고 설정 병합 결과를 확인하려면 다음 명령을 실행합니다.
 
@@ -257,8 +287,8 @@ go run ./cmd/emulator --print-effective-config
 go run ./cmd/emulator --set logging.level=debug --print-effective-config
 ```
 
-활성 상태는 프로세스가 응답한다는 뜻입니다. 준비 상태는 웨어하우스 연결 확인도
-성공했다는 뜻입니다. gRPC는 표준 Health 서비스를 제공합니다.
+활성 상태는 프로세스가 응답한다는 뜻입니다. 준비 상태는 SQLite 상태와 웨어하우스
+연결 확인도 성공했다는 뜻입니다. gRPC는 표준 Health 서비스를 제공합니다.
 
 활성화한 Storage Read/Write 서비스는 `SERVING`을 보고합니다. 비활성화한 서비스는
 `NOT_SERVING`을 보고합니다. 전송 계층의 연결을 종료하기 전에 모든 gRPC Health
@@ -294,9 +324,19 @@ context](https://docs.docker.com/build/building/context/) 안의 경로를
 `/etc/bqemu/bqemu.yaml:ro`에 명시적으로 바인드할 수 있습니다. 자세한 동작은 [bind
 mount 문서](https://docs.docker.com/engine/storage/bind-mounts/)를 따릅니다.
 
-데이터베이스는 컨테이너 UID `65532`가 소유한 이름 있는 볼륨에만 영속화합니다. 이미지에
-포함하는 설정에는 경로와 민감하지 않은 값만 넣습니다. TLS와 토큰 파일은 별도로 읽기
-전용 마운트하며 이미지 계층에 내용을 복사하지 않습니다.
+`/data/bqemu-state.sqlite`와 `/data/bqemu.duckdb`를 같은 사용자 소유 볼륨에
+영속화합니다. 이미지는 UID/GID `65532`로 실행합니다. 이름 있는 볼륨은 이 소유권을
+유지해야 합니다. 호스트 디렉터리를 바인드한다면 이 사용자가 두 데이터베이스 파일과
+SQLite 저널 파일을 만들고 교체할 수 있도록 미리 준비해야 합니다. 루트가 소유하거나
+읽기 전용인 `/data`로 컨테이너를 시작하면 안 됩니다. 두 데이터베이스 파일을 서로
+독립적으로 관리하는 볼륨으로 나눠서도 안 됩니다.
+
+두 파일을 복사하거나 복원하기 전에 프로세스를 정상 종료합니다. 두 파일은 트랜잭션을
+공유하지 않습니다. 영속 변경 기록도 시작 후 대조 절차에 연결되지 않았으므로, 두 파일을
+함께 복사해도 두 저장소 변경의 장애 원자성을 보장하지는 않습니다. 프로세스 내부 작업,
+세션, 스트림과 중복 방지 기록도 백업에 포함되지 않습니다. 이미지에 포함하는 설정에는
+경로와 민감하지 않은 값만 넣습니다. TLS와 토큰 파일은 별도로 읽기 전용 마운트하며
+이미지 계층에 내용을 복사하지 않습니다.
 
 저장소의 Compose 프로필은 루트 파일 시스템을 읽기 전용으로 설정하고
 `no-new-privileges`를 사용합니다. 전용 `/tmp/bqemu` tmpfs와 준비 상태 검사도
@@ -330,8 +370,9 @@ SIGINT, SIGTERM 또는 리스너 오류가 발생하면 먼저 모든 gRPC Healt
 시작하기 전에 `false`로 바뀌지 않습니다. 처리 중인 작업 수도 보고하지 않으며, 두
 번째 종료 신호만을 위한 즉시 종료 경로도 없습니다.
 
-DuckDB 파일이 남아 있더라도 갑작스럽게 종료하면 프로세스 메모리의 카탈로그와 작업을
-잃을 수 있습니다. Read 세션, Write 스트림, 로드 중복 방지 기록도 복구할 수 없습니다.
+파일이 남아 있으면 SQLite 카탈로그와 커밋한 DuckDB 행은 유지됩니다. 하지만 갑작스럽게
+종료하면 두 저장소 사이에 대조하지 못한 변경이 남을 수 있습니다. 프로세스 내부의
+쿼리·로드 작업, Read 세션, Write 스트림 기록과 로드 중복 방지 기록은 잃습니다.
 
 테스트에서는 새 쿼리 거부, 실행 중인 동기 및 비동기 쿼리 취소, 제한 시간 안의 쿼리
 종료, 쿼리 종료 후 Storage를 닫는 순서를 확인합니다. 유휴 상태 종료, 처리 중인 REST
@@ -408,3 +449,9 @@ BigQuery REST 네임스페이스와 공유하지 않습니다.
 
 이 설정 API, 지원 기능과 작업 수, 최근 계약 불일치 요약은 아직 계획 단계입니다.
 관리 API는 IAM을 대체하지 않습니다.
+
+선택적으로 `query.materialization.projectId`, `datasetId`, `expiration`을 함께
+설정하면 destinationTable이 없는 row-producing query 결과를 해당 기존 dataset에
+생성합니다. 명시적 `destinationTable`이 항상 우선하며, 설정한 dataset은 query
+location과 같아야 합니다. 생성 table에는 설정한 expiration이 적용되고 서버가
+수명 주기를 관리합니다.

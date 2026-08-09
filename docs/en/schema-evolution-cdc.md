@@ -42,9 +42,8 @@ explicit transaction and tests existing-row null semantics.
 
 Canonical metadata is still process-local. A process crash cannot atomically
 coordinate the in-memory catalog with the DuckDB file, and direct DuckDB changes
-are never canonical BigQuery metadata changes. DDL conversions, load/query
-`schemaUpdateOptions`, and Storage Write schema notification remain separate
-gaps.
+are never canonical BigQuery metadata changes. Query-job `schemaUpdateOptions`
+and Storage Write schema notification remain separate gaps.
 
 <!-- section: load-schema-updates -->
 ## Load and Query Job Evolution
@@ -58,10 +57,12 @@ Those paths require staging, validation against the destination's current
 schema, atomic data plus metadata publication, and a durable job error. They are
 not implemented merely by accepting the JSON option.
 
-The current opt-in Parquet load slice validates casts against an existing table
-and applies a write disposition atomically, but it rejects
-`schemaUpdateOptions`, destination creation, and autodetect. Load-driven schema
-evolution therefore remains unsupported.
+The opt-in Parquet load slice supports `ALLOW_FIELD_ADDITION` with
+`WRITE_APPEND`. It delegates to the canonical catalog schema-evolution service,
+which preserves existing field order/type/mode and permits only appended
+nullable or repeated fields (including nested fields). The catalog and DuckDB
+physical change are applied before the load begins. `ALLOW_FIELD_RELAXATION`,
+query-job schema updates, and autodetect remain unsupported.
 
 <!-- section: write-schema-updates -->
 ## Storage Write Schema Changes

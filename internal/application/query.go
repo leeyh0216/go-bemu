@@ -39,18 +39,26 @@ type QueryInput struct {
 	CreateDisposition domain.CreateDisposition
 	Priority          domain.QueryPriority
 	Labels            map[string]string
+	ParameterMode     domain.QueryParameterMode
+	QueryParameters   []domain.QueryParameter
 }
 
 type QueryService struct {
-	jobs                ports.JobRepository
-	warehouse           ports.QueryEngine
-	analyzer            ports.QueryAnalyzer
-	materializer        ports.QueryMaterializer
-	destinations        ports.QueryDestinationCatalog
+	jobs               ports.JobRepository
+	warehouse          ports.QueryEngine
+	analyzer           ports.QueryAnalyzer
+	materializer       ports.QueryMaterializer
+	destinations       ports.QueryDestinationCatalog
+	ddlParser          ports.DDLParser
+	parameterValidator ports.QueryParameterValidator
+	ddl                interface {
+		ExecuteDDL(context.Context, domain.DDLCommand) error
+	}
 	clock               ports.Clock
 	ids                 ports.IDGenerator
 	defaultLocation     string
 	anonymousTTL        time.Duration
+	materialization     *MaterializationTarget
 	operationTimeout    time.Duration
 	compensationTimeout time.Duration
 	runtimeCtx          context.Context
@@ -59,6 +67,22 @@ type QueryService struct {
 	closing             bool
 	activeWork          int
 	idle                chan struct{}
+}
+
+// MaterializationTarget controls server-generated row-producing query results
+// when callers do not supply destinationTable.
+type MaterializationTarget struct {
+	ProjectID, DatasetID string
+	TTL                  time.Duration
+}
+
+func WithQueryMaterializationTarget(target MaterializationTarget) QueryOption {
+	return func(service *QueryService) {
+		if target.ProjectID != "" && target.DatasetID != "" && target.TTL > 0 {
+			copy := target
+			service.materialization = &copy
+		}
+	}
 }
 
 // ErrQueryServiceClosed rejects execution admission once shutdown begins.
@@ -133,6 +157,25 @@ func WithQueryCompensationTimeout(timeout time.Duration) QueryOption {
 			service.compensationTimeout = timeout
 		}
 	}
+}
+
+// WithQueryDDLExecutor installs the catalog-owned semantic DDL path.
+func WithQueryDDLExecutor(executor interface {
+	ExecuteDDL(context.Context, domain.DDLCommand) error
+}) QueryOption {
+	return func(service *QueryService) { service.ddl = executor }
+}
+
+// WithQueryDDLParser installs the GoogleSQL syntax boundary. The executor
+// receives only semantic commands and never client SQL text.
+func WithQueryDDLParser(parser ports.DDLParser) QueryOption {
+	return func(service *QueryService) { service.ddlParser = parser }
+}
+
+// WithQueryParameterValidator installs the single GoogleSQL AST boundary for
+// requests that carry typed named or positional parameters.
+func WithQueryParameterValidator(validator ports.QueryParameterValidator) QueryOption {
+	return func(service *QueryService) { service.parameterValidator = validator }
 }
 
 func NewQueryService(jobs ports.JobRepository, warehouse ports.QueryEngine, clock ports.Clock, ids ports.IDGenerator, options ...QueryOption) *QueryService {
@@ -280,6 +323,14 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		destination.ProjectID = input.ProjectID
 		input.Destination = &destination
 	}
+	if len(input.QueryParameters) > 0 {
+		if s.parameterValidator == nil {
+			return nil, false, fmt.Errorf("%w: GoogleSQL query parameter validator is not configured", domain.ErrPrecondition)
+		}
+		if err := s.parameterValidator.ValidateQueryParameters(ctx, ports.QueryRequest{ProjectID: input.ProjectID, DefaultProjectID: input.DefaultProjectID, DefaultDataset: input.DefaultDataset, SQL: input.SQL, ParameterMode: input.ParameterMode, QueryParameters: input.QueryParameters}); err != nil {
+			return nil, false, err
+		}
+	}
 	analysis := ports.QueryAnalysis{}
 	if s.analyzer != nil {
 		var err error
@@ -292,24 +343,37 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		}
 	}
 	if analysis.RequiresCatalogMutation {
-		return nil, false, fmt.Errorf("%w: query DDL requires atomic physical and canonical catalog synchronization; capability=%s",
-			domain.ErrUnsupported, domain.GapQueryDDLCatalogSyncV1)
+		if s.ddlParser == nil || s.ddl == nil {
+			return nil, false, ddlUnsupported("catalog DDL parser and executor are not configured")
+		}
+		_, matched, err := s.ddlParser.ParseDDL(ctx, ports.QueryRequest{ProjectID: input.ProjectID, DefaultProjectID: input.DefaultProjectID, DefaultDataset: input.DefaultDataset, SQL: input.SQL})
+		if err != nil {
+			return nil, false, err
+		}
+		if !matched {
+			return nil, false, ddlUnsupported("catalog mutation was not recognized as supported DDL")
+		}
 	}
 	location, err := s.resolveQueryLocation(ctx, input, analysis)
 	if err != nil {
 		return nil, false, err
 	}
 	input.Location = location
-	anonymousDestination := false
+	anonymousDestination, managedDestination := false, false
 	if s.analyzer != nil && analysis.ProducesRows && input.Destination == nil {
 		if s.materializer == nil || s.destinations == nil {
 			return nil, false, fmt.Errorf("%w: anonymous query results require analyzer, materializer, and destination catalog ports", domain.ErrPrecondition)
 		}
 		destination := anonymousQueryDestination(input.ProjectID, input.Location, input.JobID)
+		if s.materialization != nil {
+			destination.ProjectID = s.materialization.ProjectID
+			destination.DatasetID = s.materialization.DatasetID
+			managedDestination = true
+		}
 		input.Destination = &destination
 		input.WriteDisposition = domain.WriteEmpty
 		input.CreateDisposition = domain.CreateIfNeeded
-		anonymousDestination = true
+		anonymousDestination = !managedDestination
 	}
 	job, err := domain.NewConfiguredQueryJob(domain.JobReference{
 		ProjectID: input.ProjectID,
@@ -319,7 +383,7 @@ func (s *QueryService) newJob(ctx context.Context, input QueryInput) (*domain.Jo
 		SQL: input.SQL, DefaultProjectID: input.DefaultProjectID,
 		DefaultDataset: input.DefaultDataset, Destination: input.Destination,
 		WriteDisposition: input.WriteDisposition, CreateDisposition: input.CreateDisposition,
-		Priority: input.Priority, Labels: input.Labels, AnonymousDestination: anonymousDestination,
+		Priority: input.Priority, Labels: input.Labels, ParameterMode: input.ParameterMode, QueryParameters: input.QueryParameters, AnonymousDestination: anonymousDestination, ManagedDestination: managedDestination,
 	}, s.clock.Now())
 	if err != nil {
 		return nil, false, err
@@ -417,7 +481,22 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domai
 	configuration := job.Configuration
 	request := ports.QueryRequest{
 		ProjectID: job.Reference.ProjectID, DefaultProjectID: configuration.DefaultProjectID,
-		DefaultDataset: configuration.DefaultDataset, SQL: configuration.SQL,
+		DefaultDataset: configuration.DefaultDataset, SQL: configuration.SQL, ParameterMode: configuration.ParameterMode, QueryParameters: configuration.QueryParameters,
+	}
+	if s.ddlParser != nil {
+		command, matched, err := s.ddlParser.ParseDDL(ctx, request)
+		if err != nil {
+			return domain.QueryResult{}, err
+		}
+		if matched {
+			if s.ddl == nil {
+				return domain.QueryResult{}, ddlUnsupported("catalog DDL executor is not configured")
+			}
+			if err := s.ddl.ExecuteDDL(ctx, command); err != nil {
+				return domain.QueryResult{}, err
+			}
+			return domain.QueryResult{}, nil
+		}
 	}
 	if configuration.Destination == nil {
 		return s.executeQueryWithoutDestination(ctx, request)
@@ -483,8 +562,12 @@ func (s *QueryService) executeQuery(ctx context.Context, job *domain.Job) (domai
 		ProjectID: destination.ProjectID, DatasetID: destination.DatasetID, ID: destination.TableID,
 		Type: "TABLE", Schema: fields, Location: dataset.Location,
 	}
-	if configuration.AnonymousDestination {
-		expires := s.clock.Now().Add(s.anonymousTTL)
+	if configuration.AnonymousDestination || configuration.ManagedDestination {
+		ttl := s.anonymousTTL
+		if configuration.ManagedDestination && s.materialization != nil {
+			ttl = s.materialization.TTL
+		}
+		expires := s.clock.Now().Add(ttl)
 		table.ExpirationTime = &expires
 	}
 	if publishErr := s.destinations.PublishMaterializedTable(ctx, table); publishErr != nil {

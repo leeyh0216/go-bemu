@@ -420,6 +420,7 @@ func newReadAdapterService(t *testing.T, materializer *DuckDBReadSnapshotMateria
 		MaxSessions:           32,
 		MaxSnapshotBytes:      32 << 20,
 		MaxTotalSnapshotBytes: 128 << 20,
+		StateOperationTimeout: time.Second,
 	}, materializer, clock, &readAdapterIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	writememory "github.com/leeyh0216/go-bemu/internal/storagewrite/adapters/memory"
 	writeapp "github.com/leeyh0216/go-bemu/internal/storagewrite/application"
 	writedomain "github.com/leeyh0216/go-bemu/internal/storagewrite/domain"
 	writeports "github.com/leeyh0216/go-bemu/internal/storagewrite/ports"
@@ -230,13 +231,29 @@ func (c *wireWriteCoordinator) DiscardPending(_ context.Context, name string) er
 	return nil
 }
 
-func newWireWriteService(t *testing.T, coordinator writeports.Coordinator) *writeapp.Service {
+func (c *wireWriteCoordinator) InspectPhysical(_ context.Context, expected []writeports.PhysicalExpectation) (map[string]writeports.PhysicalStreamState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := make(map[string]writeports.PhysicalStreamState, len(expected))
+	for _, item := range expected {
+		var rows int64
+		for _, batch := range c.staged[item.StreamName] {
+			rows += int64(len(batch.Rows))
+		}
+		result[item.StreamName] = writeports.PhysicalStreamState{PendingExists: rows != 0, PendingRows: rows}
+	}
+	return result, nil
+}
+
+func (c *wireWriteCoordinator) AcknowledgeApplied(context.Context, []string) error { return nil }
+
+func newWireWriteService(t *testing.T, coordinator writeports.DurableCoordinator) *writeapp.Service {
 	t.Helper()
 	service, err := writeapp.New(writeapp.Config{
 		Location: "US", ProtocolModelVersion: "spark-0.44.2",
 		MaxStreams: 16, MaxAppendBytes: 9 * 1024 * 1024, MaxAppendEnvelopeBytes: 64 * 1024, MaxConcurrentAppendRequests: 4,
 		OrphanTTL: time.Hour, CleanupInterval: time.Minute,
-	}, coordinator, wireClock{}, &wireIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, coordinator, writememory.NewRepository(), wireClock{}, &wireIDs{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

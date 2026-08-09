@@ -97,6 +97,49 @@ func TestParquetLoadRejectsSchemaMismatchWithoutChangingDestination(t *testing.T
 	assertNoLoadStagingTables(t, warehouse)
 }
 
+func TestParquetLoadAcceptsCanonicalStructAndRepeatedFields(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	schema := []catalogDomain.Field{
+		{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+		{Name: "profile", Type: "RECORD", Fields: []catalogDomain.Field{{Name: "name", Type: "STRING"}, {Name: "rank", Type: "INT64"}}},
+		{Name: "tags", Type: "STRING", Mode: "REPEATED"},
+		{Name: "profiles", Type: "RECORD", Mode: "REPEATED", Fields: []catalogDomain.Field{{Name: "name", Type: "STRING"}, {Name: "rank", Type: "INT64"}}},
+	}
+	if err := warehouse.CreateTable(ctx, catalogDomain.Table{ProjectID: "test-project", DatasetID: "dataset", ID: "nested_items", Schema: schema}); err != nil {
+		t.Fatal(err)
+	}
+	parquet := createLoadParquet(t, warehouse, "SELECT 1::BIGINT AS id, {'name':'alice', 'rank':7::BIGINT} AS profile, ['a', 'b']::VARCHAR[] AS tags, [{'name':'alice', 'rank':7::BIGINT}] AS profiles")
+	loadSchema := []loadDomain.Field{
+		{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+		{Name: "profile", Type: "RECORD", Fields: []loadDomain.Field{{Name: "name", Type: "STRING"}, {Name: "rank", Type: "INT64"}}},
+		{Name: "tags", Type: "STRING", Mode: "REPEATED"},
+		{Name: "profiles", Type: "RECORD", Mode: "REPEATED", Fields: []loadDomain.Field{{Name: "name", Type: "STRING"}, {Name: "rank", Type: "INT64"}}},
+	}
+	result, err := warehouse.Load(ctx, loadports.LoadRequest{Destination: loadDomain.Table{Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "nested_items"}, Schema: loadSchema}, Schema: loadSchema, Objects: []loadports.LocalObject{{Path: parquet}}, SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OutputRows != 1 {
+		t.Fatalf("output rows = %d, want 1", result.OutputRows)
+	}
+	var profileName string
+	var tagCount, profileCount int64
+	if err := warehouse.db.QueryRow(`SELECT profile.name, array_length(tags), array_length(profiles) FROM "bq_746573742d70726f6a656374_64617461736574"."nested_items"`).Scan(&profileName, &tagCount, &profileCount); err != nil {
+		t.Fatal(err)
+	}
+	if profileName != "alice" || tagCount != 2 || profileCount != 1 {
+		t.Fatalf("loaded nested values = %q/%d/%d", profileName, tagCount, profileCount)
+	}
+}
+
 func assertNoLoadStagingTables(t *testing.T, warehouse *Warehouse) {
 	t.Helper()
 	var count int64

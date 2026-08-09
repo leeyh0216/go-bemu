@@ -156,19 +156,45 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	if configuration.SourceFormat != domain.FormatParquet {
 		return statistics, fmt.Errorf("%w: sourceFormat %s", domain.ErrUnsupported, configuration.SourceFormat)
 	}
-	if configuration.Autodetect || len(configuration.SchemaUpdateOptions) > 0 || configuration.IgnoreUnknownValues || configuration.MaxBadRecords != 0 || len(configuration.UnsupportedOptions) > 0 {
+	if configuration.Autodetect || configuration.IgnoreUnknownValues || configuration.MaxBadRecords != 0 || len(configuration.UnsupportedOptions) > 0 {
 		return statistics, fmt.Errorf("%w: requested load options", domain.ErrUnsupported)
 	}
 
-	table, err := s.tables.GetTable(ctx, configuration.Destination)
+	table, createdDestination, err := s.resolveDestination(ctx, job, configuration)
 	if err != nil {
 		return statistics, err
+	}
+	if createdDestination {
+		defer func() {
+			if err == nil {
+				return
+			}
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.config.OperationTimeout)
+			defer cancel()
+			if cleanupErr := s.destinationCatalog().DeleteTable(cleanupCtx, configuration.Destination); cleanupErr != nil && !errors.Is(cleanupErr, domain.ErrNotFound) {
+				err = errors.Join(err, fmt.Errorf("compensate failed load destination: %w", cleanupErr))
+			}
+		}()
 	}
 	if table.Location != "" && !strings.EqualFold(table.Location, job.Reference.Location) {
 		return statistics, fmt.Errorf("%w: destination table and job locations differ", domain.ErrInvalid)
 	}
 	if len(configuration.Schema) > 0 && !schemasEqual(configuration.Schema, table.Schema) {
-		return statistics, fmt.Errorf("%w: requested schema does not match the destination table", domain.ErrInvalid)
+		if err := validateSchemaUpdateOptions(configuration); err != nil {
+			return statistics, err
+		}
+		updates, ok := s.tables.(ports.SchemaEvolutionCatalog)
+		if !ok {
+			return statistics, fmt.Errorf("%w: destination schema updates are not configured", domain.ErrUnsupported)
+		}
+		table, err = updates.UpdateSchema(ctx, configuration.Destination, configuration.Schema)
+		if err != nil {
+			return statistics, err
+		}
+	} else if len(configuration.SchemaUpdateOptions) > 0 {
+		if err := validateSchemaUpdateOptions(configuration); err != nil {
+			return statistics, err
+		}
 	}
 
 	objects, err := s.resolveObjects(ctx, configuration.SourceURIs)
@@ -228,6 +254,52 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		statistics.OutputBytes = downloaded
 	}
 	return statistics, err
+}
+
+func validateSchemaUpdateOptions(configuration domain.LoadConfiguration) error {
+	if len(configuration.SchemaUpdateOptions) == 0 {
+		return fmt.Errorf("%w: requested schema does not match the destination table", domain.ErrInvalid)
+	}
+	if configuration.WriteDisposition != domain.WriteAppend {
+		return fmt.Errorf("%w: schemaUpdateOptions require WRITE_APPEND", domain.ErrUnsupported)
+	}
+	for _, option := range configuration.SchemaUpdateOptions {
+		if strings.EqualFold(option, "ALLOW_FIELD_ADDITION") {
+			continue
+		}
+		return fmt.Errorf("%w: schemaUpdateOptions %q", domain.ErrUnsupported, option)
+	}
+	return nil
+}
+
+func (s *Service) resolveDestination(ctx context.Context, job *domain.Job, configuration domain.LoadConfiguration) (domain.Table, bool, error) {
+	table, err := s.tables.GetTable(ctx, configuration.Destination)
+	if err == nil {
+		return table, false, nil
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		return domain.Table{}, false, err
+	}
+	if configuration.CreateDisposition == domain.CreateNever {
+		return domain.Table{}, false, err
+	}
+	if len(configuration.Schema) == 0 {
+		return domain.Table{}, false, fmt.Errorf("%w: schema is required when creating a destination table without autodetect", domain.ErrInvalid)
+	}
+	destinations := s.destinationCatalog()
+	if destinations == nil {
+		return domain.Table{}, false, fmt.Errorf("%w: destination table creation is not configured", domain.ErrUnsupported)
+	}
+	created, createErr := destinations.CreateTable(ctx, domain.Table{Reference: configuration.Destination, Location: job.Reference.Location, Schema: configuration.Schema})
+	if createErr != nil {
+		return domain.Table{}, false, createErr
+	}
+	return created, true, nil
+}
+
+func (s *Service) destinationCatalog() ports.DestinationTableCatalog {
+	destinations, _ := s.tables.(ports.DestinationTableCatalog)
+	return destinations
 }
 
 func (s *Service) resolveObjects(ctx context.Context, patterns []string) ([]ports.ObjectInfo, error) {

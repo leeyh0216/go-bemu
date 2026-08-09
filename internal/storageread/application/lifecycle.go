@@ -9,22 +9,33 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leeyh0216/go-bemu/internal/storageread/domain"
 	"github.com/leeyh0216/go-bemu/internal/storageread/ports"
 )
 
 func (s *Service) SweepExpired(ctx context.Context) error {
 	now := s.clock.Now()
 	var expired []*sessionState
+	var names []string
 	s.mu.Lock()
 	for name, state := range s.sessions {
 		if now.Before(state.session.ExpireTime) {
 			continue
 		}
-		delete(s.sessions, name)
+		names = append(names, name)
+		expired = append(expired, state)
+	}
+	if err := s.transitionSessions(ctx, names, domain.SessionExpired, now); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	for _, state := range expired {
+		delete(s.sessions, state.session.Name)
+		state.record.Lifecycle = domain.SessionExpired
+		state.record.LifecycleUpdatedAt = now
 		for _, stream := range state.session.Streams {
 			delete(s.streams, stream.Name)
 		}
-		expired = append(expired, state)
 	}
 	s.mu.Unlock()
 	return s.closeSnapshots(ctx, "storage_read.expire_sessions", expired)
@@ -53,12 +64,22 @@ func (s *Service) RunCleanup(ctx context.Context) error {
 func (s *Service) Close(ctx context.Context) error {
 	s.mu.Lock()
 	states := make([]*sessionState, 0, len(s.sessions))
+	names := make([]string, 0, len(s.sessions))
 	for _, state := range s.sessions {
 		states = append(states, state)
+		names = append(names, state.session.Name)
+	}
+	s.closed = true
+	now := s.clock.Now()
+	stateErr := s.transitionSessions(ctx, names, domain.SessionUnavailable, now)
+	if stateErr == nil {
+		for _, state := range states {
+			state.record.Lifecycle = domain.SessionUnavailable
+			state.record.LifecycleUpdatedAt = now
+		}
 	}
 	s.sessions = make(map[string]*sessionState)
 	s.streams = make(map[string]streamState)
-	s.closed = true
 	reservations := make([]*sessionReservation, 0, len(s.reservations))
 	for _, reservation := range s.reservations {
 		reservations = append(reservations, reservation)
@@ -72,7 +93,7 @@ func (s *Service) Close(ctx context.Context) error {
 	}
 	closeErr := s.closeSnapshots(ctx, "storage_read.shutdown", states)
 	waitErr := waitForReservations(ctx, reservations)
-	return errors.Join(closeErr, waitErr)
+	return errors.Join(stateErr, closeErr, waitErr)
 }
 
 func (s *Service) closeSnapshots(ctx context.Context, operation string, states []*sessionState) error {

@@ -1,0 +1,13 @@
+services:
+  bigquery-emulator:
+    build:
+      context: ..
+    environment:
+      BQEMU_STATE_DSN: /data/bqemu-state.sqlite
+      BQEMU_DATABASE_DSN: /data/bqemu.duckdb
+      BQEMU_PUBLIC_URL: http://localhost:9050
+    ports:
+      - "9050:9050"
+      - "9060:9060"
+    volumes:
+      - ../data:/data

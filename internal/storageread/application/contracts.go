@@ -70,6 +70,14 @@ func validateSnapshotMetadata(format domain.Format, metadata *domain.SnapshotMet
 	if metadata.RowCount < 0 || metadata.EstimatedBytes < 0 || metadata.RetainedBytes < 0 {
 		return errors.New("snapshot metadata contains a negative size")
 	}
+	if metadata.FilterShape.PredicateCount < 0 || metadata.FilterShape.LogicalOperatorCount < 0 {
+		return errors.New("snapshot metadata contains a negative filter count")
+	}
+	for _, field := range metadata.SelectedFields {
+		if strings.TrimSpace(field) == "" {
+			return errors.New("snapshot metadata contains an empty canonical selected field")
+		}
+	}
 	if metadata.Schema.Format != format {
 		return fmt.Errorf("snapshot format %s does not match request %s", metadata.Schema.Format, format)
 	}
@@ -80,6 +88,7 @@ func validateSnapshotMetadata(format domain.Format, metadata *domain.SnapshotMet
 		return errors.New("snapshot Avro reference schema is not JSON")
 	}
 	metadata.Schema.Serialized = slices.Clone(metadata.Schema.Serialized)
+	metadata.SelectedFields = slices.Clone(metadata.SelectedFields)
 	metadata.Schema.Fingerprint = digest(metadata.Schema.Serialized)
 	return nil
 }

@@ -3,6 +3,7 @@
 BINARY ?= bin/go-bemu
 BQEMU_CONFIG ?= configs/bqemu.yaml
 BQEMU_LOCAL_DATA_DIR ?= $(CURDIR)/data
+BQEMU_STATE_DSN ?= $(BQEMU_LOCAL_DATA_DIR)/bqemu-state.sqlite
 BQEMU_DATABASE_DSN ?= $(BQEMU_LOCAL_DATA_DIR)/bqemu.duckdb
 BQEMU_TEMP_DIRECTORY ?= $(if $(TMPDIR),$(TMPDIR),/tmp)/bqemu
 BQEMU_GO_TEST_TIMEOUT ?= 10m
@@ -14,6 +15,7 @@ BQEMU_DOCKER_START_TIMEOUT_SECONDS ?= 120
 BQEMU_SPARK_TEST_TIMEOUT_SECONDS ?= 600
 BQEMU_SPARK_RPC_TIMEOUT_SECONDS ?= 30
 BQEMU_ARTIFACT_TIMEOUT_SECONDS ?= 180
+BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS ?= 120
 BQEMU_SPARK_VENV ?= $(CURDIR)/.artifacts/spark/venv
 BQEMU_SPARK_PYTHON ?= $(BQEMU_SPARK_VENV)/bin/python
 GO_TEST_FLAGS ?=
@@ -22,7 +24,7 @@ IMAGE ?= go-bemu:dev
 PYTHON ?= .venv/bin/python
 PYTHON3 ?= python3
 
-.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test bq-test spark-contract vet check config-check github-actions-policy ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup build run format format-check test test-race python-test bq-test dsv2-overlay spark-contract vet check config-check github-actions-policy integration-contract-check ci-static ci-test-all ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -34,6 +36,7 @@ help:
 	  'make check        Run formatting, bounded race tests, and vet' \
 	  'make python-test  Run the official Python client real-process contract' \
 	  'make bq-test      Run the exact-version official bq CLI contract' \
+	  'make dsv2-overlay Build the version-locked one-class DSv2 overlay' \
 	  'make spark-contract Install exact Spark locks and run the released connector contract' \
 	  'make ci-static     Validate formatting, vet, configuration, and GitHub Actions policy' \
 	  'make ci-test-*     Run the same functional Go test groups used by CI' \
@@ -61,6 +64,7 @@ build:
 
 run:
 	mkdir -p "$(BQEMU_LOCAL_DATA_DIR)" "$(BQEMU_TEMP_DIRECTORY)"
+	BQEMU_STATE_DSN="$(BQEMU_STATE_DSN)" \
 	BQEMU_DATABASE_DSN="$(BQEMU_DATABASE_DSN)" \
 	BQEMU_TEMP_DIRECTORY="$(BQEMU_TEMP_DIRECTORY)" \
 	CGO_ENABLED=1 go run ./cmd/emulator --config "$(BQEMU_CONFIG)"
@@ -94,6 +98,13 @@ bq-test:
 	BQEMU_BQCLI_ARTIFACT_DIR="$(CURDIR)/.artifacts/bqcli" \
 	"$(PYTHON3)" tests/bqcli/run_contract.py
 
+dsv2-overlay:
+	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
+	"$(PYTHON3)" scripts/fetch_spark_artifacts.py
+	BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS="$(BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS)" \
+	PYTHONDONTWRITEBYTECODE=1 \
+	"$(PYTHON3)" tools/dsv2-overlay/build.py
+
 spark-contract:
 	mkdir -p "$(CURDIR)/.artifacts/spark/diagnostics"
 	@if test -x "$(BQEMU_SPARK_PYTHON)"; then \
@@ -104,9 +115,13 @@ spark-contract:
 	uv pip sync --python "$(BQEMU_SPARK_PYTHON)" --require-hashes tests/spark/requirements.lock
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
 	"$(BQEMU_SPARK_PYTHON)" scripts/fetch_spark_artifacts.py
+	BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS="$(BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS)" \
+	PYTHONDONTWRITEBYTECODE=1 \
+	"$(BQEMU_SPARK_PYTHON)" tools/dsv2-overlay/build.py
 	BQEMU_SPARK_TEST_TIMEOUT_SECONDS="$(BQEMU_SPARK_TEST_TIMEOUT_SECONDS)" \
 	BQEMU_SPARK_RPC_TIMEOUT_SECONDS="$(BQEMU_SPARK_RPC_TIMEOUT_SECONDS)" \
 	BQEMU_ARTIFACT_TIMEOUT_SECONDS="$(BQEMU_ARTIFACT_TIMEOUT_SECONDS)" \
+	BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS="$(BQEMU_DSV2_OVERLAY_BUILD_TIMEOUT_SECONDS)" \
 	PYTHONPYCACHEPREFIX="$(CURDIR)/.artifacts/spark/pycache" \
 	"$(BQEMU_SPARK_PYTHON)" -m pytest -c tests/spark/pytest.ini tests/spark \
 	  --basetemp="$(CURDIR)/.artifacts/spark/pytest" \
@@ -118,7 +133,11 @@ vet:
 github-actions-policy:
 	CGO_ENABLED=1 go test ./internal/cipolicy
 
-ci-static: github-actions-policy format-check vet config-check
+integration-contract-check:
+	CGO_ENABLED=1 go run ./cmd/integration-contract
+	git diff --exit-code -- contract/generated docs/en/generated docs/ko/generated
+
+ci-static: github-actions-policy format-check vet config-check integration-contract-check
 
 ci-test-all:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...
@@ -127,6 +146,7 @@ ci-test-core:
 	CGO_ENABLED=1 go test -race -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) \
 		./internal/admin \
 		./internal/application \
+		./internal/auth/... \
 		./internal/domain \
 		./internal/loadjob/... \
 		./internal/observability \

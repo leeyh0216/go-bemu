@@ -29,6 +29,9 @@ type Config struct {
 	// to the application budget implementation.
 	MaxSnapshotBytes      int64
 	MaxTotalSnapshotBytes int64
+	// StateOperationTimeout bounds every lifecycle metadata call, including
+	// startup reconciliation and shutdown transitions.
+	StateOperationTimeout time.Duration
 }
 
 func validateConfig(config *Config) error {
@@ -46,6 +49,9 @@ func validateConfig(config *Config) error {
 	}
 	if config.MaxRowsPerResponse <= 0 || config.MaxSessions <= 0 || config.MaxSnapshotBytes <= 0 || config.MaxTotalSnapshotBytes <= 0 {
 		return fmt.Errorf("response row, session, and snapshot byte limits must be positive")
+	}
+	if config.StateOperationTimeout <= 0 {
+		return fmt.Errorf("state operation timeout must be positive")
 	}
 	if config.MaxSnapshotBytes > config.MaxTotalSnapshotBytes {
 		return fmt.Errorf("per-session snapshot byte limit must not exceed the total snapshot byte limit")

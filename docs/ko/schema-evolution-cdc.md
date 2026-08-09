@@ -52,7 +52,7 @@ null 처리도 시험합니다.
 카탈로그와 DuckDB 파일을 원자적으로 맞출 수 없습니다. DuckDB에서 직접 수행한
 변경은 기준 BigQuery 메타데이터 변경으로 보지 않습니다.
 
-DDL 변환, 적재·쿼리의 `schemaUpdateOptions`, Storage Write 스키마 알림은 별도
+DDL 변환, 쿼리 작업의 `schemaUpdateOptions`, Storage Write 스키마 알림은 별도
 미지원 항목입니다.
 
 <!-- section: load-schema-updates -->
@@ -69,9 +69,11 @@ DDL 변환, 적재·쿼리의 `schemaUpdateOptions`, Storage Write 스키마 알
 데이터와 메타데이터를 원자적으로 공개하고 작업 오류를 영속화해야 합니다. JSON
 옵션을 받는 것만으로 이 기능을 구현했다고 볼 수는 없습니다.
 
-현재 선택형 Parquet 적재는 기존 테이블을 기준으로 유형 변환을 검증합니다. 쓰기
-방식도 원자적으로 적용합니다. `schemaUpdateOptions`, 대상 생성, 자동 감지는
-거부합니다. 따라서 적재 작업을 통한 스키마 변경은 지원하지 않습니다.
+선택형 Parquet 적재는 `WRITE_APPEND`에서 `ALLOW_FIELD_ADDITION`을 지원합니다.
+기준 catalog 스키마 변경 서비스를 호출하므로 기존 필드의 순서·유형·mode를
+보존하며 nullable 또는 repeated 필드의 끝 추가(중첩 포함)만 허용합니다. catalog와
+DuckDB 물리 변경은 적재 전에 적용됩니다. `ALLOW_FIELD_RELAXATION`, 쿼리 작업의
+스키마 변경, 자동 감지는 계속 지원하지 않습니다.
 
 <!-- section: write-schema-updates -->
 ## Storage Write 스키마 변경

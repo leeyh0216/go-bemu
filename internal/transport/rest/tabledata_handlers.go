@@ -5,6 +5,7 @@ package rest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
@@ -24,6 +26,10 @@ type TableDataUseCases interface {
 	ListTableData(context.Context, string, string, string, int64, ports.TableDataMaxResults) (ports.TableDataPage, error)
 }
 
+type tableDataInsertUseCases interface {
+	InsertTableData(context.Context, string, string, string, []ports.TableDataJSONRow) error
+}
+
 // WithTableDataAPI explicitly composes the optional REST data browser. Metadata
 // servers can omit the option without advertising a route backed by a nil row
 // adapter.
@@ -33,9 +39,63 @@ func WithTableDataAPI(useCases TableDataUseCases) Option {
 			mux.HandleFunc("GET /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}/data", func(w http.ResponseWriter, r *http.Request) {
 				listTableData(w, r, useCases)
 			})
+			mux.HandleFunc("POST /bigquery/v2/projects/{projectId}/datasets/{datasetId}/tables/{tableId}/insertAll", func(w http.ResponseWriter, r *http.Request) {
+				insertTableData(w, r, useCases)
+			})
 		})
 		server.discoveryExtensions = append(server.discoveryExtensions, extendTableDataDiscovery)
 	}
+}
+
+func insertTableData(w http.ResponseWriter, r *http.Request, useCases TableDataUseCases) {
+	inserter, ok := useCases.(tableDataInsertUseCases)
+	if !ok {
+		writeError(w, fmt.Errorf("%w: tabledata.insertAll is not configured", domain.ErrUnsupported))
+		return
+	}
+	var request tableDataInsertAllRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if request.SkipInvalidRows || request.IgnoreUnknownValues || request.TemplateSuffix != "" {
+		writeError(w, fmt.Errorf("%w: skipInvalidRows, ignoreUnknownValues, and templateSuffix are not implemented by the atomic insertAll profile", domain.ErrUnsupported))
+		return
+	}
+	if len(request.Rows) == 0 {
+		writeJSON(w, http.StatusOK, tableDataInsertAllResponse{Kind: "bigquery#tableDataInsertAllResponse"})
+		return
+	}
+	rows := make([]ports.TableDataJSONRow, len(request.Rows))
+	for index, row := range request.Rows {
+		if row.JSON == nil {
+			writeInsertAllRowError(w, index, "json", "json field is required")
+			return
+		}
+		encoded, _ := json.Marshal(row.JSON)
+		if len(encoded) > int(defaultTableDataRowBytes) {
+			writeInsertAllRowError(w, index, "json", "row exceeds the 100 MB tabledata.insertAll limit")
+			return
+		}
+		rows[index] = ports.TableDataJSONRow{InsertID: row.InsertID, JSON: row.JSON}
+	}
+	err := inserter.InsertTableData(r.Context(), r.PathValue("projectId"), r.PathValue("datasetId"), r.PathValue("tableId"), rows)
+	if err != nil {
+		var rowErr *application.TableDataInsertError
+		if errors.As(err, &rowErr) {
+			writeInsertAllRowError(w, rowErr.Index, rowErr.Location, rowErr.Error())
+			return
+		}
+		writeTableDataError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tableDataInsertAllResponse{Kind: "bigquery#tableDataInsertAllResponse"})
+}
+
+func writeInsertAllRowError(w http.ResponseWriter, index int, location, message string) {
+	writeJSON(w, http.StatusOK, tableDataInsertAllResponse{Kind: "bigquery#tableDataInsertAllResponse", InsertErrors: []tableDataInsertRowError{{
+		Index: index, Errors: []errorProto{{Reason: "invalid", Location: location, Message: message}},
+	}}})
 }
 
 func listTableData(w http.ResponseWriter, r *http.Request, useCases TableDataUseCases) {

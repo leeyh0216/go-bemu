@@ -139,6 +139,10 @@ func TestSparkArtifactsAreExactAndHashLocked(t *testing.T) {
 			artifact, sourceID = dsv1, "scala-2.12-maven-jar"
 		case "dsv2-spark-3.5-raw":
 			artifact, sourceID = dsv2, "spark-3.5-maven-jar"
+		case "dsv2-spark-3.5-streaming-visibility-overlay":
+			// The overlay is an exact pair rather than another connector JAR.
+			// dsv2_overlay_artifact_test.go validates its separate fail-closed schema.
+			continue
 		default:
 			t.Fatalf("matrix has unreviewed artifact variant %q", matrix.ArtifactVariant)
 		}

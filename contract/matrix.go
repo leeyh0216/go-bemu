@@ -124,8 +124,9 @@ func validateCapabilityMatrix(path string, matrix CapabilityMatrix) error {
 		return fmt.Errorf("%s: unsupported schemaVersion %q", path, matrix.SchemaVersion)
 	}
 	variantConsumers := map[string]string{
-		"dsv1-with-dependencies-2.12": "spark-bigquery-with-dependencies_2.12",
-		"dsv2-spark-3.5-raw":          "spark-3.5-bigquery-raw",
+		"dsv1-with-dependencies-2.12":                 "spark-bigquery-with-dependencies_2.12",
+		"dsv2-spark-3.5-raw":                          "spark-3.5-bigquery-raw",
+		"dsv2-spark-3.5-streaming-visibility-overlay": "spark-3.5-bigquery-streaming-visibility-overlay",
 	}
 	if matrix.ID == "" || matrix.Connector.Kind != "connector-artifact" ||
 		variantConsumers[matrix.ArtifactVariant] != matrix.Connector.Name || len(matrix.Connector.Versions) != 1 {
@@ -188,6 +189,8 @@ func validateMatrixEntry(location string, matrix CapabilityMatrix, entry MatrixE
 		"read-storage": true, "write-direct-pending": true, "write-direct-default": true,
 		"write-direct-overwrite": true, "write-indirect-load": true,
 		"write-structured-streaming": true, "authentication": true,
+		"write-streaming-epoch-replay": true, "write-streaming-checkpoint-recovery": true,
+		"write-streaming-partial-abort": true, "write-streaming-new-table-abort": true,
 		"artifact-bootstrap": true,
 	}
 	if !allowedFlows[entry.Flow] {
@@ -201,8 +204,8 @@ func validateMatrixEntry(location string, matrix CapabilityMatrix, entry MatrixE
 	}
 	for _, ref := range entry.OfficialSourceRefs {
 		source, ok := matrix.Sources[ref]
-		if !ok || !isImmutableConnectorSource(source.URL, matrix.SourceCommit) {
-			return fmt.Errorf("%s %s source ref %q is missing or is not exact connector source", location, entry.ID, ref)
+		if !ok || !isImmutableOfficialSource(source, matrix.Connector.Versions[0], matrix.SourceCommit) {
+			return fmt.Errorf("%s %s source ref %q is missing or is not immutable official provenance", location, entry.ID, ref)
 		}
 	}
 	evidenceKinds := make(map[string]bool, len(entry.Evidence))
@@ -236,7 +239,7 @@ func validateAxes(location string, axes MatrixAxes) error {
 		"transport":         stringSet("rest+storage-read", "rest+storage-write", "rest+gcs+load", "credential-provider", "local-classpath"),
 		"execution":         stringSet("batch", "structured-streaming", "not-applicable"),
 		"format":            stringSet("ARROW", "AVRO", "PROTO_ROWS", "PARQUET", "ORC", "not-applicable"),
-		"delivery":          stringSet("exactly-once", "at-least-once", "not-applicable"),
+		"delivery":          stringSet("exactly-once", "at-least-once", "normal-path-only", "not-applicable"),
 		"saveMode":          stringSet("append", "overwrite", "ignore", "error-if-exists", "not-applicable"),
 		"readShape":         stringSet("table", "projection", "filter", "count", "query", "view", "not-applicable"),
 		"tablePartitioning": stringSet("unpartitioned", "time", "ingestion-time", "integer-range", "dynamic-overwrite", "not-applicable"),
@@ -278,6 +281,13 @@ func isImmutableOfficialSource(source MatrixSource, version, commit string) bool
 	if parsed.Host == "repo.maven.apache.org" && strings.Contains(parsed.Path, "/com/google/cloud/spark/") &&
 		strings.Contains(parsed.Path, "/"+version+"/") && strings.Contains(parsed.Path, "-"+version) {
 		return sha256Pattern.MatchString(source.Fingerprint)
+	}
+	if parsed.Host == "repo.maven.apache.org" && strings.Contains(parsed.Path, "/org/javassist/javassist/3.30.2-GA/") &&
+		strings.HasSuffix(parsed.Path, "/javassist-3.30.2-GA.jar") {
+		return sha256Pattern.MatchString(source.Fingerprint)
+	}
+	if parsed.Host == "spark.apache.org" && strings.HasPrefix(parsed.Path, "/docs/3.5.8/api/java/") {
+		return source.Fingerprint == ""
 	}
 	return false
 }

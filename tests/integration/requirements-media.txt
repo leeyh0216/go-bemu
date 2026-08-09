@@ -1,0 +1,6 @@
+# Pinned consumer matrix for the BigQuery Parquet media-upload contract.
+google-cloud-bigquery==3.43.0
+pandas==2.3.3
+pandas-gbq==0.31.1
+pytest==9.1.1
+pytest-timeout==2.4.0

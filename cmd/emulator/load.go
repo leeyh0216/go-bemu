@@ -1,8 +1,8 @@
 package main
 
 // Load-job composition keeps object-store selection at the outermost adapter
-// boundary. The public default accepts only gs:// URIs through the configured
-// JSON API endpoint; file:// access requires an explicit local-only opt-in.
+// boundary. Public load sources accept only gs:// URIs through the configured
+// JSON API endpoint.
 //
 // Official contracts:
 //   - https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad
@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
 	"github.com/leeyh0216/go-bemu/internal/adapters/objectstore"
@@ -22,31 +23,24 @@ import (
 
 func composeLoadJobs(
 	cfg config.Config,
+	jobs loadports.JobRepository,
 	catalog rest.CatalogUseCases,
 	warehouse *duckdb.Warehouse,
 	clock loadports.Clock,
 	ids loadports.IDGenerator,
 ) (rest.LoadJobUseCases, error) {
-	if !cfg.Load.Enabled {
-		return nil, nil
+	media, err := objectstore.NewMediaStore(filepath.Join(cfg.Database.TempDirectory, "bqemu-media"), cfg.Load.MaxObjectBytes)
+	if err != nil {
+		return nil, fmt.Errorf("configure load media store: %w", err)
 	}
 	gcs, err := objectstore.NewGCSJSON(objectstore.GCSJSONConfig{
-		Endpoint: cfg.Load.GCSEndpoint,
-		Client: &http.Client{
-			Timeout: cfg.Load.OperationTimeout.Value(),
-		},
-		MaxMetadataBytes: cfg.Load.MaxMetadataBytes,
-		MaxListedObjects: cfg.Load.MaxListedObjects,
+		Endpoint: cfg.Load.GCSEndpoint, Client: &http.Client{Timeout: cfg.Load.OperationTimeout.Value()},
+		MaxMetadataBytes: cfg.Load.MaxMetadataBytes, MaxListedObjects: cfg.Load.MaxListedObjects,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("configure load GCS adapter: %w", err)
 	}
-	var objects loadports.ObjectStore
-	if cfg.Load.AllowFileSources {
-		objects, err = objectstore.NewRouter(objectstore.FileSystem{}, gcs)
-	} else {
-		objects, err = objectstore.NewGCSOnlyRouter(gcs)
-	}
+	objects, err := objectstore.NewRouterWithMedia(gcs, media)
 	if err != nil {
 		return nil, fmt.Errorf("configure load object-store router: %w", err)
 	}
@@ -56,11 +50,18 @@ func composeLoadJobs(
 		MaxTotalBytes: cfg.Load.MaxTotalBytes, TempDirectory: cfg.Database.TempDirectory,
 	}
 	service, err := loadapplication.NewService(
-		loadapplication.NewMemoryJobRepository(), objects, rest.NewLoadTableCatalog(catalog),
+		jobs, objects, rest.NewLoadTableCatalog(catalog),
 		warehouse, clock, ids, loadConfig,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configure load job service: %w", err)
 	}
-	return service, nil
+	return &loadRuntime{LoadJobUseCases: service, media: media}, nil
 }
+
+type loadRuntime struct {
+	rest.LoadJobUseCases
+	media loadports.MediaUploadStore
+}
+
+func (r *loadRuntime) MediaUploads() loadports.MediaUploadStore { return r.media }

@@ -29,7 +29,7 @@ func (s *Service) ReadRows(ctx context.Context, request domain.ReadRowsRequest, 
 	}
 	s.mu.RUnlock()
 	if !found {
-		return domain.NewError(domain.ErrorNotFound, operation, errors.New("read stream was not found"))
+		return s.persistedStreamError(ctx, request.StreamName)
 	}
 	defer entry.session.mu.RUnlock()
 	if !s.clock.Now().Before(entry.session.session.ExpireTime) {

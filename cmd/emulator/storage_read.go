@@ -32,6 +32,7 @@ func composeStorageRead(
 	clock readports.Clock,
 	ids readports.IDGenerator,
 	logger *slog.Logger,
+	stateRepositories ...readports.SessionStateRepository,
 ) (*storageReadRuntime, error) {
 	if !cfg.Storage.Read.Enabled {
 		return &storageReadRuntime{}, nil
@@ -48,14 +49,25 @@ func composeStorageRead(
 	if err != nil {
 		return nil, err
 	}
+	if len(stateRepositories) > 1 {
+		return nil, errors.New("at most one Storage Read session state repository may be configured")
+	}
+	options := make([]readapplication.Option, 0, len(stateRepositories))
+	if len(stateRepositories) == 1 {
+		options = append(options, readapplication.WithSessionStateRepository(stateRepositories[0]))
+	}
 	service, err := readapplication.New(readapplication.Config{
 		Location: cfg.Defaults.Location, ProtocolModelVersion: cfg.Storage.Read.ProtocolModelVersion,
 		MaxStreams: int32(cfg.Storage.Read.MaxStreams), DefaultStreamCount: int32(cfg.Storage.Read.DefaultStreamCount),
 		SessionTTL: cfg.Runtime.ReadSessionTTL.Value(), CleanupInterval: cfg.Runtime.CleanupInterval.Value(),
 		MaxRowsPerResponse: int64(cfg.Storage.Read.RowsPerResponse), MaxSessions: cfg.Storage.Read.MaxSessions,
 		MaxSnapshotBytes: cfg.Storage.Read.MaxSnapshotBytes, MaxTotalSnapshotBytes: cfg.Storage.Read.MaxTotalSnapshotBytes,
-	}, materializer, clock, ids, logger)
+		StateOperationTimeout: cfg.Storage.Read.StateOperationTimeout.Value(),
+	}, materializer, clock, ids, logger, options...)
 	if err != nil {
+		return nil, err
+	}
+	if err := service.ReconcilePersistedSessions(context.Background()); err != nil {
 		return nil, err
 	}
 	cleanupContext, cancel := context.WithCancel(context.Background())

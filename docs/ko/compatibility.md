@@ -25,23 +25,34 @@
 
 | 기능 | 상태 | 지원 범위 |
 | --- | --- | --- |
-| 활성 및 준비 상태 | 검증됨 | 프로세스와 웨어하우스 연결을 확인합니다. |
+| 활성 및 준비 상태 | 검증됨 | 프로세스, SQLite 상태와 웨어하우스 연결을 확인합니다. |
 | 에뮬레이터 프로젝트 수명 주기 | 검증됨 | 에뮬레이터 전용 네임스페이스를 사용합니다. |
 | `projects.list` | 기본 검증 | 에뮬레이터 프로젝트와 불투명한 페이지 토큰을 지원합니다. |
 | 데이터 세트 생성 및 조회 | 기본 검증 | 위치, 라벨, 기본 만료 시간을 보존합니다. |
-| 데이터 세트 목록 및 삭제 | 기본 검증 | 페이지 나누기와 `deleteContents`를 지원합니다. 필터와 `all`은 지원하지 않습니다. |
+| 데이터 세트 목록 및 삭제 | 기본 검증 | 페이지 나누기, `deleteContents`, 숨김 데이터 세트 `all`, `labels.<name>[:<value>]`를 공백으로 AND한 label filter를 지원합니다. |
 | 데이터 세트 부분 및 전체 수정 | 검증됨 | 메타데이터 필드, ETag, HTTP 412 사전 조건을 지원합니다. |
-| 테이블 생성, 조회, 삭제 | 기본 검증 | 표준 테이블과 기준 스키마 메타데이터를 지원합니다. |
+| 테이블 생성, 조회, 삭제 | 기본 검증 | 표준 테이블과 기준 스키마 메타데이터를 지원합니다. `tables.get`은 `BASIC`과 최상위 `selectedFields`를 지원하며 저장 통계 view는 명시적으로 미지원입니다. |
 | 테이블 목록 | 기본 검증 | 페이지 나누기를 지원합니다. 뷰와 저장 통계는 제공하지 않습니다. |
 | 테이블 부분 및 전체 수정 | 제한 검증 | 메타데이터, 스키마 필드 추가, ETag 사전 조건을 지원합니다. |
 | `tabledata.list` | 부분 지원 | `f/v` 행과 페이지 단위 조회를 지원합니다. 세부 제한은 아래에 설명합니다. |
-| `tabledata.insertAll` | 미지원 | 경로를 제공하지 않습니다. |
+| `tabledata.insertAll` | 부분 지원 | 스키마 기반 scalar/nullable/temporal/decimal/bytes/nested/repeated JSON 행, atomic 배치, 행 index별 `insertErrors`, 범위가 제한된 SQLite `insertId` 재시도 ledger와 공식 Python/pandas client 검증을 지원합니다. `skipInvalidRows`, `ignoreUnknownValues`, 템플릿 테이블은 아직 지원하지 않습니다. |
 
 요청과 응답 구조는 공식
 [`datasets`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets)와
 [`tables`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables)
 리소스를 기준으로 비교합니다. 알 수 없는 JSON 필드를 무시하고 해석할 수는 있지만,
 해당 필드의 동작까지 구현했다는 의미는 아닙니다.
+
+<!-- section: generated-integration-coverage -->
+## 생성된 통합 Coverage
+
+외부 consumer operation 목록은 literal integration-test annotation에서 생성한
+[`contract/generated/integration-consumer-contract.json`](../../contract/generated/integration-consumer-contract.json)에 있습니다.
+화면에서 바로 확인할 수 있는 operation 목록은 [생성된 통합 소비자
+계약](generated/integration-consumer-contract.md)에 있습니다.
+annotation을 추가한 뒤 `make integration-contract-check`를 실행하면 CI가 오래된
+generated contract를 거부합니다. scenario 순서와 cardinality는 호환성 주장이 아니라
+명시적 test assertion으로 유지합니다.
 
 [`tabledata.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/list)
 어댑터는 `tables.get`과 Storage Read에서 사용하는 것과 같은 카탈로그 만료 검사를
@@ -75,8 +86,9 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 공식 [Python 클라이언트
 `3.43.0`](https://pypi.org/project/google-cloud-bigquery/3.43.0/)으로도 확인했습니다.
 스키마 변경은 중첩 및 반복 레코드를 포함하여 `NULLABLE` 또는 `REPEATED` 필드를
-끝에 추가하는 방식만 지원합니다. DDL 변환, 필수 여부 완화, 작업에서 요청하는 스키마
-변경까지 지원하는 것은 아닙니다.
+끝에 추가하는 방식만 지원합니다. 이 REST 수정 검증은 필수 여부 완화나 작업에서
+요청하는 스키마 변경을 뜻하지 않습니다. 별도로 문서화한 의미 기반 DDL 범위가 넓어지는
+것도 아닙니다.
 
 <!-- section: jobs -->
 ## 쿼리와 작업
@@ -97,6 +109,7 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 | --- | --- | --- |
 | 명시적 대상 테이블 | 부분 지원 | 스칼라 결과와 같은 스키마에서 `WRITE_EMPTY`, `WRITE_APPEND`, `WRITE_TRUNCATE`를 지원합니다. ID는 `query.destination.exact-schema-v1`입니다. |
 | 커넥터 쿼리 메타데이터 | 기본 검증 | `INTERACTIVE` 및 `BATCH` 우선순위와 검증한 라벨을 해시와 왕복 결과에 반영합니다. 빈 라벨 맵도 보존합니다. |
+| 쿼리/로드 작업 라벨 | 기본 검증 | BigQuery 라벨 키와 값 규칙을 검증하고 작업 구성 ID에 포함합니다. 작업 구성과 함께 영속화하며 `jobs.insert`, `jobs.get`, `jobs.list`에서 다시 반환합니다. |
 | 익명 대상 테이블 | 부분 지원 | 행을 반환하는 쿼리는 24시간 뒤 만료되는 숨김 데이터 세트의 테이블을 만들고 공개합니다. ID는 `query.destination.anonymous-v1`입니다. |
 | `WRITE_TRUNCATE` 스키마 교체 | 미지원 | 같은 스키마만 지원합니다. 미지원 ID는 `query.destination.truncate-schema-replacement-v1`입니다. |
 
@@ -104,10 +117,10 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 
 | 기능 | 상태 | 지원 범위 |
 | --- | --- | --- |
-| SQL DDL | 미지원 | 기준 메타데이터와 DuckDB 카탈로그를 같은 애플리케이션 작업으로 변경하지 못하므로 실행 전에 실패합니다. 미지원 ID는 `query.ddl.catalog-sync-v1`입니다. |
-| 여러 문장으로 된 쿼리 | 미지원 | 문자열과 주석을 구분하여 마지막 세미콜론 하나만 허용합니다. 스크립트는 실행 전에 거부합니다. 미지원 ID는 `query.scripts.unsupported-v1`이며 공식 [여러 문장 쿼리 계약](https://cloud.google.com/bigquery/docs/multi-statement-queries)을 참고합니다. |
+| 의미 기반 SQL DDL | 부분 지원 | `CREATE TABLE`, `DROP TABLE`, 최상위 스칼라 `ADD COLUMN`, `RENAME COLUMN`을 지원합니다. 열을 파괴적으로 바꾸는 작업, `TRUNCATE`와 다른 절은 `query.ddl.catalog-sync-v1`에 따라 지원하지 않습니다. |
+| 여러 문장으로 된 쿼리 | 특정 입력만 지원 | 문자열과 주석을 구분하여 일반 문장에는 마지막 세미콜론 하나만 허용합니다. 일반 스크립트는 실행 전에 거부하며 Spark 동적 시간 파티션 덮어쓰기 의미 어댑터만 예외입니다. 미지원 ID는 `query.scripts.unsupported-v1`이며 공식 [여러 문장 쿼리 계약](https://cloud.google.com/bigquery/docs/multi-statement-queries)을 참고합니다. |
 | 취소 | 부분 지원 | 종료 과정에서는 새 작업을 거부하고 실행 중인 작업을 취소한 뒤 Storage와 DuckDB를 닫습니다. 공개 [`jobs.cancel`](https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/cancel)과 취소 상태는 지원하지 않습니다. |
-| Parquet 로드 `jobs.insert`, `jobs.get`, `jobs.list` | 부분 지원 | 별도로 활성화해야 하며 기존 대상 테이블만 사용합니다. 상태는 프로세스 메모리에 저장합니다. |
+| Parquet 로드 `jobs.insert`, `jobs.get`, `jobs.list` | 부분 지원 | 별도로 활성화해야 하며 `gs://`와 불변 multipart/resumable media source, 명시 스키마 대상 생성, `WRITE_EMPTY`/`WRITE_APPEND`/`WRITE_TRUNCATE`를 지원합니다. 상태는 프로세스 메모리에 저장합니다. |
 | 복사와 추출 | 미지원 | 해당 설정을 거부합니다. |
 | 작업과 결과의 영속 상태 | 미지원 | 메모리 저장소만 사용합니다. |
 | 쿼리 결과 보관 크기 제한 | 미지원 | 모든 결과 행을 Go 메모리에 보관합니다. 미지원 ID는 `query.results.unbounded-memory-v1`입니다. |
@@ -117,7 +130,8 @@ epoch 마이크로초 문자열을 반환합니다. `maxResults=0`을 명시하�
 | 같은 요청 재실행 확장 기능 | 미지원 | 이후 별도 활성화 기능으로 계획합니다. 미지원 ID는 `query.jobs.exact-replay-extension-v1`입니다. |
 | 쿼리와 로드 사이의 ID 중복 검사 | 미지원 | 분리된 저장소의 확인 및 생성 사이에 경쟁 상태가 있습니다. 미지원 ID는 `query.jobs.cross-repository-identity-v1`입니다. |
 | 동기 요청 제어 | 부분 지원 | 36바이트 ASCII `requestId`와 음수가 아닌 `timeoutMs`를 받습니다. 미완료 응답 대기 제한, 변경 쿼리 중복 제거, `jobTimeoutMs`는 미지원이며 ID는 `query.sync.request-controls-v1`입니다. |
-| 지원하지 않는 쿼리 옵션 | 엄격히 거부 | 매개변수, `dryRun`, 캐시 및 비용 제어, `jobTimeoutMs`는 `400`으로 거부합니다. 미지원 ID는 `query.options.unsupported-v1`입니다. |
+| 쿼리 매개변수 | 부분 지원 | `NAMED`와 `POSITIONAL` scalar typed parameter(`BOOL`, `INT64`, `FLOAT64`, `NUMERIC`, `STRING`, `DATE`, `DATETIME`, `JSON`, `TIME`, `TIMESTAMP`)는 GoogleSQL AST 경계에서 검증한 뒤 DuckDB bind 인자로 전달합니다. ARRAY, STRUCT, GEOGRAPHY parameter는 아직 지원하지 않습니다. |
+| 지원하지 않는 쿼리 옵션 | 엄격히 거부 | `dryRun`, 캐시 및 비용 제어, `jobTimeoutMs`는 `400`으로 거부합니다. 미지원 ID는 `query.options.unsupported-v1`입니다. |
 | 위치를 생략한 데이터 세트 추론 | 부분 지원 | 구조적으로 참조한 테이블, 다른 프로젝트의 `defaultDataset.projectId`, 명시적 대상 데이터 세트를 실행 전에 검사합니다. ID는 `query.location.dataset-inference-v1`입니다. |
 | 최종 상태 저장 실패 복구 | 미지원 | 저장소 갱신에 실패하면 `RUNNING` 상태가 남을 수 있습니다. 미지원 ID는 `query.terminal-persistence-v1`입니다. |
 
@@ -189,14 +203,17 @@ ID를 알고 있는 숨김 데이터 세트에는 일반 삭제 규칙을 적용
 | `UPDATE`, `DELETE` | 부분 지원 | DuckDB 문장의 동작을 따릅니다. |
 | 기본 `MERGE` | 부분 지원 | DuckDB와 호환되는 형식 하나를 테스트했습니다. |
 | 커넥터 `0.44.2` 정적 덮어쓰기 | 제한 검증 | 배포된 Spark의 임시 테이블 쓰기, 원자적 DuckDB `MERGE`, 작업 조회, 정리를 확인했습니다. |
-| 동적 파티션 덮어쓰기 | 미지원 | 스크립트, 배열, 파티션 의미를 구현하지 않았습니다. |
-| 매개변수, 스크립트, 뷰, UDF | 미지원 | 구문의 의미를 변환하는 어댑터가 없습니다. |
+| 커넥터 `0.44.2` 동적 시간 파티션 덮어쓰기 | 부분 지원 | 출처 버전을 고정한 의미 작업과 원시 REST E2E를 확인했습니다. 배포된 커넥터 JAR 검증은 아직 없습니다. |
+| 동적 범위 파티션 덮어쓰기 | 미지원 | 범위 표현식 입력을 명시적으로 거부합니다. |
+| 의미 기반 DDL | 부분 지원 | 생성, 삭제, 열 추가와 이름 변경의 정확한 일부만 지원합니다. 자세한 내용은 경계 안내서를 참고합니다. |
+| ARRAY/STRUCT/GEOGRAPHY 매개변수, 스크립트, 뷰, UDF | 미지원 | scalar typed parameter는 지원하며, 나머지 형식은 구문의 의미를 변환하는 어댑터가 없습니다. |
 
 [GoogleSQL lexical
 계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)은 구문에서
-쓰인 위치에 따라 따옴표로 감싼 식별자를 구분합니다. 현재의 백틱 변환은 따옴표로 감싼
-열, 주석, 문자열을 모두 안전하게 분류하지 못합니다. 따라서 백틱이 들어간 임의의
-SQL을 지원하지 않습니다. 일반 `MERGE`는 원본 행의 수와 원자적인 공개 시점을 포함한
+쓰인 위치에 따라 따옴표로 감싼 식별자를 구분합니다. 현재 어휘 분석기는 문자열과 주석을
+보존하고 지원 대상으로 선언한 릴레이션 위치를 구분합니다. 하지만 완전한 파서는
+아닙니다. 따라서 백틱이 들어간 임의의 SQL을 지원하지 않습니다. 일반 `MERGE`는 원본
+행의 수와 원자적인 공개 시점을 포함한
 [공식 DML
 규칙](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
 따라야 합니다.
@@ -209,8 +226,10 @@ INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실�
 
 Spark `3.5.8` 프로세스 테스트에서는 `PENDING` 스트림 4개, 그룹 커밋 1회,
 `MERGE` 작업 1회를 확인했습니다. 교체 결과의 공개 시점과 임시 테이블 정리도
-확인했습니다. 시간 및 범위 파티션의 동적 덮어쓰기와 일반 BigQuery `MERGE`의 동작
-일치 여부는 아직 검증하지 않았습니다.
+확인했습니다. 동적 시간 어댑터는 별도의 출처 고정 스크립트를 의미 작업으로 파싱합니다.
+기준 메타데이터를 확인한 뒤 DuckDB 트랜잭션 하나로 적용합니다. 동적 범위 덮어쓰기와
+일반 BigQuery `MERGE`의 동작 일치 여부는 지원하지 않습니다. 정확한 변환과 DDL 절은
+[GoogleSQL 경계 안내서](google-sql-boundary.md)에 정리했습니다.
 
 <!-- section: types -->
 ## 자료형
@@ -218,11 +237,12 @@ Spark `3.5.8` 프로세스 테스트에서는 `PENDING` 스트림 4개, 그룹 �
 | BigQuery 자료형 | DuckDB 테이블 생성 | REST 쿼리 값 | 상태 |
 | --- | --- | --- | --- |
 | BOOL/INT64/FLOAT64/STRING/BYTES | 기본 자료형으로 변환 | 스칼라 값으로 인코딩 | 부분 지원 |
-| NUMERIC | `DECIMAL(38,9)` | 드라이버 동작에 따라 달라짐 | 부분 지원 |
-| BIGNUMERIC | 텍스트로 보존 | 엔진에서 원래 자료형 정보가 사라짐 | 산술 연산 미지원 |
+| NUMERIC | 정밀도 38 이하의 기본 `DECIMAL`로 변환하며 생략한 매개변수는 `(38,9)`입니다. | 드라이버 동작에 따라 달라집니다. | 부분 지원 |
+| BIGNUMERIC | 정밀도 38 이하의 기본 `DECIMAL`로 변환하며 생략한 매개변수는 `(38,18)`입니다. | BigQuery의 전체 범위는 제공하지 않습니다. | Spark 제한의 부분 지원 |
 | DATE/DATETIME/TIME/TIMESTAMP | 엔진 자료형으로 변환 | 날짜 및 시간 형식 변환 미완성 | 부분 지원 |
-| JSON/GEOGRAPHY | JSON 또는 텍스트로 변환 | 의미를 완전하게 보존하지 못함 | 부분 지원/미지원 |
-| RECORD/REPEATED | STRUCT 또는 LIST로 변환 | 복합 REST 구조와 호환되지 않음 | 부분 지원 |
+| JSON | 기본 JSON으로 변환 | 의미를 완전하게 보존하지 못합니다. | 부분 지원 |
+| GEOGRAPHY | 기준 스키마 검사에서 거부합니다. | 제공하지 않습니다. | 미지원 |
+| RECORD/REPEATED | 기본 STRUCT 또는 LIST로 변환 | `tabledata`와 Storage 경로는 일부를 지원하며 복합 쿼리 결과 스키마는 거부합니다. | 부분 지원 |
 
 자료형 호환성은 [BigQuery data
 types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)를
@@ -239,14 +259,14 @@ types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)
 | 공개 `CreateReadSession`, `ReadRows` | 부분 지원입니다. 세션마다 크기에 상한을 둔 DuckDB 결과 하나를 만듭니다. |
 | 공개 `SplitReadStream` | 미지원이며 `UNIMPLEMENTED`를 반환합니다. |
 | Arrow/Avro 스키마와 행 데이터 | 부분 지원입니다. 행과 응답 바이트 수에 상한을 두고 DuckDB 결과를 인코딩합니다. |
-| 열 선택과 행 제한 | 최상위 필드와 제한된 표현식만 지원합니다. 중첩 필드 선택은 지원하지 않습니다. |
+| 열 선택과 행 제한 | 요청 순서를 보존하는 재귀 STRUCT/REPEATED 필드 선택과 공식 GoogleSQL AST의 제한된 표현식(`AND`/`OR`/`NOT`, 비교, `IN`, `BETWEEN`, `IS NULL`, `CAST`, DATE/TIMESTAMP, `LOWER`, `STARTS_WITH`)을 지원합니다. 값은 bind parameter로 내립니다. 임의 함수, 반복 필드 predicate, 전체 GoogleSQL 의미는 지원하지 않습니다. |
 | 논리 스트림과 오프셋 재개 | 실행 중인 세션에서 고정된 범위와 스트림 기준 오프셋을 지원합니다. |
 | 과거 시점 스냅샷과 압축 | 지원하지 않습니다. |
 
 공개 기능은 일부만 지원합니다. 실행 중인 세션마다 고정된 DuckDB 결과 하나를
 소유하며, 설정한 수의 논리 스트림으로 나눕니다. 결과 크기에는 상한을 둡니다.
 
-스트림 분할 RPC, 전송 압축, 과거 시점의 `snapshot_time`, 중첩 필드 선택, 재시작 후
+스트림 분할 RPC, 전송 압축, 과거 시점의 `snapshot_time`, 반복 필드 predicate, 재시작 후
 세션 복구는 지원하지 않습니다. 목표 동작은 공식
 [`BigQueryRead`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryRead)
 서비스와 커넥터의
@@ -278,20 +298,21 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 기준으로 합니다.
 
 <!-- section: load-auth -->
-## 로드, 객체 저장소, 공개 접근
+## 로드, 객체 저장소, 인증
 
 | 기능 | 상태 |
 | --- | --- |
-| 파일 시스템 객체 저장소 어댑터 | 로컬에서 별도로 활성화한 경우만 검증했습니다. |
+| 로컬 `file://` load source | 지원하지 않습니다. 공개 load 요청은 `gs://`로 제한됩니다. |
 | GCS 및 fake GCS JSON 어댑터 | 목록, 조회, 미디어 요청의 크기에 상한을 둡니다. URI 글로브 확장은 부분 지원입니다. |
-| 기존 테이블로 Parquet 로드 | 부분 지원입니다. 명시한 스키마와 형 변환을 검사합니다. |
+| `gs://` 또는 media upload의 Parquet 로드 | 부분 지원입니다. 불변 multipart/resumable media source, 명시한 스키마와 형 변환, 명시 스키마 대상 생성을 지원합니다. |
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
-| 대상 생성, 자동 감지, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
+| `schemaUpdateOptions` | 부분 지원: `WRITE_APPEND`의 `ALLOW_FIELD_ADDITION`만 지원합니다. 기존 필드를 보존하고 새 필드는 nullable 또는 repeated여야 합니다. 완화는 지원하지 않습니다. |
+| 자동 감지, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
 | REST/gRPC TLS | 설정하면 사용할 수 있습니다. |
-| BigQuery 호환 엔드포인트 인증 | 의도적으로 제공하지 않습니다. 인증 정보가 없거나 임의 값 또는 잘못된 형식이어도 무시합니다. |
-| ADC/OAuth/STS/WIF 토큰 획득 | 공개 에뮬레이터 실행 환경의 범위 밖입니다. 클라이언트는 요청 전에 인증 정보를 요구할 수 있습니다. |
-| 진단용 관리 토큰 | 선택 사항이며 별도의 관리 수신기에만 적용합니다. |
+| BigQuery 호환 요청 인증 | 의도적으로 제공하지 않으며 인증 정보를 무시합니다. |
+| 로컬 인증 JSON 생성 | 서비스 계정, 사용자 계정과 파일 기반 WIF 클라이언트용으로 구현했습니다. |
+| 로컬 OAuth/STS 토큰 획득 | 루프백에서만 실행하는 별도 개발 명령으로 구현했습니다. |
 | IAM 권한 확인 | 지원하지 않습니다. |
 
 로드 동작은
@@ -301,23 +322,26 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 다운로드는 대상 테이블 트랜잭션 밖에서 실행합니다. 로드 작업과 중복 방지 기록은
 프로세스 메모리에 저장합니다.
 
-공개 API 경계는 `Authorization` 헤더와 메타데이터 값을 해석하거나 검증하지
-않습니다. 클라이언트 인증 정보 요구 사항, TLS, 별도의 진단용 관리 토큰, IAM은 서로
-다른 호환성 범위로 다룹니다.
+인증 관련 지원 범위는 [Google Cloud
+인증](https://cloud.google.com/docs/authentication)에 따라 구분합니다. 로컬
+클라이언트 도구는 [로컬 클라이언트 인증 파일과
+TLS](client-credentials-and-tls.md)에 설명되어 있습니다. 이 도구는 BQEMU
+엔드포인트를 보호하지 않으며 IAM과 같은 기능으로 설명하면 안 됩니다.
 
 <!-- section: persistence-atomicity -->
 ## 영속성과 원자성
 
-DuckDB 파일은 테이블 행을 보존할 수 있습니다. 그러나 카탈로그, 작업, 읽기 세션,
-쓰기 스트림, 로드 중복 방지 기록은 프로세스 메모리에만 있습니다.
+`/data/bqemu-state.sqlite`의 SQLite가 기준 메타데이터를 저장합니다.
+`/data/bqemu.duckdb`의 DuckDB는 물리 객체와 행만 보존합니다. 쿼리·로드 작업, 읽기
+세션, 쓰기 스트림 기록과 로드 중복 방지 기록은 아직 프로세스 안에만 있습니다.
 
-필드를 추가하는 DuckDB DDL은 트랜잭션 하나에서 실행합니다. 메모리 카탈로그 반영은
-같은 트랜잭션에 들어가지 않으므로 프로세스가 갑자기 종료되면 두 상태가 달라질 수
-있습니다. 로드의 쓰기 방식 적용, 기본 스트림 추가, 검증된 `PENDING` 스트림 그룹
-커밋은 각각 대상 테이블 트랜잭션을 사용합니다.
-
-이 원자성은 프로세스가 실행 중일 때만 성립합니다. 재시작 후 복구와 영속 기록을
-이용한 재실행은 지원하지 않습니다.
+필드를 추가하는 물리 DDL, 로드의 쓰기 방식 적용, 기본 스트림 추가, 검증된 `PENDING`
+스트림 그룹 커밋은 DuckDB 트랜잭션을 사용합니다. SQLite 카탈로그 반영은 별도
+트랜잭션입니다. 영속 변경 기록은 있지만, 모든 카탈로그 변경 단계를 기록하지는 않습니다.
+시작할 때 미완료 의도를 복구하는 처리도 없습니다. 따라서 두 저장소를 함께 바꿀 때의
+장애 원자성, 재시작 후 재실행과 실행 중인 인스턴스의 파일 하나만으로 만든 일관된 백업은
+지원하지 않습니다. 자세한 내용은 [저장 엔진 어댑터
+안내서](storage-engine-adapter.md)에 있습니다.
 
 <!-- section: client-coverage -->
 ## 클라이언트 검증 범위

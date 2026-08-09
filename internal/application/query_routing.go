@@ -48,6 +48,11 @@ func (s *QueryService) resolveQueryLocation(ctx context.Context, input QueryInpu
 	for _, reference := range references {
 		add(reference.ProjectID, reference.DatasetID)
 	}
+	if analysis.RequiresCatalogMutation {
+		for _, target := range analysis.MutationTargets {
+			add(target.ProjectID, target.DatasetID)
+		}
+	}
 	add(input.DefaultProjectID, input.DefaultDataset)
 	if input.Destination != nil {
 		add(input.Destination.ProjectID, input.Destination.DatasetID)

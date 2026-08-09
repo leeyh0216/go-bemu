@@ -11,8 +11,11 @@ package duckdb
 
 import (
 	"context"
+	"database/sql/driver"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/observability"
@@ -38,6 +41,10 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 	if err != nil {
 		return domain.QueryResult{}, err
 	}
+	statement, arguments, err := lowerQueryParameters(statement, request)
+	if err != nil {
+		return domain.QueryResult{}, err
+	}
 	queryAttrs := observability.PayloadAttrs("query", []byte(request.SQL))
 	queryAttrs = append(queryAttrs,
 		"project_id", request.ProjectID, "default_dataset", request.DefaultDataset,
@@ -55,14 +62,14 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 			"schema_fingerprint", observability.Digest([]byte(columnsSummary)), "transaction_mode", "autocommit")
 	}()
 	if !returnsRows(statement) {
-		execResult, err := w.db.ExecContext(ctx, statement)
+		execResult, err := w.db.ExecContext(ctx, statement, arguments...)
 		if err != nil {
 			return domain.QueryResult{}, fmt.Errorf("execute query: %w", err)
 		}
 		affected, _ := execResult.RowsAffected()
 		return domain.QueryResult{AffectedRows: affected}, nil
 	}
-	rows, err := w.db.QueryContext(ctx, statement)
+	rows, err := w.db.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return domain.QueryResult{}, fmt.Errorf("execute query: %w", err)
 	}
@@ -90,6 +97,130 @@ func (w *Warehouse) Query(ctx context.Context, request ports.QueryRequest) (resu
 		return domain.QueryResult{}, fmt.Errorf("read result rows: %w", err)
 	}
 	return result, nil
+}
+
+// lowerQueryParameters preserves literals/comments while replacing only real
+// GoogleSQL parameter tokens with DB-API placeholders. Values are passed as
+// driver arguments, never embedded into SQL text.
+func lowerQueryParameters(statement string, request ports.QueryRequest) (string, []any, error) {
+	if len(request.QueryParameters) == 0 {
+		if request.ParameterMode != "" {
+			return "", nil, fmt.Errorf("%w: parameterMode requires queryParameters", domain.ErrInvalid)
+		}
+		return statement, nil, nil
+	}
+	byName := map[string]domain.QueryParameter{}
+	for _, p := range request.QueryParameters {
+		byName[strings.ToLower(p.Name)] = p
+	}
+	usedNames := make(map[string]struct{}, len(byName))
+	var out strings.Builder
+	args := make([]any, 0, len(request.QueryParameters))
+	positional := 0
+	for i := 0; i < len(statement); {
+		if statement[i] == '\'' || statement[i] == '"' || statement[i] == '`' {
+			end, err := scanQuotedLiteral(statement, i, statement[i])
+			if err != nil {
+				return "", nil, err
+			}
+			out.WriteString(statement[i:end])
+			i = end
+			continue
+		}
+		if statement[i] == '-' && i+1 < len(statement) && statement[i+1] == '-' {
+			end := scanLineComment(statement, i)
+			out.WriteString(statement[i:end])
+			i = end
+			continue
+		}
+		if statement[i] == '#' {
+			end := scanLineComment(statement, i)
+			out.WriteString(statement[i:end])
+			i = end
+			continue
+		}
+		if statement[i] == '/' && i+1 < len(statement) && statement[i+1] == '*' {
+			end, err := scanBlockComment(statement, i)
+			if err != nil {
+				return "", nil, err
+			}
+			out.WriteString(statement[i:end])
+			i = end
+			continue
+		}
+		if statement[i] == '@' && request.ParameterMode == domain.QueryParameterNamed && i+1 < len(statement) && isIdentifierStart(statement[i+1]) {
+			end := i + 2
+			for end < len(statement) && isIdentifierPart(statement[end]) {
+				end++
+			}
+			name := strings.ToLower(statement[i+1 : end])
+			parameter, ok := byName[name]
+			if !ok {
+				return "", nil, fmt.Errorf("%w: missing named query parameter", domain.ErrInvalid)
+			}
+			value, err := duckDBParameterValue(parameter)
+			if err != nil {
+				return "", nil, err
+			}
+			out.WriteByte('?')
+			args = append(args, value)
+			usedNames[name] = struct{}{}
+			i = end
+			continue
+		}
+		if statement[i] == '?' && request.ParameterMode == domain.QueryParameterPositional {
+			if positional >= len(request.QueryParameters) {
+				return "", nil, fmt.Errorf("%w: missing positional query parameter", domain.ErrInvalid)
+			}
+			value, err := duckDBParameterValue(request.QueryParameters[positional])
+			if err != nil {
+				return "", nil, err
+			}
+			positional++
+			out.WriteByte('?')
+			args = append(args, value)
+			i++
+			continue
+		}
+		out.WriteByte(statement[i])
+		i++
+	}
+	if request.ParameterMode == domain.QueryParameterNamed {
+		for _, p := range request.QueryParameters {
+			if _, ok := usedNames[strings.ToLower(p.Name)]; !ok {
+				return "", nil, fmt.Errorf("%w: unused named query parameter", domain.ErrInvalid)
+			}
+		}
+	} else if positional != len(request.QueryParameters) {
+		return "", nil, fmt.Errorf("%w: unused positional query parameter", domain.ErrInvalid)
+	}
+	return out.String(), args, nil
+}
+
+func duckDBParameterValue(parameter domain.QueryParameter) (driver.Value, error) {
+	switch parameter.Type {
+	case "BOOL":
+		value, err := strconv.ParseBool(parameter.Value)
+		return value, err
+	case "INT64":
+		value, err := strconv.ParseInt(parameter.Value, 10, 64)
+		return value, err
+	case "FLOAT64":
+		value, err := strconv.ParseFloat(parameter.Value, 64)
+		return value, err
+	case "DATE":
+		return time.Parse("2006-01-02", parameter.Value)
+	case "DATETIME":
+		return time.Parse("2006-01-02 15:04:05", parameter.Value)
+	case "TIME":
+		return time.Parse("15:04:05", parameter.Value)
+	case "TIMESTAMP":
+		return time.Parse(time.RFC3339Nano, parameter.Value)
+	case "NUMERIC", "STRING", "JSON":
+		return parameter.Value, nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported query parameter type", domain.ErrInvalid)
+	}
 }
 
 func queryStatementType(statement string) string {

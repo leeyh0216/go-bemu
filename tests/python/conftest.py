@@ -93,6 +93,7 @@ def bqemu_endpoint(tmp_path_factory: pytest.TempPathFactory, test_timeout: float
             "BQEMU_HTTP_ADDRESS": f"127.0.0.1:{http_port}",
             "BQEMU_GRPC_ADDRESS": f"127.0.0.1:{grpc_port}",
             "BQEMU_PUBLIC_URL": endpoint,
+            "BQEMU_STATE_DSN": str(work / "bqemu-state.sqlite"),
             "BQEMU_DATABASE_DSN": str(work / "contracts.duckdb"),
             "BQEMU_UI_ENABLED": "false",
         }

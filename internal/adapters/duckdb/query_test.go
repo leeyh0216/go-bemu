@@ -2,7 +2,9 @@ package duckdb
 
 import (
 	"context"
+	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +71,30 @@ func TestTranslateSQLDistinguishesRelationsFromQuotedIdentifiers(t *testing.T) {
 			}
 			if got != test.want {
 				t.Fatalf("translation mismatch:\n got: %s\nwant: %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLowerQueryParametersBindsNamedAndPositionalTokens(t *testing.T) {
+	tests := []struct {
+		name, sql  string
+		mode       domain.QueryParameterMode
+		parameters []domain.QueryParameter
+		want       string
+		wantArgs   []any
+	}{
+		{"named", "SELECT @id, '@id' -- @id", domain.QueryParameterNamed, []domain.QueryParameter{{Name: "id", Type: "INT64", Value: "42"}}, "SELECT ?, '@id' -- @id", []any{int64(42)}},
+		{"positional", "SELECT ? + ?", domain.QueryParameterPositional, []domain.QueryParameter{{Type: "INT64", Value: "2"}, {Type: "INT64", Value: "3"}}, "SELECT ? + ?", []any{int64(2), int64(3)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, args, err := lowerQueryParameters(test.sql, ports.QueryRequest{ParameterMode: test.mode, QueryParameters: test.parameters})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want || !reflect.DeepEqual(args, test.wantArgs) {
+				t.Fatalf("got %q %#v, want %q %#v", got, args, test.want, test.wantArgs)
 			}
 		})
 	}
@@ -167,6 +193,71 @@ func TestWarehouseExecutesReservedQuotedColumnAndAlias(t *testing.T) {
 	}
 	if len(result.Columns) != 1 || result.Columns[0].Name != "from" || len(result.Rows) != 1 || result.Rows[0][0] != "value `kept`" {
 		t.Fatalf("unexpected quoted identifier result: %#v", result)
+	}
+}
+
+func TestWarehouseBindsGoogleSQLQueryParameters(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+
+	for _, test := range []struct {
+		name    string
+		request ports.QueryRequest
+		want    []any
+	}{
+		{
+			name: "named parameters are bound without interpolation",
+			request: ports.QueryRequest{
+				SQL: "SELECT @id AS id, @name AS name", ParameterMode: domain.QueryParameterNamed,
+				QueryParameters: []domain.QueryParameter{
+					{Name: "id", Type: "INT64", Value: "7"},
+					{Name: "name", Type: "STRING", Value: "safe ' value"},
+				},
+			},
+			want: []any{int64(7), "safe ' value"},
+		},
+		{
+			name: "positional parameters are bound in occurrence order",
+			request: ports.QueryRequest{
+				SQL: "SELECT ? AS enabled, ? AS amount", ParameterMode: domain.QueryParameterPositional,
+				QueryParameters: []domain.QueryParameter{
+					{Type: "BOOL", Value: "true"}, {Type: "FLOAT64", Value: "2.5"},
+				},
+			},
+			want: []any{true, 2.5},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := warehouse.Query(ctx, test.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Rows) != 1 || !reflect.DeepEqual(result.Rows[0], test.want) {
+				t.Fatalf("rows = %#v, want %#v", result.Rows, test.want)
+			}
+		})
+	}
+}
+
+func TestLowerQueryParametersRejectsMissingOrUnusedTokensOutsideLiteralsAndComments(t *testing.T) {
+	_, _, err := lowerQueryParameters("SELECT '@id' -- @id", ports.QueryRequest{
+		ParameterMode:   domain.QueryParameterNamed,
+		QueryParameters: []domain.QueryParameter{{Name: "id", Type: "STRING", Value: "value"}},
+	})
+	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "unused") {
+		t.Fatalf("literal/comment-only parameter error = %v", err)
+	}
+	_, _, err = lowerQueryParameters("SELECT @missing", ports.QueryRequest{
+		ParameterMode:   domain.QueryParameterNamed,
+		QueryParameters: []domain.QueryParameter{{Name: "id", Type: "STRING", Value: "value"}},
+	})
+	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing parameter error = %v", err)
 	}
 }
 

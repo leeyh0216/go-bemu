@@ -1,0 +1,14 @@
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+bootstrap:
+  projects:
+    - id: bootstrap-one
+      datasets:
+        - id: us_data
+          location: US
+          labels:
+            test: compose-restart
+    - id: bootstrap-two
+      datasets:
+        - id: eu_data
+          location: EU

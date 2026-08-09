@@ -35,6 +35,10 @@ func (w *Warehouse) MaterializeQuery(ctx context.Context, request ports.QueryMat
 	if err != nil {
 		return result, err
 	}
+	statement, arguments, err := lowerQueryParameters(statement, request.Query)
+	if err != nil {
+		return result, err
+	}
 	if !returnsRows(statement) {
 		return result, fmt.Errorf("%w: destinationTable requires a row-producing query", domain.ErrInvalid)
 	}
@@ -71,7 +75,7 @@ func (w *Warehouse) MaterializeQuery(ctx context.Context, request ports.QueryMat
 	}()
 
 	staging := fmt.Sprintf("__bqemu_query_result_%d", queryMaterializationSequence.Add(1))
-	if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE "+quoteIdentifier(staging)+" AS "+statement); err != nil {
+	if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE "+quoteIdentifier(staging)+" AS "+statement, arguments...); err != nil {
 		return result, fmt.Errorf("evaluate query destination source: %w", err)
 	}
 	queryResult, err := readMaterializedQueryResult(ctx, tx, staging)

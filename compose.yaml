@@ -1,6 +1,19 @@
 name: go-bemu
 
 services:
+  fake-gcs:
+    image: fsouza/fake-gcs-server@sha256:91afded49de804aa61b5f3eb6c7cd65205acf9e5c5e047cf0ba7d9507af806c8
+    command: ["-scheme", "http", "-port", "4443"]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /data:uid=1000,gid=1000,mode=0700
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-ec", "wget -q -O /dev/null http://127.0.0.1:4443/storage/v1/b"]
+      interval: 5s
+      timeout: 2s
+      retries: 24
   bqemu:
     build:
       context: .
@@ -15,6 +28,9 @@ services:
       BQEMU_CONFIG: /etc/bqemu/bqemu.yaml
       BQEMU_HEALTHCHECK_URL: ${BQEMU_HEALTHCHECK_URL:-http://127.0.0.1:9050/readyz}
       BQEMU_PUBLIC_URL: ${BQEMU_PUBLIC_URL:-http://localhost:${BQEMU_HTTP_PORT:-9050}}
+    depends_on:
+      fake-gcs:
+        condition: service_healthy
     ports:
       - "${BQEMU_HTTP_PORT:-9050}:9050"
       - "${BQEMU_GRPC_PORT:-9060}:9060"

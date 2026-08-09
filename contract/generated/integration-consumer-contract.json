@@ -1,0 +1,29 @@
+{
+  "operations": [
+    {
+      "id": "bigquery.datasets.get.metadata-view",
+      "scenario": "dataset-metadata-view",
+      "source": "tests/integration/test_catalog_metadata.py:2"
+    },
+    {
+      "id": "bigquery.datasets.list.filter",
+      "scenario": "dataset-label-filter",
+      "source": "tests/integration/test_catalog_metadata.py:1"
+    },
+    {
+      "id": "bigquery.jobs.insert.media-upload",
+      "scenario": "parquet-media-upload",
+      "source": "tests/integration/test_parquet_media_upload.py:1"
+    },
+    {
+      "id": "bigquery.jobs.query.parameters",
+      "scenario": "query-parameters",
+      "source": "tests/integration/test_query_parameters.py:1"
+    },
+    {
+      "id": "bigquery.tabledata.insert-all",
+      "scenario": "tabledata-insert-all",
+      "source": "tests/integration/test_tabledata_insert_all.py:1"
+    }
+  ]
+}

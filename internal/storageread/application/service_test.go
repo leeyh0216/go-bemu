@@ -309,6 +309,7 @@ func newTestServiceWithLogger(t *testing.T, materializer ports.SnapshotMateriali
 		MaxSessions:           32,
 		MaxSnapshotBytes:      1 << 20,
 		MaxTotalSnapshotBytes: 32 << 20,
+		StateOperationTimeout: time.Second,
 	}, materializer, clock, &fakeIDs{}, logger)
 	if err != nil {
 		t.Fatal(err)

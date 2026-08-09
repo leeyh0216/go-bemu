@@ -340,6 +340,12 @@ func fieldToProto(field writedomain.Field) *storagepb.TableFieldSchema {
 		Name: field.Name, Type: fieldTypeToProto(field.Type), Mode: fieldModeToProto(field.Mode),
 		Description: field.Description,
 	}
+	if field.Precision != nil {
+		result.Precision = *field.Precision
+	}
+	if field.Scale != nil {
+		result.Scale = *field.Scale
+	}
 	for _, nested := range field.Fields {
 		result.Fields = append(result.Fields, fieldToProto(nested))
 	}
