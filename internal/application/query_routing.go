@@ -150,7 +150,7 @@ func (s *QueryService) resolveQueryLocation(ctx context.Context, input QueryInpu
 
 func logQueryLocation(ctx context.Context, location string, inferred bool, datasetCount, referenceCount int) {
 	slog.InfoContext(ctx, "query location resolved",
-		"event", "application.query.location.resolved", "capability", domain.CapabilityQueryDatasetLocationV1,
+		"event", "domain.transition", "capability", domain.CapabilityQueryDatasetLocationV1,
 		"location", location, "inferred", inferred, "dataset_count", datasetCount,
 		"referenced_table_count", referenceCount)
 }

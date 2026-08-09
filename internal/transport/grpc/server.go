@@ -7,7 +7,6 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/leeyh0216/go-bemu/internal/observability"
 	readapp "github.com/leeyh0216/go-bemu/internal/storageread/application"
 	writeapp "github.com/leeyh0216/go-bemu/internal/storagewrite/application"
 )
@@ -61,8 +60,8 @@ func NewWithServices(services Services, options ...grpc.ServerOption) *grpc.Serv
 
 func NewRuntimeWithServices(services Services, options ...grpc.ServerOption) *Runtime {
 	options = append(options,
-		grpc.ChainUnaryInterceptor(observability.UnaryServerInterceptor),
-		grpc.ChainStreamInterceptor(observability.StreamServerInterceptor),
+		grpc.ChainUnaryInterceptor(UnaryServerInterceptor),
+		grpc.ChainStreamInterceptor(StreamServerInterceptor),
 	)
 	server := grpc.NewServer(options...)
 	storage := &StorageServer{read: services.Read}

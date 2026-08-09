@@ -19,7 +19,6 @@ import (
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	"github.com/leeyh0216/go-bemu/internal/application"
 	"github.com/leeyh0216/go-bemu/internal/domain"
-	"github.com/leeyh0216/go-bemu/internal/observability"
 )
 
 func TestRESTGzipChunkedTablesInsertUsesDecodedJSON(t *testing.T) {
@@ -303,7 +302,7 @@ func newJSONEchoServer(t *testing.T, compressedLimit, decodedLimit int64, calls 
 	handler := requestBodyMiddleware(normalizedRequestBodyLimits(compressedLimit, decodedLimit), nil, mux)
 	handler = methodOverrideMiddleware(handler)
 	handler = recoverMiddleware(handler)
-	server := httptest.NewServer(observability.HTTPMiddleware(handler))
+	server := httptest.NewServer(HTTPMiddleware(handler))
 	t.Cleanup(server.Close)
 	return server
 }

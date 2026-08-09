@@ -99,7 +99,7 @@ func (s *Server) Handler() http.Handler {
 	handler := requestBodyMiddleware(s.requestBodyLimits, s.mediaUploadBodyLimits(), mux)
 	handler = methodOverrideMiddleware(handler)
 	handler = recoverMiddleware(handler)
-	return observability.HTTPMiddleware(handler)
+	return HTTPMiddleware(handler)
 }
 
 func (s *Server) mediaUploadBodyLimits() *requestBodyLimits {
@@ -129,7 +129,7 @@ func registerOperationRoutes(mux *http.ServeMux, bindings []routeBinding) {
 		operationID := binding.operationID
 		handler := binding.handler
 		mux.Handle(spec.Pattern(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			observability.SetHTTPOperation(w, operationID)
+			SetHTTPOperation(w, operationID)
 			handler.ServeHTTP(w, r)
 		}))
 	}
@@ -159,7 +159,7 @@ func methodOverrideMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-HTTP-Method-Override")), http.MethodPatch) {
 			slog.InfoContext(r.Context(), "HTTP method override",
-				"event", "transport.http.method_override", "original_method", http.MethodPost,
+				"event", "boundary.enter", "boundary", "http.method_override", "original_method", http.MethodPost,
 				"effective_method", http.MethodPatch, "path_bytes", len(r.URL.Path),
 				"path_digest", observability.Digest([]byte(r.URL.Path)))
 			r.Method = http.MethodPatch

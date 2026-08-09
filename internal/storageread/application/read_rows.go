@@ -128,7 +128,7 @@ func (s *Service) ReadRows(ctx context.Context, request domain.ReadRowsRequest, 
 			first = false
 		}
 		s.logger.DebugContext(ctx, "sending encoded read batch",
-			"event", "boundary.before", "boundary", "storage_read.chunk",
+			"event", "boundary.enter", "boundary", "storage_read.chunk",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
 			"stream", request.StreamName, "offset", batch.Offset-entry.stream.StartOffset,
 			"row_count", batch.RowCount, "payload_bytes", len(batch.SerializedRows),

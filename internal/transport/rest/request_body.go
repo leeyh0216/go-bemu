@@ -255,7 +255,7 @@ func logRequestBodyBoundary(ctx context.Context, encoding string, compressed, un
 		outcome = "rejected"
 	}
 	attrs := append(observability.ContextAttrs(ctx),
-		"event", "boundary.body", "boundary", "http",
+		"event", "boundary.enter", "boundary", "http.body",
 		"operation", "rest.request_body.decode", "encoding", encoding, "outcome", outcome,
 	)
 	if compressed != nil {

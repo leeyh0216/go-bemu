@@ -400,7 +400,7 @@ func TestDuckDBReadSnapshotLogsStatementAndEncodedPayloadSideEffects(t *testing.
 		}
 	}
 	for _, required := range []string{
-		"side_effect.pre", "side_effect.post", "model_version",
+		"side_effect.before", "side_effect.after", "model_version",
 		"statement_digest", "restriction_digest", "row_digest", "payload_digest", "temp_dir_digest",
 		"materialize_read_snapshot", "create_read_snapshot_spill", "write_read_snapshot_spill_row",
 		"open_read_snapshot_spill_reader", "read_snapshot_spill_row", "remove_read_snapshot_spill",

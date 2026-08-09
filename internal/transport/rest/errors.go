@@ -147,7 +147,7 @@ func recoverMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				slog.ErrorContext(r.Context(), "HTTP handler panic",
-					"event", "boundary.panic", "boundary", "http",
+					"event", "boundary.reject", "boundary", "http",
 					"panic", recovered, "panic_type", fmt.Sprintf("%T", recovered),
 					"stack", string(debug.Stack()),
 				)
