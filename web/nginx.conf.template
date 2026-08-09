@@ -1,0 +1,25 @@
+server {
+  listen 8080;
+  server_name _;
+
+  location = / {
+    return 302 /console/;
+  }
+
+  location /console/ {
+    root /usr/share/nginx/html;
+    try_files $uri $uri/ /console/index.html;
+  }
+
+  location /bigquery/ {
+    proxy_pass ${BQEMU_API_UPSTREAM};
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location /emulator/ {
+    proxy_pass ${BQEMU_API_UPSTREAM};
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
