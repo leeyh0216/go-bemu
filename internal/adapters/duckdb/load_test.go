@@ -21,6 +21,7 @@ type testLoadRequest struct {
 	UpdateDestination bool
 	BeforeSchema      []loadDomain.Field
 	Evolution         catalogDomain.SchemaEvolution
+	Partition         *loadDomain.PartitionDecorator
 	Schema            []loadDomain.Field
 	Objects           []loadports.LocalObject
 	SourceFormat      loadDomain.SourceFormat
@@ -435,6 +436,128 @@ func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 	}
 }
 
+func TestParquetLoadPartitionDecoratorsScopeAndValidateWrites(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	physical := quoteIdentifier(physicalSchema("test-project", "dataset"))
+
+	ingestionSchema := []loadDomain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}}
+	ingestionTable := catalogDomain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "ingestion_events", Schema: ingestionSchema,
+		TimePartitioning: &catalogDomain.TimePartitioning{Type: "DAY"},
+	}
+	if err := warehouse.CreateTable(ctx, ingestionTable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, "INSERT INTO "+physical+`."ingestion_events" ("id", "_PARTITIONTIME") VALUES `+
+		"(1, TIMESTAMPTZ '2026-08-08T00:00:00Z'), (2, TIMESTAMPTZ '2026-08-09T00:00:00Z')"); err != nil {
+		t.Fatal(err)
+	}
+	ingestionSource := createLoadParquet(t, warehouse, "SELECT 3::BIGINT AS id")
+	ingestionDestination := loadDomain.Table{
+		Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "ingestion_events"},
+		Schema:    ingestionSchema, TimePartitioning: &catalogDomain.TimePartitioning{Type: "DAY"},
+	}
+	ingestionPartition, err := loadDomain.ResolvePartitionDecorator("20260809", ingestionDestination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: ingestionDestination, Schema: ingestionSchema, Partition: ingestionPartition,
+		Objects: []loadports.LocalObject{{Path: ingestionSource}}, SourceFormat: loadDomain.FormatParquet,
+		WriteDisposition: loadDomain.WriteTruncate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var prior, replaced int64
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT count(*) FILTER (WHERE id = 1), count(*) FILTER (WHERE id = 3) FROM "+physical+`."ingestion_events"`).Scan(&prior, &replaced); err != nil {
+		t.Fatal(err)
+	}
+	if prior != 1 || replaced != 1 {
+		t.Fatalf("ingestion-time partition rows = prior:%d replacement:%d", prior, replaced)
+	}
+
+	columnSchema := []loadDomain.Field{{Name: "id", Type: "INT64"}, {Name: "event_date", Type: "DATE"}}
+	columnTable := catalogDomain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "column_events", Schema: columnSchema,
+		TimePartitioning: &catalogDomain.TimePartitioning{Type: "DAY", Field: "event_date"},
+	}
+	if err := warehouse.CreateTable(ctx, columnTable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, "INSERT INTO "+physical+`."column_events" VALUES (1, DATE '2026-08-09')`); err != nil {
+		t.Fatal(err)
+	}
+	columnDestination := loadDomain.Table{
+		Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "column_events"},
+		Schema:    columnSchema, TimePartitioning: &catalogDomain.TimePartitioning{Type: "DAY", Field: "event_date"},
+	}
+	columnPartition, err := loadDomain.ResolvePartitionDecorator("20260809", columnDestination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatchSource := createLoadParquet(t, warehouse, "SELECT 2::BIGINT AS id, DATE '2026-08-10' AS event_date")
+	if _, err := executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: columnDestination, Schema: columnSchema, Partition: columnPartition,
+		Objects: []loadports.LocalObject{{Path: mismatchSource}}, SourceFormat: loadDomain.FormatParquet,
+		WriteDisposition: loadDomain.WriteTruncate,
+	}); !errors.Is(err, loadDomain.ErrInvalid) {
+		t.Fatalf("column partition mismatch error = %v", err)
+	}
+	var columnRows int64
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT count(*) FROM "+physical+`."column_events" WHERE id = 1`).Scan(&columnRows); err != nil {
+		t.Fatal(err)
+	}
+	if columnRows != 1 {
+		t.Fatalf("column partition mismatch changed destination: %d", columnRows)
+	}
+
+	rangeSchema := []loadDomain.Field{{Name: "bucket_id", Type: "INT64"}}
+	rangePartitioning := &catalogDomain.RangePartitioning{
+		Field: "bucket_id", Range: catalogDomain.Range{Start: 0, End: 100, Interval: 20},
+	}
+	rangeTable := catalogDomain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "range_events", Schema: rangeSchema,
+		RangePartitioning: rangePartitioning,
+	}
+	if err := warehouse.CreateTable(ctx, rangeTable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, "INSERT INTO "+physical+`."range_events" VALUES (5), (25)`); err != nil {
+		t.Fatal(err)
+	}
+	rangeDestination := loadDomain.Table{
+		Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "range_events"},
+		Schema:    rangeSchema, RangePartitioning: rangePartitioning,
+	}
+	rangePartition, err := loadDomain.ResolvePartitionDecorator("20", rangeDestination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rangeSource := createLoadParquet(t, warehouse, "SELECT 21::BIGINT AS bucket_id UNION ALL SELECT 22")
+	if _, err := executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: rangeDestination, Schema: rangeSchema, Partition: rangePartition,
+		Objects: []loadports.LocalObject{{Path: rangeSource}}, SourceFormat: loadDomain.FormatParquet,
+		WriteDisposition: loadDomain.WriteTruncate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var outsideRows, partitionRows int64
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT count(*) FILTER (WHERE bucket_id = 5), count(*) FILTER (WHERE bucket_id >= 20 AND bucket_id < 40) FROM "+physical+`."range_events"`).Scan(&outsideRows, &partitionRows); err != nil {
+		t.Fatal(err)
+	}
+	if outsideRows != 1 || partitionRows != 2 {
+		t.Fatalf("range partition rows = outside:%d replacement:%d", outsideRows, partitionRows)
+	}
+}
+
 func TestParquetLoadRejectsSchemaMismatchWithoutChangingDestination(t *testing.T) {
 	ctx := context.Background()
 	warehouse, err := New("")
@@ -676,6 +799,7 @@ func executeTestLoad(ctx context.Context, warehouse *Warehouse, request testLoad
 	plan, err := warehouse.PlanLoad(ctx, loadports.LoadPlanRequest{
 		Destination: request.Destination, CreateDestination: request.CreateDestination,
 		UpdateDestination: request.UpdateDestination, SchemaPlan: schemaPlan,
+		Partition:    request.Partition,
 		SourceFormat: request.SourceFormat, WriteDisposition: request.WriteDisposition,
 		Objects: resolved,
 	})

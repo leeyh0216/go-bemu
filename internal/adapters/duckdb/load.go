@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	catalogdomain "github.com/leeyh0216/go-bemu/internal/domain"
 	loadDomain "github.com/leeyh0216/go-bemu/internal/loadjob/domain"
@@ -35,6 +36,14 @@ type stagingColumn struct {
 type stagingValueCheck struct {
 	predicate string
 	decimal   bool
+}
+
+type loadPartitionPredicate struct {
+	sql              string
+	args             []any
+	stagingField     string
+	insertExpression string
+	insertArgs       []any
 }
 
 func (w *Warehouse) PlanLoad(ctx context.Context, request loadports.LoadPlanRequest) (loadports.LoadPlan, error) {
@@ -115,6 +124,13 @@ func (w *Warehouse) ExecuteLoad(
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM "+quoteIdentifier(validatedStaging)).Scan(&result.OutputRows); err != nil {
 		return result, fmt.Errorf("count Parquet staging rows: %w", err)
 	}
+	partition, err := buildLoadPartitionPredicate(request.Destination, request.Partition)
+	if err != nil {
+		return result, err
+	}
+	if err := validateLoadPartitionValues(ctx, tx, validatedStaging, partition); err != nil {
+		return result, err
+	}
 
 	destination := quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + "." + quoteIdentifier(table.TableID)
 	if request.CreateDestination {
@@ -143,14 +159,27 @@ func (w *Warehouse) ExecuteLoad(
 	switch request.WriteDisposition {
 	case loadDomain.WriteEmpty:
 		var exists bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM "+destination+" LIMIT 1)").Scan(&exists); err != nil {
+		statement := "SELECT EXISTS(SELECT 1 FROM " + destination
+		args := []any(nil)
+		if partition != nil {
+			statement += " WHERE " + partition.sql
+			args = partition.args
+		}
+		statement += " LIMIT 1)"
+		if err := tx.QueryRowContext(ctx, statement, args...).Scan(&exists); err != nil {
 			return result, fmt.Errorf("inspect WRITE_EMPTY destination: %w", err)
 		}
 		if exists {
 			return result, fmt.Errorf("%w: WRITE_EMPTY destination contains rows", loadDomain.ErrPrecondition)
 		}
 	case loadDomain.WriteTruncate:
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+destination); err != nil {
+		statement := "DELETE FROM " + destination
+		args := []any(nil)
+		if partition != nil {
+			statement += " WHERE " + partition.sql
+			args = partition.args
+		}
+		if _, err := tx.ExecContext(ctx, statement, args...); err != nil {
 			return result, fmt.Errorf("truncate load destination: %w", err)
 		}
 	case loadDomain.WriteAppend:
@@ -158,9 +187,17 @@ func (w *Warehouse) ExecuteLoad(
 		return result, fmt.Errorf("%w: write disposition %q", loadDomain.ErrInvalid, request.WriteDisposition)
 	}
 
+	insertColumns := append([]string(nil), destinationColumns...)
+	insertExpressions := append([]string(nil), destinationColumns...)
+	insertArgs := []any(nil)
+	if partition != nil && partition.insertExpression != "" {
+		insertColumns = append(insertColumns, quoteIdentifier(catalogdomain.PartitionTimePseudoColumn))
+		insertExpressions = append(insertExpressions, partition.insertExpression)
+		insertArgs = partition.insertArgs
+	}
 	insert := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s", destination,
-		strings.Join(destinationColumns, ", "), strings.Join(destinationColumns, ", "), quoteIdentifier(validatedStaging))
-	if _, err := tx.ExecContext(ctx, insert); err != nil {
+		strings.Join(insertColumns, ", "), strings.Join(insertExpressions, ", "), quoteIdentifier(validatedStaging))
+	if _, err := tx.ExecContext(ctx, insert, insertArgs...); err != nil {
 		return result, fmt.Errorf("insert validated Parquet rows: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "DROP TABLE "+quoteIdentifier(validatedStaging)); err != nil {
@@ -174,6 +211,104 @@ func (w *Warehouse) ExecuteLoad(
 	}
 	committed = true
 	return result, nil
+}
+
+func buildLoadPartitionPredicate(
+	table loadDomain.Table,
+	decorator *loadDomain.PartitionDecorator,
+) (*loadPartitionPredicate, error) {
+	if decorator == nil {
+		return nil, nil
+	}
+	if err := loadDomain.ValidatePartitionDecorator(decorator, table); err != nil {
+		return nil, err
+	}
+	if decorator.Kind == loadDomain.PartitionDecoratorRange {
+		field := table.RangePartitioning.Field
+		quoted := quoteIdentifier(field)
+		return &loadPartitionPredicate{
+			sql: quoted + " >= ? AND " + quoted + " < ?", args: []any{decorator.RangeStart, decorator.RangeEnd},
+			stagingField: quoted,
+		}, nil
+	}
+	if decorator.Kind != loadDomain.PartitionDecoratorTime || table.TimePartitioning == nil {
+		return nil, fmt.Errorf("%w: invalid load partition decorator", loadDomain.ErrInvalid)
+	}
+	start, end := partitionTimeArguments(*decorator, table.TimePartitioning.Field, table.Schema)
+	if start.cast == "" {
+		return nil, fmt.Errorf("%w: unsupported time partition field", loadDomain.ErrInvalid)
+	}
+	field := table.TimePartitioning.Field
+	if strings.TrimSpace(field) == "" {
+		field = catalogdomain.PartitionTimePseudoColumn
+		quoted := quoteIdentifier(field)
+		return &loadPartitionPredicate{
+			sql:  quoted + " >= CAST(? AS TIMESTAMPTZ) AND " + quoted + " < CAST(? AS TIMESTAMPTZ)",
+			args: []any{start.value, end.value}, insertExpression: "CAST(? AS TIMESTAMPTZ)", insertArgs: []any{start.value},
+		}, nil
+	}
+	quoted := quoteIdentifier(field)
+	return &loadPartitionPredicate{
+		sql:  quoted + " >= CAST(? AS " + start.cast + ") AND " + quoted + " < CAST(? AS " + start.cast + ")",
+		args: []any{start.value, end.value}, stagingField: quoted,
+	}, nil
+}
+
+type partitionTimeArgument struct {
+	cast  string
+	value string
+}
+
+func partitionTimeArguments(
+	decorator loadDomain.PartitionDecorator,
+	fieldName string,
+	schema []loadDomain.Field,
+) (partitionTimeArgument, partitionTimeArgument) {
+	fieldType := "TIMESTAMP"
+	if strings.TrimSpace(fieldName) != "" {
+		fieldType = ""
+		for _, field := range schema {
+			if strings.EqualFold(field.Name, fieldName) {
+				fieldType = strings.ToUpper(field.Type)
+				break
+			}
+		}
+	}
+	start := partitionTimeArgument{}
+	end := partitionTimeArgument{}
+	switch fieldType {
+	case "DATE":
+		start = partitionTimeArgument{cast: "DATE", value: decorator.TimeStart.Format("2006-01-02")}
+		end = partitionTimeArgument{cast: "DATE", value: decorator.TimeEnd.Format("2006-01-02")}
+	case "DATETIME":
+		start = partitionTimeArgument{cast: "TIMESTAMP", value: decorator.TimeStart.Format("2006-01-02 15:04:05")}
+		end = partitionTimeArgument{cast: "TIMESTAMP", value: decorator.TimeEnd.Format("2006-01-02 15:04:05")}
+	case "TIMESTAMP":
+		start = partitionTimeArgument{cast: "TIMESTAMPTZ", value: decorator.TimeStart.Format(time.RFC3339Nano)}
+		end = partitionTimeArgument{cast: "TIMESTAMPTZ", value: decorator.TimeEnd.Format(time.RFC3339Nano)}
+	}
+	return start, end
+}
+
+func validateLoadPartitionValues(
+	ctx context.Context,
+	tx *sql.Tx,
+	staging string,
+	partition *loadPartitionPredicate,
+) error {
+	if partition == nil || partition.stagingField == "" {
+		return nil
+	}
+	statement := "SELECT count(*) FROM " + quoteIdentifier(staging) + " WHERE " +
+		partition.stagingField + " IS NULL OR NOT (" + partition.sql + ")"
+	var invalidRows int64
+	if err := tx.QueryRowContext(ctx, statement, partition.args...).Scan(&invalidRows); err != nil {
+		return fmt.Errorf("validate load partition values: %w", err)
+	}
+	if invalidRows != 0 {
+		return fmt.Errorf("%w: Parquet rows do not match the destination partition decorator", loadDomain.ErrInvalid)
+	}
+	return nil
 }
 
 func validateRequiredLoadValues(ctx context.Context, tx *sql.Tx, staging string, schema []loadDomain.Field) error {

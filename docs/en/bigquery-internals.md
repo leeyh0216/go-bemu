@@ -182,7 +182,11 @@ after commit. A newly created destination also carries validated time-unit or
 integer-range partition metadata, partition expiration, and ordered clustering
 fields into the same immutable load plan. Ingestion-time destinations create
 and populate `_PARTITIONTIME` and `_PARTITIONDATE`; a request cannot replace an
-existing destination's layout. Partition expiration sweeping and physical
+existing destination's layout. A partition decorator is resolved against that
+canonical layout before object access. Time-column and integer-range rows must
+fall inside the decorated boundary; ingestion-time loads assign the boundary
+to `_PARTITIONTIME`. Decorated `WRITE_EMPTY` and `WRITE_TRUNCATE` inspect or
+replace only that partition in the destination transaction. Partition expiration sweeping and physical
 reclustering are not yet implemented. Local paths and non-GCS URI schemes are rejected before job
 persistence. The separate `autodetect` request flag, query-job schema updates,
 Avro/ORC/CSV/NDJSON, and

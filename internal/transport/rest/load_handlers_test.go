@@ -208,6 +208,24 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	if query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "2" {
 		t.Fatalf("unexpected query result after destination creation: %#v", query)
 	}
+	decoratedBody := fmt.Sprintf(`{
+		"jobReference":{"projectId":"test-project","jobId":"load-decorated","location":"US"},
+		"configuration":{"load":{
+			"sourceUris":[%q],
+			"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"created_events$20260801"},
+			"sourceFormat":"PARQUET","writeDisposition":"WRITE_TRUNCATE","createDisposition":"CREATE_NEVER"
+		}}
+	}`, "gs://load-bucket/input/*.parquet")
+	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", decoratedBody, http.StatusOK)
+	decoratedJob := waitForRESTLoad(t, server.URL, "load-decorated")
+	if decoratedJob["status"].(map[string]any)["errorResult"] != nil {
+		t.Fatalf("partition-decorated load failed: %#v", decoratedJob)
+	}
+	query = restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/queries",
+		`{"query":"SELECT count(*) AS row_count FROM `+"`test-project.analytics.created_events`"+` WHERE _PARTITIONDATE = DATE '2026-08-01'","useLegacySql":false}`, http.StatusOK)
+	if query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "2" {
+		t.Fatalf("unexpected decorated partition rows: %#v", query)
+	}
 	listed := restLoadRequest(t, server.URL, http.MethodGet, "/bigquery/v2/projects/test-project/jobs?location=US", "", http.StatusOK)
 	if len(listed["jobs"].([]any)) < 1 {
 		t.Fatalf("load job missing from list: %#v", listed)

@@ -26,6 +26,7 @@ type LoadPlanRequest struct {
 	CreateDestination bool
 	UpdateDestination bool
 	SchemaPlan        engine.SchemaPlan
+	Partition         *domain.PartitionDecorator
 	SourceFormat      domain.SourceFormat
 	WriteDisposition  domain.WriteDisposition
 	Objects           []ResolvedObject
@@ -219,6 +220,12 @@ func validateLoadPlanRequest(capabilities engine.Capabilities, request LoadPlanR
 	if request.CreateDestination && request.UpdateDestination {
 		return fmt.Errorf("%w: load destination cannot be created and updated together", domain.ErrInvalid)
 	}
+	if request.Partition != nil && request.CreateDestination {
+		return fmt.Errorf("%w: partition-decorated loads require an existing base table", domain.ErrInvalid)
+	}
+	if err := domain.ValidatePartitionDecorator(request.Partition, request.Destination); err != nil {
+		return err
+	}
 	expectedOperation := engine.SchemaOperationValidate
 	if request.CreateDestination {
 		expectedOperation = engine.SchemaOperationCreate
@@ -292,6 +299,10 @@ func classifyAdapterPlanningError(err error) error {
 func cloneLoadPlanRequest(input LoadPlanRequest) LoadPlanRequest {
 	result := input
 	result.Destination = domain.CloneTable(input.Destination)
+	if input.Partition != nil {
+		partition := *input.Partition
+		result.Partition = &partition
+	}
 	result.Objects = append([]ResolvedObject(nil), input.Objects...)
 	return result
 }
@@ -304,6 +315,7 @@ func loadPlanRequestFingerprint(request LoadPlanRequest) string {
 		TimePartitioning  *catalogdomain.TimePartitioning  `json:"timePartitioning,omitempty"`
 		RangePartitioning *catalogdomain.RangePartitioning `json:"rangePartitioning,omitempty"`
 		ClusteringFields  []string                         `json:"clusteringFields,omitempty"`
+		Partition         *domain.PartitionDecorator       `json:"partition,omitempty"`
 		CreateDestination bool                             `json:"createDestination"`
 		UpdateDestination bool                             `json:"updateDestination"`
 		SchemaPlan        string                           `json:"schemaPlan"`
@@ -316,6 +328,7 @@ func loadPlanRequestFingerprint(request LoadPlanRequest) string {
 		TimePartitioning:  request.Destination.TimePartitioning,
 		RangePartitioning: request.Destination.RangePartitioning,
 		ClusteringFields:  request.Destination.ClusteringFields,
+		Partition:         request.Partition,
 		CreateDestination: request.CreateDestination,
 		UpdateDestination: request.UpdateDestination,
 		SchemaPlan:        request.SchemaPlan.Fingerprint(),

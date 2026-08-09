@@ -97,9 +97,13 @@ type testCatalog struct {
 	publishErr                   error
 	published                    *[]domain.Table
 	updated                      *[]domain.Table
+	requested                    *[]domain.TableReference
 }
 
 func (c testCatalog) GetTable(_ context.Context, reference domain.TableReference) (domain.Table, error) {
+	if c.requested != nil {
+		*c.requested = append(*c.requested, reference)
+	}
 	if c.missing || reference != c.table.Reference {
 		return domain.Table{}, domain.ErrNotFound
 	}
@@ -176,6 +180,7 @@ type testLoadPlanner struct {
 	loadPlanCalls int
 	schemaPlanner *engine.SchemaPlanner
 	loadPlanner   *ports.Planner
+	lastRequest   ports.LoadPlanRequest
 }
 
 type testSchemaPlanAdapter struct{ planner *testLoadPlanner }
@@ -187,8 +192,9 @@ func (adapter testSchemaPlanAdapter) ValidateSchemaIntent(context.Context, engin
 
 type testLoadPlanAdapter struct{ planner *testLoadPlanner }
 
-func (adapter testLoadPlanAdapter) ValidateLoadRequest(context.Context, ports.LoadPlanRequest) (string, error) {
+func (adapter testLoadPlanAdapter) ValidateLoadRequest(_ context.Context, request ports.LoadPlanRequest) (string, error) {
 	adapter.planner.loadPlanCalls++
+	adapter.planner.lastRequest = request
 	if adapter.planner.loadPlanErr != nil {
 		return "", adapter.planner.loadPlanErr
 	}
@@ -495,6 +501,44 @@ func TestServiceAppliesDatasetDefaultPartitionExpiration(t *testing.T) {
 	if job.Error != nil || len(published) != 1 || published[0].TimePartitioning == nil ||
 		published[0].TimePartitioning.ExpirationMs != expiration {
 		t.Fatalf("published destination = %#v, job = %+v", published, job)
+	}
+}
+
+func TestServiceResolvesDecoratedDestinationToExistingBaseTable(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US", Schema: []domain.Field{{Name: "id", Type: "INT64"}},
+		TimePartitioning: &catalogdomain.TimePartitioning{Type: "DAY"},
+	}
+	requested := make([]domain.TableReference, 0, 1)
+	loader := &testLoader{}
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		NewMemoryJobRepository(), objects, testCatalog{table: table, requested: &requested}, loader,
+		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Destination.TableID = "items$20260809"
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "decorated-destination"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error != nil {
+		t.Fatalf("job = %+v", job)
+	}
+	if len(requested) != 1 || requested[0] != table.Reference {
+		t.Fatalf("catalog requests = %#v", requested)
+	}
+	planned := loader.lastRequest
+	if planned.Destination.Reference != table.Reference || planned.CreateDestination || planned.Partition == nil ||
+		planned.Partition.ID != "20260809" || planned.Partition.Kind != domain.PartitionDecoratorTime {
+		t.Fatalf("planned decorated destination = %#v", planned)
 	}
 }
 

@@ -77,6 +77,7 @@ type Service struct {
 
 type destinationResolution struct {
 	table        domain.Table
+	partition    *domain.PartitionDecorator
 	beforeSchema []domain.Field
 	evolution    catalogdomain.SchemaEvolution
 	create       bool
@@ -353,6 +354,7 @@ func (s *Service) planLoad(
 	return s.loader.PlanLoad(ctx, ports.LoadPlanRequest{
 		Destination: destination.table, CreateDestination: destination.create,
 		UpdateDestination: updateDestination, SchemaPlan: schemaPlan,
+		Partition:    destination.partition,
 		SourceFormat: configuration.SourceFormat, WriteDisposition: configuration.WriteDisposition,
 		Objects: objects,
 	})
@@ -363,7 +365,11 @@ func (s *Service) resolveDestination(
 	job *domain.Job,
 	configuration domain.LoadConfiguration,
 ) (destinationResolution, error) {
-	table, err := s.tables.GetTable(ctx, configuration.Destination)
+	baseReference, partitionID, decorated, err := domain.SplitPartitionDecorator(configuration.Destination)
+	if err != nil {
+		return destinationResolution{}, err
+	}
+	table, err := s.tables.GetTable(ctx, baseReference)
 	if err == nil {
 		if table.Location != "" && !strings.EqualFold(table.Location, job.Reference.Location) {
 			return destinationResolution{}, fmt.Errorf("%w: destination table and job locations differ", domain.ErrInvalid)
@@ -373,6 +379,12 @@ func (s *Service) resolveDestination(
 		}
 		resolution := destinationResolution{
 			table: domain.CloneTable(table), beforeSchema: catalogdomain.CloneFields(table.Schema),
+		}
+		if decorated {
+			resolution.partition, err = domain.ResolvePartitionDecorator(partitionID, resolution.table)
+			if err != nil {
+				return destinationResolution{}, err
+			}
 		}
 		if len(configuration.Schema) == 0 {
 			resolution.infer = len(configuration.SchemaUpdateOptions) != 0
@@ -393,11 +405,14 @@ func (s *Service) resolveDestination(
 	if !errors.Is(err, domain.ErrNotFound) {
 		return destinationResolution{}, err
 	}
+	if decorated {
+		return destinationResolution{}, fmt.Errorf("%w: decorated destination base table", domain.ErrNotFound)
+	}
 	if configuration.CreateDisposition == domain.CreateNever {
 		return destinationResolution{}, fmt.Errorf("%w: destination table", domain.ErrNotFound)
 	}
 	dataset, err := s.tables.GetDataset(
-		ctx, configuration.Destination.ProjectID, configuration.Destination.DatasetID,
+		ctx, baseReference.ProjectID, baseReference.DatasetID,
 	)
 	if err != nil {
 		return destinationResolution{}, err
@@ -407,7 +422,7 @@ func (s *Service) resolveDestination(
 	}
 	return destinationResolution{
 		table: domain.Table{
-			Reference:         configuration.Destination,
+			Reference:         baseReference,
 			Location:          dataset.Location,
 			Schema:            catalogdomain.CloneFields(configuration.Schema),
 			TimePartitioning:  domain.ResolveTimePartitioning(configuration.TimePartitioning, dataset.DefaultPartitionExpirationMs),

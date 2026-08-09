@@ -62,17 +62,19 @@ func (planner duckDBLoadAdapterPlanner) ValidateLoadRequest(
 		physicalTypes = append(physicalTypes, physicalType)
 	}
 	document, err := json.Marshal(struct {
-		ModelVersion      string                      `json:"modelVersion"`
-		CreateDestination bool                        `json:"createDestination"`
-		UpdateDestination bool                        `json:"updateDestination"`
-		PhysicalTypes     []string                    `json:"physicalTypes"`
-		SourceFormat      loadDomain.SourceFormat     `json:"sourceFormat"`
-		WriteDisposition  loadDomain.WriteDisposition `json:"writeDisposition"`
+		ModelVersion      string                         `json:"modelVersion"`
+		CreateDestination bool                           `json:"createDestination"`
+		UpdateDestination bool                           `json:"updateDestination"`
+		PhysicalTypes     []string                       `json:"physicalTypes"`
+		SourceFormat      loadDomain.SourceFormat        `json:"sourceFormat"`
+		WriteDisposition  loadDomain.WriteDisposition    `json:"writeDisposition"`
+		Partition         *loadDomain.PartitionDecorator `json:"partition,omitempty"`
 	}{
-		ModelVersion: "duckdb-parquet-load-plan-v3", PhysicalTypes: physicalTypes,
+		ModelVersion: "duckdb-parquet-load-plan-v4", PhysicalTypes: physicalTypes,
 		CreateDestination: request.CreateDestination,
 		UpdateDestination: request.UpdateDestination,
 		SourceFormat:      request.SourceFormat, WriteDisposition: request.WriteDisposition,
+		Partition: request.Partition,
 	})
 	if err != nil {
 		return "", loadports.InvalidLoadPlan()

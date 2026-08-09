@@ -252,6 +252,10 @@ func ValidateConfiguration(configuration LoadConfiguration) error {
 }
 
 func validateDestinationMetadata(configuration LoadConfiguration) error {
+	baseReference, _, _, err := SplitPartitionDecorator(configuration.Destination)
+	if err != nil {
+		return err
+	}
 	if configuration.TimePartitioning != nil && configuration.RangePartitioning != nil {
 		return fmt.Errorf("%w: timePartitioning and rangePartitioning are mutually exclusive", ErrInvalid)
 	}
@@ -277,7 +281,7 @@ func validateDestinationMetadata(configuration LoadConfiguration) error {
 		return nil
 	}
 	return ValidateTable(Table{
-		Reference: configuration.Destination, Schema: configuration.Schema,
+		Reference: baseReference, Schema: configuration.Schema,
 		TimePartitioning: ResolveTimePartitioning(configuration.TimePartitioning, nil), RangePartitioning: configuration.RangePartitioning,
 		ClusteringFields: configuration.ClusteringFields,
 	})

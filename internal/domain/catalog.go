@@ -220,7 +220,11 @@ func validateTablePartitioning(table Table) error {
 				return fmt.Errorf("%w: time partition field %q does not exist", ErrInvalid, partitioning.Field)
 			}
 			switch strings.ToUpper(field.Type) {
-			case "DATE", "DATETIME", "TIMESTAMP":
+			case "DATE":
+				if typ == "HOUR" {
+					return fmt.Errorf("%w: DATE partition field %q does not support HOUR partitioning", ErrInvalid, partitioning.Field)
+				}
+			case "DATETIME", "TIMESTAMP":
 			default:
 				return fmt.Errorf("%w: time partition field %q has type %q", ErrInvalid, partitioning.Field, field.Type)
 			}
