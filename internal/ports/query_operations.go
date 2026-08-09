@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
 type QueryOperationKind string
@@ -170,12 +171,21 @@ func (operation QueryOperation) ValidateRequest(request QueryRequest) error {
 }
 
 // QueryOperationAnalyzer recognizes connector-specific semantic operations and
-// owns verification of its versioned profile proof. Verification must compare
-// the operation with a fresh result from the pinned parser. matched=false
-// delegates to the generic query path.
+// owns verification of its versioned profile proof. Implementations that admit
+// public SQL must rebuild the proof through the configured GoogleSQL gateway,
+// never through a connector-local parser. matched=false delegates to the
+// generic query path.
 type QueryOperationAnalyzer interface {
 	AnalyzeQueryOperation(context.Context, QueryRequest) (operation QueryOperation, matched bool, err error)
 	VerifyQueryOperation(QueryRequest, QueryOperation) error
+}
+
+// AnalyzedQueryOperationAnalyzer recognizes a connector-owned operation from
+// the immutable GoogleSQL statement produced by the single gateway. It is the
+// production path: implementations must inspect the owned AST and semantic
+// bindings, never tokenize or parse request.SQL.
+type AnalyzedQueryOperationAnalyzer interface {
+	AnalyzeStatementOperation(context.Context, semantic.Statement, QueryRequest) (operation QueryOperation, matched bool, err error)
 }
 
 // QueryOperationEngine receives a verified semantic operation and canonical

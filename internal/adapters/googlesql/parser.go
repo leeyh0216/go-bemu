@@ -48,9 +48,6 @@ func (*Parser) ParseDDL(ctx context.Context, request ports.QueryRequest) (domain
 	if err := ctx.Err(); err != nil {
 		return domain.DDLCommand{}, false, err
 	}
-	if !isDDLCandidate(request.SQL) {
-		return domain.DDLCommand{}, false, nil
-	}
 	if err := initialize(); err != nil {
 		return domain.DDLCommand{}, false, err
 	}
@@ -99,72 +96,6 @@ func (*Parser) ParseDDL(ctx context.Context, request ports.QueryRequest) (domain
 		}
 		return domain.DDLCommand{}, false, nil
 	}
-}
-
-// isDDLCandidate keeps this adapter from becoming the syntax authority for
-// queries and DML. The execution engine owns those statement classes and may
-// accept expressions that are outside GoogleSQL. Once a statement is
-// classified as DDL, the GoogleSQL AST parser remains authoritative.
-func isDDLCandidate(sql string) bool {
-	keyword := leadingKeyword(sql)
-	switch keyword {
-	case "CREATE", "ALTER", "DROP", "TRUNCATE":
-		return true
-	default:
-		return false
-	}
-}
-
-func leadingKeyword(sql string) string {
-	for index := 0; index < len(sql); {
-		switch {
-		case isSpace(sql[index]):
-			index++
-		case sql[index] == '#':
-			index = skipLineComment(sql, index)
-		case sql[index] == '-' && index+1 < len(sql) && sql[index+1] == '-':
-			index = skipLineComment(sql, index)
-		case sql[index] == '/' && index+1 < len(sql) && sql[index+1] == '*':
-			end := strings.Index(sql[index+2:], "*/")
-			if end < 0 {
-				return ""
-			}
-			index += end + 4
-		case isIdentifierStart(sql[index]):
-			end := index + 1
-			for end < len(sql) && isIdentifierPart(sql[end]) {
-				end++
-			}
-			return strings.ToUpper(sql[index:end])
-		default:
-			return ""
-		}
-	}
-	return ""
-}
-
-func skipLineComment(sql string, index int) int {
-	for index < len(sql) && sql[index] != '\n' {
-		index++
-	}
-	return index
-}
-
-func isSpace(value byte) bool {
-	switch value {
-	case ' ', '\t', '\r', '\n', '\f':
-		return true
-	default:
-		return false
-	}
-}
-
-func isIdentifierStart(value byte) bool {
-	return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
-}
-
-func isIdentifierPart(value byte) bool {
-	return isIdentifierStart(value) || value >= '0' && value <= '9'
 }
 
 func isMultiStatementScript(sql string, options *gsql.ParserOptions) bool {

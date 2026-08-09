@@ -112,6 +112,24 @@ func TestLowerDuckDBSelectUsesCanonicalBindingsAndTypedArguments(t *testing.T) {
 	}
 }
 
+func TestLowerDuckDBSelectAllowsContextuallyTypedEmptyArray(t *testing.T) {
+	t.Parallel()
+	fixture := newRendererASTFixture(t)
+	body := fixture.selectBody(fixture.selectItem(fixture.arrayLiteral(nil), "empty_values"))
+	query, err := queryast.NewQuery(nil, false, body, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := queryast.NewSelectStatement(fixture.source(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := fixture.lower(statement, nil)
+	if got, want := plan.statementSQL(), `SELECT [] AS "empty_values"`; got != want {
+		t.Fatalf("lowered SQL = %q, want %q", got, want)
+	}
+}
+
 func TestLowerDuckDBQuerySupportsCTEUnionAndAggregateModifiers(t *testing.T) {
 	t.Parallel()
 	fixture := newRendererASTFixture(t)

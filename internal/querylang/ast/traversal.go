@@ -244,6 +244,14 @@ func (collector *relationCollector) expression(expression Expression) error {
 			return collector.query(*value.subquery)
 		}
 		return collector.expression(value.unnest)
+	case *BetweenExpression:
+		if err := collector.expression(value.value); err != nil {
+			return err
+		}
+		if err := collector.expression(value.low); err != nil {
+			return err
+		}
+		return collector.expression(value.high)
 	case *ParenthesizedExpression:
 		return collector.expression(value.inner)
 	case *SubqueryExpression:

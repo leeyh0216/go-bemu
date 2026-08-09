@@ -111,9 +111,25 @@
 BigQuery 커넥터 `0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)
 분석기는
 [`internal/adapters/sparkbigquery/v0442`](../../internal/adapters/sparkbigquery/v0442)에
-있습니다. 분석기는 원문 지문, 프로필, 기본 데이터 세트와 옵션을 결합한 타입 기반
-작업을 만듭니다. 엔진 실행기는 이 작업을 받아 실행하며 원문 SQL을 다시 해석하지
-않습니다.
+있습니다. 애플리케이션은 먼저 GoogleSQL gateway에서 변경 불가능한 의미 명령문 하나를
+만들고, 커넥터 어댑터가 그 AST와 관계 바인딩을 대조합니다. 이어서 요청 지문과
+프로필에 묶인 타입 기반 작업을 만듭니다. 엔진 실행기는 이 작업을 받아 실행하며 원문
+SQL을 다시 해석하지 않습니다.
+
+### GoogleSQL 명령문 visitor
+
+모든 공개 query/job 요청은 엔진 작업 전에 GoogleSQL gateway를 한 번 통과합니다.
+외부 parser 결과는 BEMU가 소유하는 변경 불가능한 명령문 모델로 복사하고, 엔진
+어댑터는 명령문·식·관계·자료형 visitor로 이 모델만 낮춰야 합니다. keyword
+선분류기, 식별자 rewrite, tokenizer, 원문 SQL 재시도 경로를 추가하지 마십시오.
+지원하지 않는 명령문이나 식 노드는 backend 부작용 전에 안정적인 unsupported 오류를
+반환해야 합니다.
+
+gateway 또는 upstream revision을 올릴 때는 새로 의존하는 AST 형태마다 적합성 검증
+사례를 추가하고 REST job, Python client contract, Spark connector profile 소비자
+행렬을 실행합니다. DuckDB 전용 문법이 gateway admission에서 거부되는지도 확인합니다.
+커넥터 profile matcher는 소유 AST를 검사할 수 있지만 요청 텍스트를 다시 parse하면
+안 됩니다.
 
 Storage Read와 Storage Write 구현도 소비자가 소유한 `resolver`와 `factory` 포트를
 구현합니다. 새 엔진의 구체 타입이 `cmd/emulator`의 조립 함수 밖으로 넘어가지 않도록

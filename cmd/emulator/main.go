@@ -104,6 +104,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	queryFallbackAnalyzer := storageEngine.queryAnalyzer
 	queryOperationEngine := storageEngine.queryOperations
 	queryMaterializer := storageEngine.queryMaterializer
+	statementExecutor := storageEngine.statementExecutor
+	statementMaterializer := storageEngine.statementMaterializer
 	tableDataReader := storageEngine.tableData
 	loader := storageEngine.loader
 	readFactory := storageEngine.readFactory
@@ -132,19 +134,24 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := ensureDefaultProject(ctx, catalogService, cfg.Defaults.ProjectID); err != nil {
 		return fmt.Errorf("initialize default project: %w", err)
 	}
+	googleSQLGateway, err := googlesqladapter.NewGateway(catalogService)
+	if err != nil {
+		return fmt.Errorf("configure GoogleSQL analyzer gateway: %w", err)
+	}
 	queryAnalyzer, err := v0442.NewAnalyzer(queryFallbackAnalyzer)
 	if err != nil {
 		return fmt.Errorf("configure Spark BigQuery query profiles: %w", err)
 	}
-	ddlParser, err := googlesqladapter.NewParser()
-	if err != nil {
-		return fmt.Errorf("configure GoogleSQL DDL parser: %w", err)
+	if err := queryAnalyzer.WithGoogleSQLGateway(googleSQLGateway); err != nil {
+		return fmt.Errorf("bind Spark BigQuery profiles to GoogleSQL gateway: %w", err)
 	}
 	queryService, err := application.NewQueryService(
 		jobRepository, queryEngine, queryAnalyzer, queryOperationEngine, catalogService, clock, system.IDGenerator{},
 		application.WithQueryDefaultLocation(cfg.Defaults.Location),
 		application.WithQueryAnalyzer(queryAnalyzer),
-		application.WithQueryDDLParser(ddlParser),
+		application.WithGoogleSQLGateway(googleSQLGateway),
+		application.WithStatementExecutor(statementExecutor),
+		application.WithStatementMaterializer(statementMaterializer),
 		application.WithQueryDDLExecutor(catalogService),
 		application.WithQueryMaterializer(queryMaterializer),
 		application.WithQueryDestinationCatalog(catalogService),

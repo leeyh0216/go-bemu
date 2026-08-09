@@ -2,25 +2,25 @@ package v0442
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"reflect"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
-	"github.com/leeyh0216/go-bemu/internal/observability"
 	"github.com/leeyh0216/go-bemu/internal/ports"
+	"github.com/leeyh0216/go-bemu/internal/querylang/semantic"
 )
 
 const SourceCommit = "719817782a214b8ca72be520870013a3e0253d92"
 
 type Analyzer struct {
 	fallback ports.QueryAnalyzer
+	gateway  ports.GoogleSQLGateway
 }
 
 var (
-	_ ports.QueryAnalyzer          = (*Analyzer)(nil)
-	_ ports.QueryOperationAnalyzer = (*Analyzer)(nil)
+	_ ports.QueryAnalyzer                  = (*Analyzer)(nil)
+	_ ports.QueryOperationAnalyzer         = (*Analyzer)(nil)
+	_ ports.AnalyzedQueryOperationAnalyzer = (*Analyzer)(nil)
 )
 
 func NewAnalyzer(fallback ports.QueryAnalyzer) (*Analyzer, error) {
@@ -28,6 +28,34 @@ func NewAnalyzer(fallback ports.QueryAnalyzer) (*Analyzer, error) {
 		return nil, fmt.Errorf("%w: fallback query analyzer is required", domain.ErrPrecondition)
 	}
 	return &Analyzer{fallback: fallback}, nil
+}
+
+// WithGoogleSQLGateway installs the sole syntax boundary for this versioned
+// connector adapter.
+func (analyzer *Analyzer) WithGoogleSQLGateway(gateway ports.GoogleSQLGateway) error {
+	if analyzer == nil || interfaceIsNil(gateway) {
+		return fmt.Errorf("%w: GoogleSQL gateway is required", domain.ErrPrecondition)
+	}
+	analyzer.gateway = gateway
+	return nil
+}
+
+// AnalyzeStatementOperation is the production connector boundary. The
+// GoogleSQL gateway has already parsed and semantically bound the request, so
+// this adapter only matches the owned immutable representation.
+func (analyzer *Analyzer) AnalyzeStatementOperation(
+	ctx context.Context,
+	statement semantic.Statement,
+	request ports.QueryRequest,
+) (ports.QueryOperation, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.QueryOperation{}, false, err
+	}
+	operation, matched, err := matchAnalyzedStaticOverwrite(statement, request)
+	if matched || err != nil {
+		return operation, matched, err
+	}
+	return matchAnalyzedDynamicTimeOverwrite(statement, request)
 }
 
 func (analyzer *Analyzer) AnalyzeQuery(ctx context.Context, request ports.QueryRequest) (ports.QueryAnalysis, error) {
@@ -50,29 +78,29 @@ func (analyzer *Analyzer) AnalyzeQueryOperation(
 	ctx context.Context,
 	request ports.QueryRequest,
 ) (ports.QueryOperation, bool, error) {
-	operation, matched, err := parsePinnedQueryOperation(request)
-	if !matched {
-		return ports.QueryOperation{}, false, nil
+	if analyzer.gateway != nil {
+		statement, err := analyzer.gateway.Analyze(ctx, request)
+		if err != nil {
+			return ports.QueryOperation{}, false, err
+		}
+		return analyzer.AnalyzeStatementOperation(ctx, statement, request)
 	}
-	if err != nil {
-		analyzer.logRejection(ctx, request, err)
-		return ports.QueryOperation{}, true, err
-	}
-	slog.InfoContext(ctx, "connector query operation analyzed",
-		"event", "boundary.exit", "boundary", "sparkbigquery.v0442.query_operation_analysis",
-		"operation", operation.Kind(), "model_version", operation.ProfileID(),
-		"query_bytes", len(request.SQL), "query_digest", operation.SQLFingerprint(),
-		"request_fingerprint", operation.RequestFingerprint(),
-		"semantic_fingerprint", operation.SemanticFingerprint(),
-		"binding_fingerprint", operation.BindingFingerprint(),
+	return ports.QueryOperation{}, false, fmt.Errorf(
+		"%w: GoogleSQL gateway is required for connector operation analysis", domain.ErrPrecondition,
 	)
-	return operation, true, nil
 }
 
 func (analyzer *Analyzer) VerifyQueryOperation(request ports.QueryRequest, operation ports.QueryOperation) error {
-	expected, matched, err := parsePinnedQueryOperation(request)
+	if analyzer == nil || analyzer.gateway == nil {
+		return fmt.Errorf("%w: GoogleSQL gateway is required for connector operation verification", domain.ErrPrecondition)
+	}
+	statement, err := analyzer.gateway.Analyze(context.Background(), request)
+	if err != nil {
+		return err
+	}
+	expected, matched, err := analyzer.AnalyzeStatementOperation(context.Background(), statement, request)
 	if err != nil || !matched {
-		return fmt.Errorf("%w: request no longer matches a pinned connector query profile", domain.ErrPrecondition)
+		return fmt.Errorf("%w: request no longer matches a connector AST profile", domain.ErrPrecondition)
 	}
 	expectedProfile, err := queryOperationProfile(expected.Kind())
 	if err != nil {
@@ -83,17 +111,9 @@ func (analyzer *Analyzer) VerifyQueryOperation(request ports.QueryRequest, opera
 	}
 	if operation.SemanticFingerprint() != expected.SemanticFingerprint() ||
 		operation.BindingFingerprint() != expected.BindingFingerprint() {
-		return fmt.Errorf("%w: semantic query operation payload differs from the pinned parser result", domain.ErrPrecondition)
+		return fmt.Errorf("%w: semantic query operation payload differs from the analyzed AST result", domain.ErrPrecondition)
 	}
 	return operation.ValidateBinding(request, expectedProfile)
-}
-
-func parsePinnedQueryOperation(request ports.QueryRequest) (ports.QueryOperation, bool, error) {
-	operation, matched, err := parseSparkDynamicTimeOverwrite(request)
-	if !matched {
-		operation, matched, err = parseStaticOverwrite(request)
-	}
-	return operation, matched, err
 }
 
 func queryOperationProfile(kind ports.QueryOperationKind) (string, error) {
@@ -105,46 +125,6 @@ func queryOperationProfile(kind ports.QueryOperationKind) (string, error) {
 	default:
 		return "", fmt.Errorf("%w: semantic operation kind is outside connector profile 0.44.2", domain.ErrPrecondition)
 	}
-}
-
-func (analyzer *Analyzer) logRejection(ctx context.Context, request ports.QueryRequest, err error) {
-	profile := StaticOverwriteProfile
-	operation := "connector-static-overwrite"
-	if leadingStatementKeyword(request.SQL) == "DECLARE" {
-		profile = DynamicTimeOverwriteProfile
-		operation = "connector-dynamic-partition-overwrite"
-		if errors.Is(err, domain.ErrUnsupported) && containsGap(err.Error(), domain.GapSparkDynamicRangePartitionOverwriteV1) {
-			profile = DynamicRangeOverwriteProfile
-		}
-	}
-	attrs := []any{
-		"event", "boundary.reject", "boundary", "sparkbigquery.v0442.query_operation_analysis",
-		"operation", operation, "model_version", profile,
-		"query", request.SQL,
-		"query_bytes", len(request.SQL), "query_digest", observability.Digest([]byte(request.SQL)),
-		"source_commit", SourceCommit,
-		"fix_hint", "compare the pinned connector producer before updating this versioned profile",
-	}
-	var drift *dynamicOverwriteShapeError
-	if errors.As(err, &drift) {
-		attrs = append(attrs, "capability", domain.CapabilitySparkDynamicTimePartitionOverwriteV1,
-			"gap", domain.GapQueryScriptsUnsupportedV1, "token_index", drift.TokenIndex,
-			"expected_shape", drift.ExpectedShape)
-	} else if profile == DynamicRangeOverwriteProfile {
-		attrs = append(attrs, "gap", domain.GapSparkDynamicRangePartitionOverwriteV1,
-			"token_index", -1, "expected_shape", "supported time-partition overwrite profile")
-	}
-	attrs = append(attrs, observability.ErrorAttrs(err)...)
-	slog.WarnContext(ctx, "connector query operation rejected", attrs...)
-}
-
-func containsGap(message, gap string) bool {
-	for index := 0; index+len(gap) <= len(message); index++ {
-		if message[index:index+len(gap)] == gap {
-			return true
-		}
-	}
-	return false
 }
 
 func interfaceIsNil(value any) bool {

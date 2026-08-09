@@ -23,35 +23,39 @@ type engineLifecycle interface {
 }
 
 type engineRuntimeDescriptor struct {
-	Capabilities      enginecontract.Capabilities
-	Health            ports.HealthChecker
-	Catalog           ports.CatalogStorage
-	DDL               ports.DDLStorage
-	Query             ports.QueryEngine
-	QueryAnalyzer     ports.QueryAnalyzer
-	QueryOperations   ports.QueryOperationEngine
-	QueryMaterializer ports.QueryMaterializer
-	TableData         ports.TableDataReader
-	Loader            loadports.Loader
-	ReadFactory       readports.SnapshotMaterializerFactory
-	WriteFactory      writeports.CoordinatorFactory
-	Lifecycle         engineLifecycle
+	Capabilities          enginecontract.Capabilities
+	Health                ports.HealthChecker
+	Catalog               ports.CatalogStorage
+	DDL                   ports.DDLStorage
+	Query                 ports.QueryEngine
+	QueryAnalyzer         ports.QueryAnalyzer
+	QueryOperations       ports.QueryOperationEngine
+	QueryMaterializer     ports.QueryMaterializer
+	StatementExecutor     ports.StatementExecutor
+	StatementMaterializer ports.StatementMaterializer
+	TableData             ports.TableDataReader
+	Loader                loadports.Loader
+	ReadFactory           readports.SnapshotMaterializerFactory
+	WriteFactory          writeports.CoordinatorFactory
+	Lifecycle             engineLifecycle
 }
 
 type engineRuntime struct {
-	capabilities      enginecontract.Capabilities
-	health            ports.HealthChecker
-	catalog           ports.CatalogStorage
-	ddl               ports.DDLStorage
-	query             ports.QueryEngine
-	queryAnalyzer     ports.QueryAnalyzer
-	queryOperations   ports.QueryOperationEngine
-	queryMaterializer ports.QueryMaterializer
-	tableData         ports.TableDataReader
-	loader            loadports.Loader
-	readFactory       readports.SnapshotMaterializerFactory
-	writeFactory      writeports.CoordinatorFactory
-	lifecycle         engineLifecycle
+	capabilities          enginecontract.Capabilities
+	health                ports.HealthChecker
+	catalog               ports.CatalogStorage
+	ddl                   ports.DDLStorage
+	query                 ports.QueryEngine
+	queryAnalyzer         ports.QueryAnalyzer
+	queryOperations       ports.QueryOperationEngine
+	queryMaterializer     ports.QueryMaterializer
+	statementExecutor     ports.StatementExecutor
+	statementMaterializer ports.StatementMaterializer
+	tableData             ports.TableDataReader
+	loader                loadports.Loader
+	readFactory           readports.SnapshotMaterializerFactory
+	writeFactory          writeports.CoordinatorFactory
+	lifecycle             engineLifecycle
 }
 
 func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error) {
@@ -70,6 +74,8 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 		{name: "query analyzer", value: descriptor.QueryAnalyzer},
 		{name: "semantic query executor", value: descriptor.QueryOperations},
 		{name: "query materializer", value: descriptor.QueryMaterializer},
+		{name: "analyzed statement executor", value: descriptor.StatementExecutor},
+		{name: "analyzed statement materializer", value: descriptor.StatementMaterializer},
 		{name: "table data reader", value: descriptor.TableData},
 		{name: "load adapter", value: descriptor.Loader},
 		{name: "Storage Read factory", value: descriptor.ReadFactory},
@@ -85,6 +91,7 @@ func newEngineRuntime(descriptor engineRuntimeDescriptor) (*engineRuntime, error
 		health:       descriptor.Health, catalog: descriptor.Catalog, ddl: descriptor.DDL,
 		query: descriptor.Query, queryAnalyzer: descriptor.QueryAnalyzer,
 		queryOperations: descriptor.QueryOperations, queryMaterializer: descriptor.QueryMaterializer,
+		statementExecutor: descriptor.StatementExecutor, statementMaterializer: descriptor.StatementMaterializer,
 		tableData: descriptor.TableData, loader: descriptor.Loader,
 		readFactory: descriptor.ReadFactory, writeFactory: descriptor.WriteFactory,
 		lifecycle: descriptor.Lifecycle,
@@ -100,6 +107,7 @@ func composeDuckDBEngine(dsn string) (*engineRuntime, error) {
 		Capabilities: warehouse.Capabilities(),
 		Health:       warehouse, Catalog: warehouse, DDL: warehouse,
 		Query: warehouse, QueryAnalyzer: warehouse, QueryOperations: warehouse, QueryMaterializer: warehouse,
+		StatementExecutor: warehouse, StatementMaterializer: warehouse,
 		TableData: warehouse, Loader: warehouse, ReadFactory: warehouse, WriteFactory: warehouse,
 		Lifecycle: warehouse,
 	})

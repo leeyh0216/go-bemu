@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/application"
@@ -45,9 +46,18 @@ func TestSparkStaticOverwriteCrossesRESTJobLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gateway, err := googlesqladapter.NewGateway(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := analyzer.WithGoogleSQLGateway(gateway); err != nil {
+		t.Fatal(err)
+	}
 	queries, err := application.NewQueryService(
 		memory.NewJobRepository(), warehouse, analyzer, warehouse, catalog, clock, &testIDs{},
 		application.WithQueryAnalyzer(analyzer), application.WithQueryDestinationCatalog(catalog),
+		application.WithGoogleSQLGateway(gateway), application.WithStatementExecutor(warehouse),
+		application.WithStatementMaterializer(warehouse), application.WithQueryDDLExecutor(catalog),
 		application.WithQueryMaterializer(warehouse),
 	)
 	if err != nil {

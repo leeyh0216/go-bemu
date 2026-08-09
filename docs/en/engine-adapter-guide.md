@@ -120,9 +120,27 @@ adapter. The [Spark BigQuery connector
 `0.44.2`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/0.44.2)
 analyzer lives in
 [`internal/adapters/sparkbigquery/v0442`](../../internal/adapters/sparkbigquery/v0442).
-It creates a typed operation bound to the raw-text digest, profile, default
-dataset, and options. The engine executor accepts that operation and does not
-reparse the raw SQL.
+The application first obtains one immutable GoogleSQL semantic statement from
+the gateway. The connector adapter matches that statement's AST and relation
+bindings, then creates a typed operation bound to the request fingerprint and
+profile. The engine executor accepts that operation and never reparses the raw
+SQL.
+
+### GoogleSQL Statement Visitors
+
+All public query/job requests pass through the GoogleSQL gateway before an
+engine receives work. Copy the external parser result into the owned immutable
+statement model; engine adapters must lower only that model through statement,
+expression, relation, and type visitors. Do not add a keyword pre-classifier,
+identifier rewriter, tokenizer, or raw-SQL retry path. Unsupported statement or
+expression nodes must return a stable unsupported error before a backend side
+effect.
+
+When upgrading the gateway or its upstream revision, add a conformance fixture
+for each newly relied-on AST shape, run the consumer matrix (REST jobs, Python
+client contract, and Spark connector profiles), and verify that DuckDB-only
+syntax is rejected at gateway admission. Connector profile matchers may inspect
+the owned AST, but may not parse the request text themselves.
 
 Storage Read and Storage Write implementations also satisfy consumer-owned
 resolver and factory ports. Keep the new engine concrete type from crossing

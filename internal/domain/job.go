@@ -117,7 +117,10 @@ type TableReference struct {
 // default to CREATE_IF_NEEDED.
 // https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
 type QueryConfiguration struct {
-	SQL               string
+	SQL string
+	// StatementType is analyzer-derived metadata. It is omitted for legacy
+	// persisted jobs and is never accepted from the public REST request.
+	StatementType     string `json:",omitempty"`
 	DefaultProjectID  string
 	DefaultDataset    string
 	Destination       *TableReference
@@ -190,6 +193,7 @@ func NewConfiguredQueryJob(reference JobReference, configuration QueryConfigurat
 
 func normalizeQueryConfiguration(configuration QueryConfiguration) QueryConfiguration {
 	configuration.SQL = strings.TrimSpace(configuration.SQL)
+	configuration.StatementType = strings.ToUpper(strings.TrimSpace(configuration.StatementType))
 	if configuration.Priority == "" {
 		configuration.Priority = QueryPriorityInteractive
 	} else {
@@ -225,6 +229,9 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 	}
 	if configuration.SQL == "" {
 		return fmt.Errorf("%w: query is required", ErrInvalid)
+	}
+	if configuration.StatementType != "" && !validQueryStatementType(configuration.StatementType) {
+		return fmt.Errorf("%w: analyzed query statement type is invalid", ErrInvalid)
 	}
 	if configuration.Priority != QueryPriorityInteractive && configuration.Priority != QueryPriorityBatch {
 		return fmt.Errorf("%w: query priority must be INTERACTIVE or BATCH", ErrInvalid)
@@ -276,6 +283,16 @@ func validateQueryJob(reference JobReference, configuration QueryConfiguration) 
 		return fmt.Errorf("%w: anonymous query destinations require WRITE_EMPTY and CREATE_IF_NEEDED", ErrInvalid)
 	}
 	return nil
+}
+
+func validQueryStatementType(value string) bool {
+	switch value {
+	case "SCRIPT", "DECLARE", "SET", "SELECT", "INSERT", "UPDATE", "DELETE", "MERGE",
+		"CREATE_TABLE", "DROP_TABLE", "ALTER_TABLE", "TRUNCATE_TABLE":
+		return true
+	default:
+		return false
+	}
 }
 
 // Query-job labels use the same key/value constraints as BigQuery resource

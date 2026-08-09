@@ -209,10 +209,9 @@ deliberately outside the load commit.
 <!-- section: sql-boundary -->
 ## SQL Dialect Boundary
 
-Catalog-mutating statements use a GoogleSQL AST adapter and immutable semantic
-commands. General query reference rewriting remains a bounded adapter and is
-not a complete implementation of scripts, table decorators, or every query
-expression. The authoritative syntax is the
+Every public query/job statement uses the GoogleSQL AST adapter and immutable
+semantic commands. The application never sends user SQL to DuckDB: the engine
+lowers the owned statement model through visitors. The authoritative syntax is the
 [GoogleSQL lexical structure](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)
 and [query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax).
 Unknown or unsupported forms must fail explicitly rather than be approximately
@@ -222,17 +221,16 @@ top-level `ADD`, `RENAME`, and `DROP COLUMN`, and `ALTER COLUMN SET DATA TYPE`
 through typed engine plans and the canonical catalog service. Unsupported DDL
 fails before mutation under `query.ddl.catalog-sync-v1`. A process crash between
 the engine change and SQLite publication still requires #26 reconciliation.
-The same boundary permits only one statement plus an optional trailing
-semicolon. A literal/comment-aware scan rejects all [multi-statement
-queries](https://cloud.google.com/bigquery/docs/multi-statement-queries) before
-job or engine side effects under `query.scripts.unsupported-v1`. Full script
-support requires statement-by-statement semantic analysis, variables, control
-flow, temporary objects, and job-level transaction semantics; passing an opaque
-script to DuckDB is never an acceptable fallback.
+Scripts are represented by the same AST. Only the connector's supported
+dynamic overwrite script is matched and lowered; unsupported script nodes fail
+before job-engine side effects under `query.scripts.unsupported-v1`. Full script
+support still requires statement-by-statement semantic analysis, variables,
+control flow, temporary objects, and job-level transaction semantics; passing
+an opaque script to DuckDB is never an acceptable fallback.
 
 The verified static unpartitioned overwrite path is intentionally structural and
-versioned. Its released connector `0.44.2` public-edge E2E uses a token parser
-that recognizes the source-derived shape from
+versioned. Its released connector `0.44.2` public-edge E2E matches the owned
+GoogleSQL AST shape derived from
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java),
 applies the constant-false [BigQuery `MERGE`
 contract](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),

@@ -259,9 +259,9 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 <!-- section: sql-boundary -->
 ## SQL 문법 경계
 
-카탈로그를 변경하는 문장은 GoogleSQL AST 어댑터와 불변 의미 명령으로 처리합니다.
-일반 쿼리의 참조 변환은 제한된 어댑터가 담당합니다. 스크립트, 테이블 데코레이터,
-모든 쿼리 표현식을 처리하는 완전한 구현은 아닙니다.
+모든 공개 query/job 명령문은 GoogleSQL AST 어댑터와 불변 의미 명령으로 처리합니다.
+애플리케이션은 사용자 SQL을 DuckDB에 보내지 않고, 엔진이 소유 명령문 모델을 visitor로
+낮춥니다.
 
 문법 기준은 [GoogleSQL 어휘
 구조](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)와
@@ -275,17 +275,14 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 `query.ddl.catalog-sync-v1`로 거부합니다. 엔진 변경과 SQLite 공개 사이에서 프로세스가
 중단된 경우의 복구는 #26에 남아 있습니다.
 
-같은 경계에서는 명령문 하나와 선택적인 마지막 세미콜론만 허용합니다. 리터럴과
-주석을 구분하는 검사기는 모든 [여러 명령문
-쿼리](https://cloud.google.com/bigquery/docs/multi-statement-queries)를
-`query.scripts.unsupported-v1`로 작업 생성과 엔진 변경 전에 거부합니다.
-
-스크립트를 완전히 지원하려면 명령문별 의미 분석, 변수, 제어 흐름, 임시 객체, 작업
-단위 트랜잭션 의미가 필요합니다. 해석하지 못한 스크립트를 DuckDB에 그대로 넘기는
-우회 방식은 허용하지 않습니다.
+스크립트도 같은 AST로 표현합니다. 커넥터의 지원하는 동적 덮어쓰기 스크립트만
+matcher와 visitor가 처리하며, 지원하지 않는 script node는 작업·엔진 부작용 전에
+`query.scripts.unsupported-v1`로 거부합니다. 스크립트를 완전히 지원하려면
+명령문별 의미 분석, 변수, 제어 흐름, 임시 객체, 작업 단위 트랜잭션 의미가 필요합니다.
+해석하지 못한 스크립트를 DuckDB에 그대로 넘기는 우회 방식은 허용하지 않습니다.
 
 검증된 정적 비파티션 덮어쓰기는 의도적으로 입력 구조와 버전을 제한합니다. 출시된
-커넥터 `0.44.2`를 사용하는 공개 API E2E는 토큰 파서로
+커넥터 `0.44.2`를 사용하는 공개 API E2E는 소유 GoogleSQL AST로
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)의
 구현에서 파생한 커넥터 `0.44.2` 구조를 인식합니다. 조건이 항상 거짓인 [BigQuery
 `MERGE` 계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을

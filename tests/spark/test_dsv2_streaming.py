@@ -283,7 +283,7 @@ def test_raw_dsv2_exact_streaming_finalizes_without_commit(
     count_result = query(
         public_edge,
         test_timeout,
-        f"SELECT COUNT(*) AS rows FROM `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}`",
+        f"SELECT COUNT(*) AS `rows` FROM `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}`",
     )
     if count_result["rows"][0]["f"][0]["v"] != "0":
         pytest.fail("raw DSv2 pending rows became visible shape=expected-count:0")

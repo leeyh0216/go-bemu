@@ -111,7 +111,7 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 		t.Fatalf("idempotent retry did not return existing job: %#v", retry)
 	}
 	query := restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/queries",
-		`{"query":"SELECT count(*) AS rows FROM `+"`test-project.analytics.events`"+`","useLegacySql":false}`, http.StatusOK)
+		`{"query":"SELECT count(*) AS `+"`rows`"+` FROM `+"`test-project.analytics.events`"+`","useLegacySql":false}`, http.StatusOK)
 	if query["totalRows"] != "1" || query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "2" {
 		t.Fatalf("unexpected query result after load: %#v", query)
 	}

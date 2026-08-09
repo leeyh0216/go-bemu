@@ -169,14 +169,13 @@ configured default remains the fallback.
 | `UPDATE`/`DELETE` | Partial | DuckDB statement behavior |
 | basic `MERGE` | Partial | one tested DuckDB-compatible form |
 | connector `0.44.2` static overwrite | Verified narrow | released Spark temporary-table write, atomic DuckDB `MERGE`, polling, and cleanup |
-| dynamic partition overwrite | Unsupported | scripts/arrays/partition semantics absent |
+| dynamic time-partition overwrite | Verified narrow | connector 0.44.2 AST profile, canonical type checks, and atomic DuckDB transaction; range partitions remain unsupported |
 | parameters/scripts/views/UDFs | Unsupported | no semantic adapter |
 
 The [GoogleSQL lexical
 contract](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)
-distinguishes quoted identifiers by syntactic position. The current broad
-backtick rewrite cannot safely classify quoted columns, comments, or strings;
-therefore arbitrary backtick SQL is not supported. General `MERGE` must follow
+is interpreted by the gateway before the engine visitor lowers the owned AST.
+General `MERGE` must follow
 the [official DML
 rules](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement),
 including source cardinality and atomic visibility.
@@ -184,11 +183,12 @@ including source cardinality and atomic visibility.
 The narrow static adapter recognizes only the source-derived connector shape
 orchestrated by
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java),
-parses its identifiers and clauses as tokens, and executes one atomic [DuckDB
+matches its identifiers and clauses in the owned AST, and executes one atomic [DuckDB
 `MERGE INTO`](https://duckdb.org/docs/current/sql/statements/merge_into). Exact
 Spark `3.5.8` process evidence covers four PENDING streams, one group commit,
 one MERGE job, replacement visibility, and temporary-table cleanup. Dynamic
-time/range partition overwrite and general BigQuery `MERGE` parity remain gaps.
+time overwrite is supported through its versioned AST profile; dynamic range
+partition overwrite and general BigQuery `MERGE` parity remain gaps.
 
 <!-- section: types -->
 ## Types

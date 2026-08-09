@@ -140,7 +140,12 @@ func (w *Warehouse) MaterializeStatement(
 		return result, fmt.Errorf("%w: statement destination is invalid", domain.ErrInvalid)
 	}
 
-	started := observability.LogSideEffectStart(ctx, "duckdb", "materialize_statement",
+	// Keep the externally observed destination-materialization operation stable
+	// while its input has moved from raw SQL to a semantic statement.
+	started := observability.LogSideEffectStart(ctx, "duckdb", "materialize_query_destination",
+		"project_id", destination.reference.ProjectID,
+		"dataset_id", destination.reference.DatasetID,
+		"table_id", destination.reference.TableID,
 		"statement_kind", string(statement.Kind()),
 		"analysis_fingerprint", plan.semanticAnalysisFingerprint(),
 		"destination_fingerprint", statementDestinationFingerprint(destination.reference),
@@ -153,7 +158,10 @@ func (w *Warehouse) MaterializeStatement(
 	)
 	defer func() {
 		err = classifyDuckDBStatementError(err)
-		observability.LogSideEffectEnd(ctx, "duckdb", "materialize_statement", started, err,
+		observability.LogSideEffectEnd(ctx, "duckdb", "materialize_query_destination", started, err,
+			"project_id", destination.reference.ProjectID,
+			"dataset_id", destination.reference.DatasetID,
+			"table_id", destination.reference.TableID,
 			"statement_kind", string(statement.Kind()),
 			"analysis_fingerprint", plan.semanticAnalysisFingerprint(),
 			"destination_fingerprint", statementDestinationFingerprint(destination.reference),

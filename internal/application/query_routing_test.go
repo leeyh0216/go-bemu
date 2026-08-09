@@ -117,7 +117,7 @@ func TestQueryLocationIsInferredBeforeJobInsertion(t *testing.T) {
 				WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ReferencedTables: test.references}}),
 				WithQueryDestinationCatalog(catalog),
 			)
-			job, created, err := service.newJob(ctx, test.input)
+			job, _, created, err := service.newJob(ctx, test.input)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,7 +156,7 @@ func TestDMLCannotTargetAnonymousCachedResultTable(t *testing.T) {
 		}}),
 		WithQueryDestinationCatalog(catalog),
 	)
-	if _, _, err := service.newJob(ctx, QueryInput{
+	if _, _, _, err := service.newJob(ctx, QueryInput{
 		ProjectID: "test-project", JobID: "mutate-cache", SQL: "DELETE FROM `_bqemu_anonymous_us._bqemu_query_cached`",
 	}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("anonymous cached-result DML error = %v, want invalid", err)
@@ -214,7 +214,7 @@ func TestQueryLocationMismatchIsRejectedBeforeJobInsertion(t *testing.T) {
 				WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ReferencedTables: test.references}}),
 				WithQueryDestinationCatalog(catalog),
 			)
-			_, _, err := service.newJob(ctx, QueryInput{
+			_, _, _, err := service.newJob(ctx, QueryInput{
 				ProjectID: "test-project", JobID: "must-not-persist", Location: test.location, SQL: "SELECT 1",
 			})
 			if !errors.Is(err, domain.ErrInvalid) {
@@ -260,7 +260,7 @@ func TestQueryReferenceAppliesTableExpirationBeforeJobInsertion(t *testing.T) {
 		}}}}),
 		WithQueryDestinationCatalog(catalog),
 	)
-	if _, _, err := service.newJob(ctx, QueryInput{
+	if _, _, _, err := service.newJob(ctx, QueryInput{
 		ProjectID: "test-project", JobID: "expired-source", SQL: "SELECT id FROM `test-project.analytics.events`",
 	}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expired query source error = %v, want not found", err)
@@ -289,7 +289,7 @@ func TestAnonymousDestinationIdentityIsGeneratedBeforeJobInsertion(t *testing.T)
 		WithQueryAnalyzer(staticQueryAnalyzer{analysis: ports.QueryAnalysis{ProducesRows: true}}),
 		WithQueryMaterializer(&compensatingMaterializer{}), WithQueryDestinationCatalog(failedPublicationCatalog{}),
 	)
-	job, created, err := service.newJob(ctx, QueryInput{ProjectID: "test-project", JobID: "anonymous-job", SQL: "SELECT 1"})
+	job, _, created, err := service.newJob(ctx, QueryInput{ProjectID: "test-project", JobID: "anonymous-job", SQL: "SELECT 1"})
 	if err != nil {
 		t.Fatal(err)
 	}

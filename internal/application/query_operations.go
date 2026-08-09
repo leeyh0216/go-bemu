@@ -39,3 +39,22 @@ func (s *QueryService) executeQueryWithoutDestinationForJob(
 			return s.operationExecutor.ExecuteQueryOperation(ctx, request, operation, canonicalDestination, canonicalSource)
 		})
 }
+
+// executePreparedQueryOperation executes the connector operation recognized
+// from the immutable GoogleSQL AST. The request remains only a fingerprint
+// attestation for diagnostics and TOCTOU protection; this path never asks a
+// connector adapter to parse or tokenize SQL again.
+func (s *QueryService) executePreparedQueryOperation(
+	ctx context.Context,
+	request ports.QueryRequest,
+	operation ports.QueryOperation,
+) (domain.QueryResult, error) {
+	if err := operation.ValidateRequest(request); err != nil {
+		return domain.QueryResult{}, err
+	}
+	return s.operationCatalog.WithCanonicalTables(
+		ctx, operation.Destination(), operation.Source(),
+		func(canonicalDestination, canonicalSource domain.Table) (domain.QueryResult, error) {
+			return s.operationExecutor.ExecuteQueryOperation(ctx, request, operation, canonicalDestination, canonicalSource)
+		})
+}

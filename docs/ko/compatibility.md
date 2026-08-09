@@ -194,28 +194,26 @@ ID를 알고 있는 숨김 데이터 세트에는 일반 삭제 규칙을 적용
 | `UPDATE`, `DELETE` | 부분 지원 | DuckDB 문장의 동작을 따릅니다. |
 | 기본 `MERGE` | 부분 지원 | DuckDB와 호환되는 형식 하나를 테스트했습니다. |
 | 커넥터 `0.44.2` 정적 덮어쓰기 | 제한 검증 | 배포된 Spark의 임시 테이블 쓰기, 원자적 DuckDB `MERGE`, 작업 조회, 정리를 확인했습니다. |
-| 동적 파티션 덮어쓰기 | 미지원 | 스크립트, 배열, 파티션 의미를 구현하지 않았습니다. |
+| 동적 시간 파티션 덮어쓰기 | 제한 검증 | connector 0.44.2 AST profile, 기준 자료형 검증, 원자적 DuckDB 트랜잭션을 확인했습니다. 범위 파티션은 미지원입니다. |
 | 매개변수, 스크립트, 뷰, UDF | 미지원 | 구문의 의미를 변환하는 어댑터가 없습니다. |
 
 [GoogleSQL lexical
-계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)은 구문에서
-쓰인 위치에 따라 따옴표로 감싼 식별자를 구분합니다. 현재의 백틱 변환은 따옴표로 감싼
-열, 주석, 문자열을 모두 안전하게 분류하지 못합니다. 따라서 백틱이 들어간 임의의
-SQL을 지원하지 않습니다. 일반 `MERGE`는 원본 행의 수와 원자적인 공개 시점을 포함한
+계약](https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical)은 gateway가
+해석하고, 엔진 visitor는 소유 AST만 낮춥니다. 일반 `MERGE`는 원본 행의 수와
+원자적인 공개 시점을 포함한
 [공식 DML
 규칙](https://cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)을
 따라야 합니다.
 
 정적 덮어쓰기 어댑터는
 [`BigQueryClient.java`](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/0.44.2/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryClient.java)가
-생성하는 커넥터 `0.44.2`의 SQL 구조만 인식합니다. 식별자와 절을 토큰으로 해석한
-뒤 원자적인 [DuckDB `MERGE
+생성하는 커넥터 `0.44.2`의 SQL 구조만 소유 AST에서 인식합니다. 그 뒤 원자적인 [DuckDB `MERGE
 INTO`](https://duckdb.org/docs/current/sql/statements/merge_into) 하나를 실행합니다.
 
 Spark `3.5.8` 프로세스 테스트에서는 `PENDING` 스트림 4개, 그룹 커밋 1회,
 `MERGE` 작업 1회를 확인했습니다. 교체 결과의 공개 시점과 임시 테이블 정리도
-확인했습니다. 시간 및 범위 파티션의 동적 덮어쓰기와 일반 BigQuery `MERGE`의 동작
-일치 여부는 아직 검증하지 않았습니다.
+확인했습니다. 시간 파티션 동적 덮어쓰기는 versioned AST profile로 지원합니다. 범위
+파티션과 일반 BigQuery `MERGE`의 동작 일치 여부는 아직 검증하지 않았습니다.
 
 <!-- section: types -->
 ## 자료형

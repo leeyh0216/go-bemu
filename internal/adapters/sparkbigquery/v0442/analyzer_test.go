@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
@@ -15,6 +16,9 @@ func TestAnalyzerRecognizesPinnedStaticProfileAndVerifiesRequest(t *testing.T) {
 	fallback := &recordingFallback{}
 	analyzer, err := NewAnalyzer(fallback)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := analyzer.WithGoogleSQLGateway(connectorGateway(t)); err != nil {
 		t.Fatal(err)
 	}
 	request := ports.QueryRequest{
@@ -65,6 +69,9 @@ func TestAnalyzerBuildsDynamicOperationAndDelegatesOrdinaryQueries(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := analyzer.WithGoogleSQLGateway(connectorGateway(t)); err != nil {
+		t.Fatal(err)
+	}
 	request := ports.QueryRequest{
 		ProjectID: "test-project",
 		SQL: dynamicOverwriteFixture(
@@ -86,6 +93,66 @@ func TestAnalyzerBuildsDynamicOperationAndDelegatesOrdinaryQueries(t *testing.T)
 	if err != nil || !analysis.ProducesRows || fallback.calls != 1 {
 		t.Fatalf("fallback analysis=%#v calls=%d err=%v", analysis, fallback.calls, err)
 	}
+}
+
+func TestAnalyzerMatchesConnectorProfilesFromAnalyzedGoogleSQL(t *testing.T) {
+	analyzer, err := NewAnalyzer(&recordingFallback{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range []struct {
+		name string
+		sql  string
+		kind ports.QueryOperationKind
+	}{
+		{name: "static", sql: staticOverwriteFixture("test-project.analytics.destination", "test-project.analytics.temporary"), kind: ports.QueryOperationSparkStaticOverwrite},
+		{name: "dynamic", sql: dynamicOverwriteFixture("test-project.analytics.destination", "test-project.analytics.temporary", "event_time", "DATE_TRUNC", "DAY", []string{"id", "event_time", "payload"}), kind: ports.QueryOperationSparkDynamicTimeOverwrite},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := ports.QueryRequest{ProjectID: "test-project", DefaultDataset: "analytics", SQL: testCase.sql}
+			gateway := connectorGateway(t)
+			statement, err := gateway.Analyze(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			operation, matched, err := analyzer.AnalyzeStatementOperation(t.Context(), statement, request)
+			if err != nil || !matched || operation.Kind() != testCase.kind {
+				t.Fatalf("analyzed operation = (%#v, %t, %v)", operation, matched, err)
+			}
+			if err := analyzer.WithGoogleSQLGateway(gateway); err != nil {
+				t.Fatal(err)
+			}
+			operation, matched, err = analyzer.AnalyzeQueryOperation(t.Context(), request)
+			if err != nil || !matched || operation.Kind() != testCase.kind {
+				t.Fatalf("gateway-backed operation = (%#v, %t, %v)", operation, matched, err)
+			}
+		})
+	}
+}
+
+func connectorGateway(t *testing.T) ports.GoogleSQLGateway {
+	t.Helper()
+	gateway, err := googlesqladapter.NewGateway(connectorAnalyzerCatalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gateway
+}
+
+type connectorAnalyzerCatalog struct{}
+
+func (connectorAnalyzerCatalog) GoogleSQLCatalogSnapshot(context.Context) (ports.GoogleSQLCatalogSnapshot, error) {
+	fields := []domain.Field{{Name: "id", Type: "INT64"}, {Name: "event_time", Type: "TIMESTAMP"}, {Name: "payload", Type: "STRING"}}
+	return ports.GoogleSQLCatalogSnapshot{Projects: []ports.GoogleSQLProjectSnapshot{{
+		Project: domain.Project{ID: "test-project"},
+		Datasets: []ports.GoogleSQLDatasetSnapshot{{
+			Dataset: domain.Dataset{ProjectID: "test-project", ID: "analytics"},
+			Tables: []domain.Table{
+				{ProjectID: "test-project", DatasetID: "analytics", ID: "destination", Type: "TABLE", Schema: fields},
+				{ProjectID: "test-project", DatasetID: "analytics", ID: "temporary", Type: "TABLE", Schema: fields},
+			},
+		}},
+	}}}, nil
 }
 
 func TestAnalyzerRequiresFallback(t *testing.T) {

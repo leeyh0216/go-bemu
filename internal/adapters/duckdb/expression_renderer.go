@@ -123,9 +123,6 @@ func (visitor *duckDBExpressionVisitor) VisitTemporalLiteral(literal *queryast.T
 
 func (visitor *duckDBExpressionVisitor) VisitArrayLiteral(literal *queryast.ArrayLiteral) error {
 	elements := literal.Elements()
-	if len(elements) == 0 && literal.ElementType() == nil {
-		return fmt.Errorf("%w: untyped empty ARRAY cannot be lowered", domain.ErrUnsupported)
-	}
 	rendered, err := visitor.renderer.renderExpressionList(elements)
 	if err != nil {
 		return err

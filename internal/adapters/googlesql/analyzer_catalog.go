@@ -63,12 +63,6 @@ func (gateway *Gateway) Analyze(ctx context.Context, request ports.QueryRequest)
 		return semantic.Statement{}, err
 	}
 	defer runtime.KeepAlive(document.owner)
-	if len(document.statements) != 1 {
-		return semantic.Statement{}, fmt.Errorf(
-			"%w: capability=%s multi-statement GoogleSQL execution is not supported",
-			domain.ErrUnsupported, domain.GapQueryScriptsUnsupportedV1,
-		)
-	}
 	snapshot, err := buildCatalogSnapshot(ctx, gateway.catalog, request)
 	if err != nil {
 		return semantic.Statement{}, err
@@ -77,6 +71,19 @@ func (gateway *Gateway) Analyze(ctx context.Context, request ports.QueryRequest)
 	if err != nil {
 		return semantic.Statement{}, analyzerBoundaryFailure(err)
 	}
+	if len(document.statements) > 1 {
+		return gateway.analyzeConnectorScript(ctx, request, document, snapshot, options)
+	}
+	return gateway.analyzeSingleStatement(ctx, request, document, snapshot, options)
+}
+
+func (gateway *Gateway) analyzeSingleStatement(
+	ctx context.Context,
+	request ports.QueryRequest,
+	document parsedDocument,
+	snapshot *catalogSnapshot,
+	options *gsql.AnalyzerOptions,
+) (semantic.Statement, error) {
 	output, err := gsql.AnalyzeStatementFromParserAST(
 		document.statements[0], options, request.SQL, snapshot.root, snapshot.typeFactory,
 	)
@@ -86,6 +93,7 @@ func (gateway *Gateway) Analyze(ctx context.Context, request ports.QueryRequest)
 	if output == nil {
 		return semantic.Statement{}, analyzerBoundaryFailure()
 	}
+	defer runtime.KeepAlive(output)
 	resolved, err := output.ResolvedStatement()
 	if err != nil || resolved == nil {
 		return semantic.Statement{}, analyzerBoundaryFailure(err)
@@ -202,6 +210,18 @@ func buildCatalogSnapshot(
 				nextTableID++
 				if err := datasetCatalog.AddTable2(table.ID, tableNode); err != nil {
 					return nil, catalogShapeFailure()
+				}
+				// BigQuery clients conventionally quote the entire
+				// project.dataset.table path with one backtick pair. The official
+				// AST represents that as one identifier, so register the canonical
+				// dotted name as a root table alias in addition to nested catalogs.
+				if err := root.AddTable2(tableFullName(registered.reference), tableNode); err != nil {
+					return nil, catalogShapeFailure()
+				}
+				if projectMetadata.Project.ID == defaultProject {
+					if err := root.AddTable2(datasetMetadata.Dataset.ID+"."+table.ID, tableNode); err != nil {
+						return nil, catalogShapeFailure()
+					}
 				}
 				if projectMetadata.Project.ID == defaultProject && datasetMetadata.Dataset.ID == request.DefaultDataset {
 					if err := root.AddTable2(table.ID, tableNode); err != nil {

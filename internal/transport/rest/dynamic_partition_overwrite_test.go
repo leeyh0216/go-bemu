@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/leeyh0216/go-bemu/internal/adapters/duckdb"
+	googlesqladapter "github.com/leeyh0216/go-bemu/internal/adapters/googlesql"
 	"github.com/leeyh0216/go-bemu/internal/adapters/memory"
 	v0442 "github.com/leeyh0216/go-bemu/internal/adapters/sparkbigquery/v0442"
 	"github.com/leeyh0216/go-bemu/internal/application"
@@ -45,9 +46,18 @@ func TestSparkDynamicTimePartitionOverwriteCrossesRESTJobLifecycle(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	gateway, err := googlesqladapter.NewGateway(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := analyzer.WithGoogleSQLGateway(gateway); err != nil {
+		t.Fatal(err)
+	}
 	queries, err := application.NewQueryService(
 		memory.NewJobRepository(), warehouse, analyzer, warehouse, catalog, clock, &testIDs{},
 		application.WithQueryAnalyzer(analyzer),
+		application.WithGoogleSQLGateway(gateway), application.WithStatementExecutor(warehouse),
+		application.WithStatementMaterializer(warehouse), application.WithQueryDDLExecutor(catalog),
 		application.WithQueryDestinationCatalog(catalog),
 		application.WithQueryMaterializer(warehouse),
 	)
@@ -129,23 +139,18 @@ func TestSparkDynamicTimePartitionOverwriteCrossesRESTJobLifecycle(t *testing.T)
 
 	// A connector-shaped UUID alias drift is rejected during admission. The
 	// follow-up jobs.get proves no PENDING job side effect was published.
-	drifted := strings.Replace(script, restDynamicTargetAlias, "__target_not-a-connector-uuid", 1)
+	drifted := strings.ReplaceAll(script, restDynamicTargetAlias, "__target_not-a-connector-uuid")
 	assertQueryJobRejectedBeforeCreation(t, request, "spark-dynamic-overwrite-drift", drifted)
-	assertQueryJobRejectedBeforeCreation(t, request, "spark-dynamic-overwrite-range", restDynamicRangeOverwriteFixture())
+	// The fixture deliberately references a partition field absent from this
+	// time-partition catalog. jobs.insert publishes the job, then reports the
+	// official analyzer error in its terminal status without a DuckDB effect.
+	assertQueryJobFailsAfterAdmission(t, ctx.Done(), request, "spark-dynamic-overwrite-range", restDynamicRangeOverwriteFixture())
 	assertQueryJobRejectedBeforeCreation(t, request, "spark-general-script", "DECLARE ordinary_value DEFAULT 1; SELECT ordinary_value")
 
-	// Canonical source/destination types are checked before DuckDB can apply an
-	// implicit STRING-to-INT64 cast. The DONE error remains an invalidQuery and no
-	// destination transaction starts.
+	// A source type mismatch follows the same job lifecycle and cannot mutate
+	// the DuckDB destination.
 	rollbackScript := strings.ReplaceAll(script, "analytics.temporary", "analytics.invalid_temporary")
-	submitQueryJob(t, request, "spark-dynamic-overwrite-rollback", rollbackScript, http.StatusOK)
-	rollbackStatus := waitForQueryJob(t, ctx.Done(), request, "spark-dynamic-overwrite-rollback")
-	if rollbackStatus["errorResult"] == nil {
-		t.Fatalf("rollback fixture unexpectedly succeeded: %#v", rollbackStatus)
-	}
-	if rollbackStatus["errorResult"].(map[string]any)["reason"] != "invalidQuery" {
-		t.Fatalf("schema drift reason = %#v, want invalidQuery", rollbackStatus["errorResult"])
-	}
+	assertQueryJobFailsAfterAdmission(t, ctx.Done(), request, "spark-dynamic-overwrite-rollback", rollbackScript)
 	result = request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", `{
 		"query":"SELECT id FROM `+"`test-project.analytics.destination`"+` ORDER BY id",
 		"useLegacySql":false
@@ -219,6 +224,23 @@ func assertQueryJobRejectedBeforeCreation(
 	submitQueryJob(t, request, jobID, query, http.StatusNotImplemented)
 	request(http.MethodGet,
 		"/bigquery/v2/projects/test-project/jobs/"+jobID+"?location=US", "", http.StatusNotFound)
+}
+
+func assertQueryJobFailsAfterAdmission(
+	t *testing.T,
+	done <-chan struct{},
+	request func(string, string, string, int) map[string]any,
+	jobID, query string,
+) {
+	t.Helper()
+	submitQueryJob(t, request, jobID, query, http.StatusOK)
+	status := waitForQueryJob(t, done, request, jobID)
+	if status["errorResult"] == nil {
+		t.Fatalf("semantic failure job %q status=%#v, want errorResult", jobID, status)
+	}
+	if status["errorResult"].(map[string]any)["reason"] != "invalidQuery" {
+		t.Fatalf("semantic failure job %q errorResult=%#v, want invalidQuery", jobID, status["errorResult"])
+	}
 }
 
 func assertRESTQueryScalarValues(t *testing.T, response map[string]any, want []string) {

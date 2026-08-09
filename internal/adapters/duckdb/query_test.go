@@ -220,6 +220,9 @@ func TestWarehouseExecutesSparkConnectorStaticOverwriteAtomically(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := analyzer.WithGoogleSQLGateway(duckDBConnectorGateway()); err != nil {
+		t.Fatal(err)
+	}
 	operation, matched, err := analyzer.AnalyzeQueryOperation(ctx, request)
 	if err != nil || !matched || operation.ProfileID() != v0442.StaticOverwriteProfile {
 		t.Fatalf("static overwrite operation=%#v matched=%t err=%v", operation, matched, err)
@@ -289,8 +292,11 @@ func TestSparkConnectorStaticOverwriteRejectsProfileDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	statement := "MERGE `p.d.target`\n" +
-		"USING (SELECT * FROM `p.d.source`)\n" +
+	if err := analyzer.WithGoogleSQLGateway(duckDBConnectorGateway()); err != nil {
+		t.Fatal(err)
+	}
+	statement := "MERGE `test-project.analytics.destination`\n" +
+		"USING (SELECT * FROM `test-project.analytics.temporary`)\n" +
 		"ON FALSE\n" +
 		"WHEN NOT MATCHED THEN INSERT ROW\n" +
 		"WHEN MATCHED THEN DELETE"
