@@ -42,12 +42,16 @@ def test_read():
 	if len(index.APICoverage) != 2 || index.APICoverage[0].OperationID != "bigquery.tables.get" {
 		t.Fatalf("API coverage = %#v", index.APICoverage)
 	}
+	if len(index.Claims) != 1 || index.Claims[0].Test != "spark:tests/integration/spark/test_read.py:test_read" ||
+		strings.Join(index.Claims[0].OperationIDs, ",") != "bigquery.tables.get,grpc.bigquery-read.create-read-session" {
+		t.Fatalf("claims = %#v", index.Claims)
+	}
 	encoded, err := MarshalCapabilityIndex(index)
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded, err := DecodeCapabilityIndex(encoded)
-	if err != nil || len(decoded.Cases) != 1 {
+	if err != nil || len(decoded.Cases) != 1 || len(decoded.Claims) != 1 {
 		t.Fatalf("decoded index = %#v, err=%v", decoded, err)
 	}
 }
@@ -116,15 +120,54 @@ func TestCapabilityAnnotationsFailClosed(t *testing.T) {
 
 func TestCapabilityAnnotationsMergeEquivalentTests(t *testing.T) {
 	root := capabilityAnnotationRoot(t)
-	for _, name := range []string{"test_one.py", "test_two.py"} {
-		writeCapabilityAnnotationSource(t, root, name, capabilityAnnotationSource("", `state="verified"`))
-	}
+	writeCapabilityAnnotationSource(t, root, "test_one.py", capabilityAnnotationSource("", `state="verified", operations=("bigquery.tables.get",)`))
+	writeCapabilityAnnotationSource(t, root, "test_two.py", capabilityAnnotationSource("", `state="verified", operations=("grpc.bigquery-read.create-read-session",)`))
 	index, err := CompileCapabilityIndex(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(index.Cases) != 1 || len(index.Cases[0].Tests) != 2 {
 		t.Fatalf("index = %#v", index)
+	}
+	if strings.Join(index.Cases[0].OperationIDs, ",") != "bigquery.tables.get,grpc.bigquery-read.create-read-session" {
+		t.Fatalf("aggregate operations = %#v", index.Cases[0].OperationIDs)
+	}
+	if len(index.Claims) != 2 ||
+		strings.Join(index.Claims[0].OperationIDs, ",") != "bigquery.tables.get" ||
+		strings.Join(index.Claims[1].OperationIDs, ",") != "grpc.bigquery-read.create-read-session" {
+		t.Fatalf("test-local claims = %#v", index.Claims)
+	}
+}
+
+func TestCapabilityAnnotationsRejectDuplicateTestLocalClaims(t *testing.T) {
+	root := capabilityAnnotationRoot(t)
+	writeCapabilityAnnotationSource(t, root, "test_duplicate.py", `
+import pytest
+
+@contract_case(
+    "SBQ-READ-EXAMPLE-V1",
+    state="verified",
+    category="read",
+    summary="Read one Arrow table",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=("bigquery.tables.get",),
+)
+@contract_case(
+    "SBQ-READ-EXAMPLE-V1",
+    state="verified",
+    category="read",
+    summary="Read one Arrow table",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=("bigquery.tables.get",),
+)
+def test_duplicate():
+    pass
+`)
+	_, err := CompileCapabilityIndex(root)
+	if err == nil || !strings.Contains(err.Error(), "duplicate contract_case metadata") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

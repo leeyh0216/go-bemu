@@ -140,7 +140,11 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     with CAPABILITY_INDEX_PATH.open("r", encoding="utf-8") as stream:
         index = json.load(stream)
-    if index.get("schemaVersion") != "1" or not isinstance(index.get("cases"), list):
+    if (
+        index.get("schemaVersion") != "2"
+        or not isinstance(index.get("cases"), list)
+        or not isinstance(index.get("claims"), list)
+    ):
         raise pytest.UsageError("generated capability index has an invalid schema")
     entries: dict[str, dict[str, object]] = {}
     for entry in index["cases"]:
@@ -148,6 +152,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if not isinstance(capability_id, str) or capability_id in entries:
             raise pytest.UsageError("generated capability index has duplicate or invalid IDs")
         entries[capability_id] = entry
+    claims: dict[tuple[str, str], dict[str, object]] = {}
+    for claim in index["claims"]:
+        if not isinstance(claim, dict):
+            raise pytest.UsageError("generated capability index has an invalid claim")
+        capability_id = claim.get("id")
+        test_id = claim.get("test")
+        if (
+            not isinstance(capability_id, str)
+            or not isinstance(test_id, str)
+            or not isinstance(claim.get("operationIds"), list)
+            or not all(isinstance(operation_id, str) for operation_id in claim["operationIds"])
+            or (capability_id, test_id) in claims
+        ):
+            raise pytest.UsageError("generated capability index has duplicate or invalid claims")
+        entry = entries.get(capability_id)
+        if entry is None or test_id not in entry.get("tests", []):
+            raise pytest.UsageError("generated capability index claim does not match its capability")
+        claims[(capability_id, test_id)] = claim
     for item in items:
         markers = list(item.iter_markers("contract_case"))
         if not markers:
@@ -168,16 +190,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             raise pytest.UsageError(
                 f"{item.nodeid} does not match generated capability test evidence"
             )
+        claim = claims.get((capability_id, test_id))
+        if claim is None:
+            raise pytest.UsageError(
+                f"{item.nodeid} does not match a generated test-local capability claim"
+            )
         expected = {
-            "state": entry.get("state"),
-            "category": entry.get("category"),
-            "summary": entry.get("summary"),
-            "profile": entry.get("profile"),
-            "wire_flow": entry.get("wireFlow", ""),
-            "operations": tuple(entry.get("operationIds", [])),
-            "issue": entry.get("issue", ""),
-            "limitation": entry.get("limitation", ""),
-            "strict_xfail": entry.get("strictXfail", False),
+            "state": claim.get("state"),
+            "category": claim.get("category"),
+            "summary": claim.get("summary"),
+            "profile": claim.get("profile"),
+            "wire_flow": claim.get("wireFlow", ""),
+            "operations": tuple(claim.get("operationIds", [])),
+            "issue": claim.get("issue", ""),
+            "limitation": claim.get("limitation", ""),
+            "strict_xfail": claim.get("strictXfail", False),
         }
         actual = dict(marker.kwargs)
         # Coverage operations are a set. The generated index sorts them for a
@@ -188,13 +215,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             raise pytest.UsageError(
                 f"{item.nodeid} contract_case metadata does not match generated index"
             )
-        if entry["state"] == "gap":
+        if claim["state"] == "gap":
             item.add_marker(
                 pytest.mark.xfail(
                     strict=True,
                     raises=CapabilityGapError,
                     reason=(
-                        f"{capability_id} state=gap issue={entry['issue']}"
+                        f"{capability_id} state=gap issue={claim['issue']}"
                     ),
                 )
             )

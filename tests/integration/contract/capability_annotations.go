@@ -15,7 +15,7 @@ import (
 
 const (
 	capabilityIndexPath     = "tests/integration/contract/capabilities.normalized.json"
-	capabilitySchemaVersion = "1"
+	capabilitySchemaVersion = "2"
 )
 
 var (
@@ -56,9 +56,27 @@ type CapabilityAPICoverage struct {
 	Tests       []string `json:"tests"`
 }
 
+// CapabilityClaim is one test-local capability annotation. Claims retain the
+// exact operation set declared by their owning test; CapabilityCase is the
+// separately generated, documentation-oriented union for a capability ID.
+type CapabilityClaim struct {
+	ID           string              `json:"id"`
+	Test         string              `json:"test"`
+	State        CapabilityCaseState `json:"state"`
+	Category     string              `json:"category"`
+	Summary      string              `json:"summary"`
+	Profile      string              `json:"profile"`
+	WireFlow     string              `json:"wireFlow,omitempty"`
+	OperationIDs []string            `json:"operationIds"`
+	Issue        string              `json:"issue,omitempty"`
+	Limitation   string              `json:"limitation,omitempty"`
+	StrictXFail  bool                `json:"strictXfail,omitempty"`
+}
+
 type CapabilityIndex struct {
 	SchemaVersion string                  `json:"schemaVersion"`
 	Cases         []CapabilityCase        `json:"cases"`
+	Claims        []CapabilityClaim       `json:"claims"`
 	APICoverage   []CapabilityAPICoverage `json:"apiCoverage"`
 }
 
@@ -151,10 +169,19 @@ func collectIntegrationAnnotations(repositoryRoot string) ([]integrationAnnotati
 
 func normalizeCapabilityAnnotations(annotations []capabilityAnnotation, operationIDs map[string]bool) (CapabilityIndex, error) {
 	byID := make(map[string]*CapabilityCase, len(annotations))
+	claims := make([]CapabilityClaim, 0, len(annotations))
+	claimKeys := make(map[string]bool, len(annotations))
 	for _, annotation := range annotations {
 		if err := validateCapabilityAnnotation(annotation, operationIDs); err != nil {
 			return CapabilityIndex{}, err
 		}
+		claim := capabilityClaimFromAnnotation(annotation)
+		claimKey := claim.ID + "\x00" + claim.Test
+		if claimKeys[claimKey] {
+			return CapabilityIndex{}, fmt.Errorf("capability %s test %s declares duplicate contract_case metadata", claim.ID, claim.Test)
+		}
+		claimKeys[claimKey] = true
+		claims = append(claims, claim)
 		current := byID[annotation.ID]
 		if current == nil {
 			copy := annotation.CapabilityCase
@@ -178,11 +205,37 @@ func normalizeCapabilityAnnotations(annotations []capabilityAnnotation, operatio
 		cases = append(cases, *capability)
 	}
 	sort.Slice(cases, func(i, j int) bool { return cases[i].ID < cases[j].ID })
+	sort.Slice(claims, func(i, j int) bool {
+		if claims[i].ID == claims[j].ID {
+			return claims[i].Test < claims[j].Test
+		}
+		return claims[i].ID < claims[j].ID
+	})
 	return CapabilityIndex{
 		SchemaVersion: capabilitySchemaVersion,
 		Cases:         cases,
+		Claims:        claims,
 		APICoverage:   buildCapabilityAPICoverage(cases),
 	}, nil
+}
+
+func capabilityClaimFromAnnotation(annotation capabilityAnnotation) CapabilityClaim {
+	capability := annotation.CapabilityCase
+	operationIDs := append([]string(nil), capability.OperationIDs...)
+	sort.Strings(operationIDs)
+	return CapabilityClaim{
+		ID:           capability.ID,
+		Test:         annotation.Test,
+		State:        capability.State,
+		Category:     capability.Category,
+		Summary:      capability.Summary,
+		Profile:      capability.Profile,
+		WireFlow:     capability.WireFlow,
+		OperationIDs: operationIDs,
+		Issue:        capability.Issue,
+		Limitation:   capability.Limitation,
+		StrictXFail:  capability.StrictXFail,
+	}
 }
 
 func validateCapabilityAnnotation(annotation capabilityAnnotation, operationIDs map[string]bool) error {
@@ -319,6 +372,9 @@ func DecodeCapabilityIndex(contents []byte) (CapabilityIndex, error) {
 	}
 	if index.SchemaVersion != capabilitySchemaVersion {
 		return CapabilityIndex{}, fmt.Errorf("capability index schemaVersion = %q, want %s", index.SchemaVersion, capabilitySchemaVersion)
+	}
+	if index.Claims == nil {
+		return CapabilityIndex{}, fmt.Errorf("capability index is missing test-local claims")
 	}
 	return index, nil
 }

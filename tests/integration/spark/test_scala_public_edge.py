@@ -34,6 +34,7 @@ def _scala_string(value: str) -> str:
     profile="spark-bigquery-connector-dsv1-0.44.2",
     wire_flow="read-arrow",
     operations=(
+        "bigquery.jobs.query",
         "bigquery.tables.get",
         "grpc.bigquery-read.create-read-session",
         "grpc.bigquery-read.read-rows",
