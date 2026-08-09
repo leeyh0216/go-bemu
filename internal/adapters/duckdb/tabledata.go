@@ -22,6 +22,20 @@ import (
 const tableDataModelVersion = "duckdb-tabledata-canonical-page-v3"
 
 var _ ports.TableDataReader = (*Warehouse)(nil)
+var _ ports.TableStatisticsReader = (*Warehouse)(nil)
+
+// TableStatistics reads count and canonical JSON bytes in one read-only
+// statement. The JSON representation is an adapter-owned deterministic
+// accounting unit, never a public row wire format.
+func (w *Warehouse) TableStatistics(ctx context.Context, reference domain.TableReference) (statistics ports.TableStatistics, err error) {
+	tableName := quoteIdentifier(physicalSchema(reference.ProjectID, reference.DatasetID)) + "." + quoteIdentifier(reference.TableID)
+	statement := "SELECT COUNT(*), COALESCE(SUM(OCTET_LENGTH(ENCODE(TO_JSON(t)))), 0) FROM " + tableName + " AS t"
+	if err := w.db.QueryRowContext(ctx, statement).Scan(&statistics.RowCount, &statistics.LogicalBytes); err != nil {
+		return ports.TableStatistics{}, fmt.Errorf("read table storage statistics: %w", err)
+	}
+	statistics.PhysicalBytes = statistics.LogicalBytes
+	return statistics, nil
+}
 
 func (w *Warehouse) ListTableData(ctx context.Context, request ports.TableDataReadRequest) (page ports.TableDataPage, err error) {
 	reference, offset, limit := request.Reference, request.Offset, request.Limit

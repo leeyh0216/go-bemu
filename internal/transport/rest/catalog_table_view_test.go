@@ -1,11 +1,19 @@
 package rest
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/leeyh0216/go-bemu/internal/domain"
+	"github.com/leeyh0216/go-bemu/internal/ports"
 )
+
+type tableStatisticsStub struct{ statistics ports.TableStatistics }
+
+func (stub tableStatisticsStub) TableStatistics(context.Context, domain.TableReference) (ports.TableStatistics, error) {
+	return stub.statistics, nil
+}
 
 func TestProjectSelectedTableFields(t *testing.T) {
 	fields := []domain.Field{{Name: "id", Type: "INT64"}, {Name: "payload", Type: "STRING"}}
@@ -24,7 +32,7 @@ func TestProjectSelectedTableFields(t *testing.T) {
 }
 
 func TestTableMetadataViewValidation(t *testing.T) {
-	for name, want := range map[string]error{"": nil, "BASIC": nil, "STORAGE_STATS": domain.ErrUnsupported, "FULL": domain.ErrUnsupported, "invalid": domain.ErrInvalid} {
+	for name, want := range map[string]error{"": nil, "BASIC": nil, "STORAGE_STATS": nil, "FULL": domain.ErrUnsupported, "invalid": domain.ErrInvalid} {
 		t.Run(name, func(t *testing.T) {
 			err := validateTableMetadataView(name)
 			if want == nil && err != nil {
@@ -34,5 +42,21 @@ func TestTableMetadataViewValidation(t *testing.T) {
 				t.Fatalf("view %q error = %v, want %v", name, err, want)
 			}
 		})
+	}
+}
+
+func TestStorageStatsViewProjectsCanonicalStatistics(t *testing.T) {
+	server := &Server{tableStatistics: tableStatisticsStub{statistics: ports.TableStatistics{
+		RowCount: 3, LogicalBytes: 42, PhysicalBytes: 51,
+	}}}
+	resource := tableResource{}
+	err := server.applyTableMetadataView(context.Background(), domain.Table{
+		ProjectID: "test-project", DatasetID: "analytics", ID: "events",
+	}, &resource, "STORAGE_STATS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resource.NumRows != "3" || resource.NumBytes != "42" || resource.NumActivePhysicalBytes != "51" || resource.NumLongTermBytes != "0" {
+		t.Fatalf("storage statistics resource = %#v", resource)
 	}
 }

@@ -407,7 +407,12 @@ func (s *Server) getTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	table.Schema = selected
-	writeJSON(w, http.StatusOK, tableFromDomain(table, s.baseURLFor(r)))
+	resource := tableFromDomain(table, s.baseURLFor(r))
+	if err := s.applyTableMetadataView(r.Context(), table, &resource, r.URL.Query().Get("view")); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resource)
 }
 
 func (s *Server) listTables(w http.ResponseWriter, r *http.Request) {

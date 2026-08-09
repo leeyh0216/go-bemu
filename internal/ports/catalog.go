@@ -84,6 +84,23 @@ type TableDataReader interface {
 	ListTableData(context.Context, TableDataReadRequest) (TableDataPage, error)
 }
 
+// TableStatisticsReader exposes one canonical physical-table snapshot for
+// catalog metadata views. It deliberately carries no backend query language
+// into the REST or catalog application boundaries.
+type TableStatisticsReader interface {
+	TableStatistics(context.Context, domain.TableReference) (TableStatistics, error)
+}
+
+// TableStatistics is the bounded storage-accounting subset returned by
+// BigQuery tables.get?view=STORAGE_STATS. Byte values use the adapter's
+// deterministic canonical row representation; long-term storage is zero for
+// the emulator because it does not implement tier migration.
+type TableStatistics struct {
+	RowCount      int64
+	LogicalBytes  int64
+	PhysicalBytes int64
+}
+
 // TableDataMaxResults preserves the optional REST field's presence. The
 // protocol defines maxResults as an optional uint32, so an explicit zero is a
 // valid zero-row request and must not be collapsed into the omitted default.

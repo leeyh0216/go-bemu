@@ -103,24 +103,33 @@ type clusteringResource struct {
 }
 
 type tableResource struct {
-	Kind                string                     `json:"kind,omitempty"`
-	ETag                string                     `json:"etag,omitempty"`
-	ID                  string                     `json:"id,omitempty"`
-	SelfLink            string                     `json:"selfLink,omitempty"`
-	TableReference      tableReference             `json:"tableReference"`
-	FriendlyName        string                     `json:"friendlyName,omitempty"`
-	Description         string                     `json:"description,omitempty"`
-	Labels              map[string]string          `json:"labels,omitempty"`
-	Type                string                     `json:"type,omitempty"`
-	Schema              tableSchema                `json:"schema"`
-	Location            string                     `json:"location,omitempty"`
-	ExpirationTime      string                     `json:"expirationTime,omitempty"`
-	TimePartitioning    *timePartitioningResource  `json:"timePartitioning,omitempty"`
-	RangePartitioning   *rangePartitioningResource `json:"rangePartitioning,omitempty"`
-	Clustering          *clusteringResource        `json:"clustering,omitempty"`
-	DefaultRoundingMode *domain.RoundingMode       `json:"defaultRoundingMode,omitempty"`
-	CreationTime        string                     `json:"creationTime,omitempty"`
-	LastModifiedTime    string                     `json:"lastModifiedTime,omitempty"`
+	Kind                     string                     `json:"kind,omitempty"`
+	ETag                     string                     `json:"etag,omitempty"`
+	ID                       string                     `json:"id,omitempty"`
+	SelfLink                 string                     `json:"selfLink,omitempty"`
+	TableReference           tableReference             `json:"tableReference"`
+	FriendlyName             string                     `json:"friendlyName,omitempty"`
+	Description              string                     `json:"description,omitempty"`
+	Labels                   map[string]string          `json:"labels,omitempty"`
+	Type                     string                     `json:"type,omitempty"`
+	Schema                   tableSchema                `json:"schema"`
+	Location                 string                     `json:"location,omitempty"`
+	ExpirationTime           string                     `json:"expirationTime,omitempty"`
+	TimePartitioning         *timePartitioningResource  `json:"timePartitioning,omitempty"`
+	RangePartitioning        *rangePartitioningResource `json:"rangePartitioning,omitempty"`
+	Clustering               *clusteringResource        `json:"clustering,omitempty"`
+	DefaultRoundingMode      *domain.RoundingMode       `json:"defaultRoundingMode,omitempty"`
+	CreationTime             string                     `json:"creationTime,omitempty"`
+	LastModifiedTime         string                     `json:"lastModifiedTime,omitempty"`
+	NumBytes                 string                     `json:"numBytes,omitempty"`
+	NumLongTermBytes         string                     `json:"numLongTermBytes,omitempty"`
+	NumRows                  string                     `json:"numRows,omitempty"`
+	NumActiveLogicalBytes    string                     `json:"numActiveLogicalBytes,omitempty"`
+	NumLongTermLogicalBytes  string                     `json:"numLongTermLogicalBytes,omitempty"`
+	NumTotalLogicalBytes     string                     `json:"numTotalLogicalBytes,omitempty"`
+	NumActivePhysicalBytes   string                     `json:"numActivePhysicalBytes,omitempty"`
+	NumLongTermPhysicalBytes string                     `json:"numLongTermPhysicalBytes,omitempty"`
+	NumTotalPhysicalBytes    string                     `json:"numTotalPhysicalBytes,omitempty"`
 }
 
 func projectFromDomain(project domain.Project) projectResource {
