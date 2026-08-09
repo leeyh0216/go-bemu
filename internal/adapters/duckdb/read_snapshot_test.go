@@ -709,6 +709,36 @@ func TestDuckDBReadSnapshotProjectsNestedStructFieldsWithRestriction(t *testing.
 	}
 }
 
+func TestDuckDBReadSnapshotProjectsNestedRepeatedStructFields(t *testing.T) {
+	ctx, cancel := duckDBReadTestContext(t)
+	defer cancel()
+	table := catalogdomain.Table{
+		ProjectID: "data-project", DatasetID: "analytics", ID: "nested_repeated_projection", Type: "TABLE",
+		Schema: []catalogdomain.Field{
+			{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+			{Name: "profiles", Type: "RECORD", Mode: "REPEATED", Fields: []catalogdomain.Field{
+				{Name: "name", Type: "STRING"}, {Name: "rank", Type: "INT64"},
+			}},
+		},
+	}
+	warehouse := newReadTestWarehouse(t, ctx, table)
+	insertReadTestRows(t, ctx, warehouse, table, "(1, [{'name':'alice', 'rank':7}, {'name':'bob', 'rank':3}])")
+	materializer := newReadTestMaterializer(t, warehouse, &readTestSchemaResolver{table: table}, readSnapshotTestConfig(t.TempDir(), 1<<20))
+
+	snapshotPort, err := materializer.Materialize(ctx, readdomain.MaterializeRequest{
+		Table: readTestTableResource(table), Format: readdomain.FormatAvro, SelectedFields: []string{"profiles.rank"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := snapshotPort.(*duckDBReadSnapshot)
+	defer closeReadSnapshot(t, snapshot)
+	if snapshot.Metadata().RowCount != 1 || len(snapshot.fields) != 1 || snapshot.fields[0].Name != "profiles" ||
+		len(snapshot.fields[0].Fields) != 1 || snapshot.fields[0].Fields[0].Name != "rank" {
+		t.Fatalf("repeated nested projected schema = %#v rows=%d", snapshot.fields, snapshot.Metadata().RowCount)
+	}
+}
+
 func TestDuckDBReadSnapshotClassifiesCatalogLookupFailures(t *testing.T) {
 	ctx, cancel := duckDBReadTestContext(t)
 	defer cancel()

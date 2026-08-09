@@ -286,9 +286,6 @@ func projectReadFields(schema []catalogdomain.Field, selected []string) ([]catal
 				if !strings.EqualFold(field.Type, "RECORD") {
 					return nil, fmt.Errorf("selected_field %q is not a STRUCT field", path)
 				}
-				if strings.EqualFold(field.Mode, "REPEATED") {
-					return nil, fmt.Errorf("nested projection of repeated STRUCT field %q is not supported", path)
-				}
 				var err error
 				copy.Fields, err = project(field.Fields, choice, path)
 				if err != nil {
@@ -321,8 +318,8 @@ func materializeReadStatement(projectID, datasetID, tableID string, fields []cat
 	columns := make([]string, len(fields))
 	for index, field := range fields {
 		identifier := quoteIdentifier(field.Name)
-		if strings.EqualFold(field.Type, "RECORD") && !strings.EqualFold(field.Mode, "REPEATED") {
-			columns[index] = renderReadStructProjection(identifier, field.Fields) + " AS " + identifier
+		if strings.EqualFold(field.Type, "RECORD") {
+			columns[index] = renderReadRecordProjection(identifier, field) + " AS " + identifier
 			continue
 		}
 		if strings.EqualFold(field.Type, "JSON") && !strings.EqualFold(field.Mode, "REPEATED") {
@@ -344,13 +341,20 @@ func materializeReadStatement(projectID, datasetID, tableID string, fields []cat
 	return statement
 }
 
+func renderReadRecordProjection(identifier string, field catalogdomain.Field) string {
+	if strings.EqualFold(field.Mode, "REPEATED") {
+		return "list_transform(" + identifier + ", x -> " + renderReadStructProjection("x", field.Fields) + ")"
+	}
+	return renderReadStructProjection(identifier, field.Fields)
+}
+
 func renderReadStructProjection(identifier string, fields []catalogdomain.Field) string {
 	arguments := make([]string, len(fields))
 	for index, field := range fields {
 		path := identifier + "." + quoteIdentifier(field.Name)
 		value := path
-		if strings.EqualFold(field.Type, "RECORD") && !strings.EqualFold(field.Mode, "REPEATED") {
-			value = renderReadStructProjection(path, field.Fields)
+		if strings.EqualFold(field.Type, "RECORD") {
+			value = renderReadRecordProjection(path, field)
 		}
 		arguments[index] = quoteIdentifier(field.Name) + " := " + value
 	}
