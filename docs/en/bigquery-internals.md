@@ -169,7 +169,10 @@ applies `WRITE_APPEND`, `WRITE_EMPTY`, or `WRITE_TRUNCATE` in one DuckDB
 transaction. Multiple URI and wildcard results are sorted by URI and
 deduplicated. Every immutable plan binds the numeric GCS generation, optional
 ETag, and byte size; conflicting overlap metadata and generation drift fail
-before the loader runs. With `CREATE_IF_NEEDED`, an explicit request schema creates the
+before the loader runs. A stable mutation ID binds the job identity to that
+plan. DuckDB records its output receipt in the destination transaction, making
+an identical engine-restart retry read-only and rejecting a different plan that
+reuses the ID. With `CREATE_IF_NEEDED`, an explicit request schema creates the
 physical destination and inserts its rows in that same transaction; catalog
 metadata is published only after commit, with physical compensation on a
 publication failure. When the request omits a schema, scalar and STRUCT fields

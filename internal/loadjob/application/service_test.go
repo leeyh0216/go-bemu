@@ -328,14 +328,16 @@ func (l *testLoader) InferParquetSchema(
 	return catalogdomain.CloneFields(l.inferredSchema), nil
 }
 
-func (l *testLoader) DiscardLoadedTable(context.Context, domain.TableReference) error {
+func (l *testLoader) DiscardLoadedTable(context.Context, string, domain.TableReference) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.discardCalls++
 	return l.discardErr
 }
 
-func (l *gatedLoader) DiscardLoadedTable(context.Context, domain.TableReference) error { return nil }
+func (l *gatedLoader) DiscardLoadedTable(context.Context, string, domain.TableReference) error {
+	return nil
+}
 
 func (l *gatedLoader) InferParquetSchema(
 	context.Context,

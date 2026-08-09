@@ -186,6 +186,7 @@ func testLoadSchemaPlan(t *testing.T, schema []domain.Field) (engine.Capabilitie
 
 func testLoadPlanRequest(schemaPlan engine.SchemaPlan, schema []domain.Field) LoadPlanRequest {
 	return LoadPlanRequest{
+		MutationID: strings.Repeat("f", 64),
 		Destination: domain.Table{
 			Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
 			Location:  "US", Schema: schema,

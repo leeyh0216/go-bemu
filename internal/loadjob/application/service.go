@@ -175,6 +175,10 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	if configuration.Autodetect || configuration.IgnoreUnknownValues || configuration.MaxBadRecords != 0 || len(configuration.UnsupportedOptions) > 0 {
 		return statistics, fmt.Errorf("%w: requested load options", domain.ErrUnsupported)
 	}
+	mutationID, err := domain.LoadMutationID(job.Reference, job.ConfigurationDigest)
+	if err != nil {
+		return statistics, err
+	}
 
 	destination, err := s.resolveDestination(ctx, job, configuration)
 	if err != nil {
@@ -198,7 +202,7 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	}
 	var loadPlan ports.LoadPlan
 	if !destination.infer {
-		loadPlan, err = s.planLoad(ctx, configuration, destination, schemaPlan, resolved)
+		loadPlan, err = s.planLoad(ctx, mutationID, configuration, destination, schemaPlan, resolved)
 		if err != nil {
 			return statistics, err
 		}
@@ -259,7 +263,7 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		if err != nil {
 			return statistics, err
 		}
-		loadPlan, err = s.planLoad(ctx, configuration, destination, schemaPlan, resolved)
+		loadPlan, err = s.planLoad(ctx, mutationID, configuration, destination, schemaPlan, resolved)
 		if err != nil {
 			return statistics, err
 		}
@@ -280,7 +284,7 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	if err == nil && destination.create {
 		if publishErr := s.tables.PublishTable(ctx, destination.table); publishErr != nil {
 			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			cleanupErr := s.loader.DiscardLoadedTable(cleanupCtx, destination.table.Reference)
+			cleanupErr := s.loader.DiscardLoadedTable(cleanupCtx, mutationID, destination.table.Reference)
 			cancelCleanup()
 			if cleanupErr != nil {
 				err = errors.Join(publishErr, fmt.Errorf("compensate unpublished load destination: %w", cleanupErr))
@@ -345,6 +349,7 @@ func (s *Service) planDestinationSchema(
 
 func (s *Service) planLoad(
 	ctx context.Context,
+	mutationID string,
 	configuration domain.LoadConfiguration,
 	destination destinationResolution,
 	schemaPlan engine.SchemaPlan,
@@ -352,6 +357,7 @@ func (s *Service) planLoad(
 ) (ports.LoadPlan, error) {
 	updateDestination := len(destination.evolution.Additions) != 0 || len(destination.evolution.Relaxations) != 0
 	return s.loader.PlanLoad(ctx, ports.LoadPlanRequest{
+		MutationID:  mutationID,
 		Destination: destination.table, CreateDestination: destination.create,
 		UpdateDestination: updateDestination, SchemaPlan: schemaPlan,
 		Partition:    destination.partition,

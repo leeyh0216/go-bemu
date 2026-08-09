@@ -22,6 +22,7 @@ type ResolvedObject struct {
 }
 
 type LoadPlanRequest struct {
+	MutationID        string
 	Destination       domain.Table
 	CreateDestination bool
 	UpdateDestination bool
@@ -207,6 +208,9 @@ func (err *LoadPlanningError) Unwrap() []error {
 }
 
 func validateLoadPlanRequest(capabilities engine.Capabilities, request LoadPlanRequest) error {
+	if !domain.ValidLoadMutationID(request.MutationID) {
+		return fmt.Errorf("%w: load mutation identity is invalid", domain.ErrInvalid)
+	}
 	if request.SchemaPlan.Fingerprint() == "" || request.SchemaPlan.EngineIdentity() != capabilities.Identity() ||
 		request.SchemaPlan.CapabilityFingerprint() != capabilities.Fingerprint() {
 		return fmt.Errorf("%w: schema plan does not belong to the load engine", domain.ErrPrecondition)
@@ -309,6 +313,7 @@ func cloneLoadPlanRequest(input LoadPlanRequest) LoadPlanRequest {
 
 func loadPlanRequestFingerprint(request LoadPlanRequest) string {
 	return fingerprint(struct {
+		MutationID        string                           `json:"mutationId"`
 		Destination       domain.TableReference            `json:"destination"`
 		Location          string                           `json:"location"`
 		Schema            []domain.Field                   `json:"schema"`
@@ -323,6 +328,7 @@ func loadPlanRequestFingerprint(request LoadPlanRequest) string {
 		WriteDisposition  domain.WriteDisposition          `json:"writeDisposition"`
 		Objects           []ResolvedObject                 `json:"objects"`
 	}{
+		MutationID:  request.MutationID,
 		Destination: request.Destination.Reference, Location: request.Destination.Location,
 		Schema:            request.Destination.Schema,
 		TimePartitioning:  request.Destination.TimePartitioning,

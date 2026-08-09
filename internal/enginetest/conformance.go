@@ -109,6 +109,7 @@ func nestedSchema(depth int) []catalogdomain.Field {
 
 func loadRequest(schemaPlan engine.SchemaPlan, schema []catalogdomain.Field) loadports.LoadPlanRequest {
 	return loadports.LoadPlanRequest{
+		MutationID: strings.Repeat("f", 64),
 		Destination: loadDomain.Table{
 			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
 			Location:  "US", Schema: schema,

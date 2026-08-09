@@ -63,6 +63,7 @@ func (planner duckDBLoadAdapterPlanner) ValidateLoadRequest(
 	}
 	document, err := json.Marshal(struct {
 		ModelVersion      string                         `json:"modelVersion"`
+		MutationID        string                         `json:"mutationId"`
 		CreateDestination bool                           `json:"createDestination"`
 		UpdateDestination bool                           `json:"updateDestination"`
 		PhysicalTypes     []string                       `json:"physicalTypes"`
@@ -70,7 +71,7 @@ func (planner duckDBLoadAdapterPlanner) ValidateLoadRequest(
 		WriteDisposition  loadDomain.WriteDisposition    `json:"writeDisposition"`
 		Partition         *loadDomain.PartitionDecorator `json:"partition,omitempty"`
 	}{
-		ModelVersion: "duckdb-parquet-load-plan-v4", PhysicalTypes: physicalTypes,
+		ModelVersion: "duckdb-parquet-load-plan-v5", MutationID: request.MutationID, PhysicalTypes: physicalTypes,
 		CreateDestination: request.CreateDestination,
 		UpdateDestination: request.UpdateDestination,
 		SourceFormat:      request.SourceFormat, WriteDisposition: request.WriteDisposition,

@@ -3,9 +3,11 @@ package duckdb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	catalogDomain "github.com/leeyh0216/go-bemu/internal/domain"
@@ -16,6 +18,7 @@ import (
 )
 
 type testLoadRequest struct {
+	MutationID        string
 	Destination       loadDomain.Table
 	CreateDestination bool
 	UpdateDestination bool
@@ -27,6 +30,8 @@ type testLoadRequest struct {
 	SourceFormat      loadDomain.SourceFormat
 	WriteDisposition  loadDomain.WriteDisposition
 }
+
+var testLoadMutationSequence atomic.Uint64
 
 func TestParquetLoadCreatesMissingDestinationInOneTransaction(t *testing.T) {
 	ctx := context.Background()
@@ -436,6 +441,75 @@ func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 	}
 }
 
+func TestParquetLoadReceiptPreventsDuplicateMutationAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "load-receipt.duckdb")
+	warehouse, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	schema := []loadDomain.Field{{Name: "id", Type: "INT64"}}
+	if err := warehouse.CreateTable(ctx, catalogDomain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "items", Schema: schema,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	parquet := createLoadParquet(t, warehouse, "SELECT 1::BIGINT AS id")
+	request := testLoadRequest{
+		MutationID: strings.Repeat("e", 64),
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+			Schema:    schema,
+		},
+		Schema: schema, Objects: []loadports.LocalObject{{Path: parquet}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+	}
+	first, err := executeTestLoad(ctx, warehouse, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := warehouse.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	second, err := executeTestLoad(ctx, restarted, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second || tableRows(t, restarted) != 1 {
+		t.Fatalf("idempotent receipt result = first:%+v second:%+v rows:%d", first, second, tableRows(t, restarted))
+	}
+	request.WriteDisposition = loadDomain.WriteTruncate
+	if _, err := executeTestLoad(ctx, restarted, request); !errors.Is(err, loadDomain.ErrPrecondition) {
+		t.Fatalf("conflicting mutation plan error = %v", err)
+	}
+	if rows := tableRows(t, restarted); rows != 1 {
+		t.Fatalf("conflicting mutation changed destination: %d", rows)
+	}
+	if err := restarted.DiscardLoadedTable(ctx, request.MutationID, request.Destination.Reference); err != nil {
+		t.Fatal(err)
+	}
+	var tableCount, receiptCount int64
+	if err := restarted.db.QueryRowContext(ctx, `SELECT count(*) FROM duckdb_tables()
+WHERE schema_name = ? AND table_name = ?`, physicalSchema("test-project", "dataset"), "items").Scan(&tableCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.db.QueryRowContext(ctx, `SELECT count(*) FROM "_bqemu_load"."receipts" WHERE mutation_id = ?`, request.MutationID).Scan(&receiptCount); err != nil {
+		t.Fatal(err)
+	}
+	if tableCount != 0 || receiptCount != 0 {
+		t.Fatalf("discarded load mutation retained table=%d receipt=%d", tableCount, receiptCount)
+	}
+}
+
 func TestParquetLoadPartitionDecoratorsScopeAndValidateWrites(t *testing.T) {
 	ctx := context.Background()
 	warehouse, err := New("")
@@ -722,6 +796,7 @@ func TestDuckDBLoadPlanningRejectsSchemaAndArtifactDriftBeforeTransaction(t *tes
 		t.Fatal(err)
 	}
 	request := loadports.LoadPlanRequest{
+		MutationID: strings.Repeat("d", 64),
 		Destination: loadDomain.Table{
 			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
 			Schema:    schema,
@@ -796,7 +871,12 @@ func executeTestLoad(ctx context.Context, warehouse *Warehouse, request testLoad
 		}
 		resolved[index] = loadports.ResolvedObject{Fingerprint: local[index].Fingerprint, Size: local[index].Size}
 	}
+	mutationID := request.MutationID
+	if mutationID == "" {
+		mutationID = fmt.Sprintf("%064x", testLoadMutationSequence.Add(1))
+	}
 	plan, err := warehouse.PlanLoad(ctx, loadports.LoadPlanRequest{
+		MutationID:  mutationID,
 		Destination: request.Destination, CreateDestination: request.CreateDestination,
 		UpdateDestination: request.UpdateDestination, SchemaPlan: schemaPlan,
 		Partition:    request.Partition,

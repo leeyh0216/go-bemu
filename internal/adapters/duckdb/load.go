@@ -88,6 +88,23 @@ func (w *Warehouse) ExecuteLoad(
 			_ = tx.Rollback()
 		}
 	}()
+	if err := ensureLoadReceiptStore(ctx, tx); err != nil {
+		return result, err
+	}
+	receipt, found, err := readLoadReceipt(ctx, tx, request.MutationID)
+	if err != nil {
+		return result, err
+	}
+	if found {
+		if receipt.PlanFingerprint != plan.Fingerprint() {
+			return result, fmt.Errorf("%w: load mutation identity belongs to a different plan", loadDomain.ErrPrecondition)
+		}
+		if err := tx.Commit(); err != nil {
+			return result, fmt.Errorf("commit idempotent load receipt read: %w", err)
+		}
+		committed = true
+		return receipt.Result, nil
+	}
 
 	staging := "bqemu_load_" + strconv.FormatUint(loadSequence.Add(1), 10)
 	objectList := make([]string, len(objects))
@@ -205,6 +222,9 @@ func (w *Warehouse) ExecuteLoad(
 	}
 	if _, err := tx.ExecContext(ctx, "DROP TABLE "+quoteIdentifier(staging)); err != nil {
 		return result, fmt.Errorf("drop load staging table: %w", err)
+	}
+	if err := insertLoadReceipt(ctx, tx, request.MutationID, plan.Fingerprint(), table, result); err != nil {
+		return result, err
 	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("commit load transaction: %w", err)
@@ -400,10 +420,6 @@ func requiredLoadChildren(fields []loadDomain.Field, source string, depth int) s
 
 func isLoadRecord(field loadDomain.Field) bool {
 	return strings.EqualFold(field.Type, "RECORD") || strings.EqualFold(field.Type, "STRUCT")
-}
-
-func (w *Warehouse) DiscardLoadedTable(ctx context.Context, table loadDomain.TableReference) error {
-	return w.DropTable(ctx, table.ProjectID, table.DatasetID, table.TableID)
 }
 
 func createLoadDestinationStatement(table loadDomain.Table) (string, error) {

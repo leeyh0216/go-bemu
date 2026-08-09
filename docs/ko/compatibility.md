@@ -334,6 +334,7 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 | 테이블로 Parquet 로드 | 기존 대상과 명시적 또는 추론 스키마를 사용하는 `CREATE_IF_NEEDED` 새 대상에서 스칼라, 중첩 `STRUCT`, 반복 `ARRAY` 값을 지원합니다. LIST 추론에는 `parquetOptions.enableListInference=true`가 필요합니다. 타입 검증을 마친 준비 테이블을 먼저 완성한 뒤 새 대상 생성이나 쓰기 방식을 적용합니다. 10진수 자릿수 축소는 대상을 변경하기 전에 `load.decimal-rounding.unsupported-v1`로 거부합니다. |
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
+| 물리 적재 mutation 영수증 | 작업 identity와 불변 계획으로 안정적인 mutation ID를 만듭니다. DuckDB는 대상 행과 같은 트랜잭션에 결과 영수증을 저장하므로 엔진 재시작 뒤 동일한 요청을 재시도해도 적재를 중복 적용하지 않고 이전 결과를 반환합니다. 같은 ID에 다른 계획을 사용하면 준비 영역을 만들기 전에 실패합니다. SQLite 시작 시 게시 재조정은 #26에서 계속 추적합니다. |
 | Parquet 스키마 추론 | 스칼라와 STRUCT를 지원합니다. LIST를 REPEATED로 추론하려면 `enableListInference=true`가 필요합니다. |
 | 적재 `schemaUpdateOptions` | `WRITE_APPEND`에서 `ALLOW_FIELD_ADDITION`과 `ALLOW_FIELD_RELAXATION`을 지원합니다. 명시적 스키마와 Parquet 추론 스키마 모두 최상위·중첩 변경을 처리하며 다른 변경은 대상을 수정하기 전에 거부합니다. |
 | 적재 대상 파티셔닝과 클러스터링 | 새 대상은 시간 단위 또는 정수 범위 파티션 메타데이터, 파티션 만료 시간, 유효한 클러스터 필드 1~4개를 보존합니다. 수집 시간 파티션 대상은 `_PARTITIONTIME`과 `_PARTITIONDATE`를 채웁니다. 기존 대상은 요청한 구성이 기존 구성과 같을 때만 허용합니다. `$yyyy`, `$yyyymm`, `$yyyymmdd`, `$yyyymmddhh`, 정수 범위 시작값 데코레이터로 기존 파티션을 지정할 수 있습니다. 컬럼 및 범위 파티션은 입력 행이 지정 범위에 속해야 하고, 수집 시간 데코레이터는 요청한 경계를 행에 지정합니다. 데코레이터를 쓴 `WRITE_EMPTY`와 `WRITE_TRUNCATE`는 해당 파티션만 검사하거나 교체합니다. 파티션 만료 정리와 DuckDB 물리 재클러스터링은 #47의 남은 범위입니다. |
