@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,6 +88,73 @@ func TestPrepareDirectoryCreatesConfiguredPath(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Fatalf("configured path is not a directory: %s", directory)
+	}
+}
+
+func TestShutdownServersReportsDrainTimeoutAndReleasesListener(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		close(entered)
+		<-release
+		writer.WriteHeader(http.StatusOK)
+	})}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	requestDone := make(chan struct{})
+	go func() {
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+		close(requestDone)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("request did not enter handler")
+	}
+	drainContext, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	if err := shutdownServers(drainContext, server, nil, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+	}
+	if rebound, listenErr := net.Listen("tcp", listener.Addr().String()); listenErr != nil {
+		t.Fatalf("HTTP listener remained open after drain timeout: %v", listenErr)
+	} else {
+		_ = rebound.Close()
+	}
+	close(release)
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("request did not return after handler release")
+	}
+	select {
+	case serveErr := <-serveDone:
+		if !errors.Is(serveErr, http.ErrServerClosed) {
+			t.Fatalf("serve error = %v", serveErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop after drain timeout")
+	}
+}
+
+func TestAwaitServeResultMakesUnexpectedServerFailureTerminal(t *testing.T) {
+	results := make(chan serveResult, 1)
+	results <- serveResult{name: "rest", err: errors.New("accept failed")}
+	if err, shutdownRequested := awaitServeResult(t.Context(), results); shutdownRequested || err == nil || !strings.Contains(err.Error(), "rest server stopped: accept failed") {
+		t.Fatalf("serve failure = %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err, shutdownRequested := awaitServeResult(cancelled, make(chan serveResult)); err != nil || !shutdownRequested {
+		t.Fatalf("cancelled serving wait = %v, shutdown=%t", err, shutdownRequested)
 	}
 }
 

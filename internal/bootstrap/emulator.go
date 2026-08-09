@@ -346,17 +346,12 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 	}
 	defer listeners.Close(context.Background())
 
-	var servingFailure error
-	select {
-	case <-ctx.Done():
+	servingFailure, shutdownRequested := awaitServeResult(ctx, results)
+	if shutdownRequested {
 		logger.InfoContext(context.Background(), "shutdown requested",
 			"event", "domain.transition", "state_from", "SERVING", "state_to", "STOPPING",
 			"reason", context.Cause(ctx),
 		)
-	case result := <-results:
-		if !isExpectedServeError(result.err) {
-			servingFailure = fmt.Errorf("%s server stopped: %w", result.name, result.err)
-		}
 	}
 
 	grpcRuntime.MarkNotServing()
@@ -381,6 +376,18 @@ func runWithVersion(ctx context.Context, args []string, stdout io.Writer, versio
 		return errors.Join(servingFailure, shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
 	}
 	return errors.Join(shutdownErr, queryCloseErr, readCloseErr, writeCloseErr)
+}
+
+func awaitServeResult(ctx context.Context, results <-chan serveResult) (error, bool) {
+	select {
+	case <-ctx.Done():
+		return nil, true
+	case result := <-results:
+		if isExpectedServeError(result.err) {
+			return nil, false
+		}
+		return fmt.Errorf("%s server stopped: %w", result.name, result.err), false
+	}
 }
 
 func composeCatalogService(
