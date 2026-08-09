@@ -18,6 +18,7 @@ from conftest import (
     STATIC_ACCESS_TOKEN,
     TRUSTSTORE_PASSWORD,
     PublicEdge,
+    contract_case,
     create_table,
     list_table_data,
     record_capability,
@@ -49,15 +50,26 @@ def _safe_scala_stage(output: str) -> str:
     return stages[-1] if stages else "missing"
 
 
-@pytest.mark.operation("bigquery.tables.insert")
-@pytest.mark.operation("grpc.bigquery-read.create-read-session")
-@pytest.mark.operation("grpc.bigquery-read.read-rows")
-@pytest.mark.operation("grpc.bigquery-write.create-write-stream")
-@pytest.mark.operation("grpc.bigquery-write.append-rows")
-@pytest.mark.operation("grpc.bigquery-write.finalize-write-stream")
-@pytest.mark.operation("grpc.bigquery-write.batch-commit-write-streams")
-@pytest.mark.operation("bigquery.tabledata.list")
-@pytest.mark.capability("SBQ-WRITE-DIRECT-DECIMAL-V1")
+@contract_case(
+    "SBQ-WRITE-DIRECT-DECIMAL-V1",
+    state="partial",
+    category="write",
+    summary="Direct decimal ProtoRows write",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="direct-append-pending",
+    operations=(
+        "bigquery.tables.insert",
+        "bigquery.tabledata.list",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream",
+    ),
+    issue="https://github.com/leeyh0216/go-bemu/issues/9",
+    limitation="Spark 3.5.8 verifies connector 0.44.2 direct ProtoRows for scalar NUMERIC(20,4) and BIGNUMERIC(38,18). Recursive decimal ProtoRows are covered below the released-Spark boundary.",
+)
 def test_scala_decimal_read_and_direct_write_through_public_edge(
     connector_jar: Path,
     public_edge: PublicEdge,

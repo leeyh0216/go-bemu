@@ -25,7 +25,6 @@ ARTIFACT_USAGES = frozenset(
         "python-wheel",
         "cloud-sdk-release-provenance",
         "spark-connector-dsv1-jar",
-        "spark-connector-dsv2-jar",
         "spark-python-bridge",
         "spark-runtime",
         "hadoop-gcs-connector-jar",
@@ -74,7 +73,6 @@ ADAPTER_REQUIRED_ARTIFACT_USAGES = {
     "bq-cli-v1": ("cloud-sdk-release-provenance",),
     "spark-pyspark-pytest-v1": (
         "spark-connector-dsv1-jar",
-        "spark-connector-dsv2-jar",
         "spark-python-bridge",
         "spark-runtime",
     ),
@@ -699,10 +697,24 @@ def _decode_source_provenance(value: Any) -> SourceProvenance:
 def _decode_scenario(value: Any, selector_prefix: str) -> dict[str, Any]:
     scenario = _exact_object(
         value,
-        {"id", "operationIds", "selectors", "testEvidence", "operationExpectations"},
+        {
+            "id",
+            "trafficSource",
+            "operationIds",
+            "selectors",
+            "testEvidence",
+            "operationExpectations",
+        },
         "scenario",
     )
     scenario_id = _nonempty_string(scenario["id"], "scenario.id")
+    traffic_source = _exact_object(
+        scenario["trafficSource"], {"kind", "reason"}, "scenario.trafficSource"
+    )
+    traffic_kind = _nonempty_string(traffic_source["kind"], "scenario.trafficSource.kind")
+    traffic_reason = traffic_source["reason"]
+    if not isinstance(traffic_reason, str):
+        raise ConsumerRuntimeError("normalized scenario traffic source reason is invalid")
     operation_ids = _string_list(scenario["operationIds"], "scenario.operationIds")
     selectors = _string_list(scenario["selectors"], "scenario.selectors")
     test_evidence = _string_list(
@@ -716,6 +728,14 @@ def _decode_scenario(value: Any, selector_prefix: str) -> dict[str, Any]:
         raise ConsumerRuntimeError("normalized scenario contains duplicate values")
     if any(not selector.startswith(selector_prefix + ":") for selector in selectors):
         raise ConsumerRuntimeError("normalized scenario selector does not match its adapter")
+    if traffic_kind == "annotations":
+        if traffic_reason or not test_evidence:
+            raise ConsumerRuntimeError("normalized annotation scenario evidence is invalid")
+    elif traffic_kind == "runner-evidence":
+        if not traffic_reason or test_evidence or selector_prefix != "load":
+            raise ConsumerRuntimeError("normalized runner evidence scenario is invalid")
+    else:
+        raise ConsumerRuntimeError("normalized scenario traffic source is unknown")
     raw_expectations = scenario["operationExpectations"]
     if not isinstance(raw_expectations, list):
         raise ConsumerRuntimeError("normalized operation expectations must be a list")
@@ -753,6 +773,7 @@ def _decode_scenario(value: Any, selector_prefix: str) -> dict[str, Any]:
     _reject_dependency_cycles(scenario_id, expectations)
     return {
         "id": scenario_id,
+        "trafficSource": {"kind": traffic_kind, "reason": traffic_reason},
         "operationIds": operation_ids,
         "selectors": selectors,
         "testEvidence": test_evidence,

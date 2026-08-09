@@ -382,8 +382,6 @@ class SparkAdapter(RunnerAdapter):
     connector_path: Path
     connector_spec: dict[str, Any]
     hadoop_gcs_path: Path | None = None
-    dsv2_connector_path: Path | None = None
-    dsv2_connector_spec: dict[str, Any] | None = None
 
     def prepare(self) -> None:
         super().prepare()
@@ -430,27 +428,6 @@ class SparkAdapter(RunnerAdapter):
             self.artifact_evidence.append(
                 _materialized_evidence(hadoop_gcs, self.hadoop_gcs_path)
             )
-        if "spark-connector-dsv2-jar" in self.context.execution.required_artifact_usages:
-            dsv2_artifact = require_execution_artifact(
-                self.context.case,
-                self.context.execution,
-                "spark-connector-dsv2-jar",
-            )
-            self.dsv2_connector_path = _materialize_case_artifact(
-                self.context, dsv2_artifact
-            )
-            self.artifact_evidence.append(
-                _materialized_evidence(dsv2_artifact, self.dsv2_connector_path)
-            )
-            self.dsv2_connector_spec = {
-                "variant": "dsv2-spark-3.5-raw",
-                "output": self.dsv2_connector_path.name,
-                "size": self.dsv2_connector_path.stat().st_size,
-                "sha256": dsv2_artifact.sha256,
-                "provider": "com.google.cloud.spark.bigquery.v2.Spark35BigQueryTableProvider",
-                "connectorVersion": self.context.versions["connector"],
-            }
-
     def spark_environment(self) -> dict[str, str]:
         environment = os.environ.copy()
         environment["BQEMU_SPARK_CONNECTOR_JAR"] = str(self.connector_path)
@@ -460,11 +437,6 @@ class SparkAdapter(RunnerAdapter):
         if self.hadoop_gcs_path is not None:
             environment["BQEMU_HADOOP_GCS_CONNECTOR_JAR"] = str(
                 self.hadoop_gcs_path
-            )
-        if self.dsv2_connector_path is not None and self.dsv2_connector_spec is not None:
-            environment["BQEMU_SPARK_DSV2_CONNECTOR_JAR"] = str(self.dsv2_connector_path)
-            environment["BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON"] = json.dumps(
-                self.dsv2_connector_spec, sort_keys=True, separators=(",", ":")
             )
         return environment
 

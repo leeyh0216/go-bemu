@@ -23,3 +23,5 @@ They are integration-test assets, not product runtime dependencies.
   contracts, CI lanes, and the procedure for adding a case.
 - [Consumer compatibility](consumer-compatibility.md): exact versions,
   immutable artifacts, scenario IDs, and selectors used by CI.
+- [Capability coverage](capability-coverage.md): compact, generated claims
+  backed by test-local annotations.

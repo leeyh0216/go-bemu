@@ -1,8 +1,8 @@
 """First released-connector vertical slice across the public TLS edge.
 
-The test capability marker is resolved against the machine-readable matrix.
-Known gaps become strict xfails; an unexpected pass fails so the matrix cannot
-silently remain stale.
+Each tested caller behavior carries a literal contract_case annotation. The
+integration compiler projects those annotations into the generated capability
+index; known gaps become strict xfails.
 
 Official connector source:
 https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92
@@ -23,6 +23,7 @@ from conftest import (
     assert_ordered_operations,
     connector_options,
     create_table,
+    contract_case,
     list_table_data,
     load_connector_source,
     observe_default_append_offsets,
@@ -244,49 +245,145 @@ def _assert_read_session_shape(
         pytest.param(
             "ARROW",
             1,
-            marks=pytest.mark.capability("SBQ-READ-STREAM-ONE-V1"),
+            marks=contract_case(
+                "SBQ-READ-STREAM-ONE-V1",
+                state="verified",
+                category="read",
+                summary="Arrow table read with one requested stream",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-arrow",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="arrow-1",
         ),
         pytest.param(
             "ARROW",
             2,
-            marks=pytest.mark.capability("SBQ-READ-STREAM-TWO-V1"),
+            marks=contract_case(
+                "SBQ-READ-STREAM-TWO-V1",
+                state="verified",
+                category="read",
+                summary="Arrow table read with two requested streams",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-arrow",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="arrow-2",
         ),
         pytest.param(
             "ARROW",
             4,
-            marks=pytest.mark.capability("SBQ-READ-ARROW-TABLE-V1"),
+            marks=contract_case(
+                "SBQ-READ-ARROW-TABLE-V1",
+                state="verified",
+                category="read",
+                summary="Arrow table read with four requested streams",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-arrow",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="arrow-4",
         ),
         pytest.param(
             "ARROW",
             16,
-            marks=pytest.mark.capability("SBQ-READ-ARROW-STREAM-SIXTEEN-V1"),
+            marks=contract_case(
+                "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
+                state="verified",
+                category="read",
+                summary="Arrow table read with sixteen requested streams",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-arrow",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="arrow-16",
         ),
         pytest.param(
             "AVRO",
             1,
-            marks=pytest.mark.capability("SBQ-READ-AVRO-STREAM-ONE-V1"),
+            marks=contract_case(
+                "SBQ-READ-AVRO-STREAM-ONE-V1",
+                state="verified",
+                category="read",
+                summary="Avro table read with one requested stream",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-avro",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="avro-1",
         ),
         pytest.param(
             "AVRO",
             2,
-            marks=pytest.mark.capability("SBQ-READ-AVRO-STREAM-TWO-V1"),
+            marks=contract_case(
+                "SBQ-READ-AVRO-STREAM-TWO-V1",
+                state="verified",
+                category="read",
+                summary="Avro table read with two requested streams",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-avro",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="avro-2",
         ),
         pytest.param(
             "AVRO",
             4,
-            marks=pytest.mark.capability("SBQ-READ-AVRO-TABLE-V1"),
+            marks=contract_case(
+                "SBQ-READ-AVRO-TABLE-V1",
+                state="verified",
+                category="read",
+                summary="Avro table read with four requested streams",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-avro",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="avro-4",
         ),
         pytest.param(
             "AVRO",
             16,
-            marks=pytest.mark.capability("SBQ-READ-AVRO-STREAM-SIXTEEN-V1"),
+            marks=contract_case(
+                "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
+                state="verified",
+                category="read",
+                summary="Avro table read with sixteen requested streams",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-avro",
+                operations=(
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="avro-16",
         ),
     ],
@@ -342,9 +439,21 @@ def test_storage_read_arrow_and_avro(
     )
 
 
-@pytest.mark.capability("SBQ-READ-ARROW-PROJECTION-V1")
-@pytest.mark.operation("grpc.bigquery-read.create-read-session")
-@pytest.mark.operation("grpc.bigquery-read.read-rows")
+@contract_case(
+    "SBQ-READ-ARROW-PROJECTION-V1",
+    state="partial",
+    category="read",
+    summary="Arrow nested projection",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=(
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+    ),
+    issue="https://github.com/leeyh0216/go-bemu/issues/6",
+    limitation="Nested Spark projection is verified end to end; the DSv1 artifact requests its top-level parent while exact nested selected-field paths remain transport-tested.",
+)
 def test_nested_projection_through_storage_read(
     spark_session,
     public_edge: PublicEdge,
@@ -387,9 +496,21 @@ def test_nested_projection_through_storage_read(
     )
 
 
-@pytest.mark.capability("SBQ-READ-ARROW-FILTER-V1")
-@pytest.mark.operation("grpc.bigquery-read.create-read-session")
-@pytest.mark.operation("grpc.bigquery-read.read-rows")
+@contract_case(
+    "SBQ-READ-ARROW-FILTER-V1",
+    state="partial",
+    category="read",
+    summary="Arrow filter pushdown",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=(
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+    ),
+    issue="https://github.com/leeyh0216/go-bemu/issues/6",
+    limitation="Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported.",
+)
 def test_advanced_filter_pushdown_through_storage_read(
     spark_session,
     public_edge: PublicEdge,
@@ -442,9 +563,21 @@ def test_advanced_filter_pushdown_through_storage_read(
     )
 
 
-@pytest.mark.capability("SBQ-READ-TIME-PARTITION-V1")
-@pytest.mark.operation("grpc.bigquery-read.create-read-session")
-@pytest.mark.operation("grpc.bigquery-read.read-rows")
+@contract_case(
+    "SBQ-READ-TIME-PARTITION-V1",
+    state="partial",
+    category="read",
+    summary="Arrow field-partition filter",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=(
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+    ),
+    issue="https://github.com/leeyh0216/go-bemu/issues/6",
+    limitation="Field-based time partition metadata and filters are implemented; ingestion-time pseudo columns and physical partition pruning remain unsupported.",
+)
 def test_time_partition_field_filter_through_storage_read(
     spark_session,
     public_edge: PublicEdge,
@@ -494,20 +627,47 @@ def test_time_partition_field_filter_through_storage_read(
         pytest.param(
             "ARROW",
             "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
-            marks=pytest.mark.capability("SBQ-READ-ARROW-DECIMAL-TYPES-V1"),
+            marks=contract_case(
+                "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
+                state="partial",
+                category="read",
+                summary="Arrow decimal schema read",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-arrow",
+                operations=(
+                    "bigquery.tables.insert",
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+                issue="https://github.com/leeyh0216/go-bemu/issues/9",
+                limitation="Spark 3.5.8 verifies connector 0.44.2 Arrow schemas for default, parameterized, nested, and repeated decimals. Precision above 38 is intentionally unsupported; nested and repeated values remain covered below the released-Spark boundary.",
+            ),
             id="arrow",
         ),
         pytest.param(
             "AVRO",
             "SBQ-READ-DECIMAL-TYPES-V1",
-            marks=pytest.mark.capability("SBQ-READ-DECIMAL-TYPES-V1"),
+            marks=contract_case(
+                "SBQ-READ-DECIMAL-TYPES-V1",
+                state="partial",
+                category="read",
+                summary="Avro decimal schema read",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-avro",
+                operations=(
+                    "bigquery.tables.insert",
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+                issue="https://github.com/leeyh0216/go-bemu/issues/9",
+                limitation="Spark 3.5.8 verifies connector 0.44.2 AVRO schemas for default, parameterized, nested, and repeated decimals. Precision above 38 is intentionally unsupported; nested and repeated values remain covered below the released-Spark boundary.",
+            ),
             id="avro",
         ),
     ],
 )
-@pytest.mark.operation("bigquery.tables.insert")
-@pytest.mark.operation("grpc.bigquery-read.create-read-session")
-@pytest.mark.operation("grpc.bigquery-read.read-rows")
 def test_decimal_schema_through_public_storage_read_edge(
     spark_session,
     public_edge: PublicEdge,
@@ -596,14 +756,44 @@ def test_decimal_schema_through_public_storage_read_edge(
             "ARROW",
             "SBQ-READ-ARROW-QUERY-V1",
             "id >= 2",
-            marks=pytest.mark.capability("SBQ-READ-ARROW-QUERY-V1"),
+            marks=contract_case(
+                "SBQ-READ-ARROW-QUERY-V1",
+                state="verified",
+                category="read",
+                summary="Arrow query source read",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-arrow",
+                operations=(
+                    "bigquery.jobs.get",
+                    "bigquery.jobs.getQueryResults",
+                    "bigquery.jobs.insert",
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="query-arrow",
         ),
         pytest.param(
             "AVRO",
             "SBQ-READ-AVRO-QUERY-V1",
             "id BETWEEN 2 AND 4",
-            marks=pytest.mark.capability("SBQ-READ-AVRO-QUERY-V1"),
+            marks=contract_case(
+                "SBQ-READ-AVRO-QUERY-V1",
+                state="verified",
+                category="read",
+                summary="Avro query source read",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="read-avro",
+                operations=(
+                    "bigquery.jobs.get",
+                    "bigquery.jobs.getQueryResults",
+                    "bigquery.jobs.insert",
+                    "bigquery.tables.get",
+                    "grpc.bigquery-read.create-read-session",
+                    "grpc.bigquery-read.read-rows",
+                ),
+            ),
             id="query-avro",
         ),
     ],
@@ -669,7 +859,22 @@ def test_query_source_arrow_and_avro(
     )
 
 
-@pytest.mark.capability("SBQ-READ-ARROW-QUERY-PROJECTION-V1")
+@contract_case(
+    "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+    state="verified",
+    category="read",
+    summary="Arrow query source projection",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=(
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+    ),
+)
 def test_query_source_projection(
     spark_session,
     public_edge: PublicEdge,
@@ -720,7 +925,22 @@ def test_query_source_projection(
     )
 
 
-@pytest.mark.capability("SBQ-READ-ARROW-QUERY-FILTER-V1")
+@contract_case(
+    "SBQ-READ-ARROW-QUERY-FILTER-V1",
+    state="verified",
+    category="read",
+    summary="Arrow query source filter pushdown",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=(
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+    ),
+)
 def test_query_source_filter_pushdown(
     spark_session,
     public_edge: PublicEdge,
@@ -771,7 +991,23 @@ def test_query_source_filter_pushdown(
     )
 
 
-@pytest.mark.capability("SBQ-READ-ARROW-QUERY-MATERIALIZED-V1")
+@contract_case(
+    "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+    state="verified",
+    category="read",
+    summary="Arrow query with explicit materialization",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=(
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.get",
+        "bigquery.tables.patch",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+    ),
+)
 def test_query_source_explicit_materialization_patches_expiration(
     spark_session,
     public_edge: PublicEdge,
@@ -842,7 +1078,21 @@ def test_query_source_explicit_materialization_patches_expiration(
     )
 
 
-@pytest.mark.capability("SBQ-READ-ARROW-COUNT-V1")
+@contract_case(
+    "SBQ-READ-ARROW-COUNT-V1",
+    state="verified",
+    category="read",
+    summary="Arrow query result count",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=(
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tabledata.list",
+        "bigquery.tables.get",
+    ),
+)
 def test_query_result_count(
     spark_session,
     public_edge: PublicEdge,
@@ -918,20 +1168,65 @@ def test_query_result_count(
     [
         pytest.param(
             1,
-            marks=pytest.mark.capability(
-                "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1"
+            marks=contract_case(
+                "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+                state="verified",
+                category="write",
+                summary="Direct exactly-once append with one partition",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="direct-append-pending",
+                operations=(
+                    "bigquery.jobs.get",
+                    "bigquery.jobs.getQueryResults",
+                    "bigquery.jobs.insert",
+                    "bigquery.tables.insert",
+                    "grpc.bigquery-write.append-rows",
+                    "grpc.bigquery-write.batch-commit-write-streams",
+                    "grpc.bigquery-write.create-write-stream",
+                    "grpc.bigquery-write.finalize-write-stream",
+                ),
             ),
         ),
         pytest.param(
             2,
-            marks=pytest.mark.capability(
-                "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1"
+            marks=contract_case(
+                "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+                state="verified",
+                category="write",
+                summary="Direct exactly-once append with two partitions",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="direct-append-pending",
+                operations=(
+                    "bigquery.jobs.get",
+                    "bigquery.jobs.getQueryResults",
+                    "bigquery.jobs.insert",
+                    "bigquery.tables.insert",
+                    "grpc.bigquery-write.append-rows",
+                    "grpc.bigquery-write.batch-commit-write-streams",
+                    "grpc.bigquery-write.create-write-stream",
+                    "grpc.bigquery-write.finalize-write-stream",
+                ),
             ),
         ),
         pytest.param(
             4,
-            marks=pytest.mark.capability(
-                "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1"
+            marks=contract_case(
+                "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+                state="verified",
+                category="write",
+                summary="Direct exactly-once append with four partitions",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="direct-append-pending",
+                operations=(
+                    "bigquery.jobs.get",
+                    "bigquery.jobs.getQueryResults",
+                    "bigquery.jobs.insert",
+                    "bigquery.tables.insert",
+                    "grpc.bigquery-write.append-rows",
+                    "grpc.bigquery-write.batch-commit-write-streams",
+                    "grpc.bigquery-write.create-write-stream",
+                    "grpc.bigquery-write.finalize-write-stream",
+                ),
             ),
         ),
     ],
@@ -1020,13 +1315,24 @@ def test_direct_pending_exact_append(
     )
 
 
-@pytest.mark.operation("bigquery.tables.insert")
-@pytest.mark.operation("grpc.bigquery-write.create-write-stream")
-@pytest.mark.operation("grpc.bigquery-write.append-rows")
-@pytest.mark.operation("grpc.bigquery-write.finalize-write-stream")
-@pytest.mark.operation("grpc.bigquery-write.batch-commit-write-streams")
-@pytest.mark.operation("bigquery.tabledata.list")
-@pytest.mark.capability("SBQ-WRITE-DIRECT-DECIMAL-V1")
+@contract_case(
+    "SBQ-WRITE-DIRECT-DECIMAL-V1",
+    state="partial",
+    category="write",
+    summary="Direct decimal ProtoRows write",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="direct-append-pending",
+    operations=(
+        "bigquery.tables.insert",
+        "bigquery.tabledata.list",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream",
+    ),
+    issue="https://github.com/leeyh0216/go-bemu/issues/9",
+    limitation="Spark 3.5.8 verifies connector 0.44.2 direct ProtoRows for scalar NUMERIC(20,4) and BIGNUMERIC(38,18). Recursive decimal ProtoRows are covered below the released-Spark boundary.",
+)
 def test_direct_decimal_write_through_public_proto_rows_edge(
     spark_session,
     public_edge: PublicEdge,
@@ -1093,7 +1399,25 @@ def test_direct_decimal_write_through_public_proto_rows_edge(
     )
 
 
-@pytest.mark.capability("SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1")
+@contract_case(
+    "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1",
+    state="verified",
+    category="write",
+    summary="Direct exactly-once static overwrite",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="direct-overwrite-static",
+    operations=(
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.delete",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream",
+    ),
+)
 def test_direct_pending_exact_static_overwrite(
     spark_session,
     public_edge: PublicEdge,
@@ -1226,7 +1550,25 @@ def test_direct_pending_exact_static_overwrite(
     )
 
 
-@pytest.mark.capability("SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1")
+@contract_case(
+    "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+    state="verified",
+    category="write",
+    summary="Direct exactly-once dynamic partition overwrite",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="direct-overwrite-static",
+    operations=(
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.delete",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream",
+    ),
+)
 def test_direct_pending_exact_dynamic_partition_overwrite(
     spark_session,
     public_edge: PublicEdge,
@@ -1366,15 +1708,60 @@ def test_direct_pending_exact_dynamic_partition_overwrite(
     [
         pytest.param(
             1,
-            marks=pytest.mark.capability("SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1"),
+            marks=contract_case(
+                "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+                state="verified",
+                category="write",
+                summary="Direct at-least-once append with one partition",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="direct-at-least-once-default",
+                operations=(
+                    "bigquery.jobs.get",
+                    "bigquery.jobs.getQueryResults",
+                    "bigquery.jobs.insert",
+                    "bigquery.tables.insert",
+                    "grpc.bigquery-write.append-rows",
+                    "grpc.bigquery-write.get-write-stream",
+                ),
+            ),
         ),
         pytest.param(
             2,
-            marks=pytest.mark.capability("SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1"),
+            marks=contract_case(
+                "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
+                state="verified",
+                category="write",
+                summary="Direct at-least-once append with two partitions",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="direct-at-least-once-default",
+                operations=(
+                    "bigquery.jobs.get",
+                    "bigquery.jobs.getQueryResults",
+                    "bigquery.jobs.insert",
+                    "bigquery.tables.insert",
+                    "grpc.bigquery-write.append-rows",
+                    "grpc.bigquery-write.get-write-stream",
+                ),
+            ),
         ),
         pytest.param(
             4,
-            marks=pytest.mark.capability("SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1"),
+            marks=contract_case(
+                "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+                state="verified",
+                category="write",
+                summary="Direct at-least-once append with four partitions",
+                profile="spark-bigquery-connector-dsv1-0.44.2",
+                wire_flow="direct-at-least-once-default",
+                operations=(
+                    "bigquery.jobs.get",
+                    "bigquery.jobs.getQueryResults",
+                    "bigquery.jobs.insert",
+                    "bigquery.tables.insert",
+                    "grpc.bigquery-write.append-rows",
+                    "grpc.bigquery-write.get-write-stream",
+                ),
+            ),
         ),
     ],
 )

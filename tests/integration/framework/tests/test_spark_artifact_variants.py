@@ -18,7 +18,7 @@ from artifact_variants import (  # noqa: E402
 class SparkArtifactVariantsTest(unittest.TestCase):
     def test_normalized_connector_spec_decodes_without_version_inference(self) -> None:
         payload = {
-            "variant": "dsv2-spark-runtime-raw",
+            "variant": "dsv1-with-dependencies-2.12",
             "output": "connector.jar",
             "size": 42,
             "sha256": "a" * 64,
@@ -29,11 +29,11 @@ class SparkArtifactVariantsTest(unittest.TestCase):
         spec = artifact_spec_from_json(json.dumps(payload))
 
         self.assertEqual(spec.connector_version, "99.1.7")
-        self.assertEqual(spec.variant, "dsv2-spark-runtime-raw")
+        self.assertEqual(spec.variant, "dsv1-with-dependencies-2.12")
 
     def test_normalized_connector_spec_rejects_shape_drift(self) -> None:
         valid = {
-            "variant": "dsv2-spark-runtime-raw",
+            "variant": "dsv1-with-dependencies-2.12",
             "output": "connector.jar",
             "size": 42,
             "sha256": "a" * 64,

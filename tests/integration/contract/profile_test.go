@@ -19,24 +19,13 @@ func TestRegistryResolvesPinnedConnectorVersions(t *testing.T) {
 	}
 }
 
-func TestRegistryResolvesDSv2ByArtifactIdentity(t *testing.T) {
+func TestRegistryResolvesDSv1ArtifactIdentity(t *testing.T) {
 	registry := DefaultRegistry()
-	dsv1, ok := registry.ForConsumerVersion(
+	profile, ok := registry.ForConsumerVersion(
 		"connector-artifact", "spark-bigquery-with-dependencies_2.12", "0.44.2",
 	)
-	if !ok || dsv1.ID != "spark-bigquery-connector-dsv1-0.44.2" {
-		t.Fatalf("DSv1 artifact identity resolved to %#v, %t", dsv1, ok)
-	}
-	profile, ok := registry.ForConsumerVersion(
-		"connector-artifact", "spark-3.5-bigquery-raw", "0.44.2",
-	)
-	if !ok || profile.ID != "spark-bigquery-connector-dsv2-raw-0.44.2" {
-		t.Fatalf("DSv2 artifact identity resolved to %#v, %t", profile, ok)
-	}
-	if _, ok := registry.ForConsumerVersion(
-		"connector-artifact", "spark-3.5-bigquery", "0.44.2",
-	); ok {
-		t.Fatal("unqualified DSv2 coordinate must not silently select an artifact profile")
+	if !ok || profile.ID != "spark-bigquery-connector-dsv1-0.44.2" {
+		t.Fatalf("DSv1 artifact identity resolved to %#v, %t", profile, ok)
 	}
 }
 
@@ -155,71 +144,6 @@ func TestSparkStaticOverwriteProfilePinsAtomicReplaceShape(t *testing.T) {
 		flow[3].Method != "DELETE" {
 		t.Fatalf("unexpected static overwrite flow: %#v", flow)
 	}
-}
-
-func TestRawDSv2StreamingProfileEndsAtFinalizeWithoutBatchCommit(t *testing.T) {
-	// The wrapper calls an interface hook which is empty in connector 0.44.2:
-	// https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-connector-common/src/main/java/com/google/cloud/spark/bigquery/write/context/DataSourceWriterContext.java#L42-L50
-	profile, ok := DefaultRegistry().ForConsumerVersion(
-		"connector-artifact", "spark-3.5-bigquery-raw", "0.44.2",
-	)
-	if !ok {
-		t.Fatal("raw DSv2 profile is missing")
-	}
-	flow := profile.Flows["dsv2-direct-exact-streaming-raw"]
-	wantStages := []string{
-		"destination_metadata", "create_pending_stream", "append_rows", "finalize_stream",
-	}
-	if len(flow) != len(wantStages) {
-		t.Fatalf("raw DSv2 flow has %d calls, want exactly %d ending at finalize", len(flow), len(wantStages))
-	}
-	for index, call := range flow {
-		if call.Stage != wantStages[index] {
-			t.Fatalf("raw DSv2 stage[%d]=%q, want %q", index, call.Stage, wantStages[index])
-		}
-		if strings.HasSuffix(call.Target, "/GetWriteStream") ||
-			strings.HasSuffix(call.Target, "/BatchCommitWriteStreams") {
-			t.Fatal("raw DSv2 profile must retain zero GetWriteStream and zero BatchCommitWriteStreams")
-		}
-	}
-	if !strings.HasSuffix(flow[len(flow)-1].Target, "/FinalizeWriteStream") {
-		t.Fatalf("raw DSv2 flow does not terminate at FinalizeWriteStream: %#v", flow)
-	}
-	appendFields := make(map[string]bool)
-	for _, field := range flow[2].RequiredFields {
-		appendFields[field] = true
-	}
-	for _, required := range []string{
-		"request.first.offset",
-		"request.continuation.write_stream",
-		"request.continuation.proto_rows.writer_schema",
-	} {
-		if !appendFields[required] {
-			t.Fatalf("raw DSv2 append contract omitted %q", required)
-		}
-	}
-
-	traces, err := GoldenTraces()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, trace := range traces {
-		if trace.ProfileID != profile.ID || trace.Flow != "dsv2-direct-exact-streaming-raw" {
-			continue
-		}
-		if len(trace.Events) != len(wantStages) ||
-			!strings.HasSuffix(trace.Events[len(trace.Events)-1].Target, "/FinalizeWriteStream") {
-			t.Fatalf("raw DSv2 golden must end at finalize with no batch commit: %#v", trace.Events)
-		}
-		for _, event := range trace.Events {
-			if strings.HasSuffix(event.Target, "/GetWriteStream") ||
-				strings.HasSuffix(event.Target, "/BatchCommitWriteStreams") {
-				t.Fatal("raw DSv2 golden must retain zero GetWriteStream and zero BatchCommitWriteStreams")
-			}
-		}
-		return
-	}
-	t.Fatal("raw DSv2 golden trace is missing")
 }
 
 func TestEveryGoldenTraceSatisfiesItsProfile(t *testing.T) {

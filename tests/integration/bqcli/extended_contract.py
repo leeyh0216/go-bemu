@@ -33,12 +33,12 @@ DecodeJSON = Callable[[subprocess.CompletedProcess[str], str], Any]
 Require = Callable[[bool, str, str, str], None]
 
 
-@operation("bigquery.datasets.patch")
-@operation("bigquery.tables.patch")
-@operation("bigquery.jobs.insert")
-@operation("bigquery.jobs.get")
-@operation("bigquery.jobs.getQueryResults")
-@operation("bigquery.jobs.list")
+@operation("bigquery.datasets.patch", scenario="bq-metadata")
+@operation("bigquery.tables.patch", scenario="bq-metadata")
+@operation("bigquery.jobs.insert", scenario="bq-query")
+@operation("bigquery.jobs.get", scenario="bq-query")
+@operation("bigquery.jobs.getQueryResults", scenario="bq-query")
+@operation("bigquery.jobs.list", scenario="bq-query")
 def run_extended_contract(
     *,
     base: list[str],

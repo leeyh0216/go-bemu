@@ -55,6 +55,29 @@
         "requiredFields": ["request.read_stream", "request.offset", "response.arrow_record_batch.serialized_record_batch", "response.row_count"]
       }
     ],
+    "read-avro": [
+      {
+        "stage": "table_metadata",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+        "requiredFields": ["response.tableReference", "response.schema.fields"]
+      },
+      {
+        "stage": "create_read_session",
+        "protocol": "gRPC",
+        "method": "UNARY",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryRead/CreateReadSession",
+        "requiredFields": ["request.parent", "request.read_session.table", "request.read_session.data_format", "request.max_stream_count", "response.schema", "response.streams"]
+      },
+      {
+        "stage": "read_rows",
+        "protocol": "gRPC",
+        "method": "SERVER_STREAM",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryRead/ReadRows",
+        "requiredFields": ["request.read_stream", "request.offset", "response.avro_rows.serialized_binary_rows", "response.row_count"]
+      }
+    ],
     "direct-append-pending": [
       {
         "stage": "destination_metadata",

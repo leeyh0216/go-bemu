@@ -42,11 +42,13 @@ def _known_operation_ids() -> frozenset[str]:
     return frozenset(operation_ids)
 
 
-def operation(operation_id: str, /) -> Callable[[F], F]:
-    """Attach one canonical operation ID to a runner function."""
+def operation(operation_id: str, /, *, scenario: str) -> Callable[[F], F]:
+    """Attach one canonical operation ID and its generated scenario owner."""
 
     if not isinstance(operation_id, str) or operation_id not in _known_operation_ids():
         raise OperationContractError(f"unknown operation ID: {operation_id!r}")
+    if not isinstance(scenario, str) or not scenario:
+        raise OperationContractError(f"invalid operation scenario: {scenario!r}")
 
     def decorate(function: F) -> F:
         declared = tuple(getattr(function, "__bqemu_operation_ids__", ()))
@@ -55,6 +57,8 @@ def operation(operation_id: str, /) -> Callable[[F], F]:
                 f"duplicate operation ID {operation_id!r} on {function.__name__}"
             )
         setattr(function, "__bqemu_operation_ids__", declared + (operation_id,))
+        annotations = tuple(getattr(function, "__bqemu_operation_scenarios__", ()))
+        setattr(function, "__bqemu_operation_scenarios__", annotations + ((operation_id, scenario),))
         return function
 
     return decorate

@@ -23,10 +23,21 @@ func CompileArtifacts(repositoryRoot string) ([]GeneratedArtifact, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode normalized consumer manifest: %w", err)
 	}
+	capabilities, err := CompileCapabilityIndex(repositoryRoot)
+	if err != nil {
+		return nil, fmt.Errorf("compile capability index: %w", err)
+	}
+	capabilityContents, err := MarshalCapabilityIndex(capabilities)
+	if err != nil {
+		return nil, fmt.Errorf("encode capability index: %w", err)
+	}
 	artifacts := []GeneratedArtifact{
 		{Path: consumerNormalizedPath, Contents: normalized},
 		{Path: "tests/integration/docs/en/consumer-compatibility.md", Contents: renderConsumerCompatibility(manifest, "en")},
 		{Path: "tests/integration/docs/ko/consumer-compatibility.md", Contents: renderConsumerCompatibility(manifest, "ko")},
+		{Path: capabilityIndexPath, Contents: capabilityContents},
+		{Path: "tests/integration/docs/en/capability-coverage.md", Contents: renderCapabilityCoverage(capabilities, "en")},
+		{Path: "tests/integration/docs/ko/capability-coverage.md", Contents: renderCapabilityCoverage(capabilities, "ko")},
 	}
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 	return artifacts, nil

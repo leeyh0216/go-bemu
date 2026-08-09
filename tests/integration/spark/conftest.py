@@ -29,27 +29,18 @@ import pytest
 
 from artifact_variants import (
     DSV1_VARIANT,
-    DSV2_RAW_VARIANT,
     artifact_spec_from_json,
     enforce_connector_classpath,
 )
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-MATRIX_PATHS = tuple(
-    sorted(
-        (REPOSITORY_ROOT / "tests" / "integration" / "contract" / "matrices").glob(
-            "spark-bigquery-connector*.json"
-        )
-    )
+CAPABILITY_INDEX_PATH = (
+    REPOSITORY_ROOT / "tests" / "integration" / "contract" / "capabilities.normalized.json"
 )
 ARTIFACT_LOCK_PATH = (
     REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts.lock.json"
 )
-DSV2_ARTIFACT_LOCK_PATH = (
-    REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts-dsv2.lock.json"
-)
-OPERATION_MANIFEST_PATH = REPOSITORY_ROOT / "contract" / "operations.normalized.json"
 STATIC_ACCESS_TOKEN = "bqemu-spark-e2e-static-token"
 TRUSTSTORE_PASSWORD = "bqemu-test-only"
 
@@ -73,7 +64,37 @@ def runtime_versions() -> dict[str, str]:
 
 
 class CapabilityGapError(RuntimeError):
-    """Raised only after a test matches the matrix's exact known failure."""
+    """Raised only after a test matches its exact known gap."""
+
+
+def contract_case(
+    capability_id: str,
+    /,
+    *,
+    state: str,
+    category: str,
+    summary: str,
+    profile: str,
+    wire_flow: str = "",
+    operations: tuple[str, ...],
+    issue: str = "",
+    limitation: str = "",
+    strict_xfail: bool = False,
+) -> pytest.MarkDecorator:
+    """Attach one literal capability claim to a test or pytest.param."""
+
+    return pytest.mark.contract_case(
+        capability_id,
+        state=state,
+        category=category,
+        summary=summary,
+        profile=profile,
+        wire_flow=wire_flow,
+        operations=operations,
+        issue=issue,
+        limitation=limitation,
+        strict_xfail=strict_xfail,
+    )
 
 
 @dataclass(frozen=True)
@@ -117,60 +138,58 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    with OPERATION_MANIFEST_PATH.open("r", encoding="utf-8") as stream:
-        operation_manifest = json.load(stream)
-    operation_ids = {
-        operation["id"] for operation in operation_manifest["operations"]
-    }
-    entries: dict[str, tuple[dict[str, object], str]] = {}
-    for matrix_path in MATRIX_PATHS:
-        with matrix_path.open("r", encoding="utf-8") as stream:
-            matrix = json.load(stream)
-        for entry in matrix["entries"]:
-            capability_id = entry["id"]
-            if capability_id in entries:
-                raise pytest.UsageError(
-                    f"duplicate capability ID across matrices: {capability_id}"
-                )
-            issue_ref = entry.get("issueRef")
-            issue_url = (
-                matrix["issueCatalog"][issue_ref]["url"]
-                if issue_ref is not None
-                else "none"
-            )
-            entries[capability_id] = (entry, issue_url)
+    with CAPABILITY_INDEX_PATH.open("r", encoding="utf-8") as stream:
+        index = json.load(stream)
+    if index.get("schemaVersion") != "1" or not isinstance(index.get("cases"), list):
+        raise pytest.UsageError("generated capability index has an invalid schema")
+    entries: dict[str, dict[str, object]] = {}
+    for entry in index["cases"]:
+        capability_id = entry.get("id")
+        if not isinstance(capability_id, str) or capability_id in entries:
+            raise pytest.UsageError("generated capability index has duplicate or invalid IDs")
+        entries[capability_id] = entry
     for item in items:
-        for operation_marker in item.iter_markers("operation"):
-            if (
-                len(operation_marker.args) != 1
-                or operation_marker.kwargs
-                or not isinstance(operation_marker.args[0], str)
-            ):
-                raise pytest.UsageError(
-                    f"{item.nodeid} operation marker must contain one operation ID"
-                )
-            if operation_marker.args[0] not in operation_ids:
-                raise pytest.UsageError(
-                    f"{item.nodeid} references unknown operation {operation_marker.args[0]}"
-                )
-        marker = item.get_closest_marker("capability")
-        if marker is None or len(marker.args) != 1:
-            raise pytest.UsageError(f"{item.nodeid} must declare one capability ID")
+        markers = list(item.iter_markers("contract_case"))
+        if not markers:
+            continue
+        if len(markers) != 1 or len(markers[0].args) != 1:
+            raise pytest.UsageError(f"{item.nodeid} must declare one contract_case ID")
+        marker = markers[0]
         capability_id = marker.args[0]
-        selected = entries.get(capability_id)
-        if selected is None:
+        entry = entries.get(capability_id)
+        if not isinstance(capability_id, str) or entry is None:
             raise pytest.UsageError(
                 f"{item.nodeid} references unknown capability {capability_id}"
             )
-        entry, issue_url = selected
-        if entry["state"] in {"gap", "cloud-only"}:
+        relative_path = Path(str(item.path)).resolve().relative_to(REPOSITORY_ROOT)
+        test_name = item.originalname or item.name.split("[", 1)[0]
+        test_id = f"spark:{relative_path.as_posix()}:{test_name}"
+        if test_id not in entry.get("tests", []):
+            raise pytest.UsageError(
+                f"{item.nodeid} does not match generated capability test evidence"
+            )
+        expected = {
+            "state": entry.get("state"),
+            "category": entry.get("category"),
+            "summary": entry.get("summary"),
+            "profile": entry.get("profile"),
+            "wire_flow": entry.get("wireFlow", ""),
+            "operations": tuple(entry.get("operationIds", [])),
+            "issue": entry.get("issue", ""),
+            "limitation": entry.get("limitation", ""),
+            "strict_xfail": entry.get("strictXfail", False),
+        }
+        if marker.kwargs != expected:
+            raise pytest.UsageError(
+                f"{item.nodeid} contract_case metadata does not match generated index"
+            )
+        if entry["state"] == "gap":
             item.add_marker(
                 pytest.mark.xfail(
                     strict=True,
                     raises=CapabilityGapError,
                     reason=(
-                        f"{capability_id} state={entry['state']} "
-                        f"issue={issue_url}"
+                        f"{capability_id} state=gap issue={entry['issue']}"
                     ),
                 )
             )
@@ -575,139 +594,6 @@ def observe_direct_overwrite_flow(
     }
 
 
-def observe_dsv2_exact_streaming_flow(
-    edge: PublicEdge, *, since: int
-) -> dict[str, object]:
-    """Return a contract projection of one raw DSv2 exact-streaming micro-batch.
-
-    The complete runtime log remains available as a diagnostic artifact. This
-    projection uses SHA-256 stream fingerprints and known protobuf enum symbols
-    to assert lifecycle correlation and optional lookup behavior.
-
-    Pinned producers:
-    https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-dsv2/spark-3.1-bigquery-lib/src/main/java/com/google/cloud/spark/bigquery/v2/BigQueryStreamingWrite.java#L23-L30
-    https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/bigquery-connector-common/src/main/java/com/google/cloud/bigquery/connector/common/BigQueryDirectDataWriterHelper.java#L92-L102
-    """
-
-    with edge.log_path.open("rb") as stream:
-        stream.seek(since)
-        encoded_lines = stream.read().splitlines()
-
-    sequence: list[str] = []
-    created: set[str] = set()
-    appended: set[str] = set()
-    finalized: set[str] = set()
-    create_types: list[str] = []
-    get_views: list[str] = []
-    append_batches = 0
-    append_rows = 0
-    append_offsets: list[int] = []
-    commit_calls = 0
-    committed_rows = 0
-    for encoded in encoded_lines:
-        try:
-            event = json.loads(encoded)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            continue
-
-        if event.get("event") == "boundary.enter" and event.get("boundary") in {
-            "grpc.unary",
-            "grpc.stream",
-        }:
-            rpc = event.get("rpc")
-            if not isinstance(rpc, str):
-                continue
-            operation = next(
-                (
-                    name
-                    for name in (
-                        "CreateWriteStream",
-                        "GetWriteStream",
-                        "AppendRows",
-                        "FinalizeWriteStream",
-                        "BatchCommitWriteStreams",
-                    )
-                    if rpc.endswith("/" + name)
-                ),
-                None,
-            )
-            if operation is None:
-                continue
-            sequence.append(operation)
-            if operation == "CreateWriteStream":
-                stream_type = event.get("type")
-                if isinstance(stream_type, str):
-                    create_types.append(stream_type)
-            elif operation == "GetWriteStream":
-                view = event.get("view")
-                fingerprint = event.get("name_fingerprint")
-                if isinstance(view, str):
-                    get_views.append(view)
-            elif operation == "FinalizeWriteStream":
-                fingerprint = event.get("name_fingerprint")
-                if isinstance(fingerprint, str):
-                    finalized.add(fingerprint)
-            elif operation == "BatchCommitWriteStreams":
-                commit_calls += 1
-            continue
-
-        if (
-            event.get("event") == "domain.transition"
-            and event.get("operation") == "storage_write.create_stream"
-        ):
-            fingerprint = event.get("stream_fingerprint")
-            if isinstance(fingerprint, str):
-                created.add(fingerprint)
-            continue
-
-        if (
-            event.get("event") == "side_effect.after"
-            and event.get("side_effect") == "coordinator.stage_pending"
-            and event.get("operation") == "storage_write.append"
-            and event.get("success") is True
-        ):
-            fingerprint = event.get("stream_fingerprint")
-            row_count = event.get("row_count")
-            offset = event.get("start_offset")
-            if (
-                not isinstance(fingerprint, str)
-                or not isinstance(row_count, int)
-                or not isinstance(offset, int)
-            ):
-                raise AssertionError("DSv2 append observation omitted its required shape")
-            appended.add(fingerprint)
-            append_batches += 1
-            append_rows += row_count
-            append_offsets.append(offset)
-            continue
-
-        if (
-            event.get("event") == "side_effect.after"
-            and event.get("side_effect") == "coordinator.commit_pending"
-            and event.get("operation") == "storage_write.batch_commit"
-            and event.get("success") is True
-        ):
-            row_count = event.get("row_count")
-            if isinstance(row_count, int):
-                committed_rows += row_count
-
-    counts = {operation: sequence.count(operation) for operation in set(sequence)}
-    return {
-        "sequence": tuple(sequence),
-        "counts": counts,
-        "create_types": tuple(create_types),
-        "get_views": tuple(get_views),
-        "append_batches": append_batches,
-        "append_rows": append_rows,
-        "append_offsets": tuple(append_offsets),
-        "batch_commit_calls": commit_calls,
-        "committed_rows": committed_rows,
-        "stream_lifecycle_correlated": (
-            len(created) > 0 and created == appended == finalized
-        ),
-    }
-
-
 def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object]:
     """Return a value-free connector query lifecycle observed at the public edge.
 
@@ -1005,40 +891,6 @@ def connector_jar(test_timeout: float) -> Path:
     return enforce_connector_classpath(
         [target],
         expected_variant=DSV1_VARIANT,
-        repository_root=REPOSITORY_ROOT,
-        expected_spec=expected_spec,
-    ).path
-
-
-@pytest.fixture(scope="session")
-def dsv2_connector_jar(test_timeout: float) -> Path:
-    configured = os.getenv("BQEMU_SPARK_DSV2_CONNECTOR_JAR")
-    expected_spec = None
-    if configured:
-        target = Path(configured).resolve()
-        raw_spec = os.getenv("BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON")
-        if not raw_spec:
-            raise pytest.UsageError(
-                "BQEMU_SPARK_DSV2_CONNECTOR_SPEC_JSON is required with a configured DSv2 connector JAR"
-            )
-        expected_spec = artifact_spec_from_json(raw_spec)
-    else:
-        _run(
-            [
-                os.getenv("PYTHON", os.sys.executable),
-                "-m",
-                "tests.integration.framework.fetch_spark_artifacts",
-            ],
-            cwd=REPOSITORY_ROOT,
-            timeout=_positive_timeout("BQEMU_ARTIFACT_TIMEOUT_SECONDS", "120"),
-            stage="fetch-dsv2-connector-jar",
-        )
-        with DSV2_ARTIFACT_LOCK_PATH.open("r", encoding="utf-8") as stream:
-            lock = json.load(stream)
-        target = REPOSITORY_ROOT / ".artifacts" / "spark" / lock["artifacts"][0]["output"]
-    return enforce_connector_classpath(
-        [target],
-        expected_variant=DSV2_RAW_VARIANT,
         repository_root=REPOSITORY_ROOT,
         expected_spec=expected_spec,
     ).path

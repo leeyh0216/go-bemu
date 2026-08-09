@@ -46,7 +46,7 @@ func DeriveIntegrationScenarioEvidence(repositoryRoot string, manifest ConsumerM
 			return ConsumerManifest{}, fmt.Errorf("scenario %s must define unique test selectors", scenario.ID)
 		}
 		scenario.OperationIDs = nil
-		scenario.TestEvidence = nil
+		scenario.TestEvidence = []string{}
 		switch scenario.TrafficSource.Kind {
 		case trafficSourceAnnotations:
 			if scenario.TrafficSource.Reason != "" || len(scenario.TrafficSource.OperationIDs) != 0 {

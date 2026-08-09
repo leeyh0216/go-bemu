@@ -12,6 +12,7 @@ import pytest
 from conftest import (
     PublicEdge,
     TRUSTSTORE_PASSWORD,
+    contract_case,
     connector_options,
     create_table,
     observe_query_read_flow,
@@ -25,9 +26,21 @@ def _scala_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-@pytest.mark.capability("SBQ-READ-ARROW-FILTER-V1")
-@pytest.mark.operation("grpc.bigquery-read.create-read-session")
-@pytest.mark.operation("grpc.bigquery-read.read-rows")
+@contract_case(
+    "SBQ-READ-ARROW-FILTER-V1",
+    state="partial",
+    category="read",
+    summary="Arrow filter pushdown",
+    profile="spark-bigquery-connector-dsv1-0.44.2",
+    wire_flow="read-arrow",
+    operations=(
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+    ),
+    issue="https://github.com/leeyh0216/go-bemu/issues/6",
+    limitation="Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported.",
+)
 def test_scala_spark_reads_through_connector(
     connector_jar: Path,
     public_edge: PublicEdge,

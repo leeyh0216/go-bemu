@@ -64,9 +64,13 @@
             "scenarios": [
               {
                 "id": "bq-indirect-load",
+                "trafficSource": {
+                  "kind": "runner-evidence",
+                  "reason": "The load runner generates traffic inside the standalone bq process rather than a selected Python function."
+                },
                 "operationIds": [
-                  "bigquery.jobs.insert",
-                  "bigquery.jobs.get"
+                  "bigquery.jobs.get",
+                  "bigquery.jobs.insert"
                 ],
                 "selectors": [
                   "load:bq"
@@ -74,18 +78,18 @@
                 "testEvidence": [],
                 "operationExpectations": [
                   {
-                    "operationId": "bigquery.jobs.insert",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "bigquery.jobs.get",
                     "min": 1,
                     "max": 0,
                     "after": [
                       "bigquery.jobs.insert"
                     ]
+                  },
+                  {
+                    "operationId": "bigquery.jobs.insert",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
                   }
                 ]
               }
@@ -124,35 +128,32 @@
             "scenarios": [
               {
                 "id": "bq-metadata",
+                "trafficSource": {
+                  "kind": "annotations",
+                  "reason": ""
+                },
                 "operationIds": [
-                  "bigquery.projects.list",
-                  "bigquery.datasets.insert",
-                  "bigquery.datasets.get",
-                  "bigquery.datasets.patch",
                   "bigquery.datasets.delete",
-                  "bigquery.tables.insert",
-                  "bigquery.tables.get",
-                  "bigquery.tables.patch",
-                  "bigquery.tables.list",
+                  "bigquery.datasets.get",
+                  "bigquery.datasets.insert",
+                  "bigquery.datasets.patch",
+                  "bigquery.projects.list",
                   "bigquery.tables.delete",
-                  "bqemu.discovery.get"
+                  "bigquery.tables.get",
+                  "bigquery.tables.insert",
+                  "bigquery.tables.list",
+                  "bigquery.tables.patch"
                 ],
                 "selectors": [
                   "bq:tests/integration/bqcli/run_contract.py:main"
                 ],
                 "testEvidence": [
-                  "bq:tests/integration/bqcli/run_contract.py:main",
-                  "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract"
+                  "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
+                  "bq:tests/integration/bqcli/run_contract.py:main"
                 ],
                 "operationExpectations": [
                   {
-                    "operationId": "bigquery.projects.list",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.datasets.insert",
+                    "operationId": "bigquery.datasets.delete",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -164,37 +165,19 @@
                     "after": []
                   },
                   {
+                    "operationId": "bigquery.datasets.insert",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
                     "operationId": "bigquery.datasets.patch",
                     "min": 1,
                     "max": 0,
                     "after": []
                   },
                   {
-                    "operationId": "bigquery.datasets.delete",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.insert",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.get",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.patch",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.list",
+                    "operationId": "bigquery.projects.list",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -206,7 +189,25 @@
                     "after": []
                   },
                   {
-                    "operationId": "bqemu.discovery.get",
+                    "operationId": "bigquery.tables.get",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.insert",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.list",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.patch",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -215,26 +216,24 @@
               },
               {
                 "id": "bq-query",
+                "trafficSource": {
+                  "kind": "annotations",
+                  "reason": ""
+                },
                 "operationIds": [
-                  "bigquery.jobs.insert",
                   "bigquery.jobs.get",
                   "bigquery.jobs.getQueryResults",
+                  "bigquery.jobs.insert",
                   "bigquery.jobs.list"
                 ],
                 "selectors": [
                   "bq:tests/integration/bqcli/run_contract.py:main"
                 ],
                 "testEvidence": [
-                  "bq:tests/integration/bqcli/run_contract.py:main",
-                  "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract"
+                  "bq:tests/integration/bqcli/extended_contract.py:run_extended_contract",
+                  "bq:tests/integration/bqcli/run_contract.py:main"
                 ],
                 "operationExpectations": [
-                  {
-                    "operationId": "bigquery.jobs.insert",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
                   {
                     "operationId": "bigquery.jobs.get",
                     "min": 1,
@@ -243,6 +242,12 @@
                   },
                   {
                     "operationId": "bigquery.jobs.getQueryResults",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.jobs.insert",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -322,9 +327,13 @@
             "scenarios": [
               {
                 "id": "python-indirect-load",
+                "trafficSource": {
+                  "kind": "runner-evidence",
+                  "reason": "The load runner generates traffic outside a selected Python test function."
+                },
                 "operationIds": [
-                  "bigquery.jobs.insert",
-                  "bigquery.jobs.get"
+                  "bigquery.jobs.get",
+                  "bigquery.jobs.insert"
                 ],
                 "selectors": [
                   "load:python"
@@ -332,18 +341,18 @@
                 "testEvidence": [],
                 "operationExpectations": [
                   {
-                    "operationId": "bigquery.jobs.insert",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "bigquery.jobs.get",
                     "min": 1,
                     "max": 0,
                     "after": [
                       "bigquery.jobs.insert"
                     ]
+                  },
+                  {
+                    "operationId": "bigquery.jobs.insert",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
                   }
                 ]
               }
@@ -384,17 +393,21 @@
             "scenarios": [
               {
                 "id": "python-metadata",
+                "trafficSource": {
+                  "kind": "annotations",
+                  "reason": ""
+                },
                 "operationIds": [
+                  "bigquery.datasets.delete",
+                  "bigquery.datasets.get",
                   "bigquery.datasets.insert",
                   "bigquery.datasets.list",
-                  "bigquery.datasets.get",
                   "bigquery.datasets.patch",
-                  "bigquery.datasets.delete",
+                  "bigquery.tables.delete",
+                  "bigquery.tables.get",
                   "bigquery.tables.insert",
                   "bigquery.tables.list",
-                  "bigquery.tables.get",
-                  "bigquery.tables.patch",
-                  "bigquery.tables.delete"
+                  "bigquery.tables.patch"
                 ],
                 "selectors": [
                   "pytest:tests/integration/python/test_admin_contract.py"
@@ -404,6 +417,18 @@
                   "python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema"
                 ],
                 "operationExpectations": [
+                  {
+                    "operationId": "bigquery.datasets.delete",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.datasets.get",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
                   {
                     "operationId": "bigquery.datasets.insert",
                     "min": 1,
@@ -417,19 +442,19 @@
                     "after": []
                   },
                   {
-                    "operationId": "bigquery.datasets.get",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "bigquery.datasets.patch",
                     "min": 1,
                     "max": 0,
                     "after": []
                   },
                   {
-                    "operationId": "bigquery.datasets.delete",
+                    "operationId": "bigquery.tables.delete",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.get",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -447,19 +472,7 @@
                     "after": []
                   },
                   {
-                    "operationId": "bigquery.tables.get",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "bigquery.tables.patch",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.delete",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -468,12 +481,16 @@
               },
               {
                 "id": "python-query",
+                "trafficSource": {
+                  "kind": "annotations",
+                  "reason": ""
+                },
                 "operationIds": [
+                  "bigquery.jobs.get",
+                  "bigquery.jobs.getQueryResults",
                   "bigquery.jobs.insert",
                   "bigquery.jobs.list",
-                  "bigquery.jobs.get",
-                  "bigquery.jobs.query",
-                  "bigquery.jobs.getQueryResults"
+                  "bigquery.jobs.query"
                 ],
                 "selectors": [
                   "pytest:tests/integration/python/test_query_contract.py",
@@ -485,6 +502,18 @@
                   "python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
                 ],
                 "operationExpectations": [
+                  {
+                    "operationId": "bigquery.jobs.get",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.jobs.getQueryResults",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
                   {
                     "operationId": "bigquery.jobs.insert",
                     "min": 1,
@@ -498,19 +527,7 @@
                     "after": []
                   },
                   {
-                    "operationId": "bigquery.jobs.get",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "bigquery.jobs.query",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.jobs.getQueryResults",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -519,6 +536,10 @@
               },
               {
                 "id": "python-tabledata",
+                "trafficSource": {
+                  "kind": "annotations",
+                  "reason": ""
+                },
                 "operationIds": [
                   "bigquery.tabledata.list"
                 ],
@@ -568,13 +589,6 @@
           "usage": "spark-connector-dsv1-jar",
           "uri": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar",
           "sha256": "516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e"
-        },
-        {
-          "id": "spark-bigquery-connector-0.44.2-dsv2-jar",
-          "role": "execution",
-          "usage": "spark-connector-dsv2-jar",
-          "uri": "https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/spark-3.5-bigquery-0.44.2.jar",
-          "sha256": "2e6bbb41bcaf56ae17a5488dd4453698bd35f13e9849f4daed744ca7b57b053f"
         },
         {
           "id": "pyspark-3.5.8-sdist",
@@ -651,41 +665,23 @@
             "scenarios": [
               {
                 "id": "spark-pyspark-indirect-load",
+                "trafficSource": {
+                  "kind": "runner-evidence",
+                  "reason": "The load runner generates traffic inside the released PySpark process rather than a selected test function."
+                },
                 "operationIds": [
-                  "bigquery.tables.get",
-                  "bigquery.tables.insert",
-                  "bigquery.jobs.insert",
                   "bigquery.jobs.get",
                   "bigquery.jobs.getQueryResults",
-                  "bigquery.tables.delete"
+                  "bigquery.jobs.insert",
+                  "bigquery.tables.delete",
+                  "bigquery.tables.get",
+                  "bigquery.tables.insert"
                 ],
                 "selectors": [
                   "load:pyspark"
                 ],
                 "testEvidence": [],
                 "operationExpectations": [
-                  {
-                    "operationId": "bigquery.tables.get",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.insert",
-                    "min": 1,
-                    "max": 1,
-                    "after": [
-                      "bigquery.tables.get"
-                    ]
-                  },
-                  {
-                    "operationId": "bigquery.jobs.insert",
-                    "min": 2,
-                    "max": 2,
-                    "after": [
-                      "bigquery.tables.insert"
-                    ]
-                  },
                   {
                     "operationId": "bigquery.jobs.get",
                     "min": 2,
@@ -703,11 +699,33 @@
                     ]
                   },
                   {
+                    "operationId": "bigquery.jobs.insert",
+                    "min": 2,
+                    "max": 2,
+                    "after": [
+                      "bigquery.tables.insert"
+                    ]
+                  },
+                  {
                     "operationId": "bigquery.tables.delete",
                     "min": 1,
                     "max": 1,
                     "after": [
                       "bigquery.jobs.get"
+                    ]
+                  },
+                  {
+                    "operationId": "bigquery.tables.get",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.insert",
+                    "min": 1,
+                    "max": 1,
+                    "after": [
+                      "bigquery.tables.get"
                     ]
                   }
                 ]
@@ -732,7 +750,6 @@
             ],
             "requiredArtifactUsages": [
               "spark-connector-dsv1-jar",
-              "spark-connector-dsv2-jar",
               "spark-python-bridge",
               "spark-runtime"
             ],
@@ -755,60 +772,48 @@
             "scenarios": [
               {
                 "id": "spark-pyspark-public-edge",
+                "trafficSource": {
+                  "kind": "annotations",
+                  "reason": ""
+                },
                 "operationIds": [
-                  "bigquery.tables.insert",
-                  "bigquery.tables.get",
-                  "bigquery.tables.delete",
-                  "bigquery.jobs.insert",
                   "bigquery.jobs.get",
                   "bigquery.jobs.getQueryResults",
-                  "bigquery.jobs.query",
+                  "bigquery.jobs.insert",
                   "bigquery.tabledata.list",
+                  "bigquery.tables.delete",
+                  "bigquery.tables.get",
+                  "bigquery.tables.insert",
                   "bigquery.tables.patch",
                   "grpc.bigquery-read.create-read-session",
                   "grpc.bigquery-read.read-rows",
-                  "grpc.bigquery-write.create-write-stream",
                   "grpc.bigquery-write.append-rows",
-                  "grpc.bigquery-write.finalize-write-stream",
                   "grpc.bigquery-write.batch-commit-write-streams",
+                  "grpc.bigquery-write.create-write-stream",
+                  "grpc.bigquery-write.finalize-write-stream",
                   "grpc.bigquery-write.get-write-stream"
                 ],
                 "selectors": [
-                  "pytest:tests/integration/spark/test_public_edge.py",
-                  "pytest:tests/integration/spark/test_dsv2_streaming.py"
+                  "pytest:tests/integration/spark/test_public_edge.py"
                 ],
                 "testEvidence": [
+                  "spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read",
                   "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
                   "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+                  "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once",
+                  "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+                  "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+                  "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
                   "spark:tests/integration/spark/test_public_edge.py:test_nested_projection_through_storage_read",
-                  "spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read",
+                  "spark:tests/integration/spark/test_public_edge.py:test_query_result_count",
+                  "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro",
+                  "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration",
+                  "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown",
+                  "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection",
+                  "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro",
                   "spark:tests/integration/spark/test_public_edge.py:test_time_partition_field_filter_through_storage_read"
                 ],
                 "operationExpectations": [
-                  {
-                    "operationId": "bigquery.tables.insert",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.get",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.delete",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.jobs.insert",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
                   {
                     "operationId": "bigquery.jobs.get",
                     "min": 1,
@@ -822,13 +827,31 @@
                     "after": []
                   },
                   {
-                    "operationId": "bigquery.jobs.query",
+                    "operationId": "bigquery.jobs.insert",
                     "min": 1,
                     "max": 0,
                     "after": []
                   },
                   {
                     "operationId": "bigquery.tabledata.list",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.delete",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.get",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.insert",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -854,12 +877,6 @@
                     ]
                   },
                   {
-                    "operationId": "grpc.bigquery-write.create-write-stream",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "grpc.bigquery-write.append-rows",
                     "min": 1,
                     "max": 0,
@@ -868,18 +885,24 @@
                     ]
                   },
                   {
-                    "operationId": "grpc.bigquery-write.finalize-write-stream",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "grpc.bigquery-write.batch-commit-write-streams",
                     "min": 1,
                     "max": 0,
                     "after": [
                       "grpc.bigquery-write.finalize-write-stream"
                     ]
+                  },
+                  {
+                    "operationId": "grpc.bigquery-write.create-write-stream",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "grpc.bigquery-write.finalize-write-stream",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
                   },
                   {
                     "operationId": "grpc.bigquery-write.get-write-stream",
@@ -996,41 +1019,23 @@
             "scenarios": [
               {
                 "id": "spark-scala-indirect-load",
+                "trafficSource": {
+                  "kind": "runner-evidence",
+                  "reason": "The load runner generates traffic inside the released Scala Spark process rather than a selected test function."
+                },
                 "operationIds": [
-                  "bigquery.tables.get",
-                  "bigquery.tables.insert",
-                  "bigquery.jobs.insert",
                   "bigquery.jobs.get",
                   "bigquery.jobs.getQueryResults",
-                  "bigquery.tables.delete"
+                  "bigquery.jobs.insert",
+                  "bigquery.tables.delete",
+                  "bigquery.tables.get",
+                  "bigquery.tables.insert"
                 ],
                 "selectors": [
                   "load:scala-spark"
                 ],
                 "testEvidence": [],
                 "operationExpectations": [
-                  {
-                    "operationId": "bigquery.tables.get",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tables.insert",
-                    "min": 1,
-                    "max": 1,
-                    "after": [
-                      "bigquery.tables.get"
-                    ]
-                  },
-                  {
-                    "operationId": "bigquery.jobs.insert",
-                    "min": 2,
-                    "max": 2,
-                    "after": [
-                      "bigquery.tables.insert"
-                    ]
-                  },
                   {
                     "operationId": "bigquery.jobs.get",
                     "min": 2,
@@ -1048,11 +1053,33 @@
                     ]
                   },
                   {
+                    "operationId": "bigquery.jobs.insert",
+                    "min": 2,
+                    "max": 2,
+                    "after": [
+                      "bigquery.tables.insert"
+                    ]
+                  },
+                  {
                     "operationId": "bigquery.tables.delete",
                     "min": 1,
                     "max": 1,
                     "after": [
                       "bigquery.jobs.get"
+                    ]
+                  },
+                  {
+                    "operationId": "bigquery.tables.get",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.tables.insert",
+                    "min": 1,
+                    "max": 1,
+                    "after": [
+                      "bigquery.tables.get"
                     ]
                   }
                 ]
@@ -1099,17 +1126,20 @@
             "scenarios": [
               {
                 "id": "spark-scala-public-edge",
+                "trafficSource": {
+                  "kind": "annotations",
+                  "reason": ""
+                },
                 "operationIds": [
-                  "bigquery.tables.insert",
-                  "bigquery.tables.get",
-                  "bigquery.jobs.query",
                   "bigquery.tabledata.list",
+                  "bigquery.tables.get",
+                  "bigquery.tables.insert",
                   "grpc.bigquery-read.create-read-session",
                   "grpc.bigquery-read.read-rows",
-                  "grpc.bigquery-write.create-write-stream",
                   "grpc.bigquery-write.append-rows",
-                  "grpc.bigquery-write.finalize-write-stream",
-                  "grpc.bigquery-write.batch-commit-write-streams"
+                  "grpc.bigquery-write.batch-commit-write-streams",
+                  "grpc.bigquery-write.create-write-stream",
+                  "grpc.bigquery-write.finalize-write-stream"
                 ],
                 "selectors": [
                   "pytest:tests/integration/spark/test_scala_public_edge.py",
@@ -1121,7 +1151,7 @@
                 ],
                 "operationExpectations": [
                   {
-                    "operationId": "bigquery.tables.insert",
+                    "operationId": "bigquery.tabledata.list",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -1133,13 +1163,7 @@
                     "after": []
                   },
                   {
-                    "operationId": "bigquery.jobs.query",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
-                    "operationId": "bigquery.tabledata.list",
+                    "operationId": "bigquery.tables.insert",
                     "min": 1,
                     "max": 0,
                     "after": []
@@ -1159,12 +1183,6 @@
                     ]
                   },
                   {
-                    "operationId": "grpc.bigquery-write.create-write-stream",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "grpc.bigquery-write.append-rows",
                     "min": 1,
                     "max": 0,
@@ -1173,18 +1191,24 @@
                     ]
                   },
                   {
-                    "operationId": "grpc.bigquery-write.finalize-write-stream",
-                    "min": 1,
-                    "max": 0,
-                    "after": []
-                  },
-                  {
                     "operationId": "grpc.bigquery-write.batch-commit-write-streams",
                     "min": 1,
                     "max": 0,
                     "after": [
                       "grpc.bigquery-write.finalize-write-stream"
                     ]
+                  },
+                  {
+                    "operationId": "grpc.bigquery-write.create-write-stream",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "grpc.bigquery-write.finalize-write-stream",
+                    "min": 1,
+                    "max": 0,
+                    "after": []
                   }
                 ]
               }

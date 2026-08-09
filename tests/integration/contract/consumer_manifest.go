@@ -28,9 +28,9 @@ const (
 )
 
 var (
-	consumerCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	consumerDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	consumerCaseIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	consumerCommitPattern    = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	consumerDigestPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	consumerCaseIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	integrationTestIDPattern = regexp.MustCompile(`^(python|spark|bq):tests/integration/(python|spark|bqcli)/[^:]+:[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
@@ -657,7 +657,7 @@ func validateConsumerOrdering(scenario ConsumerScenario) error {
 
 func validConsumerArtifactUsage(usage string) bool {
 	switch usage {
-	case "python-wheel", "cloud-sdk-release-provenance", "spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-python-bridge", "spark-runtime", "hadoop-gcs-connector-jar":
+	case "python-wheel", "cloud-sdk-release-provenance", "spark-connector-dsv1-jar", "spark-python-bridge", "spark-runtime", "hadoop-gcs-connector-jar":
 		return true
 	default:
 		return false
@@ -849,6 +849,23 @@ func DecodeNormalizedConsumerManifest(contents []byte) (NormalizedConsumerManife
 				if scenario.ID == "" || len(scenario.OperationIDs) == 0 || len(scenario.Selectors) == 0 {
 					return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has an invalid scenario", consumerCase.ID, execution.ID)
 				}
+				switch scenario.TrafficSource.Kind {
+				case trafficSourceAnnotations:
+					if scenario.TrafficSource.Reason != "" || len(scenario.TestEvidence) == 0 {
+						return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has an invalid annotation traffic source", consumerCase.ID, execution.ID)
+					}
+				case trafficSourceRunnerEvidence:
+					if scenario.TrafficSource.Reason == "" || len(scenario.TestEvidence) != 0 {
+						return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has an invalid runner-evidence traffic source", consumerCase.ID, execution.ID)
+					}
+					for _, selector := range scenario.Selectors {
+						if !strings.HasPrefix(selector, "load:") {
+							return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s uses runner-evidence outside load", consumerCase.ID, execution.ID)
+						}
+					}
+				default:
+					return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s has an unknown traffic source", consumerCase.ID, execution.ID)
+				}
 				if duplicate := firstDuplicate(scenario.TestEvidence); duplicate != "" {
 					return NormalizedConsumerManifest{}, fmt.Errorf("normalized consumer case %s execution %s duplicates test evidence", consumerCase.ID, execution.ID)
 				}
@@ -985,7 +1002,7 @@ func normalizedRunnerAdapterContract(id string) (RunnerAdapter, bool) {
 		"spark-pyspark-pytest-v1": {
 			ID: "spark-pyspark-pytest-v1", Family: "spark", RuntimeKind: "spark-pyspark", SelectorPrefix: "pytest",
 			RequiredVersions:       []string{"spark", "connector", "scala", "scalaBinary", "java", "python"},
-			RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-python-bridge", "spark-runtime"},
+			RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-python-bridge", "spark-runtime"},
 			Bootstrap:              map[string]string{}, SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bigquery.datasets.insert"},
 		},
 		"spark-scala-shell-v1": {
@@ -1159,7 +1176,11 @@ func renderConsumerCompatibility(manifest NormalizedConsumerManifest, language s
 		for _, execution := range consumerCase.Executions {
 			scenarios := make([]string, 0, len(execution.ScenarioSet.Scenarios))
 			for _, scenario := range execution.ScenarioSet.Scenarios {
-				scenarios = append(scenarios, "`"+scenario.ID+"`")
+				traffic := "`" + scenario.TrafficSource.Kind + "`"
+				if scenario.TrafficSource.Reason != "" {
+					traffic += ": " + scenario.TrafficSource.Reason
+				}
+				scenarios = append(scenarios, "`"+scenario.ID+"`<br>"+traffic)
 			}
 			fmt.Fprintf(&output, "| `%s` | `%s` | %s | %s | %s | %s | %s | %s |\n", consumerCase.ID, execution.ID, consumerCase.Family, consumerCase.Lane, strings.Join(versions, ", "), strings.Join(scenarios, "<br>"), strings.Join(sources, "<br>"), strings.Join(artifacts, "<br>"))
 		}

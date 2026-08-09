@@ -23,3 +23,5 @@
   추가 절차입니다.
 - [소비자 호환성](consumer-compatibility.md): CI가 사용하는 정확한 버전, 변경되지 않는
   아티팩트, scenario ID와 selector입니다.
+- [Capability coverage](capability-coverage.md): test-local annotation에서 생성한
+  간결한 검증 기반 claim입니다.

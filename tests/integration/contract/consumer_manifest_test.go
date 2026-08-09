@@ -9,7 +9,7 @@ import (
 )
 
 func TestConsumerYAMLRejectsUnknownFieldsAndMultipleDocuments(t *testing.T) {
-	manifest := `schemaVersion: "2"
+	manifest := `schemaVersion: "3"
 runtimeProfiles: []
 runnerAdapters: []
 compatibilityProfiles: []
@@ -75,7 +75,7 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 			manifest.RunnerAdapters[0] = RunnerAdapter{
 				ID: "spark-pyspark-pytest-v1", Family: "spark", RuntimeKind: "spark-pyspark", SelectorPrefix: "pytest",
 				RequiredVersions:       []string{"spark", "connector", "scala", "scalaBinary", "java", "python"},
-				RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-connector-dsv2-jar", "spark-python-bridge", "spark-runtime"},
+				RequiredArtifactUsages: []string{"spark-connector-dsv1-jar", "spark-python-bridge", "spark-runtime"},
 			}
 			(*cases)[0].Family = "spark"
 			(*cases)[0].Executions[0].RunnerAdapterID = "spark-pyspark-pytest-v1"
@@ -83,9 +83,8 @@ func TestConsumerManifestRejectsInvalidReferencesAndRuntimeContracts(t *testing.
 			(*cases)[0].SourceProvenance = []ConsumerSourceReference{{Name: "connector", VersionKey: "connector", URI: "https://github.com/example/project/tree/v0.44.2"}}
 			(*cases)[0].Artifacts = []ConsumerArtifact{
 				{ID: "dsv1", Role: "execution", Usage: "spark-connector-dsv1-jar", URI: "https://example.invalid/dsv1.jar", SHA256: strings.Repeat("a", 64)},
-				{ID: "dsv2", Role: "execution", Usage: "spark-connector-dsv2-jar", URI: "https://example.invalid/dsv2.jar", SHA256: strings.Repeat("b", 64)},
-				{ID: "bridge", Role: "execution", Usage: "spark-python-bridge", URI: "https://example.invalid/bridge.whl", SHA256: strings.Repeat("c", 64)},
-				{ID: "runtime", Role: "execution", Usage: "spark-runtime", URI: "https://example.invalid/runtime.tar.gz", SHA256: strings.Repeat("d", 64)},
+				{ID: "bridge", Role: "execution", Usage: "spark-python-bridge", URI: "https://example.invalid/bridge.whl", SHA256: strings.Repeat("b", 64)},
+				{ID: "runtime", Role: "execution", Usage: "spark-runtime", URI: "https://example.invalid/runtime.tar.gz", SHA256: strings.Repeat("c", 64)},
 			}
 		},
 		"duplicate scenario ID": func(manifest *ConsumerManifest, _ *[]ConsumerCase, _ map[string]bool) {
@@ -420,7 +419,7 @@ func TestConsumerMatrixSeparatesRequiredPreviewAndNightlyLanes(t *testing.T) {
 
 func validConsumerFixture() (ConsumerManifest, []ConsumerCase, map[string]bool) {
 	manifest := ConsumerManifest{
-		SchemaVersion:   consumerSchemaVersion,
+		SchemaVersion:   consumerManifestSchemaVersion,
 		RuntimeProfiles: []RuntimeProfile{{ID: "python", Family: "python", Kind: "python-pytest"}},
 		RunnerAdapters: []RunnerAdapter{{
 			ID: "python-pytest-v1", Family: "python", RuntimeKind: "python-pytest", SelectorPrefix: "pytest",
@@ -428,8 +427,12 @@ func validConsumerFixture() (ConsumerManifest, []ConsumerCase, map[string]bool) 
 			SetupOperationIDs: []string{"bqemu.health.ready", "bqemu.projects.create", "bqemu.projects.delete"},
 		}},
 		CompatibilityProfiles: []CompatibilityProfile{{ID: "python-v1", ScenarioIDs: []string{"query"}}},
-		Scenarios:             []ConsumerScenario{{ID: "query", OperationIDs: []string{"bigquery.jobs.query"}, Selectors: []string{"pytest:tests/integration/python/test_query_contract.py"}}},
-		ScenarioSets:          []ScenarioSet{{ID: "query-set", ScenarioIDs: []string{"query"}}},
+		Scenarios: []ConsumerScenario{{
+			ID: "query", TrafficSource: ScenarioTrafficSource{Kind: trafficSourceAnnotations},
+			OperationIDs: []string{"bigquery.jobs.query"}, Selectors: []string{"pytest:tests/integration/python/test_query_contract.py"},
+			TestEvidence: []string{"python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs"},
+		}},
+		ScenarioSets: []ScenarioSet{{ID: "query-set", ScenarioIDs: []string{"query"}}},
 	}
 	cases := []ConsumerCase{{
 		SchemaVersion: consumerSchemaVersion, ID: "case-one", DisplayName: "Case one", Family: "python", Lane: "required",
@@ -525,6 +528,11 @@ func copyFile(t *testing.T, source, destination string) {
 
 func copyIntegrationAnnotationFiles(t *testing.T, sourceRoot, destinationRoot string) {
 	t.Helper()
+	copyFile(
+		t,
+		filepath.Join(sourceRoot, "tests", "integration", "contract", "extract_integration_annotations.py"),
+		filepath.Join(destinationRoot, "tests", "integration", "contract", "extract_integration_annotations.py"),
+	)
 	for _, directory := range []string{"python", "spark", "bqcli"} {
 		root := filepath.Join(sourceRoot, "tests", "integration", directory)
 		if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {

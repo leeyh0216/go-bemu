@@ -422,8 +422,6 @@ class ConsumerRunnerTest(unittest.TestCase):
             self.assertEqual(adapter.artifact_evidence[0]["usage"], "spark-python-bridge")
             self.assertEqual(adapter.artifact_evidence[1]["usage"], "spark-runtime")
             self.assertEqual(adapter.artifact_evidence[2]["sha256"], digest)
-            self.assertEqual(adapter.dsv2_connector_path.read_bytes(), contents)
-            self.assertEqual(adapter.artifact_evidence[3]["sha256"], digest)
 
     def test_junit_normalization_retains_consumer_output(self) -> None:
         secret = "authorization: Bearer future-credential"

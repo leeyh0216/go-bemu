@@ -1,14 +1,10 @@
 """Fail-closed Spark connector artifact selection for real-process tests.
 
-The fetch cache may contain both DSv1 and DSv2 artifacts, but one Spark JVM
-must receive exactly one connector variant. The released JARs register the
-same short name and carry overlapping resources, so a mixed classpath is not a
-supported fallback.
+The supported connector artifact is pinned by a reviewed lock. A Spark JVM
+must receive exactly that one connector JAR.
 
-Official artifacts and DSv2 provider source:
+Official artifact:
 https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/
-https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/
-https://github.com/GoogleCloudDataproc/spark-bigquery-connector/blob/719817782a214b8ca72be520870013a3e0253d92/spark-bigquery-dsv2/spark-3.5-bigquery-lib/src/main/java/com/google/cloud/spark/bigquery/v2/Spark35BigQueryTableProvider.java
 """
 
 from __future__ import annotations
@@ -24,8 +20,6 @@ from zipfile import BadZipFile, ZipFile
 
 
 DSV1_VARIANT = "dsv1-with-dependencies-2.12"
-DSV2_RAW_VARIANT = "dsv2-spark-3.5-raw"
-DSV2_PROVIDER = "com.google.cloud.spark.bigquery.v2.Spark35BigQueryTableProvider"
 SERVICE_ENTRY = "META-INF/services/org.apache.spark.sql.sources.DataSourceRegister"
 VERSION_ENTRY = "spark-bigquery-connector.properties"
 
@@ -176,10 +170,6 @@ def _digest(path: Path) -> tuple[str, int]:
 def load_artifact_specs(repository_root: Path) -> dict[str, ArtifactSpec]:
     locks = (
         (repository_root / "tests" / "integration" / "spark" / "artifacts.lock.json", DSV1_VARIANT),
-        (
-            repository_root / "tests" / "integration" / "spark" / "artifacts-dsv2.lock.json",
-            DSV2_RAW_VARIANT,
-        ),
     )
     specs: dict[str, ArtifactSpec] = {}
     for lock_path, default_variant in locks:

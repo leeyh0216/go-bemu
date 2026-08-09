@@ -96,10 +96,12 @@ decision small and makes the repository check the rest.
    `internal/adapters/sqlite/queries/*.sql`, then run `make sqlc-generate`.
    Generated sqlc source is reviewed with the SQL resource, not edited directly.
 4. **Add caller behavior through the integration framework.** Put the test in
-   `tests/integration/<family>`, attach literal operation annotations to the
-   test function, and add a versioned case only when a runtime/provenance or
-   runner contract changes. Run `make integration-contract-generate` to write
-   the expanded execution matrix and integration compatibility pages.
+   `tests/integration/<family>` and attach the framework's literal annotation.
+   The annotation is the source of test-to-operation coverage; do not repeat
+   operation IDs or test evidence in `consumers.yaml`. Add a versioned case
+   only when a runtime/provenance or runner contract changes. Run
+   `make integration-contract-generate` to write the expanded execution
+   matrix, capability index, and integration compatibility pages.
 5. **Run the smallest useful checks locally.** Run the changed package plus
    the matching generator check: `make contract-check`,
    `make integration-contract-check`, or `make sqlc-check`. Run

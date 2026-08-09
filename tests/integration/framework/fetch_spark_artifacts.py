@@ -2,11 +2,10 @@
 """Fetch exact Spark test artifacts without cloning or building upstream.
 
 Artifact coordinates come from Maven Central and are checked byte-for-byte
-against the reviewed variant-specific lock files before an atomic rename.
+against the reviewed lock file before an atomic rename.
 
 Official artifact:
 https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/
-https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/
 """
 
 from __future__ import annotations
@@ -23,10 +22,7 @@ import urllib.request
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_LOCKS = (
-    REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts.lock.json",
-    REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts-dsv2.lock.json",
-)
+DEFAULT_LOCKS = (REPOSITORY_ROOT / "tests" / "integration" / "spark" / "artifacts.lock.json",)
 DEFAULT_OUTPUT = REPOSITORY_ROOT / ".artifacts" / "spark"
 
 
@@ -145,7 +141,7 @@ def main() -> int:
         "--lock",
         action="append",
         type=Path,
-        help="Exact lock to fetch; repeat for multiple locks (defaults to DSv1 and DSv2).",
+        help="Exact lock to fetch; repeat for multiple locks (defaults to the supported connector lock).",
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     arguments = parser.parse_args()
@@ -174,25 +170,7 @@ def main() -> int:
             and "testRuntime" not in lock
             and "executionClasspathPolicy" not in lock
         )
-        dsv2_binding_valid = (
-            lock.get("schemaVersion") == "2"
-            and lock.get("artifactVariant") == "dsv2-spark-3.5-raw"
-            and "sparkVersion" not in lock
-            and "scalaBinaryVersion" not in lock
-            and all(
-                isinstance(lock.get("artifactBuild", {}).get(field), str)
-                and bool(lock.get("artifactBuild", {}).get(field))
-                for field in ("sparkVersion", "scalaBinaryVersion", "javaToolchain")
-            )
-            and all(
-                isinstance(lock.get("testRuntime", {}).get(field), str)
-                and bool(lock.get("testRuntime", {}).get(field))
-                for field in ("sparkVersion", "scalaBinaryVersion", "scalaVersion", "javaVersion")
-            )
-            and lock.get("executionClasspathPolicy")
-            == "exactly-one-connector-variant"
-        )
-        if not common_binding_valid or not (dsv1_binding_valid or dsv2_binding_valid):
+        if not common_binding_valid or not dsv1_binding_valid:
             raise SystemExit("unreviewed Spark artifact lock version")
         targets.extend(
             _fetch(artifact, arguments.output, timeout, connector_version)

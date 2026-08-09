@@ -25,11 +25,6 @@ artifacts:
     usage: spark-connector-dsv1-jar
     uri: https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.44.2/spark-bigquery-with-dependencies_2.12-0.44.2.jar
     sha256: 516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e
-  - id: spark-bigquery-connector-0.44.2-dsv2-jar
-    role: execution
-    usage: spark-connector-dsv2-jar
-    uri: https://repo.maven.apache.org/maven2/com/google/cloud/spark/spark-3.5-bigquery/0.44.2/spark-3.5-bigquery-0.44.2.jar
-    sha256: 2e6bbb41bcaf56ae17a5488dd4453698bd35f13e9849f4daed744ca7b57b053f
   - id: pyspark-3.5.8-sdist
     role: execution
     usage: spark-runtime

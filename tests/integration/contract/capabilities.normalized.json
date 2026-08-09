@@ -1,0 +1,877 @@
+{
+  "schemaVersion": "1",
+  "cases": [
+    {
+      "id": "SBQ-READ-ARROW-COUNT-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow query result count",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_query_result_count"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tabledata.list",
+        "bigquery.tables.get"
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
+      "state": "partial",
+      "category": "read",
+      "summary": "Arrow decimal schema read",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "bigquery.tables.insert",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ],
+      "issue": "https://github.com/leeyh0216/go-bemu/issues/9",
+      "limitation": "Spark 3.5.8 verifies connector 0.44.2 Arrow schemas for default, parameterized, nested, and repeated decimals. Precision above 38 is intentionally unsupported; nested and repeated values remain covered below the released-Spark boundary."
+    },
+    {
+      "id": "SBQ-READ-ARROW-FILTER-V1",
+      "state": "partial",
+      "category": "read",
+      "summary": "Arrow filter pushdown",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read",
+        "spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ],
+      "issue": "https://github.com/leeyh0216/go-bemu/issues/6",
+      "limitation": "Comparisons, IN, null predicates, nested boolean logic, string LIKE filters, and temporal literals are implemented; function calls and subqueries remain unsupported."
+    },
+    {
+      "id": "SBQ-READ-ARROW-PROJECTION-V1",
+      "state": "partial",
+      "category": "read",
+      "summary": "Arrow nested projection",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_nested_projection_through_storage_read"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ],
+      "issue": "https://github.com/leeyh0216/go-bemu/issues/6",
+      "limitation": "Nested Spark projection is verified end to end; the DSv1 artifact requests its top-level parent while exact nested selected-field paths remain transport-tested."
+    },
+    {
+      "id": "SBQ-READ-ARROW-QUERY-FILTER-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow query source filter pushdown",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow query with explicit materialization",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.get",
+        "bigquery.tables.patch",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow query source projection",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-QUERY-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow query source read",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow table read with sixteen requested streams",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-ARROW-TABLE-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow table read with four requested streams",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-QUERY-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Avro query source read",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-avro",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-STREAM-ONE-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Avro table read with one requested stream",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-avro",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Avro table read with sixteen requested streams",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-avro",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-STREAM-TWO-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Avro table read with two requested streams",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-avro",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-AVRO-TABLE-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Avro table read with four requested streams",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-avro",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-DECIMAL-TYPES-V1",
+      "state": "partial",
+      "category": "read",
+      "summary": "Avro decimal schema read",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-avro",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "bigquery.tables.insert",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ],
+      "issue": "https://github.com/leeyh0216/go-bemu/issues/9",
+      "limitation": "Spark 3.5.8 verifies connector 0.44.2 AVRO schemas for default, parameterized, nested, and repeated decimals. Precision above 38 is intentionally unsupported; nested and repeated values remain covered below the released-Spark boundary."
+    },
+    {
+      "id": "SBQ-READ-STREAM-ONE-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow table read with one requested stream",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-STREAM-TWO-V1",
+      "state": "verified",
+      "category": "read",
+      "summary": "Arrow table read with two requested streams",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ]
+    },
+    {
+      "id": "SBQ-READ-TIME-PARTITION-V1",
+      "state": "partial",
+      "category": "read",
+      "summary": "Arrow field-partition filter",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "read-arrow",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_time_partition_field_filter_through_storage_read"
+      ],
+      "operationIds": [
+        "bigquery.tables.get",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows"
+      ],
+      "issue": "https://github.com/leeyh0216/go-bemu/issues/6",
+      "limitation": "Field-based time partition metadata and filters are implemented; ingestion-time pseudo columns and physical partition pruning remain unsupported."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+      "state": "verified",
+      "category": "write",
+      "summary": "Direct at-least-once append with four partitions",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-at-least-once-default",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.get-write-stream"
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+      "state": "verified",
+      "category": "write",
+      "summary": "Direct at-least-once append with one partition",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-at-least-once-default",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.get-write-stream"
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
+      "state": "verified",
+      "category": "write",
+      "summary": "Direct at-least-once append with two partitions",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-at-least-once-default",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.get-write-stream"
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-DECIMAL-V1",
+      "state": "partial",
+      "category": "write",
+      "summary": "Direct decimal ProtoRows write",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-append-pending",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+      ],
+      "operationIds": [
+        "bigquery.tabledata.list",
+        "bigquery.tables.insert",
+        "grpc.bigquery-read.create-read-session",
+        "grpc.bigquery-read.read-rows",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream"
+      ],
+      "issue": "https://github.com/leeyh0216/go-bemu/issues/9",
+      "limitation": "Spark 3.5.8 verifies connector 0.44.2 direct ProtoRows for scalar NUMERIC(20,4) and BIGNUMERIC(38,18). Recursive decimal ProtoRows are covered below the released-Spark boundary."
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+      "state": "verified",
+      "category": "write",
+      "summary": "Direct exactly-once append with four partitions",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-append-pending",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream"
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+      "state": "verified",
+      "category": "write",
+      "summary": "Direct exactly-once append with one partition",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-append-pending",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream"
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+      "state": "verified",
+      "category": "write",
+      "summary": "Direct exactly-once append with two partitions",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-append-pending",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream"
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+      "state": "verified",
+      "category": "write",
+      "summary": "Direct exactly-once dynamic partition overwrite",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-overwrite-static",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.delete",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream"
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1",
+      "state": "verified",
+      "category": "write",
+      "summary": "Direct exactly-once static overwrite",
+      "profile": "spark-bigquery-connector-dsv1-0.44.2",
+      "wireFlow": "direct-overwrite-static",
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite"
+      ],
+      "operationIds": [
+        "bigquery.jobs.get",
+        "bigquery.jobs.getQueryResults",
+        "bigquery.jobs.insert",
+        "bigquery.tables.delete",
+        "bigquery.tables.insert",
+        "grpc.bigquery-write.append-rows",
+        "grpc.bigquery-write.batch-commit-write-streams",
+        "grpc.bigquery-write.create-write-stream",
+        "grpc.bigquery-write.finalize-write-stream"
+      ]
+    }
+  ],
+  "apiCoverage": [
+    {
+      "operationId": "bigquery.jobs.get",
+      "caseIds": [
+        "SBQ-READ-ARROW-COUNT-V1",
+        "SBQ-READ-ARROW-QUERY-FILTER-V1",
+        "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+        "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-V1",
+        "SBQ-READ-AVRO-QUERY-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_result_count",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection"
+      ]
+    },
+    {
+      "operationId": "bigquery.jobs.getQueryResults",
+      "caseIds": [
+        "SBQ-READ-ARROW-COUNT-V1",
+        "SBQ-READ-ARROW-QUERY-FILTER-V1",
+        "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+        "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-V1",
+        "SBQ-READ-AVRO-QUERY-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_result_count",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection"
+      ]
+    },
+    {
+      "operationId": "bigquery.jobs.insert",
+      "caseIds": [
+        "SBQ-READ-ARROW-COUNT-V1",
+        "SBQ-READ-ARROW-QUERY-FILTER-V1",
+        "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+        "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-V1",
+        "SBQ-READ-AVRO-QUERY-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_result_count",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection"
+      ]
+    },
+    {
+      "operationId": "bigquery.tabledata.list",
+      "caseIds": [
+        "SBQ-READ-ARROW-COUNT-V1",
+        "SBQ-WRITE-DIRECT-DECIMAL-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_result_count",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+      ]
+    },
+    {
+      "operationId": "bigquery.tables.delete",
+      "caseIds": [
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite"
+      ]
+    },
+    {
+      "operationId": "bigquery.tables.get",
+      "caseIds": [
+        "SBQ-READ-ARROW-COUNT-V1",
+        "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
+        "SBQ-READ-ARROW-FILTER-V1",
+        "SBQ-READ-ARROW-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-FILTER-V1",
+        "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+        "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-V1",
+        "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
+        "SBQ-READ-ARROW-TABLE-V1",
+        "SBQ-READ-AVRO-QUERY-V1",
+        "SBQ-READ-AVRO-STREAM-ONE-V1",
+        "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
+        "SBQ-READ-AVRO-STREAM-TWO-V1",
+        "SBQ-READ-AVRO-TABLE-V1",
+        "SBQ-READ-DECIMAL-TYPES-V1",
+        "SBQ-READ-STREAM-ONE-V1",
+        "SBQ-READ-STREAM-TWO-V1",
+        "SBQ-READ-TIME-PARTITION-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read",
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_nested_projection_through_storage_read",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_result_count",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection",
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_time_partition_field_filter_through_storage_read",
+        "spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector"
+      ]
+    },
+    {
+      "operationId": "bigquery.tables.insert",
+      "caseIds": [
+        "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
+        "SBQ-READ-DECIMAL-TYPES-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-DECIMAL-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+      ]
+    },
+    {
+      "operationId": "bigquery.tables.patch",
+      "caseIds": [
+        "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration"
+      ]
+    },
+    {
+      "operationId": "grpc.bigquery-read.create-read-session",
+      "caseIds": [
+        "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
+        "SBQ-READ-ARROW-FILTER-V1",
+        "SBQ-READ-ARROW-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-FILTER-V1",
+        "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+        "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-V1",
+        "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
+        "SBQ-READ-ARROW-TABLE-V1",
+        "SBQ-READ-AVRO-QUERY-V1",
+        "SBQ-READ-AVRO-STREAM-ONE-V1",
+        "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
+        "SBQ-READ-AVRO-STREAM-TWO-V1",
+        "SBQ-READ-AVRO-TABLE-V1",
+        "SBQ-READ-DECIMAL-TYPES-V1",
+        "SBQ-READ-STREAM-ONE-V1",
+        "SBQ-READ-STREAM-TWO-V1",
+        "SBQ-READ-TIME-PARTITION-V1",
+        "SBQ-WRITE-DIRECT-DECIMAL-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read",
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_nested_projection_through_storage_read",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection",
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_time_partition_field_filter_through_storage_read",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge",
+        "spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector"
+      ]
+    },
+    {
+      "operationId": "grpc.bigquery-read.read-rows",
+      "caseIds": [
+        "SBQ-READ-ARROW-DECIMAL-TYPES-V1",
+        "SBQ-READ-ARROW-FILTER-V1",
+        "SBQ-READ-ARROW-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-FILTER-V1",
+        "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
+        "SBQ-READ-ARROW-QUERY-PROJECTION-V1",
+        "SBQ-READ-ARROW-QUERY-V1",
+        "SBQ-READ-ARROW-STREAM-SIXTEEN-V1",
+        "SBQ-READ-ARROW-TABLE-V1",
+        "SBQ-READ-AVRO-QUERY-V1",
+        "SBQ-READ-AVRO-STREAM-ONE-V1",
+        "SBQ-READ-AVRO-STREAM-SIXTEEN-V1",
+        "SBQ-READ-AVRO-STREAM-TWO-V1",
+        "SBQ-READ-AVRO-TABLE-V1",
+        "SBQ-READ-DECIMAL-TYPES-V1",
+        "SBQ-READ-STREAM-ONE-V1",
+        "SBQ-READ-STREAM-TWO-V1",
+        "SBQ-READ-TIME-PARTITION-V1",
+        "SBQ-WRITE-DIRECT-DECIMAL-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read",
+        "spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_nested_projection_through_storage_read",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_explicit_materialization_patches_expiration",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_filter_pushdown",
+        "spark:tests/integration/spark/test_public_edge.py:test_query_source_projection",
+        "spark:tests/integration/spark/test_public_edge.py:test_storage_read_arrow_and_avro",
+        "spark:tests/integration/spark/test_public_edge.py:test_time_partition_field_filter_through_storage_read",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge",
+        "spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector"
+      ]
+    },
+    {
+      "operationId": "grpc.bigquery-write.append-rows",
+      "caseIds": [
+        "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-DECIMAL-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+      ]
+    },
+    {
+      "operationId": "grpc.bigquery-write.batch-commit-write-streams",
+      "caseIds": [
+        "SBQ-WRITE-DIRECT-DECIMAL-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+      ]
+    },
+    {
+      "operationId": "grpc.bigquery-write.create-write-stream",
+      "caseIds": [
+        "SBQ-WRITE-DIRECT-DECIMAL-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+      ]
+    },
+    {
+      "operationId": "grpc.bigquery-write.finalize-write-stream",
+      "caseIds": [
+        "SBQ-WRITE-DIRECT-DECIMAL-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-APPEND-TWO-V1",
+        "SBQ-WRITE-DIRECT-EXACT-DYNAMIC-OVERWRITE-V1",
+        "SBQ-WRITE-DIRECT-EXACT-OVERWRITE-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_append",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_dynamic_partition_overwrite",
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_pending_exact_static_overwrite",
+        "spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge"
+      ]
+    },
+    {
+      "operationId": "grpc.bigquery-write.get-write-stream",
+      "caseIds": [
+        "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
+        "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1"
+      ],
+      "tests": [
+        "spark:tests/integration/spark/test_public_edge.py:test_direct_default_stream_at_least_once"
+      ]
+    }
+  ]
+}

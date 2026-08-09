@@ -103,10 +103,11 @@ DuckDB가 SQL을 받아들였다는 사실만으로는 BigQuery 동작을 재현
    `internal/adapters/sqlite/queries/*.sql`에 두고 `make sqlc-generate`를 실행합니다.
    생성된 sqlc source는 SQL resource와 함께 검토하며 직접 수정하지 않습니다.
 4. **외부 호출자 동작은 통합 프레임워크로 추가합니다.** 테스트를
-   `tests/integration/<family>`에 두고 테스트 함수에 literal operation annotation을
-   붙입니다. runtime/provenance 또는 runner 계약이 바뀔 때만 versioned case를
-   추가합니다. `make integration-contract-generate`는 펼친 실행 matrix와 통합
-   호환성 페이지를 생성합니다.
+   `tests/integration/<family>`에 두고 프레임워크의 literal annotation을 붙입니다.
+   annotation이 test-to-operation coverage의 원본이므로 `consumers.yaml`에 operation
+   ID나 test evidence를 반복하지 않습니다. runtime/provenance 또는 runner 계약이
+   바뀔 때만 versioned case를 추가합니다. `make integration-contract-generate`는 펼친
+   실행 matrix, capability index, 통합 호환성 페이지를 생성합니다.
 5. **로컬에서는 가장 작은 유효 검사를 실행합니다.** 바꾼 package와 함께
    `make contract-check`, `make integration-contract-check`, `make sqlc-check` 중 맞는
    검사를 실행합니다. 문서나 CI report 변경에는

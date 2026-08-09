@@ -1,4 +1,4 @@
-schemaVersion: "2"
+schemaVersion: "3"
 runtimeProfiles:
   - id: python-3.13
     family: python
@@ -32,7 +32,7 @@ runnerAdapters:
     runtimeKind: spark-pyspark
     selectorPrefix: pytest
     requiredVersions: [spark, connector, scala, scalaBinary, java, python]
-    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-connector-dsv2-jar, spark-python-bridge, spark-runtime]
+    requiredArtifactUsages: [spark-connector-dsv1-jar, spark-python-bridge, spark-runtime]
     setupOperationIds: [bqemu.health.ready, bqemu.projects.create, bigquery.datasets.insert]
   - id: spark-scala-shell-v1
     family: spark
@@ -84,94 +84,27 @@ compatibilityProfiles:
     scenarioIds: [spark-pyspark-indirect-load, spark-scala-indirect-load]
 scenarios:
   - id: python-metadata
+    trafficSource: {kind: annotations}
     selectors: [pytest:tests/integration/python/test_admin_contract.py]
-    testEvidence:
-      - python:tests/integration/python/test_admin_contract.py:test_dataset_crud_update_pagination_location_and_errors
-      - python:tests/integration/python/test_admin_contract.py:test_table_crud_metadata_etag_and_additive_schema
-    operationIds:
-      - bigquery.datasets.insert
-      - bigquery.datasets.list
-      - bigquery.datasets.get
-      - bigquery.datasets.patch
-      - bigquery.datasets.delete
-      - bigquery.tables.insert
-      - bigquery.tables.list
-      - bigquery.tables.get
-      - bigquery.tables.patch
-      - bigquery.tables.delete
   - id: python-query
+    trafficSource: {kind: annotations}
     selectors:
       - pytest:tests/integration/python/test_query_contract.py
       - pytest:tests/integration/python/test_query_lifecycle_contract.py
       - pytest:tests/integration/python/test_explicit_gaps.py
-    testEvidence:
-      - python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs
-      - python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch
-    operationIds:
-      - bigquery.jobs.insert
-      - bigquery.jobs.list
-      - bigquery.jobs.get
-      - bigquery.jobs.query
-      - bigquery.jobs.getQueryResults
   - id: python-tabledata
+    trafficSource: {kind: annotations}
     selectors: [pytest:tests/integration/python/test_tabledata_contract.py]
-    testEvidence:
-      - python:tests/integration/python/test_tabledata_contract.py:test_list_rows_decodes_nested_repeated_values_and_pages
-    operationIds: [bigquery.tabledata.list]
   - id: bq-metadata
+    trafficSource: {kind: annotations}
     selectors: [bq:tests/integration/bqcli/run_contract.py:main]
-    testEvidence:
-      - bq:tests/integration/bqcli/run_contract.py:main
-      - bq:tests/integration/bqcli/extended_contract.py:run_extended_contract
-    operationIds:
-      - bigquery.projects.list
-      - bigquery.datasets.insert
-      - bigquery.datasets.get
-      - bigquery.datasets.patch
-      - bigquery.datasets.delete
-      - bigquery.tables.insert
-      - bigquery.tables.get
-      - bigquery.tables.patch
-      - bigquery.tables.list
-      - bigquery.tables.delete
-      - bqemu.discovery.get
   - id: bq-query
+    trafficSource: {kind: annotations}
     selectors: [bq:tests/integration/bqcli/run_contract.py:main]
-    testEvidence:
-      - bq:tests/integration/bqcli/run_contract.py:main
-      - bq:tests/integration/bqcli/extended_contract.py:run_extended_contract
-    operationIds:
-      - bigquery.jobs.insert
-      - bigquery.jobs.get
-      - bigquery.jobs.getQueryResults
-      - bigquery.jobs.list
   - id: spark-pyspark-public-edge
+    trafficSource: {kind: annotations}
     selectors:
       - pytest:tests/integration/spark/test_public_edge.py
-      - pytest:tests/integration/spark/test_dsv2_streaming.py
-    testEvidence:
-      - spark:tests/integration/spark/test_public_edge.py:test_decimal_schema_through_public_storage_read_edge
-      - spark:tests/integration/spark/test_public_edge.py:test_direct_decimal_write_through_public_proto_rows_edge
-      - spark:tests/integration/spark/test_public_edge.py:test_nested_projection_through_storage_read
-      - spark:tests/integration/spark/test_public_edge.py:test_advanced_filter_pushdown_through_storage_read
-      - spark:tests/integration/spark/test_public_edge.py:test_time_partition_field_filter_through_storage_read
-    operationIds:
-      - bigquery.tables.insert
-      - bigquery.tables.get
-      - bigquery.tables.delete
-      - bigquery.jobs.insert
-      - bigquery.jobs.get
-      - bigquery.jobs.getQueryResults
-      - bigquery.jobs.query
-      - bigquery.tabledata.list
-      - bigquery.tables.patch
-      - grpc.bigquery-read.create-read-session
-      - grpc.bigquery-read.read-rows
-      - grpc.bigquery-write.create-write-stream
-      - grpc.bigquery-write.append-rows
-      - grpc.bigquery-write.finalize-write-stream
-      - grpc.bigquery-write.batch-commit-write-streams
-      - grpc.bigquery-write.get-write-stream
     operationExpectations:
       - operationId: grpc.bigquery-read.read-rows
         min: 1
@@ -186,23 +119,10 @@ scenarios:
         max: 0
         after: [grpc.bigquery-write.finalize-write-stream]
   - id: spark-scala-public-edge
+    trafficSource: {kind: annotations}
     selectors:
       - pytest:tests/integration/spark/test_scala_public_edge.py
       - pytest:tests/integration/spark/test_scala_decimal_edge.py
-    testEvidence:
-      - spark:tests/integration/spark/test_scala_decimal_edge.py:test_scala_decimal_read_and_direct_write_through_public_edge
-      - spark:tests/integration/spark/test_scala_public_edge.py:test_scala_spark_reads_through_connector
-    operationIds:
-      - bigquery.tables.insert
-      - bigquery.tables.get
-      - bigquery.jobs.query
-      - bigquery.tabledata.list
-      - grpc.bigquery-read.create-read-session
-      - grpc.bigquery-read.read-rows
-      - grpc.bigquery-write.create-write-stream
-      - grpc.bigquery-write.append-rows
-      - grpc.bigquery-write.finalize-write-stream
-      - grpc.bigquery-write.batch-commit-write-streams
     operationExpectations:
       - operationId: grpc.bigquery-read.read-rows
         min: 1
@@ -217,37 +137,38 @@ scenarios:
         max: 0
         after: [grpc.bigquery-write.finalize-write-stream]
   - id: python-indirect-load
+    trafficSource:
+      kind: runner-evidence
+      reason: The load runner generates traffic outside a selected Python test function.
     selectors: [load:python]
-    testEvidence: []
-    operationIds:
-      - bigquery.jobs.insert
-      - bigquery.jobs.get
     operationExpectations:
+      - operationId: bigquery.jobs.insert
+        min: 1
+        max: 0
+        after: []
       - operationId: bigquery.jobs.get
         min: 1
         max: 0
         after: [bigquery.jobs.insert]
   - id: bq-indirect-load
+    trafficSource:
+      kind: runner-evidence
+      reason: The load runner generates traffic inside the standalone bq process rather than a selected Python function.
     selectors: [load:bq]
-    testEvidence: []
-    operationIds:
-      - bigquery.jobs.insert
-      - bigquery.jobs.get
     operationExpectations:
+      - operationId: bigquery.jobs.insert
+        min: 1
+        max: 0
+        after: []
       - operationId: bigquery.jobs.get
         min: 1
         max: 0
         after: [bigquery.jobs.insert]
   - id: spark-pyspark-indirect-load
+    trafficSource:
+      kind: runner-evidence
+      reason: The load runner generates traffic inside the released PySpark process rather than a selected test function.
     selectors: [load:pyspark]
-    testEvidence: []
-    operationIds:
-      - bigquery.tables.get
-      - bigquery.tables.insert
-      - bigquery.jobs.insert
-      - bigquery.jobs.get
-      - bigquery.jobs.getQueryResults
-      - bigquery.tables.delete
     operationExpectations:
       - operationId: bigquery.tables.get
         min: 1
@@ -274,15 +195,10 @@ scenarios:
         max: 1
         after: [bigquery.jobs.get]
   - id: spark-scala-indirect-load
+    trafficSource:
+      kind: runner-evidence
+      reason: The load runner generates traffic inside the released Scala Spark process rather than a selected test function.
     selectors: [load:scala-spark]
-    testEvidence: []
-    operationIds:
-      - bigquery.tables.get
-      - bigquery.tables.insert
-      - bigquery.jobs.insert
-      - bigquery.jobs.get
-      - bigquery.jobs.getQueryResults
-      - bigquery.tables.delete
     operationExpectations:
       - operationId: bigquery.tables.get
         min: 1
