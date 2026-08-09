@@ -22,11 +22,12 @@ type ResolvedObject struct {
 }
 
 type LoadPlanRequest struct {
-	Destination      domain.Table
-	SchemaPlan       engine.SchemaPlan
-	SourceFormat     domain.SourceFormat
-	WriteDisposition domain.WriteDisposition
-	Objects          []ResolvedObject
+	Destination       domain.Table
+	CreateDestination bool
+	SchemaPlan        engine.SchemaPlan
+	SourceFormat      domain.SourceFormat
+	WriteDisposition  domain.WriteDisposition
+	Objects           []ResolvedObject
 }
 
 // LoadAdapterPlanner performs a pure adapter-specific check and returns only a
@@ -214,7 +215,11 @@ func validateLoadPlanRequest(capabilities engine.Capabilities, request LoadPlanR
 		DatasetID: request.Destination.Reference.DatasetID,
 		TableID:   request.Destination.Reference.TableID,
 	}
-	if schemaIntent.Operation() != engine.SchemaOperationValidate || schemaIntent.Target() != expectedTarget ||
+	expectedOperation := engine.SchemaOperationValidate
+	if request.CreateDestination {
+		expectedOperation = engine.SchemaOperationCreate
+	}
+	if schemaIntent.Operation() != expectedOperation || schemaIntent.Target() != expectedTarget ||
 		!reflect.DeepEqual(schemaIntent.AfterSchema(), request.Destination.Schema) {
 		return fmt.Errorf("%w: schema plan does not match the load destination", domain.ErrPrecondition)
 	}
@@ -284,16 +289,18 @@ func cloneLoadPlanRequest(input LoadPlanRequest) LoadPlanRequest {
 
 func loadPlanRequestFingerprint(request LoadPlanRequest) string {
 	return fingerprint(struct {
-		Destination      domain.TableReference   `json:"destination"`
-		Location         string                  `json:"location"`
-		Schema           []domain.Field          `json:"schema"`
-		SchemaPlan       string                  `json:"schemaPlan"`
-		SourceFormat     domain.SourceFormat     `json:"sourceFormat"`
-		WriteDisposition domain.WriteDisposition `json:"writeDisposition"`
-		Objects          []ResolvedObject        `json:"objects"`
+		Destination       domain.TableReference   `json:"destination"`
+		Location          string                  `json:"location"`
+		Schema            []domain.Field          `json:"schema"`
+		CreateDestination bool                    `json:"createDestination"`
+		SchemaPlan        string                  `json:"schemaPlan"`
+		SourceFormat      domain.SourceFormat     `json:"sourceFormat"`
+		WriteDisposition  domain.WriteDisposition `json:"writeDisposition"`
+		Objects           []ResolvedObject        `json:"objects"`
 	}{
 		Destination: request.Destination.Reference, Location: request.Destination.Location,
-		Schema: request.Destination.Schema, SchemaPlan: request.SchemaPlan.Fingerprint(),
+		Schema: request.Destination.Schema, CreateDestination: request.CreateDestination,
+		SchemaPlan:   request.SchemaPlan.Fingerprint(),
 		SourceFormat: request.SourceFormat, WriteDisposition: request.WriteDisposition,
 		Objects: request.Objects,
 	})

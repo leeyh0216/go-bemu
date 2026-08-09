@@ -112,6 +112,16 @@ func (w *Warehouse) ExecuteLoad(
 	}
 
 	destination := quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + "." + quoteIdentifier(table.TableID)
+	if request.CreateDestination {
+		create, createErr := createLoadDestinationStatement(request.Destination)
+		if createErr != nil {
+			return result, createErr
+		}
+		if _, err := tx.ExecContext(ctx, create); err != nil {
+			return result, fmt.Errorf("create load destination: %w", err)
+		}
+		result.CreatedDestination = true
+	}
 	switch request.WriteDisposition {
 	case loadDomain.WriteEmpty:
 		var exists bool
@@ -143,6 +153,31 @@ func (w *Warehouse) ExecuteLoad(
 	}
 	committed = true
 	return result, nil
+}
+
+func (w *Warehouse) DiscardLoadedTable(ctx context.Context, table loadDomain.TableReference) error {
+	return w.DropTable(ctx, table.ProjectID, table.DatasetID, table.TableID)
+}
+
+func createLoadDestinationStatement(table loadDomain.Table) (string, error) {
+	columns := make([]string, len(table.Schema))
+	for index, field := range table.Schema {
+		physicalType, err := duckDBType(field)
+		if err != nil {
+			return "", err
+		}
+		column := quoteIdentifier(field.Name) + " " + physicalType
+		if strings.EqualFold(normalizeMode(field.Mode), "REQUIRED") {
+			column += " NOT NULL"
+		}
+		columns[index] = column
+	}
+	return fmt.Sprintf(
+		"CREATE TABLE %s.%s (%s)",
+		quoteIdentifier(physicalSchema(table.Reference.ProjectID, table.Reference.DatasetID)),
+		quoteIdentifier(table.Reference.TableID),
+		strings.Join(columns, ", "),
+	), nil
 }
 
 func describeStaging(ctx context.Context, tx *sql.Tx, staging string) ([]stagingColumn, error) {

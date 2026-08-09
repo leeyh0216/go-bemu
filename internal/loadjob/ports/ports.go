@@ -26,6 +26,8 @@ type ObjectStore interface {
 
 type TableCatalog interface {
 	GetTable(context.Context, domain.TableReference) (domain.Table, error)
+	GetDatasetLocation(context.Context, string, string) (string, error)
+	PublishTable(context.Context, domain.Table) error
 }
 
 type LocalObject struct {
@@ -35,13 +37,15 @@ type LocalObject struct {
 }
 
 type LoadResult struct {
-	OutputRows int64
+	OutputRows         int64
+	CreatedDestination bool
 }
 
 type Loader interface {
 	catalogports.SchemaPlanner
 	PlanLoad(context.Context, LoadPlanRequest) (LoadPlan, error)
 	ExecuteLoad(context.Context, LoadPlan, []LocalObject) (LoadResult, error)
+	DiscardLoadedTable(context.Context, domain.TableReference) error
 }
 
 type JobRepository interface {

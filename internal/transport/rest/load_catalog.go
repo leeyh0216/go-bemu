@@ -11,13 +11,38 @@ import (
 )
 
 type loadTableCatalog struct {
-	catalog CatalogUseCases
+	catalog LoadCatalogUseCases
+}
+
+type LoadCatalogUseCases interface {
+	GetTable(context.Context, string, string, string) (catalogDomain.Table, error)
+	GetDataset(context.Context, string, string) (catalogDomain.Dataset, error)
+	PublishMaterializedTable(context.Context, catalogDomain.Table) error
 }
 
 // NewLoadTableCatalog adapts the existing catalog application boundary to the
 // load-job bounded context without coupling that context to REST DTOs.
-func NewLoadTableCatalog(catalog CatalogUseCases) loadports.TableCatalog {
+func NewLoadTableCatalog(catalog LoadCatalogUseCases) loadports.TableCatalog {
 	return &loadTableCatalog{catalog: catalog}
+}
+
+func (c *loadTableCatalog) GetDatasetLocation(ctx context.Context, projectID, datasetID string) (string, error) {
+	dataset, err := c.catalog.GetDataset(ctx, projectID, datasetID)
+	if err != nil {
+		return "", mapCatalogLoadError(err)
+	}
+	return dataset.Location, nil
+}
+
+func (c *loadTableCatalog) PublishTable(ctx context.Context, table loadDomain.Table) error {
+	err := c.catalog.PublishMaterializedTable(ctx, catalogDomain.Table{
+		ProjectID: table.Reference.ProjectID,
+		DatasetID: table.Reference.DatasetID,
+		ID:        table.Reference.TableID,
+		Location:  table.Location,
+		Schema:    catalogDomain.CloneFields(table.Schema),
+	})
+	return mapCatalogLoadError(err)
 }
 
 func (c *loadTableCatalog) GetTable(ctx context.Context, reference loadDomain.TableReference) (loadDomain.Table, error) {
@@ -52,6 +77,8 @@ func mapCatalogLoadError(err error) error {
 		return fmt.Errorf("%w: destination table", loadDomain.ErrConflict)
 	case errors.Is(err, catalogDomain.ErrPrecondition):
 		return fmt.Errorf("%w: destination table", loadDomain.ErrPrecondition)
+	case errors.Is(err, catalogDomain.ErrUnsupported):
+		return fmt.Errorf("%w: destination table", loadDomain.ErrUnsupported)
 	default:
 		return err
 	}

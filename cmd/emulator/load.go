@@ -21,7 +21,7 @@ import (
 func composeLoadJobs(
 	cfg config.Config,
 	jobs loadports.JobRepository,
-	catalog rest.CatalogUseCases,
+	catalog rest.LoadCatalogUseCases,
 	loader loadports.Loader,
 	clock loadports.Clock,
 	ids loadports.IDGenerator,

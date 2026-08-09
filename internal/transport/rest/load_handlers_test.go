@@ -122,6 +122,31 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	if query["totalRows"] != "1" || query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "2" {
 		t.Fatalf("unexpected query result after load: %#v", query)
 	}
+
+	createBody := fmt.Sprintf(`{
+		"jobReference":{"projectId":"test-project","jobId":"load-create","location":"US"},
+		"configuration":{"load":{
+			"sourceUris":[%q],
+			"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"created_events"},
+			"sourceFormat":"PARQUET","writeDisposition":"WRITE_EMPTY","createDisposition":"CREATE_IF_NEEDED",
+			"schema":{"fields":[{"name":"id","type":"INT64","mode":"REQUIRED"},{"name":"name","type":"STRING"}]}
+		}}
+	}`, "gs://load-bucket/input/*.parquet")
+	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", createBody, http.StatusOK)
+	createdJob := waitForRESTLoad(t, server.URL, "load-create")
+	if createdJob["status"].(map[string]any)["errorResult"] != nil {
+		t.Fatalf("destination-creating load failed: %#v", createdJob)
+	}
+	createdTable := restLoadRequest(t, server.URL, http.MethodGet,
+		"/bigquery/v2/projects/test-project/datasets/analytics/tables/created_events", "", http.StatusOK)
+	if createdTable["location"] != "US" {
+		t.Fatalf("created table metadata = %#v", createdTable)
+	}
+	query = restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/queries",
+		`{"query":"SELECT count(*) AS row_count FROM `+"`test-project.analytics.created_events`"+`","useLegacySql":false}`, http.StatusOK)
+	if query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "2" {
+		t.Fatalf("unexpected query result after destination creation: %#v", query)
+	}
 	listed := restLoadRequest(t, server.URL, http.MethodGet, "/bigquery/v2/projects/test-project/jobs?location=US", "", http.StatusOK)
 	if len(listed["jobs"].([]any)) < 1 {
 		t.Fatalf("load job missing from list: %#v", listed)

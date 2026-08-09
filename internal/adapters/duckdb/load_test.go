@@ -16,11 +16,80 @@ import (
 )
 
 type testLoadRequest struct {
-	Destination      loadDomain.Table
-	Schema           []loadDomain.Field
-	Objects          []loadports.LocalObject
-	SourceFormat     loadDomain.SourceFormat
-	WriteDisposition loadDomain.WriteDisposition
+	Destination       loadDomain.Table
+	CreateDestination bool
+	Schema            []loadDomain.Field
+	Objects           []loadports.LocalObject
+	SourceFormat      loadDomain.SourceFormat
+	WriteDisposition  loadDomain.WriteDisposition
+}
+
+func TestParquetLoadCreatesMissingDestinationInOneTransaction(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	fields := []loadDomain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}, {Name: "name", Type: "STRING"}}
+	parquet := createLoadParquet(t, warehouse, "SELECT 1::BIGINT AS id, 'one'::VARCHAR AS name")
+	result, err := executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "created_items"},
+			Schema:    fields,
+		},
+		CreateDestination: true,
+		Schema:            fields, Objects: []loadports.LocalObject{{Path: parquet}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.CreatedDestination || result.OutputRows != 1 {
+		t.Fatalf("load result = %+v", result)
+	}
+	var id int64
+	var name string
+	if err := warehouse.db.QueryRowContext(ctx,
+		`SELECT id, name FROM "bq_746573742d70726f6a656374_64617461736574"."created_items"`,
+	).Scan(&id, &name); err != nil {
+		t.Fatal(err)
+	}
+	if id != 1 || name != "one" {
+		t.Fatalf("created destination row = %d %q", id, name)
+	}
+
+	invalid := createLoadParquet(t, warehouse, "SELECT 1234::BIGINT AS amount")
+	precision, scale := int64(3), int64(0)
+	_, err = executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "rolled_back_items"},
+			Schema: []loadDomain.Field{{
+				Name: "amount", Type: "NUMERIC", Precision: &precision, Scale: &scale,
+			}},
+		},
+		CreateDestination: true,
+		Schema: []loadDomain.Field{{
+			Name: "amount", Type: "NUMERIC", Precision: &precision, Scale: &scale,
+		}}, Objects: []loadports.LocalObject{{Path: invalid}},
+		SourceFormat: loadDomain.FormatParquet, WriteDisposition: loadDomain.WriteAppend,
+	})
+	if err == nil {
+		t.Fatalf("invalid new-destination load error = %v", err)
+	}
+	var exists bool
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM duckdb_tables() WHERE schema_name = 'bq_746573742d70726f6a656374_64617461736574'
+		AND table_name = 'rolled_back_items'
+	)`).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("failed load published a physical destination")
+	}
 }
 
 func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
@@ -286,8 +355,12 @@ func executeTestLoad(ctx context.Context, warehouse *Warehouse, request testLoad
 	if len(request.Destination.Schema) == 0 {
 		request.Destination.Schema = catalogDomain.CloneFields(request.Schema)
 	}
+	operation := engine.SchemaOperationValidate
+	if request.CreateDestination {
+		operation = engine.SchemaOperationCreate
+	}
 	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
-		Operation: engine.SchemaOperationValidate,
+		Operation: operation,
 		Target: catalogDomain.TableReference{
 			ProjectID: request.Destination.Reference.ProjectID,
 			DatasetID: request.Destination.Reference.DatasetID,
@@ -314,7 +387,7 @@ func executeTestLoad(ctx context.Context, warehouse *Warehouse, request testLoad
 		resolved[index] = loadports.ResolvedObject{Fingerprint: local[index].Fingerprint, Size: local[index].Size}
 	}
 	plan, err := warehouse.PlanLoad(ctx, loadports.LoadPlanRequest{
-		Destination: request.Destination, SchemaPlan: schemaPlan,
+		Destination: request.Destination, CreateDestination: request.CreateDestination, SchemaPlan: schemaPlan,
 		SourceFormat: request.SourceFormat, WriteDisposition: request.WriteDisposition,
 		Objects: resolved,
 	})

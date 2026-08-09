@@ -304,10 +304,10 @@ service.
 | accepted load source URI | `gs://` only; local paths and other schemes fail before job persistence |
 | fake GCS service | Required by the default Compose project; the binary connects to the configured GCS-compatible JSON endpoint |
 | GCS/fake-GCS JSON adapter | Partial; bounded list/get/media and URI glob expansion |
-| Parquet load into an existing table | Partial; scalar fields only, with explicit schema/cast validation; nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1`, and decimal narrowing fails before destination mutation with `load.decimal-rounding.unsupported-v1` |
+| Parquet load into a table | Partial; existing destinations and `CREATE_IF_NEEDED` with an explicit schema are supported for scalar fields. A new physical table and its rows commit in one transaction before metadata publication. Nested or repeated fields fail before object access with `load.parquet.nested-repeated.unsupported-v1`, and decimal narrowing fails before destination mutation with `load.decimal-rounding.unsupported-v1`. |
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
-| destination create, autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
+| schema inference/autodetect, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | Implemented when configured |
 | BigQuery-compatible endpoint authentication | Intentionally absent; missing, arbitrary, and malformed credentials are ignored |
 | Disposable service-account, authorized-user, WIF, and direct-token files | Implemented by the loopback-only `bqemu-auth-fixture` development helper |

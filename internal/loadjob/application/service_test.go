@@ -68,21 +68,49 @@ func (s *testObjectStore) Open(_ context.Context, object ports.ObjectInfo) (io.R
 	return io.NopCloser(bytes.NewReader(s.objects[object.URI])), nil
 }
 
-type testCatalog struct{ table domain.Table }
+type testCatalog struct {
+	table           domain.Table
+	missing         bool
+	datasetLocation string
+	publishErr      error
+	published       *[]domain.Table
+}
 
 func (c testCatalog) GetTable(_ context.Context, reference domain.TableReference) (domain.Table, error) {
-	if reference != c.table.Reference {
+	if c.missing || reference != c.table.Reference {
 		return domain.Table{}, domain.ErrNotFound
 	}
 	return c.table, nil
 }
 
+func (c testCatalog) GetDatasetLocation(_ context.Context, projectID, datasetID string) (string, error) {
+	if projectID != c.table.Reference.ProjectID || datasetID != c.table.Reference.DatasetID {
+		return "", domain.ErrNotFound
+	}
+	if c.datasetLocation != "" {
+		return c.datasetLocation, nil
+	}
+	return "US", nil
+}
+
+func (c testCatalog) PublishTable(_ context.Context, table domain.Table) error {
+	if c.publishErr != nil {
+		return c.publishErr
+	}
+	if c.published != nil {
+		*c.published = append(*c.published, table)
+	}
+	return nil
+}
+
 type testLoader struct {
 	testLoadPlanner
-	mu    sync.Mutex
-	calls int
-	paths []string
-	block bool
+	mu           sync.Mutex
+	calls        int
+	paths        []string
+	block        bool
+	discardCalls int
+	discardErr   error
 }
 
 type gatedLoader struct {
@@ -133,12 +161,11 @@ func (planner *testLoadPlanner) PlanLoad(ctx context.Context, request ports.Load
 	return planner.loadPlanner.Plan(ctx, request)
 }
 
-func (planner *testLoadPlanner) validateExecution(ctx context.Context, plan ports.LoadPlan, objects []ports.LocalObject) error {
+func (planner *testLoadPlanner) validateExecution(ctx context.Context, plan ports.LoadPlan, objects []ports.LocalObject) (ports.LoadPlanRequest, error) {
 	if err := planner.ensurePlanners(); err != nil {
-		return err
+		return ports.LoadPlanRequest{}, err
 	}
-	_, err := planner.loadPlanner.ValidateExecution(ctx, plan, objects)
-	return err
+	return planner.loadPlanner.ValidateExecution(ctx, plan, objects)
 }
 
 func (planner *testLoadPlanner) ensurePlanners() error {
@@ -176,6 +203,9 @@ func testLoaderCapabilities() engine.Capabilities {
 		AtomicReplacements: map[engine.AtomicReplacementScope]bool{
 			engine.AtomicReplacementTable: true,
 		},
+		DDL: map[engine.DDLOperation]engine.DDLCapability{
+			engine.DDLCreateTable: {Guarantee: engine.DDLGuaranteeAtomicPhysicalTable},
+		},
 	})
 	if err != nil {
 		panic(err)
@@ -184,20 +214,22 @@ func testLoaderCapabilities() engine.Capabilities {
 }
 
 func (l *gatedLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objects []ports.LocalObject) (ports.LoadResult, error) {
-	if err := l.validateExecution(ctx, plan, objects); err != nil {
+	request, err := l.validateExecution(ctx, plan, objects)
+	if err != nil {
 		return ports.LoadResult{}, err
 	}
 	l.once.Do(func() { close(l.started) })
 	select {
 	case <-l.release:
-		return ports.LoadResult{OutputRows: 3}, nil
+		return ports.LoadResult{OutputRows: 3, CreatedDestination: request.CreateDestination}, nil
 	case <-ctx.Done():
 		return ports.LoadResult{}, ctx.Err()
 	}
 }
 
 func (l *testLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objects []ports.LocalObject) (ports.LoadResult, error) {
-	if err := l.validateExecution(ctx, plan, objects); err != nil {
+	request, err := l.validateExecution(ctx, plan, objects)
+	if err != nil {
 		return ports.LoadResult{}, err
 	}
 	l.mu.Lock()
@@ -214,8 +246,17 @@ func (l *testLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objec
 		<-ctx.Done()
 		return ports.LoadResult{}, ctx.Err()
 	}
-	return ports.LoadResult{OutputRows: 3}, nil
+	return ports.LoadResult{OutputRows: 3, CreatedDestination: request.CreateDestination}, nil
 }
+
+func (l *testLoader) DiscardLoadedTable(context.Context, domain.TableReference) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.discardCalls++
+	return l.discardErr
+}
+
+func (l *gatedLoader) DiscardLoadedTable(context.Context, domain.TableReference) error { return nil }
 
 func TestServiceIsIdempotentAndCleansWorkspace(t *testing.T) {
 	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
@@ -254,6 +295,114 @@ func TestServiceIsIdempotentAndCleansWorkspace(t *testing.T) {
 	if _, err := service.Submit(context.Background(), reference, configuration); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("configuration conflict = %v", err)
 	}
+}
+
+func TestServiceCreatesAndPublishesMissingDestination(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+	loader := &testLoader{}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US",
+		Schema:    []domain.Field{{Name: "id", Type: "INT64"}},
+	}
+	published := make([]domain.Table, 0, 1)
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		NewMemoryJobRepository(), objects,
+		testCatalog{table: table, missing: true, published: &published}, loader,
+		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Schema = catalogdomain.CloneFields(table.Schema)
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "create-destination"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error != nil || job.Statistics.OutputRows != 3 {
+		t.Fatalf("job = %+v", job)
+	}
+	if len(published) != 1 || published[0].Reference != table.Reference || !schemasEqual(published[0].Schema, table.Schema) {
+		t.Fatalf("published destinations = %#v", published)
+	}
+	loader.mu.Lock()
+	discards := loader.discardCalls
+	loader.mu.Unlock()
+	if discards != 0 {
+		t.Fatalf("successful destination was discarded %d times", discards)
+	}
+}
+
+func TestServiceEnforcesCreateNeverAndCompensatesPublicationFailure(t *testing.T) {
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US",
+		Schema:    []domain.Field{{Name: "id", Type: "INT64"}},
+	}
+	newService := func(t *testing.T, catalog testCatalog, loader *testLoader, objects *testObjectStore) *Service {
+		t.Helper()
+		config := DefaultConfig()
+		config.TempDirectory = t.TempDir()
+		service, err := NewService(
+			NewMemoryJobRepository(), objects, catalog, loader,
+			testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service
+	}
+
+	t.Run("CREATE_NEVER", func(t *testing.T) {
+		objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+		loader := &testLoader{}
+		service := newService(t, testCatalog{table: table, missing: true}, loader, objects)
+		configuration := testConfiguration(domain.FormatParquet)
+		configuration.Schema = catalogdomain.CloneFields(table.Schema)
+		configuration.CreateDisposition = domain.CreateNever
+		reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "create-never"}
+		if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+			t.Fatal(err)
+		}
+		job := waitForDone(t, service, reference)
+		if job.Error == nil || job.Error.Reason != "notFound" {
+			t.Fatalf("job = %+v", job)
+		}
+		objects.mu.Lock()
+		opens := objects.opens
+		objects.mu.Unlock()
+		if opens != 0 || loader.calls != 0 {
+			t.Fatalf("CREATE_NEVER crossed object/engine boundary: opens=%d loads=%d", opens, loader.calls)
+		}
+	})
+
+	t.Run("publication failure", func(t *testing.T) {
+		objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+		loader := &testLoader{}
+		service := newService(t, testCatalog{
+			table: table, missing: true, publishErr: fmt.Errorf("%w: publish", domain.ErrConflict),
+		}, loader, objects)
+		configuration := testConfiguration(domain.FormatParquet)
+		configuration.Schema = catalogdomain.CloneFields(table.Schema)
+		reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "publish-failure"}
+		if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+			t.Fatal(err)
+		}
+		job := waitForDone(t, service, reference)
+		if job.Error == nil {
+			t.Fatalf("job = %+v", job)
+		}
+		loader.mu.Lock()
+		discards := loader.discardCalls
+		loader.mu.Unlock()
+		if discards != 1 {
+			t.Fatalf("publication failure discarded destination %d times", discards)
+		}
+	})
 }
 
 func TestServiceRejectsNonGCSURIWithoutPersistingJob(t *testing.T) {
