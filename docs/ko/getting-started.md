@@ -18,6 +18,7 @@
 ```bash
 docker compose up --build -d --wait
 curl --fail http://localhost:9050/readyz
+export BQEMU_REST=http://localhost:9050
 ```
 
 Compose는 카탈로그와 테이블 데이터를 `bqemu-data` 볼륨에 보관합니다. 재시작 후에도
@@ -26,14 +27,18 @@ Compose는 카탈로그와 테이블 데이터를 `bqemu-data` 볼륨에 보관�
 <!-- section: endpoints -->
 ## 접속 주소 선택하기
 
-| 클라이언트 위치 | REST | Storage gRPC |
-| --- | --- | --- |
-| Compose를 실행한 호스트 | `http://localhost:9050` | `localhost:9060` |
-| 같은 Compose의 다른 서비스 | `http://bqemu:9050` | `bqemu:9060` |
-| BQEMU를 호스트에서 실행하는 개발 컨테이너 | `http://host.docker.internal:9050` | `host.docker.internal:9060` |
+| 클라이언트 위치 | REST | Storage gRPC | fake GCS 업로더 | TLS CA 경로 |
+| --- | --- | --- | --- | --- |
+| Compose를 실행한 호스트 | `http://localhost:9050` | `localhost:9060` | `http://localhost:4443` | `.bqemu-auth/ca.pem` |
+| 같은 Compose 서비스 / Compose network의 Dev Container | `http://bqemu:9050` | `bqemu:9060` | `http://fake-gcs:4443` | mount한 `/run/bqemu-auth/ca.pem` |
+| BQEMU를 호스트에서 실행하는 개발 컨테이너 | `http://host.docker.internal:9050` | `host.docker.internal:9060` | `http://host.docker.internal:4443` | mount한 host CA 경로 |
 
 REST 호출자는 REST 주소만 사용합니다. Storage Read와 Storage Write 호출자는 gRPC
 주소도 사용합니다.
+
+아래 호스트 quick start는 `BQEMU_REST=http://localhost:9050`을 설정합니다.
+컨테이너 호출자는 표에 맞는 localhost가 아닌 REST 주소를 설정해야 합니다. 컨테이너
+안의 `localhost`는 BQEMU가 아니라 그 컨테이너 자신입니다.
 
 <!-- section: resources -->
 ## 프로젝트, 데이터 세트, 테이블 만들기
@@ -42,17 +47,17 @@ BQEMU 프로젝트는 에뮬레이터 전용 리소스입니다. BigQuery v2 메
 먼저 프로젝트를 만듭니다.
 
 ```bash
-curl --fail -X POST http://localhost:9050/bqemu/v1/projects \
+curl --fail -X POST "$BQEMU_REST/bqemu/v1/projects" \
   -H 'Content-Type: application/json' \
   -d '{"projectId":"test-project","friendlyName":"Local tests"}'
 
 curl --fail -X POST \
-  http://localhost:9050/bigquery/v2/projects/test-project/datasets \
+  "$BQEMU_REST/bigquery/v2/projects/test-project/datasets" \
   -H 'Content-Type: application/json' \
   -d '{"datasetReference":{"projectId":"test-project","datasetId":"analytics"},"location":"US"}'
 
 curl --fail -X POST \
-  http://localhost:9050/bigquery/v2/projects/test-project/datasets/analytics/tables \
+  "$BQEMU_REST/bigquery/v2/projects/test-project/datasets/analytics/tables" \
   -H 'Content-Type: application/json' \
   -d '{"tableReference":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},"schema":{"fields":[{"name":"id","type":"INTEGER","mode":"REQUIRED"},{"name":"label","type":"STRING"}]}}'
 ```
@@ -65,7 +70,7 @@ curl --fail -X POST \
 
 ```bash
 curl --fail -X POST \
-  http://localhost:9050/bigquery/v2/projects/test-project/queries \
+  "$BQEMU_REST/bigquery/v2/projects/test-project/queries" \
   -H 'Content-Type: application/json' \
   -d '{"query":"SELECT 1 AS answer","useLegacySql":false,"location":"US"}'
 ```
@@ -96,7 +101,7 @@ curl --fail http://localhost:4443/storage/v1/b
 | 호출자 | 설정 | Compose 값 |
 | --- | --- | --- |
 | BQEMU 로드 작업자 | `BQEMU_LOAD_GCS_ENDPOINT` / `load.gcsEndpoint` | `http://fake-gcs:4443` |
-| Parquet 객체를 업로드하는 프로세스 | 업로더별 주소 설정 | `http://localhost:4443` |
+| Parquet 객체를 업로드하는 프로세스 | 업로더별 주소 설정 | endpoint 표에서 실행 위치에 맞는 fake-GCS 주소 선택 |
 
 데이터를 만드는 프로세스가 임시 Parquet 객체를 fake GCS에 업로드합니다. BQEMU는
 필요할 때 일치하는 객체 목록을 조회하고 객체 내용을 내려받은 뒤 로드를 반영합니다.

@@ -18,6 +18,7 @@ From the repository root:
 ```bash
 docker compose up --build -d --wait
 curl --fail http://localhost:9050/readyz
+export BQEMU_REST=http://localhost:9050
 ```
 
 Compose stores the catalog and table data in the `bqemu-data` volume. Keeping
@@ -26,14 +27,19 @@ that volume across restarts is the user's responsibility.
 <!-- section: endpoints -->
 ## Choose The Endpoint
 
-| Client location | REST | Storage gRPC |
-| --- | --- | --- |
-| Host running Compose | `http://localhost:9050` | `localhost:9060` |
-| Sibling Compose service | `http://bqemu:9050` | `bqemu:9060` |
-| Development container, BQEMU on host | `http://host.docker.internal:9050` | `host.docker.internal:9060` |
+| Client location | REST | Storage gRPC | fake GCS uploader | TLS CA path |
+| --- | --- | --- | --- | --- |
+| Host running Compose | `http://localhost:9050` | `localhost:9060` | `http://localhost:4443` | `.bqemu-auth/ca.pem` |
+| Sibling Compose service / Dev Container on the Compose network | `http://bqemu:9050` | `bqemu:9060` | `http://fake-gcs:4443` | mounted `/run/bqemu-auth/ca.pem` |
+| Development container, BQEMU on host | `http://host.docker.internal:9050` | `host.docker.internal:9060` | `http://host.docker.internal:4443` | mounted host CA path |
 
 REST callers use only the REST endpoint. Storage Read and Storage Write callers
 also use the gRPC endpoint.
+
+For the host quick start below, set `BQEMU_REST=http://localhost:9050`. A
+containerized caller must instead set it to the matching non-localhost REST
+address from the table; `localhost` inside that container is the container,
+not BQEMU.
 
 <!-- section: resources -->
 ## Create A Project, Dataset, And Table
@@ -42,17 +48,17 @@ BQEMU projects are emulator resources, so create one before calling BigQuery
 v2 methods:
 
 ```bash
-curl --fail -X POST http://localhost:9050/bqemu/v1/projects \
+curl --fail -X POST "$BQEMU_REST/bqemu/v1/projects" \
   -H 'Content-Type: application/json' \
   -d '{"projectId":"test-project","friendlyName":"Local tests"}'
 
 curl --fail -X POST \
-  http://localhost:9050/bigquery/v2/projects/test-project/datasets \
+  "$BQEMU_REST/bigquery/v2/projects/test-project/datasets" \
   -H 'Content-Type: application/json' \
   -d '{"datasetReference":{"projectId":"test-project","datasetId":"analytics"},"location":"US"}'
 
 curl --fail -X POST \
-  http://localhost:9050/bigquery/v2/projects/test-project/datasets/analytics/tables \
+  "$BQEMU_REST/bigquery/v2/projects/test-project/datasets/analytics/tables" \
   -H 'Content-Type: application/json' \
   -d '{"tableReference":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},"schema":{"fields":[{"name":"id","type":"INTEGER","mode":"REQUIRED"},{"name":"label","type":"STRING"}]}}'
 ```
@@ -65,7 +71,7 @@ These requests use `bqemu.projects.create`, `bigquery.datasets.insert`, and
 
 ```bash
 curl --fail -X POST \
-  http://localhost:9050/bigquery/v2/projects/test-project/queries \
+  "$BQEMU_REST/bigquery/v2/projects/test-project/queries" \
   -H 'Content-Type: application/json' \
   -d '{"query":"SELECT 1 AS answer","useLegacySql":false,"location":"US"}'
 ```
@@ -97,7 +103,7 @@ The two endpoint settings serve different callers:
 | Caller | Setting | Compose value |
 | --- | --- | --- |
 | BQEMU load worker | `BQEMU_LOAD_GCS_ENDPOINT` / `load.gcsEndpoint` | `http://fake-gcs:4443` |
-| Process uploading Parquet objects | Uploader-specific endpoint | `http://localhost:4443` |
+| Process uploading Parquet objects | Uploader-specific endpoint | Select the fake-GCS address for its location from the endpoint table |
 
 The producing process uploads temporary Parquet objects to fake GCS. BQEMU
 lists matching objects when necessary, downloads object media, and commits the
