@@ -9,12 +9,18 @@ import (
 )
 
 type Querier interface {
+	CreateLoadJob(ctx context.Context, arg CreateLoadJobParams) (int64, error)
 	CreateLoadMutation(ctx context.Context, arg CreateLoadMutationParams) error
+	GetLoadJob(ctx context.Context, arg GetLoadJobParams) (GetLoadJobRow, error)
 	GetLoadMutation(ctx context.Context, mutationID string) (GetLoadMutationRow, error)
+	ListInterruptedLoadJobs(ctx context.Context) ([]ListInterruptedLoadJobsRow, error)
+	ListLoadJobs(ctx context.Context, projectID string) ([]ListLoadJobsRow, error)
+	ListLoadJobsAtLocation(ctx context.Context, arg ListLoadJobsAtLocationParams) ([]ListLoadJobsAtLocationRow, error)
 	ListRecoverableLoadMutations(ctx context.Context) ([]ListRecoverableLoadMutationsRow, error)
 	MarkLoadMutationAborted(ctx context.Context, mutationID string) (int64, error)
 	MarkLoadMutationApplied(ctx context.Context, mutationID string) (int64, error)
 	MarkLoadMutationPhysical(ctx context.Context, arg MarkLoadMutationPhysicalParams) (int64, error)
+	UpdateLoadJob(ctx context.Context, arg UpdateLoadJobParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

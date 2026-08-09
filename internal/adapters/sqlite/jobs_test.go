@@ -186,6 +186,51 @@ func TestRepositoryStartupTerminatesOnlyInterruptedQueryJobs(t *testing.T) {
 	}
 }
 
+func TestLoadJobRepositoryListsStaticScopesAndInterruptedJobs(t *testing.T) {
+	ctx := context.Background()
+	repositories, err := Open(ctx, filepath.Join(t.TempDir(), "bqemu-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repositories.Close()
+	created := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
+	newJob := func(jobID, location string, createdAt time.Time) *loaddomain.Job {
+		t.Helper()
+		job, createErr := loaddomain.NewJob(loaddomain.JobReference{
+			ProjectID: "test-project", Location: location, JobID: jobID,
+		}, loaddomain.LoadConfiguration{
+			SourceURIs: []string{"gs://fixtures/input.parquet"}, SourceFormat: loaddomain.FormatParquet,
+			Destination: loaddomain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "events"},
+		}, createdAt)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return job
+	}
+	earlier := newJob("earlier", "US", created)
+	later := newJob("later", "EU", created.Add(time.Second))
+	if err := later.Start(created.Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []*loaddomain.Job{later, earlier} {
+		if _, createdJob, createErr := repositories.LoadJobs().CreateOrGet(ctx, job); createErr != nil || !createdJob {
+			t.Fatalf("create load job %s = %v, created=%v", job.Reference.JobID, createErr, createdJob)
+		}
+	}
+	all, err := repositories.LoadJobs().List(ctx, "test-project", "")
+	if err != nil || len(all) != 2 || all[0].Reference.JobID != "earlier" || all[1].Reference.JobID != "later" {
+		t.Fatalf("all load jobs = %#v, %v", all, err)
+	}
+	us, err := repositories.LoadJobs().List(ctx, "test-project", "us")
+	if err != nil || len(us) != 1 || us[0].Reference.JobID != "earlier" {
+		t.Fatalf("US load jobs = %#v, %v", us, err)
+	}
+	interrupted, err := repositories.LoadJobs().ListInterrupted(ctx)
+	if err != nil || len(interrupted) != 2 || interrupted[0].Reference.JobID != "earlier" || interrupted[1].Reference.JobID != "later" {
+		t.Fatalf("interrupted load jobs = %#v, %v", interrupted, err)
+	}
+}
+
 func newInterruptedLoadJob(t *testing.T, jobID string, created time.Time) *loaddomain.Job {
 	t.Helper()
 	job, err := loaddomain.NewJob(loaddomain.JobReference{

@@ -105,7 +105,7 @@ func Open(ctx context.Context, path string) (*Repositories, error) {
 
 	return &Repositories{
 		db: db, catalog: &catalogRepository{db: db},
-		queryJobs: newQueryJobRepository(db), loadJobs: &loadJobRepository{db: db},
+		queryJobs: newQueryJobRepository(db), loadJobs: newLoadJobRepository(db),
 		loadMutations: newLoadMutationJournal(db),
 		readSessions:  &readSessionRepository{db: db},
 		writeState:    &writeStateRepository{db: db},

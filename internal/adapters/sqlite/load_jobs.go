@@ -6,20 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
+	"time"
 
+	"github.com/leeyh0216/go-bemu/internal/adapters/sqlite/sqlcgen"
 	loaddomain "github.com/leeyh0216/go-bemu/internal/loadjob/domain"
 	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 )
 
-const loadJobSelect = `SELECT project_id, location, job_id, configuration_version,
-    configuration_json, configuration_digest, state, error_reason, error_message,
-    created_at, started_at, ended_at, input_files, input_bytes, output_rows, output_bytes
-FROM bqemu_load_jobs`
-
 type loadJobRepository struct {
-	db *sql.DB
+	queries *sqlcgen.Queries
+}
+
+func newLoadJobRepository(db *sql.DB) *loadJobRepository {
+	return &loadJobRepository{queries: sqlcgen.New(db)}
 }
 
 var _ loadports.JobRepository = (*loadJobRepository)(nil)
@@ -29,18 +29,9 @@ func (r *loadJobRepository) CreateOrGet(ctx context.Context, job *loaddomain.Job
 	if err != nil {
 		return nil, false, err
 	}
-	result, err := r.db.ExecContext(ctx, `INSERT INTO bqemu_load_jobs (
-    project_id, location_key, location, job_id, configuration_version,
-    configuration_json, configuration_digest, state, error_reason, error_message,
-    created_at, started_at, ended_at, input_files, input_bytes, output_rows, output_bytes
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (project_id, location_key, job_id) DO NOTHING`, values...)
+	rowsAffected, err := r.queries.CreateLoadJob(ctx, values.createParams())
 	if err != nil {
 		return nil, false, loadJobRepositoryError(ctx, "create", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return nil, false, loadJobRepositoryError(ctx, "inspect create", err)
 	}
 	if rowsAffected == 0 {
 		existing, getErr := r.Get(ctx, job.Reference)
@@ -58,21 +49,9 @@ func (r *loadJobRepository) Update(ctx context.Context, job *loaddomain.Job) err
 	if err != nil {
 		return err
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE bqemu_load_jobs SET
-    location = ?, configuration_version = ?, configuration_json = ?,
-    configuration_digest = ?, state = ?, error_reason = ?, error_message = ?,
-    created_at = ?, started_at = ?, ended_at = ?, input_files = ?, input_bytes = ?,
-    output_rows = ?, output_bytes = ?
-WHERE project_id = ? AND location_key = ? AND job_id = ?`,
-		values[2], values[4], values[5], values[6], values[7], values[8], values[9],
-		values[10], values[11], values[12], values[13], values[14], values[15], values[16],
-		values[0], values[1], values[3])
+	rowsAffected, err := r.queries.UpdateLoadJob(ctx, values.updateParams())
 	if err != nil {
 		return loadJobRepositoryError(ctx, "update", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return loadJobRepositoryError(ctx, "inspect update", err)
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("%w: load job %s", loaddomain.ErrNotFound, job.Reference.JobID)
@@ -84,12 +63,16 @@ func (r *loadJobRepository) Get(ctx context.Context, reference loaddomain.JobRef
 	if err := validateLoadJobReference(reference); err != nil {
 		return nil, err
 	}
-	job, err := scanLoadJob(r.db.QueryRowContext(ctx, loadJobSelect+`
-WHERE project_id = ? AND location_key = ? AND job_id = ?`,
-		reference.ProjectID, strings.ToUpper(reference.Location), reference.JobID))
+	row, err := r.queries.GetLoadJob(ctx, sqlcgen.GetLoadJobParams{
+		ProjectID: reference.ProjectID, LocationKey: strings.ToUpper(reference.Location), JobID: reference.JobID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: load job %s", loaddomain.ErrNotFound, reference.JobID)
 	}
+	if err != nil {
+		return nil, loadJobRepositoryError(ctx, "get", err)
+	}
+	job, err := decodeGetLoadJob(row)
 	if err != nil {
 		return nil, loadJobRepositoryError(ctx, "get", err)
 	}
@@ -100,97 +83,173 @@ func (r *loadJobRepository) List(ctx context.Context, projectID, location string
 	if strings.TrimSpace(projectID) == "" {
 		return nil, fmt.Errorf("%w: projectId is required", loaddomain.ErrInvalid)
 	}
-	statement := loadJobSelect + ` WHERE project_id = ?`
-	args := []any{projectID}
-	if location != "" {
-		statement += ` AND location_key = ?`
-		args = append(args, strings.ToUpper(location))
+	if location == "" {
+		rows, err := r.queries.ListLoadJobs(ctx, projectID)
+		if err != nil {
+			return nil, loadJobRepositoryError(ctx, "list", err)
+		}
+		return decodeListedLoadJobs(rows)
 	}
-	rows, err := r.db.QueryContext(ctx, statement, args...)
+	rows, err := r.queries.ListLoadJobsAtLocation(ctx, sqlcgen.ListLoadJobsAtLocationParams{
+		ProjectID: projectID, LocationKey: strings.ToUpper(location),
+	})
 	if err != nil {
 		return nil, loadJobRepositoryError(ctx, "list", err)
 	}
-	defer rows.Close()
-	jobs := make([]*loaddomain.Job, 0)
-	for rows.Next() {
-		job, scanErr := scanLoadJob(rows)
-		if scanErr != nil {
-			return nil, loadJobRepositoryError(ctx, "list", scanErr)
-		}
-		jobs = append(jobs, job)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, loadJobRepositoryError(ctx, "list", err)
-	}
-	sort.Slice(jobs, func(i, j int) bool {
-		if jobs[i].CreatedAt.Equal(jobs[j].CreatedAt) {
-			return jobs[i].Reference.JobID < jobs[j].Reference.JobID
-		}
-		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
-	})
-	return jobs, nil
+	return decodeListedLoadJobsAtLocation(rows)
 }
 
 func (r *loadJobRepository) ListInterrupted(ctx context.Context) ([]*loaddomain.Job, error) {
-	rows, err := r.db.QueryContext(ctx, loadJobSelect+` WHERE state IN ('PENDING', 'RUNNING')
-ORDER BY created_at, project_id, location_key, job_id`)
+	rows, err := r.queries.ListInterruptedLoadJobs(ctx)
 	if err != nil {
 		return nil, loadJobRepositoryError(ctx, "list interrupted", err)
 	}
-	defer rows.Close()
-	jobs := make([]*loaddomain.Job, 0)
-	for rows.Next() {
-		job, scanErr := scanLoadJob(rows)
-		if scanErr != nil {
-			return nil, loadJobRepositoryError(ctx, "list interrupted", scanErr)
+	jobs := make([]*loaddomain.Job, 0, len(rows))
+	for _, row := range rows {
+		job, decodeErr := decodeInterruptedLoadJob(row)
+		if decodeErr != nil {
+			return nil, loadJobRepositoryError(ctx, "list interrupted", decodeErr)
 		}
 		jobs = append(jobs, job)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, loadJobRepositoryError(ctx, "list interrupted", err)
 	}
 	return jobs, nil
 }
 
-func encodeLoadJob(job *loaddomain.Job) ([]any, error) {
+type loadJobPersistence struct {
+	projectID            string
+	locationKey          string
+	location             string
+	jobID                string
+	configurationVersion int64
+	configurationJSON    string
+	configurationDigest  string
+	state                string
+	errorReason          sql.NullString
+	errorMessage         sql.NullString
+	createdAt            string
+	startedAt            sql.NullString
+	endedAt              sql.NullString
+	inputFiles           int64
+	inputBytes           int64
+	outputRows           int64
+	outputBytes          int64
+}
+
+func encodeLoadJob(job *loaddomain.Job) (loadJobPersistence, error) {
 	if job == nil {
-		return nil, fmt.Errorf("%w: load job is required", loaddomain.ErrInvalid)
+		return loadJobPersistence{}, fmt.Errorf("%w: load job is required", loaddomain.ErrInvalid)
 	}
 	if err := validateLoadJobReference(job.Reference); err != nil {
-		return nil, err
+		return loadJobPersistence{}, err
 	}
 	validated, err := loaddomain.NewJob(job.Reference, job.Configuration, job.CreatedAt)
 	if err != nil {
-		return nil, err
+		return loadJobPersistence{}, err
 	}
 	if validated.ConfigurationDigest != job.ConfigurationDigest {
-		return nil, fmt.Errorf("%w: load configuration digest does not match job metadata", loaddomain.ErrInvalid)
+		return loadJobPersistence{}, fmt.Errorf("%w: load configuration digest does not match job metadata", loaddomain.ErrInvalid)
 	}
 	configurationJSON, err := json.Marshal(job.Configuration)
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode load job configuration: %v", loaddomain.ErrInvalid, err)
+		return loadJobPersistence{}, fmt.Errorf("%w: encode load job configuration: %v", loaddomain.ErrInvalid, err)
 	}
 	errorReason, errorMessage := optionalLoadError(job.Error)
-	return []any{
-		job.Reference.ProjectID, strings.ToUpper(job.Reference.Location), job.Reference.Location, job.Reference.JobID,
-		1, string(configurationJSON), job.ConfigurationDigest, string(job.State), errorReason, errorMessage,
-		encodeTime(job.CreatedAt), optionalTime(job.StartedAt), optionalTime(job.EndedAt),
-		job.Statistics.InputFiles, job.Statistics.InputBytes, job.Statistics.OutputRows, job.Statistics.OutputBytes,
+	return loadJobPersistence{
+		projectID: job.Reference.ProjectID, locationKey: strings.ToUpper(job.Reference.Location),
+		location: job.Reference.Location, jobID: job.Reference.JobID, configurationVersion: 1,
+		configurationJSON: string(configurationJSON), configurationDigest: job.ConfigurationDigest,
+		state: string(job.State), errorReason: errorReason, errorMessage: errorMessage,
+		createdAt: encodeTime(job.CreatedAt), startedAt: optionalLoadTime(job.StartedAt), endedAt: optionalLoadTime(job.EndedAt),
+		inputFiles: job.Statistics.InputFiles, inputBytes: job.Statistics.InputBytes,
+		outputRows: job.Statistics.OutputRows, outputBytes: job.Statistics.OutputBytes,
 	}, nil
 }
 
-func scanLoadJob(scanner rowScanner) (*loaddomain.Job, error) {
-	var projectID, location, jobID, configurationJSON, digest, state, createdAt string
-	var configurationVersion int
-	var errorReason, errorMessage, startedAt, endedAt sql.NullString
-	var statistics loaddomain.Statistics
-	if err := scanner.Scan(
-		&projectID, &location, &jobID, &configurationVersion, &configurationJSON, &digest,
-		&state, &errorReason, &errorMessage, &createdAt, &startedAt, &endedAt,
-		&statistics.InputFiles, &statistics.InputBytes, &statistics.OutputRows, &statistics.OutputBytes,
-	); err != nil {
-		return nil, err
+func (values loadJobPersistence) createParams() sqlcgen.CreateLoadJobParams {
+	return sqlcgen.CreateLoadJobParams{
+		ProjectID: values.projectID, LocationKey: values.locationKey, Location: values.location, JobID: values.jobID,
+		ConfigurationVersion: values.configurationVersion, ConfigurationJson: values.configurationJSON,
+		ConfigurationDigest: values.configurationDigest, State: values.state,
+		ErrorReason: values.errorReason, ErrorMessage: values.errorMessage,
+		CreatedAt: values.createdAt, StartedAt: values.startedAt, EndedAt: values.endedAt,
+		InputFiles: values.inputFiles, InputBytes: values.inputBytes,
+		OutputRows: values.outputRows, OutputBytes: values.outputBytes,
 	}
+}
+
+func (values loadJobPersistence) updateParams() sqlcgen.UpdateLoadJobParams {
+	return sqlcgen.UpdateLoadJobParams{
+		Location: values.location, ConfigurationVersion: values.configurationVersion,
+		ConfigurationJson: values.configurationJSON, ConfigurationDigest: values.configurationDigest,
+		State: values.state, ErrorReason: values.errorReason, ErrorMessage: values.errorMessage,
+		CreatedAt: values.createdAt, StartedAt: values.startedAt, EndedAt: values.endedAt,
+		InputFiles: values.inputFiles, InputBytes: values.inputBytes,
+		OutputRows: values.outputRows, OutputBytes: values.outputBytes,
+		ProjectID: values.projectID, LocationKey: values.locationKey, JobID: values.jobID,
+	}
+}
+
+func decodeGetLoadJob(row sqlcgen.GetLoadJobRow) (*loaddomain.Job, error) {
+	return decodeLoadJob(
+		row.ProjectID, row.Location, row.JobID, row.ConfigurationVersion,
+		row.ConfigurationJson, row.ConfigurationDigest, row.State, row.ErrorReason, row.ErrorMessage,
+		row.CreatedAt, row.StartedAt, row.EndedAt,
+		row.InputFiles, row.InputBytes, row.OutputRows, row.OutputBytes,
+	)
+}
+
+func decodeListedLoadJobs(rows []sqlcgen.ListLoadJobsRow) ([]*loaddomain.Job, error) {
+	jobs := make([]*loaddomain.Job, 0, len(rows))
+	for _, row := range rows {
+		job, err := decodeLoadJob(
+			row.ProjectID, row.Location, row.JobID, row.ConfigurationVersion,
+			row.ConfigurationJson, row.ConfigurationDigest, row.State, row.ErrorReason, row.ErrorMessage,
+			row.CreatedAt, row.StartedAt, row.EndedAt,
+			row.InputFiles, row.InputBytes, row.OutputRows, row.OutputBytes,
+		)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
+func decodeListedLoadJobsAtLocation(rows []sqlcgen.ListLoadJobsAtLocationRow) ([]*loaddomain.Job, error) {
+	jobs := make([]*loaddomain.Job, 0, len(rows))
+	for _, row := range rows {
+		job, err := decodeLoadJob(
+			row.ProjectID, row.Location, row.JobID, row.ConfigurationVersion,
+			row.ConfigurationJson, row.ConfigurationDigest, row.State, row.ErrorReason, row.ErrorMessage,
+			row.CreatedAt, row.StartedAt, row.EndedAt,
+			row.InputFiles, row.InputBytes, row.OutputRows, row.OutputBytes,
+		)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
+func decodeInterruptedLoadJob(row sqlcgen.ListInterruptedLoadJobsRow) (*loaddomain.Job, error) {
+	return decodeLoadJob(
+		row.ProjectID, row.Location, row.JobID, row.ConfigurationVersion,
+		row.ConfigurationJson, row.ConfigurationDigest, row.State, row.ErrorReason, row.ErrorMessage,
+		row.CreatedAt, row.StartedAt, row.EndedAt,
+		row.InputFiles, row.InputBytes, row.OutputRows, row.OutputBytes,
+	)
+}
+
+func decodeLoadJob(
+	projectID, location, jobID string,
+	configurationVersion int64,
+	configurationJSON, digest, state string,
+	errorReason, errorMessage sql.NullString,
+	createdAt string,
+	startedAt, endedAt sql.NullString,
+	inputFiles, inputBytes, outputRows, outputBytes int64,
+) (*loaddomain.Job, error) {
 	if configurationVersion != 1 {
 		return nil, fmt.Errorf("unsupported load job configuration version %d", configurationVersion)
 	}
@@ -213,7 +272,9 @@ func scanLoadJob(scanner rowScanner) (*loaddomain.Job, error) {
 	}
 	job.State = loaddomain.JobState(state)
 	job.Error = decodeLoadError(errorReason, errorMessage)
-	job.Statistics = statistics
+	job.Statistics = loaddomain.Statistics{
+		InputFiles: inputFiles, InputBytes: inputBytes, OutputRows: outputRows, OutputBytes: outputBytes,
+	}
 	job.StartedAt, err = decodeOptionalTime(startedAt)
 	if err != nil {
 		return nil, err
@@ -232,11 +293,18 @@ func validateLoadJobReference(reference loaddomain.JobReference) error {
 	return nil
 }
 
-func optionalLoadError(jobError *loaddomain.JobError) (any, any) {
+func optionalLoadError(jobError *loaddomain.JobError) (sql.NullString, sql.NullString) {
 	if jobError == nil {
-		return nil, nil
+		return sql.NullString{}, sql.NullString{}
 	}
-	return jobError.Reason, jobError.Message
+	return sql.NullString{String: jobError.Reason, Valid: true}, sql.NullString{String: jobError.Message, Valid: true}
+}
+
+func optionalLoadTime(value *time.Time) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: encodeTime(*value), Valid: true}
 }
 
 func decodeLoadError(reason, message sql.NullString) *loaddomain.JobError {
