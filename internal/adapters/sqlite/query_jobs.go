@@ -11,18 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/leeyh0216/go-bemu/internal/adapters/sqlite/sqlcgen"
 	"github.com/leeyh0216/go-bemu/internal/domain"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 )
 
-const queryJobSelect = `SELECT project_id, location, job_id, configuration_version,
-    configuration_json, configuration_digest, state, error_reason, error_message,
-    created_at, started_at, ended_at, result_present, result_schema_json,
-    result_row_count, affected_rows
-FROM bqemu_query_jobs`
-
 type queryJobRepository struct {
-	db *sql.DB
+	queries *sqlcgen.Queries
 
 	mu       sync.RWMutex
 	payloads map[string]*domain.QueryResult
@@ -31,7 +26,7 @@ type queryJobRepository struct {
 var _ ports.JobRepository = (*queryJobRepository)(nil)
 
 func newQueryJobRepository(db *sql.DB) *queryJobRepository {
-	return &queryJobRepository{db: db, payloads: make(map[string]*domain.QueryResult)}
+	return &queryJobRepository{queries: sqlcgen.New(db), payloads: make(map[string]*domain.QueryResult)}
 }
 
 func (r *queryJobRepository) CreateOrGet(ctx context.Context, job *domain.Job) (*domain.Job, bool, error) {
@@ -39,19 +34,9 @@ func (r *queryJobRepository) CreateOrGet(ctx context.Context, job *domain.Job) (
 	if err != nil {
 		return nil, false, err
 	}
-	result, err := r.db.ExecContext(ctx, `INSERT INTO bqemu_query_jobs (
-    project_id, location_key, location, job_id, configuration_version,
-    configuration_json, configuration_digest, state, error_reason, error_message,
-    created_at, started_at, ended_at, result_present, result_schema_json,
-    result_row_count, affected_rows
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (project_id, location_key, job_id) DO NOTHING`, values...)
+	rowsAffected, err := r.queries.CreateQueryJob(ctx, values.createParams())
 	if err != nil {
 		return nil, false, queryJobRepositoryError(ctx, "create", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return nil, false, queryJobRepositoryError(ctx, "inspect create", err)
 	}
 	if rowsAffected == 0 {
 		existing, getErr := r.Get(ctx, job.Reference)
@@ -70,21 +55,9 @@ func (r *queryJobRepository) Update(ctx context.Context, job *domain.Job) error 
 	if err != nil {
 		return err
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE bqemu_query_jobs SET
-    location = ?, configuration_version = ?, configuration_json = ?,
-    configuration_digest = ?, state = ?, error_reason = ?, error_message = ?,
-    created_at = ?, started_at = ?, ended_at = ?, result_present = ?,
-    result_schema_json = ?, result_row_count = ?, affected_rows = ?
-WHERE project_id = ? AND location_key = ? AND job_id = ?`,
-		values[2], values[4], values[5], values[6], values[7], values[8], values[9],
-		values[10], values[11], values[12], values[13], values[14], values[15], values[16],
-		values[0], values[1], values[3])
+	rowsAffected, err := r.queries.UpdateQueryJob(ctx, values.updateParams())
 	if err != nil {
 		return queryJobRepositoryError(ctx, "update", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return queryJobRepositoryError(ctx, "inspect update", err)
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("%w: query job %s", domain.ErrNotFound, job.Reference.JobID)
@@ -98,12 +71,16 @@ func (r *queryJobRepository) Get(ctx context.Context, reference domain.JobRefere
 	if err != nil {
 		return nil, err
 	}
-	job, err := scanQueryJob(r.db.QueryRowContext(ctx, queryJobSelect+`
-WHERE project_id = ? AND location_key = ? AND job_id = ?`,
-		reference.ProjectID, strings.ToUpper(reference.Location), reference.JobID))
+	row, err := r.queries.GetQueryJob(ctx, sqlcgen.GetQueryJobParams{
+		ProjectID: reference.ProjectID, LocationKey: strings.ToUpper(reference.Location), JobID: reference.JobID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: query job %s", domain.ErrNotFound, reference.JobID)
 	}
+	if err != nil {
+		return nil, queryJobRepositoryError(ctx, "get", err)
+	}
+	job, err := decodeGetQueryJob(row)
 	if err != nil {
 		return nil, queryJobRepositoryError(ctx, "get", err)
 	}
@@ -120,23 +97,29 @@ func (r *queryJobRepository) List(ctx context.Context, projectID, location strin
 	if err := domain.ValidateJobListScope(projectID, location); err != nil {
 		return nil, err
 	}
-	statement := queryJobSelect + ` WHERE project_id = ?`
-	args := []any{projectID}
-	if location != "" {
-		statement += ` AND location_key = ?`
-		args = append(args, strings.ToUpper(location))
-	}
-	rows, err := r.db.QueryContext(ctx, statement, args...)
-	if err != nil {
-		return nil, queryJobRepositoryError(ctx, "list", err)
-	}
-	defer rows.Close()
-	jobs := make([]*domain.Job, 0)
-	for rows.Next() {
-		job, scanErr := scanQueryJob(rows)
-		if scanErr != nil {
-			return nil, queryJobRepositoryError(ctx, "list", scanErr)
+	var jobs []*domain.Job
+	if location == "" {
+		rows, err := r.queries.ListQueryJobs(ctx, projectID)
+		if err != nil {
+			return nil, queryJobRepositoryError(ctx, "list", err)
 		}
+		jobs, err = decodeListedQueryJobs(rows)
+		if err != nil {
+			return nil, queryJobRepositoryError(ctx, "list", err)
+		}
+	} else {
+		rows, err := r.queries.ListQueryJobsAtLocation(ctx, sqlcgen.ListQueryJobsAtLocationParams{
+			ProjectID: projectID, LocationKey: strings.ToUpper(location),
+		})
+		if err != nil {
+			return nil, queryJobRepositoryError(ctx, "list", err)
+		}
+		jobs, err = decodeListedQueryJobsAtLocation(rows)
+		if err != nil {
+			return nil, queryJobRepositoryError(ctx, "list", err)
+		}
+	}
+	for _, job := range jobs {
 		key, _ := queryJobKey(job.Reference)
 		r.mu.RLock()
 		payload := cloneQueryResult(r.payloads[key])
@@ -144,10 +127,6 @@ func (r *queryJobRepository) List(ctx context.Context, projectID, location strin
 		if payload != nil && job.Result != nil {
 			job.Result = payload
 		}
-		jobs = append(jobs, job)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, queryJobRepositoryError(ctx, "list", err)
 	}
 	sort.Slice(jobs, func(i, j int) bool {
 		if jobs[i].CreatedAt.Equal(jobs[j].CreatedAt) {
@@ -161,34 +140,54 @@ func (r *queryJobRepository) List(ctx context.Context, projectID, location strin
 	return jobs, nil
 }
 
-func encodeQueryJob(job *domain.Job) ([]any, *domain.QueryResult, error) {
+type queryJobPersistence struct {
+	projectID            string
+	locationKey          string
+	location             string
+	jobID                string
+	configurationVersion int64
+	configurationJSON    string
+	configurationDigest  string
+	state                string
+	errorReason          sql.NullString
+	errorMessage         sql.NullString
+	createdAt            string
+	startedAt            sql.NullString
+	endedAt              sql.NullString
+	resultPresent        int64
+	resultSchemaJSON     sql.NullString
+	resultRowCount       int64
+	affectedRows         int64
+}
+
+func encodeQueryJob(job *domain.Job) (queryJobPersistence, *domain.QueryResult, error) {
 	if job == nil {
-		return nil, nil, fmt.Errorf("%w: query job is required", domain.ErrInvalid)
+		return queryJobPersistence{}, nil, fmt.Errorf("%w: query job is required", domain.ErrInvalid)
 	}
 	if err := job.Reference.Validate(); err != nil {
-		return nil, nil, err
+		return queryJobPersistence{}, nil, err
 	}
 	validated, err := domain.NewConfiguredQueryJob(job.Reference, job.Configuration, job.CreatedAt)
 	if err != nil {
-		return nil, nil, err
+		return queryJobPersistence{}, nil, err
 	}
 	if validated.ConfigurationDigest != job.ConfigurationDigest {
-		return nil, nil, fmt.Errorf("%w: query configuration digest does not match job metadata", domain.ErrInvalid)
+		return queryJobPersistence{}, nil, fmt.Errorf("%w: query configuration digest does not match job metadata", domain.ErrInvalid)
 	}
 	configurationJSON, err := json.Marshal(job.Configuration)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: encode query job configuration: %v", domain.ErrInvalid, err)
+		return queryJobPersistence{}, nil, fmt.Errorf("%w: encode query job configuration: %v", domain.ErrInvalid, err)
 	}
 	errorReason, errorMessage := optionalQueryError(job.Error)
-	resultPresent, schemaJSON, rowCount, affectedRows := 0, any(nil), int64(0), int64(0)
+	resultPresent, schemaJSON, rowCount, affectedRows := int64(0), sql.NullString{}, int64(0), int64(0)
 	var cached *domain.QueryResult
 	if job.Result != nil {
 		resultPresent = 1
 		encodedSchema, marshalErr := json.Marshal(job.Result.Columns)
 		if marshalErr != nil {
-			return nil, nil, fmt.Errorf("%w: encode query result schema: %v", domain.ErrInvalid, marshalErr)
+			return queryJobPersistence{}, nil, fmt.Errorf("%w: encode query result schema: %v", domain.ErrInvalid, marshalErr)
 		}
-		schemaJSON = string(encodedSchema)
+		schemaJSON = sql.NullString{String: string(encodedSchema), Valid: true}
 		rowCount = int64(len(job.Result.Rows))
 		if job.Result.TotalRows > rowCount {
 			rowCount = job.Result.TotalRows
@@ -199,26 +198,94 @@ func encodeQueryJob(job *domain.Job) ([]any, *domain.QueryResult, error) {
 			cached.TotalRows = rowCount
 		}
 	}
-	return []any{
-		job.Reference.ProjectID, strings.ToUpper(job.Reference.Location), job.Reference.Location, job.Reference.JobID,
-		1, string(configurationJSON), job.ConfigurationDigest, string(job.State), errorReason, errorMessage,
-		encodeTime(job.CreatedAt), optionalTime(job.StartedAt), optionalTime(job.EndedAt),
-		resultPresent, schemaJSON, rowCount, affectedRows,
+	return queryJobPersistence{
+		projectID: job.Reference.ProjectID, locationKey: strings.ToUpper(job.Reference.Location),
+		location: job.Reference.Location, jobID: job.Reference.JobID, configurationVersion: 1,
+		configurationJSON: string(configurationJSON), configurationDigest: job.ConfigurationDigest,
+		state: string(job.State), errorReason: errorReason, errorMessage: errorMessage,
+		createdAt: encodeTime(job.CreatedAt), startedAt: optionalTime(job.StartedAt), endedAt: optionalTime(job.EndedAt),
+		resultPresent: resultPresent, resultSchemaJSON: schemaJSON, resultRowCount: rowCount, affectedRows: affectedRows,
 	}, cached, nil
 }
 
-func scanQueryJob(scanner rowScanner) (*domain.Job, error) {
-	var projectID, location, jobID, configurationJSON, digest, state, createdAt string
-	var configurationVersion, resultPresent int
-	var errorReason, errorMessage, startedAt, endedAt, schemaJSON sql.NullString
-	var rowCount, affectedRows int64
-	if err := scanner.Scan(
-		&projectID, &location, &jobID, &configurationVersion, &configurationJSON, &digest,
-		&state, &errorReason, &errorMessage, &createdAt, &startedAt, &endedAt,
-		&resultPresent, &schemaJSON, &rowCount, &affectedRows,
-	); err != nil {
-		return nil, err
+func (values queryJobPersistence) createParams() sqlcgen.CreateQueryJobParams {
+	return sqlcgen.CreateQueryJobParams{
+		ProjectID: values.projectID, LocationKey: values.locationKey, Location: values.location, JobID: values.jobID,
+		ConfigurationVersion: values.configurationVersion, ConfigurationJson: values.configurationJSON,
+		ConfigurationDigest: values.configurationDigest, State: values.state,
+		ErrorReason: values.errorReason, ErrorMessage: values.errorMessage,
+		CreatedAt: values.createdAt, StartedAt: values.startedAt, EndedAt: values.endedAt,
+		ResultPresent: values.resultPresent, ResultSchemaJson: values.resultSchemaJSON,
+		ResultRowCount: values.resultRowCount, AffectedRows: values.affectedRows,
 	}
+}
+
+func (values queryJobPersistence) updateParams() sqlcgen.UpdateQueryJobParams {
+	return sqlcgen.UpdateQueryJobParams{
+		Location: values.location, ConfigurationVersion: values.configurationVersion,
+		ConfigurationJson: values.configurationJSON, ConfigurationDigest: values.configurationDigest,
+		State: values.state, ErrorReason: values.errorReason, ErrorMessage: values.errorMessage,
+		CreatedAt: values.createdAt, StartedAt: values.startedAt, EndedAt: values.endedAt,
+		ResultPresent: values.resultPresent, ResultSchemaJson: values.resultSchemaJSON,
+		ResultRowCount: values.resultRowCount, AffectedRows: values.affectedRows,
+		ProjectID: values.projectID, LocationKey: values.locationKey, JobID: values.jobID,
+	}
+}
+
+func decodeGetQueryJob(row sqlcgen.GetQueryJobRow) (*domain.Job, error) {
+	return decodeQueryJob(
+		row.ProjectID, row.Location, row.JobID, row.ConfigurationVersion,
+		row.ConfigurationJson, row.ConfigurationDigest, row.State, row.ErrorReason, row.ErrorMessage,
+		row.CreatedAt, row.StartedAt, row.EndedAt,
+		row.ResultPresent, row.ResultSchemaJson, row.ResultRowCount, row.AffectedRows,
+	)
+}
+
+func decodeListedQueryJobs(rows []sqlcgen.ListQueryJobsRow) ([]*domain.Job, error) {
+	jobs := make([]*domain.Job, 0, len(rows))
+	for _, row := range rows {
+		job, err := decodeQueryJob(
+			row.ProjectID, row.Location, row.JobID, row.ConfigurationVersion,
+			row.ConfigurationJson, row.ConfigurationDigest, row.State, row.ErrorReason, row.ErrorMessage,
+			row.CreatedAt, row.StartedAt, row.EndedAt,
+			row.ResultPresent, row.ResultSchemaJson, row.ResultRowCount, row.AffectedRows,
+		)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
+func decodeListedQueryJobsAtLocation(rows []sqlcgen.ListQueryJobsAtLocationRow) ([]*domain.Job, error) {
+	jobs := make([]*domain.Job, 0, len(rows))
+	for _, row := range rows {
+		job, err := decodeQueryJob(
+			row.ProjectID, row.Location, row.JobID, row.ConfigurationVersion,
+			row.ConfigurationJson, row.ConfigurationDigest, row.State, row.ErrorReason, row.ErrorMessage,
+			row.CreatedAt, row.StartedAt, row.EndedAt,
+			row.ResultPresent, row.ResultSchemaJson, row.ResultRowCount, row.AffectedRows,
+		)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
+func decodeQueryJob(
+	projectID, location, jobID string,
+	configurationVersion int64,
+	configurationJSON, digest, state string,
+	errorReason, errorMessage sql.NullString,
+	createdAt string,
+	startedAt, endedAt sql.NullString,
+	resultPresent int64,
+	schemaJSON sql.NullString,
+	rowCount, affectedRows int64,
+) (*domain.Job, error) {
 	if configurationVersion != 1 {
 		return nil, fmt.Errorf("unsupported query job configuration version %d", configurationVersion)
 	}
@@ -321,11 +388,11 @@ func cloneQueryValue(value any) any {
 	}
 }
 
-func optionalQueryError(jobError *domain.JobError) (any, any) {
+func optionalQueryError(jobError *domain.JobError) (sql.NullString, sql.NullString) {
 	if jobError == nil {
-		return nil, nil
+		return sql.NullString{}, sql.NullString{}
 	}
-	return jobError.Reason, jobError.Message
+	return sql.NullString{String: jobError.Reason, Valid: true}, sql.NullString{String: jobError.Message, Valid: true}
 }
 
 func decodeQueryError(reason, message sql.NullString) *domain.JobError {
@@ -335,11 +402,11 @@ func decodeQueryError(reason, message sql.NullString) *domain.JobError {
 	return &domain.JobError{Reason: reason.String, Message: message.String}
 }
 
-func optionalTime(value *time.Time) any {
+func optionalTime(value *time.Time) sql.NullString {
 	if value == nil {
-		return nil
+		return sql.NullString{}
 	}
-	return encodeTime(*value)
+	return sql.NullString{String: encodeTime(*value), Valid: true}
 }
 
 func decodeOptionalTime(value sql.NullString) (*time.Time, error) {

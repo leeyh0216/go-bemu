@@ -186,6 +186,45 @@ func TestRepositoryStartupTerminatesOnlyInterruptedQueryJobs(t *testing.T) {
 	}
 }
 
+func TestQueryJobRepositoryListsStaticScopes(t *testing.T) {
+	ctx := context.Background()
+	repositories, err := Open(ctx, filepath.Join(t.TempDir(), "bqemu-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repositories.Close()
+
+	created := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
+	newJob := func(jobID, location string, createdAt time.Time) *domain.Job {
+		t.Helper()
+		job, createErr := domain.NewQueryJob(domain.JobReference{
+			ProjectID: "test-project", Location: location, JobID: jobID,
+		}, "SELECT 1", createdAt)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return job
+	}
+	later := newJob("later", "US", created.Add(100*time.Millisecond))
+	sameEU := newJob("same", "EU", created)
+	sameUS := newJob("same", "US", created)
+	for _, job := range []*domain.Job{sameUS, later, sameEU} {
+		if _, createdJob, createErr := repositories.QueryJobs().CreateOrGet(ctx, job); createErr != nil || !createdJob {
+			t.Fatalf("create query job %s = %v, created=%v", job.Reference.JobID, createErr, createdJob)
+		}
+	}
+
+	all, err := repositories.QueryJobs().List(ctx, "test-project", "")
+	if err != nil || len(all) != 3 || all[0].Reference != later.Reference ||
+		all[1].Reference != sameEU.Reference || all[2].Reference != sameUS.Reference {
+		t.Fatalf("all query jobs = %#v, %v", all, err)
+	}
+	us, err := repositories.QueryJobs().List(ctx, "test-project", "us")
+	if err != nil || len(us) != 2 || us[0].Reference != later.Reference || us[1].Reference != sameUS.Reference {
+		t.Fatalf("US query jobs = %#v, %v", us, err)
+	}
+}
+
 func TestLoadJobRepositoryListsStaticScopesAndInterruptedJobs(t *testing.T) {
 	ctx := context.Background()
 	repositories, err := Open(ctx, filepath.Join(t.TempDir(), "bqemu-state.sqlite"))

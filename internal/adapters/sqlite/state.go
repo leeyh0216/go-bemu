@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leeyh0216/go-bemu/internal/adapters/sqlite/sqlcgen"
 	loadports "github.com/leeyh0216/go-bemu/internal/loadjob/ports"
 	"github.com/leeyh0216/go-bemu/internal/ports"
 	readports "github.com/leeyh0216/go-bemu/internal/storageread/ports"
@@ -125,19 +126,11 @@ func reconcileInterruptedQueryJobs(ctx context.Context, db *sql.DB, now time.Tim
 		return fmt.Errorf("begin interrupted job reconciliation: %w", err)
 	}
 	defer tx.Rollback()
-	endedAt := encodeTime(now)
-	updates := []struct {
-		statement string
-		message   string
-	}{
-		{`UPDATE bqemu_query_jobs SET state = 'DONE', error_reason = 'stopped',
-    error_message = ?, ended_at = ? WHERE state IN ('PENDING', 'RUNNING')`,
-			"query job was interrupted by emulator restart"},
-	}
-	for _, update := range updates {
-		if _, err := tx.ExecContext(ctx, update.statement, update.message, endedAt); err != nil {
-			return fmt.Errorf("reconcile interrupted BQEMU jobs: %w", err)
-		}
+	if _, err := sqlcgen.New(tx).ReconcileInterruptedQueryJobs(ctx, sqlcgen.ReconcileInterruptedQueryJobsParams{
+		ErrorMessage: sql.NullString{String: "query job was interrupted by emulator restart", Valid: true},
+		EndedAt:      sql.NullString{String: encodeTime(now), Valid: true},
+	}); err != nil {
+		return fmt.Errorf("reconcile interrupted BQEMU jobs: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit interrupted job reconciliation: %w", err)

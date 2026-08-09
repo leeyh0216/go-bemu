@@ -11,16 +11,22 @@ import (
 type Querier interface {
 	CreateLoadJob(ctx context.Context, arg CreateLoadJobParams) (int64, error)
 	CreateLoadMutation(ctx context.Context, arg CreateLoadMutationParams) error
+	CreateQueryJob(ctx context.Context, arg CreateQueryJobParams) (int64, error)
 	GetLoadJob(ctx context.Context, arg GetLoadJobParams) (GetLoadJobRow, error)
 	GetLoadMutation(ctx context.Context, mutationID string) (GetLoadMutationRow, error)
+	GetQueryJob(ctx context.Context, arg GetQueryJobParams) (GetQueryJobRow, error)
 	ListInterruptedLoadJobs(ctx context.Context) ([]ListInterruptedLoadJobsRow, error)
 	ListLoadJobs(ctx context.Context, projectID string) ([]ListLoadJobsRow, error)
 	ListLoadJobsAtLocation(ctx context.Context, arg ListLoadJobsAtLocationParams) ([]ListLoadJobsAtLocationRow, error)
+	ListQueryJobs(ctx context.Context, projectID string) ([]ListQueryJobsRow, error)
+	ListQueryJobsAtLocation(ctx context.Context, arg ListQueryJobsAtLocationParams) ([]ListQueryJobsAtLocationRow, error)
 	ListRecoverableLoadMutations(ctx context.Context) ([]ListRecoverableLoadMutationsRow, error)
 	MarkLoadMutationAborted(ctx context.Context, mutationID string) (int64, error)
 	MarkLoadMutationApplied(ctx context.Context, mutationID string) (int64, error)
 	MarkLoadMutationPhysical(ctx context.Context, arg MarkLoadMutationPhysicalParams) (int64, error)
+	ReconcileInterruptedQueryJobs(ctx context.Context, arg ReconcileInterruptedQueryJobsParams) (int64, error)
 	UpdateLoadJob(ctx context.Context, arg UpdateLoadJobParams) (int64, error)
+	UpdateQueryJob(ctx context.Context, arg UpdateQueryJobParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)
