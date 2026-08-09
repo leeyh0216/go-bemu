@@ -23,7 +23,7 @@ func TestLoadMutationJournalSurvivesRestartAndEnforcesReceipts(t *testing.T) {
 	created := time.Date(2026, 8, 9, 1, 2, 3, 0, time.UTC)
 	table := domain.Table{
 		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "events"},
-		Location: "US", Schema: []domain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}},
+		Location:  "US", Schema: []domain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}},
 	}
 	job, err := domain.NewJob(domain.JobReference{
 		ProjectID: "test-project", Location: "US", JobID: "load-recovery",

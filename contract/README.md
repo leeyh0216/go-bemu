@@ -54,9 +54,8 @@ conditions, and REST/gRPC descriptor drift.
    registration, Discovery, gRPC descriptors, and annotations are all checked
    from the same manifest.
 
-External compatibility suites belong under `tests/integration`. They may prove
-end-to-end behavior, but they do not replace the product Go test evidence that
-this manifest validates.
+External compatibility suites may prove end-to-end behavior, but they do not
+replace the product Go test evidence that this manifest validates.
 
 ## Required Classification
 

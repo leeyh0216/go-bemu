@@ -48,8 +48,8 @@
 6. **집중 동작 테스트와 `make contract-check`를 실행합니다.** 같은 매니페스트에서
    route 등록, Discovery, gRPC descriptor, annotation을 함께 검사합니다.
 
-외부 호환성 suite는 `tests/integration`에 둡니다. 이는 종단간 동작의 근거가 될 수
-있지만, 이 매니페스트가 검사하는 제품 Go 테스트 근거를 대체하지는 않습니다.
+외부 호환성 suite는 종단간 동작의 근거가 될 수 있지만, 이 매니페스트가 검사하는
+제품 Go 테스트 근거를 대체하지는 않습니다.
 
 ## 필수 분류
 
