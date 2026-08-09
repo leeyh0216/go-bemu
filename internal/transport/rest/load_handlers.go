@@ -144,6 +144,9 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		SchemaUpdateOptions: append([]string(nil), wire.SchemaUpdateOptions...), IgnoreUnknownValues: wire.IgnoreUnknownValues,
 		MaxBadRecords: wire.MaxBadRecords, UnsupportedOptions: unsupported,
 	}
+	if wire.ParquetOptions != nil && wire.ParquetOptions.EnableListInference != nil {
+		configuration.ParquetOptions.EnableListInference = *wire.ParquetOptions.EnableListInference
+	}
 	if wire.Schema != nil {
 		configuration.Schema = loadFieldsFromWire(wire.Schema.Fields)
 	}
@@ -252,7 +255,7 @@ func unsupportedLoadOptions(payload []byte, wire loadConfigurationResource) ([]s
 		for field, fieldValue := range parquetFields {
 			switch field {
 			case "enableListInference":
-				if wire.ParquetOptions == nil || wire.ParquetOptions.EnableListInference == nil || *wire.ParquetOptions.EnableListInference {
+				if wire.ParquetOptions == nil || wire.ParquetOptions.EnableListInference == nil {
 					unsupported = append(unsupported, unsupportedLoadOption("parquetOptions."+field, fieldValue))
 				}
 			case "enumAsString":

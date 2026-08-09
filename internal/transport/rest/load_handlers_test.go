@@ -129,13 +129,17 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 			"sourceUris":[%q],
 			"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"created_events"},
 			"sourceFormat":"PARQUET","writeDisposition":"WRITE_EMPTY","createDisposition":"CREATE_IF_NEEDED",
-			"schema":{"fields":[{"name":"id","type":"INT64","mode":"REQUIRED"},{"name":"name","type":"STRING"}]}
+			"parquetOptions":{"enableListInference":true}
 		}}
 	}`, "gs://load-bucket/input/*.parquet")
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", createBody, http.StatusOK)
 	createdJob := waitForRESTLoad(t, server.URL, "load-create")
 	if createdJob["status"].(map[string]any)["errorResult"] != nil {
 		t.Fatalf("destination-creating load failed: %#v", createdJob)
+	}
+	createdOptions := createdJob["configuration"].(map[string]any)["load"].(map[string]any)["parquetOptions"].(map[string]any)
+	if createdOptions["enableListInference"] != true {
+		t.Fatalf("load job lost Parquet options: %#v", createdJob)
 	}
 	createdTable := restLoadRequest(t, server.URL, http.MethodGet,
 		"/bigquery/v2/projects/test-project/datasets/analytics/tables/created_events", "", http.StatusOK)
@@ -205,7 +209,7 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 		t.Fatalf("failed load exposed successful outputBytes: %#v", job)
 	}
 
-	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["gs://test-bucket/does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enableListInference":true}}}}`
+	activeOption := `{"jobReference":{"jobId":"parquet-option-gap","location":"US"},"configuration":{"load":{"sourceUris":["gs://test-bucket/does-not-exist.parquet"],"destinationTable":{"datasetId":"analytics","tableId":"events"},"sourceFormat":"PARQUET","parquetOptions":{"enumAsString":true}}}}`
 	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", activeOption, http.StatusOK)
 	job = waitForRESTLoad(t, server.URL, "parquet-option-gap")
 	errorResult = job["status"].(map[string]any)["errorResult"].(map[string]any)
@@ -233,6 +237,7 @@ func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
 		"absent":                 `{}`,
 		"empty options":          `{"parquetOptions":{}}`,
 		"explicit false":         `{"parquetOptions":{"enableListInference":false,"enumAsString":false}}`,
+		"list inference":         `{"parquetOptions":{"enableListInference":true}}`,
 		"explicit empty options": `{"decimalTargetTypes":null,"nullMarkers":[],"projectionFields":[],"timestampTargetPrecision":[]}`,
 	}
 	for name, payload := range accepted {
@@ -256,7 +261,6 @@ func TestLoadCompatibilityOptionsAcceptOnlyPinnedNeutralShapes(t *testing.T) {
 		field   string
 	}{
 		"null parquet object":  {payload: `{"parquetOptions":null}`, field: "parquetOptions:"},
-		"list inference":       {payload: `{"parquetOptions":{"enableListInference":true}}`, field: "parquetOptions.enableListInference:"},
 		"enum as string":       {payload: `{"parquetOptions":{"enumAsString":true}}`, field: "parquetOptions.enumAsString:"},
 		"null parquet flag":    {payload: `{"parquetOptions":{"enumAsString":null}}`, field: "parquetOptions.enumAsString:"},
 		"map target":           {payload: `{"parquetOptions":{"mapTargetType":"ARRAY_OF_STRUCT"}}`, field: "parquetOptions.mapTargetType:"},

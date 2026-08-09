@@ -331,10 +331,11 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 | 허용하는 로드 원본 URI | `gs://`만 허용합니다. 로컬 경로와 다른 scheme은 작업을 저장하기 전에 거부합니다. |
 | fake GCS 서비스 | 기본 Compose 프로젝트의 필수 서비스입니다. 바이너리는 설정한 GCS 호환 JSON endpoint에 연결합니다. |
 | GCS 및 fake GCS JSON 어댑터 | 목록, 조회, 미디어 요청의 크기에 상한을 둡니다. URI 글로브 확장은 부분 지원입니다. |
-| 테이블로 Parquet 로드 | 기존 대상과 명시적 스키마를 지정한 `CREATE_IF_NEEDED` 새 대상에서 스칼라, 중첩 `STRUCT`, 반복 `ARRAY` 값을 지원합니다. 타입 검증을 마친 준비 테이블을 먼저 완성한 뒤 새 대상 생성이나 쓰기 방식을 적용합니다. 10진수 자릿수 축소는 대상을 변경하기 전에 `load.decimal-rounding.unsupported-v1`로 거부합니다. |
+| 테이블로 Parquet 로드 | 기존 대상과 명시적 또는 추론 스키마를 사용하는 `CREATE_IF_NEEDED` 새 대상에서 스칼라, 중첩 `STRUCT`, 반복 `ARRAY` 값을 지원합니다. LIST 추론에는 `parquetOptions.enableListInference=true`가 필요합니다. 타입 검증을 마친 준비 테이블을 먼저 완성한 뒤 새 대상 생성이나 쓰기 방식을 적용합니다. 10진수 자릿수 축소는 대상을 변경하기 전에 `load.decimal-rounding.unsupported-v1`로 거부합니다. |
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
-| 스키마 추론 및 자동 감지, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
+| Parquet 스키마 추론 | 스칼라와 STRUCT를 지원합니다. LIST를 REPEATED로 추론하려면 `enableListInference=true`가 필요합니다. |
+| `autodetect`, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
 | REST/gRPC TLS | 설정하면 사용할 수 있습니다. |
 | BigQuery 호환 엔드포인트 인증 | 의도적으로 제공하지 않습니다. 인증 정보가 없거나 임의 값 또는 잘못된 형식이어도 무시합니다. |
 | 폐기 가능한 service account, authorized user, WIF, direct token 파일 | 루프백 전용 개발 도구인 `bqemu-auth-fixture`로 생성할 수 있습니다. |

@@ -68,9 +68,9 @@ DDL 복구, 적재·쿼리의 `schemaUpdateOptions`, Storage Write 스키마 알
 옵션을 받는 것만으로 이 기능을 구현했다고 볼 수는 없습니다.
 
 현재 Parquet 적재 경로는 기존 테이블을 기준으로 유형 변환을 검증하고 쓰기 방식을
-원자적으로 적용합니다. 요청에 정확한 스키마가 있으면 누락된 대상도 같은
-트랜잭션에서 생성합니다. `schemaUpdateOptions`, 스키마 추론, 자동 감지는 거부하므로
-적재 작업을 통한 스키마 변경은 지원하지 않습니다.
+원자적으로 적용합니다. 요청에 정확한 스키마가 있거나 Parquet 스키마를 추론할 수
+있으면 누락된 대상도 같은 트랜잭션에서 생성합니다. `schemaUpdateOptions`와 별도의
+`autodetect` 요청 필드는 거부하므로 적재 작업을 통한 스키마 변경은 지원하지 않습니다.
 
 <!-- section: write-schema-updates -->
 ## Storage Write 스키마 변경

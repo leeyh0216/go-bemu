@@ -38,3 +38,23 @@ func TestValidateConfigurationAcceptsOnlyGCSObjectURIs(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigurationDigestIncludesParquetListInference(t *testing.T) {
+	configuration := LoadConfiguration{
+		SourceURIs:   []string{"gs://bucket/path/input.parquet"},
+		Destination:  TableReference{ProjectID: "project", DatasetID: "dataset", TableID: "table"},
+		SourceFormat: FormatParquet, WriteDisposition: WriteAppend, CreateDisposition: CreateIfNeeded,
+	}
+	withoutInference, err := ConfigurationDigest(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration.ParquetOptions.EnableListInference = true
+	withInference, err := ConfigurationDigest(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withInference == withoutInference {
+		t.Fatal("Parquet list inference did not change load idempotency identity")
+	}
+}

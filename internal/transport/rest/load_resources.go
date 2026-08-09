@@ -36,8 +36,8 @@ type loadConfigurationResource struct {
 }
 
 // ParquetOptions is an optional, typed part of JobConfigurationLoad. The
-// emulator accepts only the empty/default shape until the DuckDB load adapter
-// implements the non-default inference behavior.
+// enableListInference is consumed by Parquet schema inference. Other
+// format-specific options remain explicit unsupported inputs.
 // https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#ParquetOptions
 type parquetOptionsResource struct {
 	EnableListInference *bool   `json:"enableListInference,omitempty"`
@@ -101,6 +101,10 @@ func loadJobFromDomain(job *loadDomain.Job) loadJobResource {
 	}
 	if len(configuration.Schema) > 0 {
 		load.Schema = &tableSchema{Fields: loadFieldsToWire(configuration.Schema)}
+	}
+	if configuration.ParquetOptions.EnableListInference {
+		value := true
+		load.ParquetOptions = &parquetOptionsResource{EnableListInference: &value}
 	}
 	resource := loadJobResource{
 		Kind: "bigquery#job",

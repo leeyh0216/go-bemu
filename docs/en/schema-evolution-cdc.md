@@ -59,9 +59,9 @@ not implemented merely by accepting the JSON option.
 
 The current Parquet load path validates casts against an existing table and
 applies a write disposition atomically. It can also create a missing destination
-atomically when the request supplies its exact schema. It still rejects
-`schemaUpdateOptions`, schema inference, and autodetect, so load-driven schema
-evolution remains unsupported.
+atomically from an explicit or inferred Parquet schema. It still rejects
+`schemaUpdateOptions` and the separate `autodetect` request flag, so load-driven
+schema evolution remains unsupported.
 
 <!-- section: write-schema-updates -->
 ## Storage Write Schema Changes

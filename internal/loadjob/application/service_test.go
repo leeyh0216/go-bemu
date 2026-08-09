@@ -105,12 +105,16 @@ func (c testCatalog) PublishTable(_ context.Context, table domain.Table) error {
 
 type testLoader struct {
 	testLoadPlanner
-	mu           sync.Mutex
-	calls        int
-	paths        []string
-	block        bool
-	discardCalls int
-	discardErr   error
+	mu             sync.Mutex
+	calls          int
+	paths          []string
+	block          bool
+	discardCalls   int
+	discardErr     error
+	inferredSchema []domain.Field
+	inferErr       error
+	inferCalls     int
+	inferOptions   ports.ParquetSchemaOptions
 }
 
 type gatedLoader struct {
@@ -249,6 +253,21 @@ func (l *testLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objec
 	return ports.LoadResult{OutputRows: 3, CreatedDestination: request.CreateDestination}, nil
 }
 
+func (l *testLoader) InferParquetSchema(
+	_ context.Context,
+	_ []ports.LocalObject,
+	options ports.ParquetSchemaOptions,
+) ([]domain.Field, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.inferCalls++
+	l.inferOptions = options
+	if l.inferErr != nil {
+		return nil, l.inferErr
+	}
+	return catalogdomain.CloneFields(l.inferredSchema), nil
+}
+
 func (l *testLoader) DiscardLoadedTable(context.Context, domain.TableReference) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -257,6 +276,14 @@ func (l *testLoader) DiscardLoadedTable(context.Context, domain.TableReference) 
 }
 
 func (l *gatedLoader) DiscardLoadedTable(context.Context, domain.TableReference) error { return nil }
+
+func (l *gatedLoader) InferParquetSchema(
+	context.Context,
+	[]ports.LocalObject,
+	ports.ParquetSchemaOptions,
+) ([]domain.Field, error) {
+	return nil, domain.ErrUnsupported
+}
 
 func TestServiceIsIdempotentAndCleansWorkspace(t *testing.T) {
 	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
@@ -334,6 +361,48 @@ func TestServiceCreatesAndPublishesMissingDestination(t *testing.T) {
 	loader.mu.Unlock()
 	if discards != 0 {
 		t.Fatalf("successful destination was discarded %d times", discards)
+	}
+}
+
+func TestServiceInfersMissingParquetDestinationAfterDownload(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+	inferred := []domain.Field{{Name: "items", Type: "RECORD", Mode: "REPEATED", Fields: []domain.Field{
+		{Name: "id", Type: "INT64"},
+	}}}
+	loader := &testLoader{inferredSchema: inferred}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US",
+	}
+	published := make([]domain.Table, 0, 1)
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		NewMemoryJobRepository(), objects,
+		testCatalog{table: table, missing: true, published: &published}, loader,
+		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.ParquetOptions.EnableListInference = true
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "infer-destination"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error != nil {
+		t.Fatalf("job = %+v error=%+v", job, job.Error)
+	}
+	if len(published) != 1 || !schemasEqual(published[0].Schema, inferred) {
+		t.Fatalf("published inferred destination = %#v", published)
+	}
+	loader.mu.Lock()
+	inferCalls, inferOptions := loader.inferCalls, loader.inferOptions
+	loader.mu.Unlock()
+	if inferCalls != 1 || !inferOptions.EnableListInference {
+		t.Fatalf("schema inference calls=%d options=%+v", inferCalls, inferOptions)
 	}
 }
 

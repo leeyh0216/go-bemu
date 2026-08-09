@@ -165,29 +165,16 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		return statistics, fmt.Errorf("%w: requested load options", domain.ErrUnsupported)
 	}
 
-	table, createDestination, err := s.resolveDestination(ctx, job, configuration)
+	table, createDestination, inferSchema, err := s.resolveDestination(ctx, job, configuration)
 	if err != nil {
 		return statistics, err
 	}
-	operation := engine.SchemaOperationValidate
-	if createDestination {
-		operation = engine.SchemaOperationCreate
-	}
-	schemaIntent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
-		Operation: operation,
-		Target: catalogdomain.TableReference{
-			ProjectID: table.Reference.ProjectID,
-			DatasetID: table.Reference.DatasetID,
-			TableID:   table.Reference.TableID,
-		},
-		AfterSchema: table.Schema,
-	})
-	if err != nil {
-		return statistics, translateCatalogSchemaError(err)
-	}
-	schemaPlan, err := s.loader.PlanSchema(ctx, schemaIntent)
-	if err != nil {
-		return statistics, translateCatalogSchemaError(err)
+	var schemaPlan engine.SchemaPlan
+	if !inferSchema {
+		schemaPlan, err = s.planDestinationSchema(ctx, table, createDestination)
+		if err != nil {
+			return statistics, err
+		}
 	}
 
 	objects, err := s.resolveObjects(ctx, configuration.SourceURIs)
@@ -198,13 +185,12 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	for index, object := range objects {
 		resolved[index] = ports.ResolvedObject{Fingerprint: objectFingerprint(object), Size: object.Size}
 	}
-	loadPlan, err := s.loader.PlanLoad(ctx, ports.LoadPlanRequest{
-		Destination: table, CreateDestination: createDestination, SchemaPlan: schemaPlan,
-		SourceFormat: configuration.SourceFormat, WriteDisposition: configuration.WriteDisposition,
-		Objects: resolved,
-	})
-	if err != nil {
-		return statistics, err
+	var loadPlan ports.LoadPlan
+	if !inferSchema {
+		loadPlan, err = s.planLoad(ctx, configuration, table, createDestination, schemaPlan, resolved)
+		if err != nil {
+			return statistics, err
+		}
 	}
 	statistics.InputFiles = int64(len(objects))
 	uriDigest := objectSetDigest(objects)
@@ -231,6 +217,25 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	statistics.InputBytes = downloaded
 	if err != nil {
 		return statistics, err
+	}
+	if inferSchema {
+		table.Schema, err = s.loader.InferParquetSchema(ctx, localObjects, ports.ParquetSchemaOptions{
+			EnableListInference: configuration.ParquetOptions.EnableListInference,
+		})
+		if err != nil {
+			return statistics, err
+		}
+		if err := domain.ValidateSchema(table.Schema); err != nil {
+			return statistics, err
+		}
+		schemaPlan, err = s.planDestinationSchema(ctx, table, createDestination)
+		if err != nil {
+			return statistics, err
+		}
+		loadPlan, err = s.planLoad(ctx, configuration, table, createDestination, schemaPlan, resolved)
+		if err != nil {
+			return statistics, err
+		}
 	}
 	started := observability.LogSideEffectStart(ctx, "warehouse", "commit_load_job",
 		"project_id", job.Reference.ProjectID, "dataset_id", table.Reference.DatasetID,
@@ -271,44 +276,84 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	return statistics, err
 }
 
+func (s *Service) planDestinationSchema(
+	ctx context.Context,
+	table domain.Table,
+	createDestination bool,
+) (engine.SchemaPlan, error) {
+	operation := engine.SchemaOperationValidate
+	if createDestination {
+		operation = engine.SchemaOperationCreate
+	}
+	schemaIntent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
+		Operation: operation,
+		Target: catalogdomain.TableReference{
+			ProjectID: table.Reference.ProjectID,
+			DatasetID: table.Reference.DatasetID,
+			TableID:   table.Reference.TableID,
+		},
+		AfterSchema: table.Schema,
+	})
+	if err != nil {
+		return engine.SchemaPlan{}, translateCatalogSchemaError(err)
+	}
+	plan, err := s.loader.PlanSchema(ctx, schemaIntent)
+	if err != nil {
+		return engine.SchemaPlan{}, translateCatalogSchemaError(err)
+	}
+	return plan, nil
+}
+
+func (s *Service) planLoad(
+	ctx context.Context,
+	configuration domain.LoadConfiguration,
+	table domain.Table,
+	createDestination bool,
+	schemaPlan engine.SchemaPlan,
+	objects []ports.ResolvedObject,
+) (ports.LoadPlan, error) {
+	return s.loader.PlanLoad(ctx, ports.LoadPlanRequest{
+		Destination: table, CreateDestination: createDestination, SchemaPlan: schemaPlan,
+		SourceFormat: configuration.SourceFormat, WriteDisposition: configuration.WriteDisposition,
+		Objects: objects,
+	})
+}
+
 func (s *Service) resolveDestination(
 	ctx context.Context,
 	job *domain.Job,
 	configuration domain.LoadConfiguration,
-) (domain.Table, bool, error) {
+) (domain.Table, bool, bool, error) {
 	table, err := s.tables.GetTable(ctx, configuration.Destination)
 	if err == nil {
 		if table.Location != "" && !strings.EqualFold(table.Location, job.Reference.Location) {
-			return domain.Table{}, false, fmt.Errorf("%w: destination table and job locations differ", domain.ErrInvalid)
+			return domain.Table{}, false, false, fmt.Errorf("%w: destination table and job locations differ", domain.ErrInvalid)
 		}
 		if len(configuration.Schema) > 0 && !schemasEqual(configuration.Schema, table.Schema) {
-			return domain.Table{}, false, fmt.Errorf("%w: requested schema does not match the destination table", domain.ErrInvalid)
+			return domain.Table{}, false, false, fmt.Errorf("%w: requested schema does not match the destination table", domain.ErrInvalid)
 		}
-		return table, false, nil
+		return table, false, false, nil
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
-		return domain.Table{}, false, err
+		return domain.Table{}, false, false, err
 	}
 	if configuration.CreateDisposition == domain.CreateNever {
-		return domain.Table{}, false, fmt.Errorf("%w: destination table", domain.ErrNotFound)
-	}
-	if len(configuration.Schema) == 0 {
-		return domain.Table{}, false, fmt.Errorf("%w: an explicit schema is required to create a Parquet destination", domain.ErrUnsupported)
+		return domain.Table{}, false, false, fmt.Errorf("%w: destination table", domain.ErrNotFound)
 	}
 	location, err := s.tables.GetDatasetLocation(
 		ctx, configuration.Destination.ProjectID, configuration.Destination.DatasetID,
 	)
 	if err != nil {
-		return domain.Table{}, false, err
+		return domain.Table{}, false, false, err
 	}
 	if location != "" && !strings.EqualFold(location, job.Reference.Location) {
-		return domain.Table{}, false, fmt.Errorf("%w: destination dataset and job locations differ", domain.ErrInvalid)
+		return domain.Table{}, false, false, fmt.Errorf("%w: destination dataset and job locations differ", domain.ErrInvalid)
 	}
 	return domain.Table{
 		Reference: configuration.Destination,
 		Location:  location,
 		Schema:    catalogdomain.CloneFields(configuration.Schema),
-	}, true, nil
+	}, true, len(configuration.Schema) == 0, nil
 }
 
 func translateCatalogSchemaError(err error) error {

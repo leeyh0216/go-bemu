@@ -176,7 +176,9 @@ BigQuery는 REST 요청 구조를
 DuckDB 트랜잭션 하나에서 적용합니다. 로컬 경로와 GCS가 아닌 URI scheme은 작업을
 저장하기 전에 거부합니다.
 
-Parquet 스키마 추론, 자동 감지, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON,
+요청 스키마를 생략하면 Parquet 스키마에서 스칼라와 STRUCT 필드를 추론합니다. LIST
+필드를 REPEATED로 추론하려면 `parquetOptions.enableListInference=true`가 필요합니다.
+별도의 `autodetect` 요청 필드, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON,
 멀티파트·재개 가능 다운로드는 지원하지 않습니다. 작업 메타데이터와 멱등성 식별 정보는 SQLite에
 영속화하지만 내려받은 객체와 임시 준비 작업 공간은 영속화하지 않습니다.
 
@@ -246,7 +248,7 @@ gRPC는 인증 정보가 없는 요청을 허용하며 `Authorization` 값이 �
 | 쿼리 작업 | 작업 저장소, GoogleSQL gateway, statement 포트 | 공개 동기·비동기 절차 검증 완료, 결과 payload는 프로세스 내부에 유지 |
 | `CreateReadSession`/`ReadRows` | 스냅샷·세션 원장과 Arrow/Avro 인코더 | 공개 API 부분 지원: 크기 제한이 있는 DuckDB 스냅샷, 재귀 필드 선택, 논리 스트림, 안정된 오프셋 지원. 분할, 압축, 과거 스냅샷, 복구는 미지원 |
 | `AppendRows`/확정/커밋 | 영속 스트림별 원장과 트랜잭션 조정기 | 공개 API 부분 지원: `PENDING`·기본 `ProtoRows`, 오프셋, 확정, 원자적 커밋, 시작 시 상태 조정 지원. 고급 스트림 유형과 한쪽 저장소 복원 증명은 미지원 |
-| 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 또는 명시적 스키마가 있는 새 테이블 대상 Parquet 지원. 다른 형식, 스키마 추론, 스키마 변경, 다운로드 방식은 미지원 |
+| 간접 적재 | 객체 저장소, 준비 영역, 적재 쓰기 방식 | 공개 API 부분 지원: 가짜 GCS JSON과 기존 테이블 또는 스키마를 추론한 새 테이블 대상 Parquet 및 명시적 LIST 추론 지원. 다른 형식, 스키마 변경, 다운로드 방식은 미지원 |
 | 덮어쓰기 `MERGE` | 공식 analyzer, 불변 semantic AST, 엔진 visitor | 항상 거짓, 동적 시간·범위 파티션, 순서형 `WHEN`, 원본 행 대응 개수 동작 검증 완료. 추가 AST node는 #8에 남아 있음 |
 | BigQuery 호환 요청 인증 | REST/gRPC 전송 동작 | 의도적으로 제공하지 않으며 인증 정보 값을 무시함 |
 | ADC/WIF 획득 | 클라이언트 인증 정보 라이브러리 | 공개 BQEMU 실행 환경의 범위 밖 |

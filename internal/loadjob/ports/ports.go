@@ -41,9 +41,14 @@ type LoadResult struct {
 	CreatedDestination bool
 }
 
+type ParquetSchemaOptions struct {
+	EnableListInference bool
+}
+
 type Loader interface {
 	catalogports.SchemaPlanner
 	PlanLoad(context.Context, LoadPlanRequest) (LoadPlan, error)
+	InferParquetSchema(context.Context, []LocalObject, ParquetSchemaOptions) ([]domain.Field, error)
 	ExecuteLoad(context.Context, LoadPlan, []LocalObject) (LoadResult, error)
 	DiscardLoadedTable(context.Context, domain.TableReference) error
 }

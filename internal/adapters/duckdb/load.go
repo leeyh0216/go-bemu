@@ -284,6 +284,10 @@ func describeStaging(ctx context.Context, tx *sql.Tx, staging string) ([]staging
 	if err != nil {
 		return nil, fmt.Errorf("describe Parquet staging schema: %w", err)
 	}
+	return scanStagingColumns(rows)
+}
+
+func scanStagingColumns(rows *sql.Rows) ([]stagingColumn, error) {
 	defer rows.Close()
 	columnNames, err := rows.Columns()
 	if err != nil {
@@ -307,7 +311,7 @@ func describeStaging(ctx context.Context, tx *sql.Tx, staging string) ([]staging
 		if !nameOK || !typeOK {
 			return nil, fmt.Errorf("%w: DuckDB returned an invalid Parquet schema description", loadDomain.ErrInvalid)
 		}
-		result = append(result, stagingColumn{name: name, typeName: strings.ToUpper(typeName)})
+		result = append(result, stagingColumn{name: name, typeName: strings.TrimSpace(typeName)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read Parquet schema description: %w", err)

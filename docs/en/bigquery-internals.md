@@ -169,8 +169,11 @@ applies `WRITE_APPEND`, `WRITE_EMPTY`, or `WRITE_TRUNCATE` in one DuckDB
 transaction. With `CREATE_IF_NEEDED`, an explicit request schema creates the
 physical destination and inserts its rows in that same transaction; catalog
 metadata is published only after commit, with physical compensation on a
-publication failure. Local paths and non-GCS URI schemes are rejected before
-job persistence. Parquet schema inference, autodetect, `schemaUpdateOptions`,
+publication failure. When the request omits a schema, scalar and STRUCT fields
+are inferred from the Parquet schema; LIST fields additionally require
+`parquetOptions.enableListInference=true`. Local paths and non-GCS URI schemes
+are rejected before job persistence. The separate `autodetect` request flag,
+`schemaUpdateOptions`,
 Avro/ORC/CSV/NDJSON, and
 multipart/resumable download are unsupported. Job metadata and idempotency
 identity persist in SQLite; downloaded objects and temporary staging workspaces
@@ -239,7 +242,7 @@ policy, token introspection, or production authorization.
 | query job | job repository plus GoogleSQL gateway and statement ports | public sync/async path verified; result payload remains process-local |
 | CreateReadSession/ReadRows | snapshot/session ledger plus Arrow/Avro encoder | public Partial: bounded DuckDB snapshot, recursive projection, logical streams, stable offsets; split/compression/historical snapshot/recovery gaps |
 | AppendRows/finalize/commit | durable per-stream ledger plus transaction coordinator | public Partial: PENDING/default ProtoRows, offsets, finalize, atomic commit, startup reconciliation; advanced stream kinds and independent-restore proof gaps |
-| indirect load | object store, staging, load dispositions | public Partial: fake-GCS JSON plus Parquet into an existing or explicitly schematized new table; other formats/schema inference/evolution/download gaps |
+| indirect load | object store, staging, load dispositions | public Partial: fake-GCS JSON plus Parquet into an existing or schema-inferred new table, with explicit LIST inference; other formats/evolution/download gaps |
 | overwrite `MERGE` | official analyzer, immutable semantic AST, engine visitor | constant-false, dynamic time/range partition, ordered `WHEN`, and source-cardinality behavior verified; additional AST nodes remain #8 |
 | BigQuery-compatible request authentication | REST/gRPC transport behavior | intentionally absent; credential values are ignored |
 | ADC/WIF acquisition | client credential library | external to the public BQEMU runtime |

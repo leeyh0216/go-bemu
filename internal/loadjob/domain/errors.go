@@ -11,5 +11,6 @@ var (
 )
 
 const (
-	CapabilityDecimalRoundingV1 = "load.decimal-rounding.unsupported-v1"
+	CapabilityDecimalRoundingV1      = "load.decimal-rounding.unsupported-v1"
+	CapabilityParquetListInferenceV1 = "load.parquet.list-inference-v1"
 )

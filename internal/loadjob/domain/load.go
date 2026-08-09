@@ -69,6 +69,10 @@ type Table struct {
 	Schema    []Field
 }
 
+type ParquetOptions struct {
+	EnableListInference bool
+}
+
 type LoadConfiguration struct {
 	SourceURIs          []string
 	Destination         TableReference
@@ -81,6 +85,7 @@ type LoadConfiguration struct {
 	IgnoreUnknownValues bool
 	MaxBadRecords       int64
 	UnsupportedOptions  []string
+	ParquetOptions      ParquetOptions
 }
 
 type JobError struct {

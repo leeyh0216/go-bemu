@@ -223,6 +223,40 @@ func TestParquetLoadPreservesNestedAndRepeatedValues(t *testing.T) {
 	}
 }
 
+func TestParquetSchemaInferenceRequiresExplicitListSemantics(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	parquet := createLoadParquet(t, warehouse, `SELECT
+		1::BIGINT AS id,
+		{'label': 'one'::VARCHAR, 'amount': 12.3400::DECIMAL(20,4)} AS payload,
+		[{'code': 7::BIGINT}] AS items`)
+	info, err := os.Stat(parquet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := []loadports.LocalObject{{Path: parquet, Size: info.Size(), Fingerprint: strings.Repeat("a", 64)}}
+	if _, err := warehouse.InferParquetSchema(ctx, objects, loadports.ParquetSchemaOptions{}); !errors.Is(err, loadDomain.ErrUnsupported) ||
+		!strings.Contains(err.Error(), loadDomain.CapabilityParquetListInferenceV1) {
+		t.Fatalf("disabled LIST inference error = %v", err)
+	}
+	fields, err := warehouse.InferParquetSchema(ctx, objects, loadports.ParquetSchemaOptions{EnableListInference: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 3 || fields[0].Name != "id" || fields[0].Type != "INTEGER" ||
+		fields[1].Name != "payload" || fields[1].Type != "RECORD" || len(fields[1].Fields) != 2 ||
+		fields[1].Fields[1].Type != "NUMERIC" || fields[1].Fields[1].Precision == nil || *fields[1].Fields[1].Precision != 20 ||
+		fields[1].Fields[1].Scale == nil || *fields[1].Fields[1].Scale != 4 ||
+		fields[2].Name != "items" || fields[2].Mode != "REPEATED" || fields[2].Type != "RECORD" ||
+		len(fields[2].Fields) != 1 || fields[2].Fields[0].Name != "code" || fields[2].Fields[0].Type != "INTEGER" {
+		t.Fatalf("inferred schema = %#v", fields)
+	}
+}
+
 func TestParquetLoadWriteDispositionsAreAtomic(t *testing.T) {
 	ctx := context.Background()
 	warehouse, err := New("")
