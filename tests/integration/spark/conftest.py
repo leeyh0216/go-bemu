@@ -443,7 +443,7 @@ def observe_direct_overwrite_flow(
                     if rpc.endswith("/" + operation):
                         sequence.append(operation)
                         if operation == "FinalizeWriteStream":
-                            fingerprint = event.get("name_fingerprint")
+                            fingerprint = event.get("name_digest")
                             if not isinstance(fingerprint, str):
                                 raise AssertionError(
                                     "finalize observation omitted its resource shape"
@@ -515,7 +515,7 @@ def observe_direct_overwrite_flow(
             continue
 
         if (
-            event.get("event") == "side_effect.post"
+            event.get("event") == "side_effect.after"
             and event.get("component") == "duckdb"
             and event.get("operation") in {"create_table", "drop_table"}
             and event.get("success") is True
@@ -533,7 +533,7 @@ def observe_direct_overwrite_flow(
             continue
 
         if (
-            event.get("event") == "side_effect.pre"
+            event.get("event") == "side_effect.before"
             and event.get("component") == "duckdb"
             and event.get("operation") in {"execute_statement", "execute_script"}
             and event.get("statement_kind") in {"MERGE", "SCRIPT"}
@@ -640,11 +640,11 @@ def observe_dsv2_exact_streaming_flow(
                     create_types.append(stream_type)
             elif operation == "GetWriteStream":
                 view = event.get("view")
-                fingerprint = event.get("name_fingerprint")
+                fingerprint = event.get("name_digest")
                 if isinstance(view, str):
                     get_views.append(view)
             elif operation == "FinalizeWriteStream":
-                fingerprint = event.get("name_fingerprint")
+                fingerprint = event.get("name_digest")
                 if isinstance(fingerprint, str):
                     finalized.add(fingerprint)
             elif operation == "BatchCommitWriteStreams":
@@ -802,7 +802,7 @@ def observe_query_read_flow(edge: PublicEdge, *, since: int) -> dict[str, object
             )
 
         if (
-            event.get("event") == "side_effect.post"
+            event.get("event") == "side_effect.after"
             and event.get("component") == "duckdb"
             and event.get("operation") == "materialize_statement"
             and event.get("success") is True
