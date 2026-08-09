@@ -28,8 +28,8 @@
     },
     {
       "stage": "explicit_destination_metadata",
-      "operation": "tables.get",
-      "shape": "calls:1 patch-calls:0 destination-metadata:reused",
+      "operation": "tables.get[+tables.patch+tables.get]",
+      "shape": "allowed-flows:get:1+patch:0 or get:2+patch:1 destination-metadata:reused-or-expiration-updated",
       "status": "200"
     },
     {

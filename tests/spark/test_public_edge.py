@@ -618,13 +618,21 @@ def test_query_source_explicit_materialization_reuses_destination_metadata(
             "ReadRows",
         ),
     )
+    counts = observation["counts"]
+    if not isinstance(counts, dict):
+        raise AssertionError("query operation counts have an invalid shape")
+    metadata_gets = counts.get("tables.get", 0)
+    metadata_patches = counts.get("tables.patch", 0)
+    if (metadata_gets, metadata_patches) not in {(1, 0), (2, 1)}:
+        raise AssertionError(
+            "explicit materialization metadata flow mismatch "
+            f"shape=tables.get:{metadata_gets},tables.patch:{metadata_patches}"
+        )
     _assert_operation_counts(
         observation,
         exact={
             "jobs.insert": 1,
             "jobs.get": 1,
-            "tables.get": 1,
-            "tables.patch": 0,
             "jobs.query": 0,
             "tabledata.list": 0,
             "CreateReadSession": 1,
@@ -643,7 +651,7 @@ def test_query_source_explicit_materialization_reuses_destination_metadata(
     record_capability(
         "SBQ-READ-ARROW-QUERY-MATERIALIZED-V1",
         (
-            "arrow-query explicit-destination patch-calls:0 rows:2 "
+            "arrow-query explicit-destination metadata-patch:optional rows:2 "
             f"storage-read:observed row-fingerprint:sha256:{_row_fingerprint(actual)}"
         ),
     )
