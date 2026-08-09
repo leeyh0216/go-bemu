@@ -54,12 +54,25 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	evolvedParquet := createRESTParquet(t, "SELECT NULL::BIGINT AS id, 'evolved'::VARCHAR AS name, 9.5::DOUBLE AS score")
+	evolvedPayload, err := os.ReadFile(evolvedParquet)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fakeGCS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/storage/v1/b/load-bucket/o":
+			if strings.HasPrefix(r.URL.Query().Get("prefix"), "evolved/") {
+				_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+					"name": "evolved/part-00000.parquet", "size": fmt.Sprint(len(evolvedPayload)), "generation": "2",
+				}}})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
 				"name": "input/part-00000.parquet", "size": fmt.Sprint(len(parquetPayload)), "generation": "1",
 			}}})
+		case strings.HasSuffix(r.URL.Path, "/o/evolved/part-00000.parquet") && r.URL.Query().Get("alt") == "media":
+			_, _ = w.Write(evolvedPayload)
 		case strings.HasSuffix(r.URL.Path, "/o/input/part-00000.parquet") && r.URL.Query().Get("alt") == "media":
 			_, _ = w.Write(parquetPayload)
 		default:
@@ -121,6 +134,41 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 		`{"query":"SELECT count(*) AS row_count FROM `+"`test-project.analytics.events`"+`","useLegacySql":false}`, http.StatusOK)
 	if query["totalRows"] != "1" || query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "2" {
 		t.Fatalf("unexpected query result after load: %#v", query)
+	}
+
+	updateBody := fmt.Sprintf(`{
+		"jobReference":{"projectId":"test-project","jobId":"load-schema-update","location":"US"},
+		"configuration":{"load":{
+			"sourceUris":[%q],
+			"destinationTable":{"projectId":"test-project","datasetId":"analytics","tableId":"events"},
+			"sourceFormat":"PARQUET","writeDisposition":"WRITE_APPEND",
+			"schemaUpdateOptions":["ALLOW_FIELD_ADDITION","ALLOW_FIELD_RELAXATION"],
+			"schema":{"fields":[
+				{"name":"id","type":"INT64","mode":"NULLABLE"},
+				{"name":"name","type":"STRING","mode":"NULLABLE"},
+				{"name":"score","type":"FLOAT64","mode":"NULLABLE"}
+			]}
+		}}
+	}`, "gs://load-bucket/evolved/*.parquet")
+	restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/jobs", updateBody, http.StatusOK)
+	updatedJob := waitForRESTLoad(t, server.URL, "load-schema-update")
+	if updatedJob["status"].(map[string]any)["errorResult"] != nil {
+		t.Fatalf("schema-updating load failed: %#v", updatedJob)
+	}
+	updateOptions := updatedJob["configuration"].(map[string]any)["load"].(map[string]any)["schemaUpdateOptions"].([]any)
+	if len(updateOptions) != 2 {
+		t.Fatalf("schema update options were not preserved: %#v", updatedJob)
+	}
+	updatedTable := restLoadRequest(t, server.URL, http.MethodGet,
+		"/bigquery/v2/projects/test-project/datasets/analytics/tables/events", "", http.StatusOK)
+	fields := updatedTable["schema"].(map[string]any)["fields"].([]any)
+	if len(fields) != 3 || fields[0].(map[string]any)["mode"] != "NULLABLE" || fields[2].(map[string]any)["name"] != "score" {
+		t.Fatalf("updated table schema = %#v", updatedTable)
+	}
+	query = restLoadRequest(t, server.URL, http.MethodPost, "/bigquery/v2/projects/test-project/queries",
+		`{"query":"SELECT count(*) AS row_count FROM `+"`test-project.analytics.events`"+` WHERE id IS NULL AND score = 9.5","useLegacySql":false}`, http.StatusOK)
+	if query["rows"].([]any)[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "1" {
+		t.Fatalf("unexpected query result after schema update: %#v", query)
 	}
 
 	createBody := fmt.Sprintf(`{

@@ -96,7 +96,7 @@ func loadJobFromDomain(job *loadDomain.Job) loadJobResource {
 		},
 		SourceFormat: string(configuration.SourceFormat), WriteDisposition: string(configuration.WriteDisposition),
 		CreateDisposition: string(configuration.CreateDisposition), Autodetect: configuration.Autodetect,
-		SchemaUpdateOptions: append([]string(nil), configuration.SchemaUpdateOptions...),
+		SchemaUpdateOptions: loadSchemaUpdateOptionStrings(configuration.SchemaUpdateOptions),
 		IgnoreUnknownValues: configuration.IgnoreUnknownValues, MaxBadRecords: configuration.MaxBadRecords,
 	}
 	if len(configuration.Schema) > 0 {
@@ -141,6 +141,14 @@ func loadJobFromDomain(job *loadDomain.Job) loadJobResource {
 		resource.Status.Errors = []errorProto{jobError}
 	}
 	return resource
+}
+
+func loadSchemaUpdateOptionStrings(options []loadDomain.SchemaUpdateOption) []string {
+	result := make([]string, len(options))
+	for index, option := range options {
+		result[index] = string(option)
+	}
+	return result
 }
 
 func loadFieldsToWire(fields []loadDomain.Field) []tableFieldSchema {

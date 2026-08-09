@@ -178,7 +178,10 @@ DuckDB 트랜잭션 하나에서 적용합니다. 로컬 경로와 GCS가 아닌
 
 요청 스키마를 생략하면 Parquet 스키마에서 스칼라와 STRUCT 필드를 추론합니다. LIST
 필드를 REPEATED로 추론하려면 `parquetOptions.enableListInference=true`가 필요합니다.
-별도의 `autodetect` 요청 필드, `schemaUpdateOptions`, Avro/ORC/CSV/NDJSON,
+기존 `WRITE_APPEND` 대상은 명시적으로 허용한 nullable 필드 추가와 REQUIRED에서
+NULLABLE로의 완화만 처리합니다. 물리 스키마 변경과 추가 행은 대상 트랜잭션 하나에서
+반영하고, 기준 SQLite 메타데이터는 커밋 뒤 게시합니다. 별도의 `autodetect` 요청 필드,
+쿼리 작업 스키마 변경, Avro/ORC/CSV/NDJSON,
 멀티파트·재개 가능 다운로드는 지원하지 않습니다. 작업 메타데이터와 멱등성 식별 정보는 SQLite에
 영속화하지만 내려받은 객체와 임시 준비 작업 공간은 영속화하지 않습니다.
 

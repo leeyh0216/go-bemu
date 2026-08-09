@@ -24,6 +24,7 @@ type ResolvedObject struct {
 type LoadPlanRequest struct {
 	Destination       domain.Table
 	CreateDestination bool
+	UpdateDestination bool
 	SchemaPlan        engine.SchemaPlan
 	SourceFormat      domain.SourceFormat
 	WriteDisposition  domain.WriteDisposition
@@ -215,9 +216,14 @@ func validateLoadPlanRequest(capabilities engine.Capabilities, request LoadPlanR
 		DatasetID: request.Destination.Reference.DatasetID,
 		TableID:   request.Destination.Reference.TableID,
 	}
+	if request.CreateDestination && request.UpdateDestination {
+		return fmt.Errorf("%w: load destination cannot be created and updated together", domain.ErrInvalid)
+	}
 	expectedOperation := engine.SchemaOperationValidate
 	if request.CreateDestination {
 		expectedOperation = engine.SchemaOperationCreate
+	} else if request.UpdateDestination {
+		expectedOperation = engine.SchemaOperationUpdate
 	}
 	if schemaIntent.Operation() != expectedOperation || schemaIntent.Target() != expectedTarget ||
 		!reflect.DeepEqual(schemaIntent.AfterSchema(), request.Destination.Schema) {
@@ -293,6 +299,7 @@ func loadPlanRequestFingerprint(request LoadPlanRequest) string {
 		Location          string                  `json:"location"`
 		Schema            []domain.Field          `json:"schema"`
 		CreateDestination bool                    `json:"createDestination"`
+		UpdateDestination bool                    `json:"updateDestination"`
 		SchemaPlan        string                  `json:"schemaPlan"`
 		SourceFormat      domain.SourceFormat     `json:"sourceFormat"`
 		WriteDisposition  domain.WriteDisposition `json:"writeDisposition"`
@@ -300,8 +307,9 @@ func loadPlanRequestFingerprint(request LoadPlanRequest) string {
 	}{
 		Destination: request.Destination.Reference, Location: request.Destination.Location,
 		Schema: request.Destination.Schema, CreateDestination: request.CreateDestination,
-		SchemaPlan:   request.SchemaPlan.Fingerprint(),
-		SourceFormat: request.SourceFormat, WriteDisposition: request.WriteDisposition,
+		UpdateDestination: request.UpdateDestination,
+		SchemaPlan:        request.SchemaPlan.Fingerprint(),
+		SourceFormat:      request.SourceFormat, WriteDisposition: request.WriteDisposition,
 		Objects: request.Objects,
 	})
 }

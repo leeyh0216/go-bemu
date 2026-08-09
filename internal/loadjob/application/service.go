@@ -73,6 +73,14 @@ type Service struct {
 	config  Config
 }
 
+type destinationResolution struct {
+	table        domain.Table
+	beforeSchema []domain.Field
+	evolution    catalogdomain.SchemaEvolution
+	create       bool
+	infer        bool
+}
+
 func NewService(jobs ports.JobRepository, objects ports.ObjectStore, tables ports.TableCatalog, loader ports.Loader, clock ports.Clock, ids ports.IDGenerator, config Config) (*Service, error) {
 	if jobs == nil || objects == nil || tables == nil || loader == nil || clock == nil || ids == nil {
 		return nil, fmt.Errorf("%w: load service dependencies are required", domain.ErrInvalid)
@@ -161,17 +169,17 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	if configuration.SourceFormat != domain.FormatParquet {
 		return statistics, fmt.Errorf("%w: sourceFormat %s", domain.ErrUnsupported, configuration.SourceFormat)
 	}
-	if configuration.Autodetect || len(configuration.SchemaUpdateOptions) > 0 || configuration.IgnoreUnknownValues || configuration.MaxBadRecords != 0 || len(configuration.UnsupportedOptions) > 0 {
+	if configuration.Autodetect || configuration.IgnoreUnknownValues || configuration.MaxBadRecords != 0 || len(configuration.UnsupportedOptions) > 0 {
 		return statistics, fmt.Errorf("%w: requested load options", domain.ErrUnsupported)
 	}
 
-	table, createDestination, inferSchema, err := s.resolveDestination(ctx, job, configuration)
+	destination, err := s.resolveDestination(ctx, job, configuration)
 	if err != nil {
 		return statistics, err
 	}
 	var schemaPlan engine.SchemaPlan
-	if !inferSchema {
-		schemaPlan, err = s.planDestinationSchema(ctx, table, createDestination)
+	if !destination.infer {
+		schemaPlan, err = s.planDestinationSchema(ctx, destination)
 		if err != nil {
 			return statistics, err
 		}
@@ -186,8 +194,8 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 		resolved[index] = ports.ResolvedObject{Fingerprint: objectFingerprint(object), Size: object.Size}
 	}
 	var loadPlan ports.LoadPlan
-	if !inferSchema {
-		loadPlan, err = s.planLoad(ctx, configuration, table, createDestination, schemaPlan, resolved)
+	if !destination.infer {
+		loadPlan, err = s.planLoad(ctx, configuration, destination, schemaPlan, resolved)
 		if err != nil {
 			return statistics, err
 		}
@@ -218,38 +226,55 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 	if err != nil {
 		return statistics, err
 	}
-	if inferSchema {
-		table.Schema, err = s.loader.InferParquetSchema(ctx, localObjects, ports.ParquetSchemaOptions{
+	if destination.infer {
+		inferred, inferErr := s.loader.InferParquetSchema(ctx, localObjects, ports.ParquetSchemaOptions{
 			EnableListInference: configuration.ParquetOptions.EnableListInference,
 		})
+		if inferErr != nil {
+			return statistics, inferErr
+		}
+		if err := domain.ValidateSchema(inferred); err != nil {
+			return statistics, err
+		}
+		destination.table.Schema = catalogdomain.CloneFields(inferred)
+		if !destination.create {
+			destination.table.Schema = mergeInferredSchemaUpdate(
+				destination.beforeSchema, inferred,
+				schemaUpdateOptionEnabled(configuration.SchemaUpdateOptions, domain.AllowFieldRelaxation),
+			)
+			destination.evolution, err = validateRequestedSchemaUpdate(
+				destination.beforeSchema, destination.table.Schema, configuration.SchemaUpdateOptions,
+			)
+			if err != nil {
+				return statistics, err
+			}
+		}
+		schemaPlan, err = s.planDestinationSchema(ctx, destination)
 		if err != nil {
 			return statistics, err
 		}
-		if err := domain.ValidateSchema(table.Schema); err != nil {
-			return statistics, err
-		}
-		schemaPlan, err = s.planDestinationSchema(ctx, table, createDestination)
-		if err != nil {
-			return statistics, err
-		}
-		loadPlan, err = s.planLoad(ctx, configuration, table, createDestination, schemaPlan, resolved)
+		loadPlan, err = s.planLoad(ctx, configuration, destination, schemaPlan, resolved)
 		if err != nil {
 			return statistics, err
 		}
 	}
 	started := observability.LogSideEffectStart(ctx, "warehouse", "commit_load_job",
-		"project_id", job.Reference.ProjectID, "dataset_id", table.Reference.DatasetID,
-		"table_id", table.Reference.TableID, "job_id", job.Reference.JobID,
+		"project_id", job.Reference.ProjectID, "dataset_id", destination.table.Reference.DatasetID,
+		"table_id", destination.table.Reference.TableID, "job_id", job.Reference.JobID,
 		"file_count", len(localObjects), "input_bytes", downloaded,
-		"schema_fingerprint", schemaDigest(table.Schema), "write_disposition", configuration.WriteDisposition)
+		"schema_fingerprint", schemaDigest(destination.table.Schema), "write_disposition", configuration.WriteDisposition)
 	result, err := s.loader.ExecuteLoad(ctx, loadPlan, localObjects)
-	if err == nil && result.CreatedDestination != createDestination {
+	if err == nil && result.CreatedDestination != destination.create {
 		err = fmt.Errorf("%w: loader destination creation result differs from the plan", domain.ErrPrecondition)
 	}
-	if err == nil && createDestination {
-		if publishErr := s.tables.PublishTable(ctx, table); publishErr != nil {
+	updateDestination := len(destination.evolution.Additions) != 0 || len(destination.evolution.Relaxations) != 0
+	if err == nil && result.UpdatedDestination != updateDestination {
+		err = fmt.Errorf("%w: loader destination update result differs from the plan", domain.ErrPrecondition)
+	}
+	if err == nil && destination.create {
+		if publishErr := s.tables.PublishTable(ctx, destination.table); publishErr != nil {
 			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			cleanupErr := s.loader.DiscardLoadedTable(cleanupCtx, table.Reference)
+			cleanupErr := s.loader.DiscardLoadedTable(cleanupCtx, destination.table.Reference)
 			cancelCleanup()
 			if cleanupErr != nil {
 				err = errors.Join(publishErr, fmt.Errorf("compensate unpublished load destination: %w", cleanupErr))
@@ -257,12 +282,16 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 				err = publishErr
 			}
 		}
+	} else if err == nil && updateDestination {
+		err = s.tables.PublishSchemaUpdate(
+			ctx, destination.table.Reference, destination.beforeSchema, destination.table.Schema,
+		)
 	}
 	observability.LogSideEffectEnd(ctx, "warehouse", "commit_load_job", started, err,
-		"project_id", job.Reference.ProjectID, "dataset_id", table.Reference.DatasetID,
-		"table_id", table.Reference.TableID, "job_id", job.Reference.JobID,
+		"project_id", job.Reference.ProjectID, "dataset_id", destination.table.Reference.DatasetID,
+		"table_id", destination.table.Reference.TableID, "job_id", job.Reference.JobID,
 		"file_count", len(localObjects), "input_bytes", downloaded,
-		"schema_fingerprint", schemaDigest(table.Schema), "write_disposition", configuration.WriteDisposition)
+		"schema_fingerprint", schemaDigest(destination.table.Schema), "write_disposition", configuration.WriteDisposition)
 	statistics.OutputRows = result.OutputRows
 	if err == nil {
 		// BigQuery reports the bytes produced by the load job. DuckDB does not
@@ -278,21 +307,25 @@ func (s *Service) run(ctx context.Context, job *domain.Job) (statistics domain.S
 
 func (s *Service) planDestinationSchema(
 	ctx context.Context,
-	table domain.Table,
-	createDestination bool,
+	destination destinationResolution,
 ) (engine.SchemaPlan, error) {
 	operation := engine.SchemaOperationValidate
-	if createDestination {
+	var beforeSchema []domain.Field
+	if destination.create {
 		operation = engine.SchemaOperationCreate
+	} else if len(destination.evolution.Additions) != 0 || len(destination.evolution.Relaxations) != 0 {
+		operation = engine.SchemaOperationUpdate
+		beforeSchema = destination.beforeSchema
 	}
 	schemaIntent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
 		Operation: operation,
 		Target: catalogdomain.TableReference{
-			ProjectID: table.Reference.ProjectID,
-			DatasetID: table.Reference.DatasetID,
-			TableID:   table.Reference.TableID,
+			ProjectID: destination.table.Reference.ProjectID,
+			DatasetID: destination.table.Reference.DatasetID,
+			TableID:   destination.table.Reference.TableID,
 		},
-		AfterSchema: table.Schema,
+		BeforeSchema: beforeSchema, AfterSchema: destination.table.Schema,
+		Additions: destination.evolution.Additions, Relaxations: destination.evolution.Relaxations,
 	})
 	if err != nil {
 		return engine.SchemaPlan{}, translateCatalogSchemaError(err)
@@ -307,13 +340,14 @@ func (s *Service) planDestinationSchema(
 func (s *Service) planLoad(
 	ctx context.Context,
 	configuration domain.LoadConfiguration,
-	table domain.Table,
-	createDestination bool,
+	destination destinationResolution,
 	schemaPlan engine.SchemaPlan,
 	objects []ports.ResolvedObject,
 ) (ports.LoadPlan, error) {
+	updateDestination := len(destination.evolution.Additions) != 0 || len(destination.evolution.Relaxations) != 0
 	return s.loader.PlanLoad(ctx, ports.LoadPlanRequest{
-		Destination: table, CreateDestination: createDestination, SchemaPlan: schemaPlan,
+		Destination: destination.table, CreateDestination: destination.create,
+		UpdateDestination: updateDestination, SchemaPlan: schemaPlan,
 		SourceFormat: configuration.SourceFormat, WriteDisposition: configuration.WriteDisposition,
 		Objects: objects,
 	})
@@ -323,37 +357,125 @@ func (s *Service) resolveDestination(
 	ctx context.Context,
 	job *domain.Job,
 	configuration domain.LoadConfiguration,
-) (domain.Table, bool, bool, error) {
+) (destinationResolution, error) {
 	table, err := s.tables.GetTable(ctx, configuration.Destination)
 	if err == nil {
 		if table.Location != "" && !strings.EqualFold(table.Location, job.Reference.Location) {
-			return domain.Table{}, false, false, fmt.Errorf("%w: destination table and job locations differ", domain.ErrInvalid)
+			return destinationResolution{}, fmt.Errorf("%w: destination table and job locations differ", domain.ErrInvalid)
 		}
-		if len(configuration.Schema) > 0 && !schemasEqual(configuration.Schema, table.Schema) {
-			return domain.Table{}, false, false, fmt.Errorf("%w: requested schema does not match the destination table", domain.ErrInvalid)
+		resolution := destinationResolution{
+			table: table, beforeSchema: catalogdomain.CloneFields(table.Schema),
 		}
-		return table, false, false, nil
+		if len(configuration.Schema) == 0 {
+			resolution.infer = len(configuration.SchemaUpdateOptions) != 0
+			return resolution, nil
+		}
+		if schemasEqual(configuration.Schema, table.Schema) {
+			return resolution, nil
+		}
+		resolution.table.Schema = catalogdomain.CloneFields(configuration.Schema)
+		resolution.evolution, err = validateRequestedSchemaUpdate(
+			resolution.beforeSchema, resolution.table.Schema, configuration.SchemaUpdateOptions,
+		)
+		if err != nil {
+			return destinationResolution{}, err
+		}
+		return resolution, nil
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
-		return domain.Table{}, false, false, err
+		return destinationResolution{}, err
 	}
 	if configuration.CreateDisposition == domain.CreateNever {
-		return domain.Table{}, false, false, fmt.Errorf("%w: destination table", domain.ErrNotFound)
+		return destinationResolution{}, fmt.Errorf("%w: destination table", domain.ErrNotFound)
 	}
 	location, err := s.tables.GetDatasetLocation(
 		ctx, configuration.Destination.ProjectID, configuration.Destination.DatasetID,
 	)
 	if err != nil {
-		return domain.Table{}, false, false, err
+		return destinationResolution{}, err
 	}
 	if location != "" && !strings.EqualFold(location, job.Reference.Location) {
-		return domain.Table{}, false, false, fmt.Errorf("%w: destination dataset and job locations differ", domain.ErrInvalid)
+		return destinationResolution{}, fmt.Errorf("%w: destination dataset and job locations differ", domain.ErrInvalid)
 	}
-	return domain.Table{
-		Reference: configuration.Destination,
-		Location:  location,
-		Schema:    catalogdomain.CloneFields(configuration.Schema),
-	}, true, len(configuration.Schema) == 0, nil
+	return destinationResolution{
+		table: domain.Table{
+			Reference: configuration.Destination,
+			Location:  location,
+			Schema:    catalogdomain.CloneFields(configuration.Schema),
+		},
+		create: true, infer: len(configuration.Schema) == 0,
+	}, nil
+}
+
+func mergeInferredSchemaUpdate(current, inferred []domain.Field, allowRelaxation bool) []domain.Field {
+	result := catalogdomain.CloneFields(inferred)
+	for index := 0; index < len(current) && index < len(result); index++ {
+		if !strings.EqualFold(current[index].Name, result[index].Name) ||
+			canonicalLoadFieldType(current[index].Type) != canonicalLoadFieldType(result[index].Type) {
+			continue
+		}
+		inferredMode := strings.ToUpper(result[index].Mode)
+		if inferredMode == "" {
+			inferredMode = "NULLABLE"
+		}
+		canonical := catalogdomain.CloneFields([]catalogdomain.Field{current[index]})[0]
+		currentMode := strings.ToUpper(canonical.Mode)
+		if currentMode == "" {
+			currentMode = "NULLABLE"
+		}
+		if allowRelaxation && currentMode == "REQUIRED" && inferredMode == "NULLABLE" {
+			canonical.Mode = "NULLABLE"
+		}
+		if len(current[index].Fields) != 0 && len(result[index].Fields) != 0 {
+			canonical.Fields = mergeInferredSchemaUpdate(current[index].Fields, result[index].Fields, allowRelaxation)
+		}
+		result[index] = canonical
+	}
+	return result
+}
+
+func schemaUpdateOptionEnabled(options []domain.SchemaUpdateOption, target domain.SchemaUpdateOption) bool {
+	for _, option := range options {
+		if option == target {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalLoadFieldType(fieldType string) string {
+	switch strings.ToUpper(fieldType) {
+	case "BOOL":
+		return "BOOLEAN"
+	case "INT64":
+		return "INTEGER"
+	case "FLOAT64":
+		return "FLOAT"
+	case "STRUCT":
+		return "RECORD"
+	default:
+		return strings.ToUpper(fieldType)
+	}
+}
+
+func validateRequestedSchemaUpdate(
+	current, proposed []domain.Field,
+	options []domain.SchemaUpdateOption,
+) (catalogdomain.SchemaEvolution, error) {
+	allowed := catalogdomain.SchemaEvolutionOptions{}
+	for _, option := range options {
+		switch option {
+		case domain.AllowFieldAddition:
+			allowed.AllowFieldAddition = true
+		case domain.AllowFieldRelaxation:
+			allowed.AllowFieldRelaxation = true
+		}
+	}
+	evolution, err := catalogdomain.ValidateSchemaUpdate(current, proposed, allowed)
+	if err != nil {
+		return catalogdomain.SchemaEvolution{}, fmt.Errorf("%w: %v", domain.ErrInvalid, err)
+	}
+	return evolution, nil
 }
 
 func translateCatalogSchemaError(err error) error {

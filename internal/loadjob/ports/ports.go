@@ -28,6 +28,7 @@ type TableCatalog interface {
 	GetTable(context.Context, domain.TableReference) (domain.Table, error)
 	GetDatasetLocation(context.Context, string, string) (string, error)
 	PublishTable(context.Context, domain.Table) error
+	PublishSchemaUpdate(context.Context, domain.TableReference, []domain.Field, []domain.Field) error
 }
 
 type LocalObject struct {
@@ -39,6 +40,7 @@ type LocalObject struct {
 type LoadResult struct {
 	OutputRows         int64
 	CreatedDestination bool
+	UpdatedDestination bool
 }
 
 type ParquetSchemaOptions struct {

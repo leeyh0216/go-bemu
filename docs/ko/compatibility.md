@@ -335,7 +335,8 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 | Avro, ORC, CSV, NDJSON 로드 | 지원하지 않습니다. 작업은 최종 `notImplemented` 오류를 반환합니다. |
 | `WRITE_APPEND`, `WRITE_EMPTY`, `WRITE_TRUNCATE` | DuckDB 트랜잭션 하나에서 실행하도록 검증했습니다. |
 | Parquet 스키마 추론 | 스칼라와 STRUCT를 지원합니다. LIST를 REPEATED로 추론하려면 `enableListInference=true`가 필요합니다. |
-| `autodetect`, `schemaUpdateOptions`, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
+| 적재 `schemaUpdateOptions` | `WRITE_APPEND`에서 `ALLOW_FIELD_ADDITION`과 `ALLOW_FIELD_RELAXATION`을 지원합니다. 명시적 스키마와 Parquet 추론 스키마 모두 최상위·중첩 변경을 처리하며 다른 변경은 대상을 수정하기 전에 거부합니다. |
+| `autodetect`, 쿼리 작업 스키마 변경, 멀티파트 및 재개 다운로드 | 지원하지 않습니다. |
 | REST/gRPC TLS | 설정하면 사용할 수 있습니다. |
 | BigQuery 호환 엔드포인트 인증 | 의도적으로 제공하지 않습니다. 인증 정보가 없거나 임의 값 또는 잘못된 형식이어도 무시합니다. |
 | 폐기 가능한 service account, authorized user, WIF, direct token 파일 | 루프백 전용 개발 도구인 `bqemu-auth-fixture`로 생성할 수 있습니다. |
@@ -347,8 +348,11 @@ BigQuery와 같은 처리량을 보장하지 않습니다. 목표 동작은 공�
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad)를
 기준으로 합니다. 로드 경로는 크기가 정해져 있고 변경할 수 없는 객체를
 전용 임시 작업 공간에 내려받습니다. 이후 선택한 쓰기 방식을 원자적으로 적용합니다.
-다운로드는 대상 테이블 트랜잭션 밖에서 실행합니다. 로드 작업 메타데이터와 멱등성
-식별 정보는 SQLite에 저장하며 내려받은 객체와 임시 작업 공간은 저장하지 않습니다.
+다운로드는 대상 테이블 트랜잭션 밖에서 실행합니다. 기존 대상의 허용된 스키마 변경과
+추가 행은 DuckDB 트랜잭션 하나에서 처리합니다. 변경된 기준 스키마는 커밋 뒤 SQLite에
+게시하며, 두 저장소 사이에서 프로세스가 중단된 경우의 영속 복구는 아직 완성되지
+않았습니다. 로드 작업 메타데이터와 멱등성 식별 정보는 SQLite에 저장하며 내려받은
+객체와 임시 작업 공간은 저장하지 않습니다.
 
 업로드하는 프로세스와 BQEMU는 GCS endpoint를 서로 독립적으로 설정합니다. 두 설정은
 같은 객체 저장소 서비스를 가리켜야 합니다. Compose 설정은

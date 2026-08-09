@@ -66,6 +66,9 @@ func newDuckDBCapabilities(db *sql.DB) (engine.Capabilities, error) {
 			engine.DDLChangeColumnType: {
 				Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement, MaxFieldPathDepth: 1,
 			},
+			engine.DDLRelaxColumn: {
+				Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement, MaxFieldPathDepth: 15,
+			},
 		},
 	})
 	if err != nil {

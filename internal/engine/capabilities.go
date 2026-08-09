@@ -39,6 +39,7 @@ const (
 	DDLDropColumn       DDLOperation = "drop-column"
 	DDLRenameColumn     DDLOperation = "rename-column"
 	DDLChangeColumnType DDLOperation = "change-column-type"
+	DDLRelaxColumn      DDLOperation = "relax-column"
 )
 
 type DDLGuarantee string
@@ -247,7 +248,7 @@ func validInspectionScope(scope InspectionScope) bool {
 
 func validDDLOperation(operation DDLOperation) bool {
 	switch operation {
-	case DDLCreateTable, DDLDropTable, DDLAddColumn, DDLDropColumn, DDLRenameColumn, DDLChangeColumnType:
+	case DDLCreateTable, DDLDropTable, DDLAddColumn, DDLDropColumn, DDLRenameColumn, DDLChangeColumnType, DDLRelaxColumn:
 		return true
 	default:
 		return false
@@ -267,7 +268,7 @@ func ddlGuaranteeSatisfies(actual, required DDLGuarantee) bool {
 
 func ddlUsesFieldPath(operation DDLOperation) bool {
 	switch operation {
-	case DDLAddColumn, DDLDropColumn, DDLRenameColumn, DDLChangeColumnType:
+	case DDLAddColumn, DDLDropColumn, DDLRenameColumn, DDLChangeColumnType, DDLRelaxColumn:
 		return true
 	default:
 		return false

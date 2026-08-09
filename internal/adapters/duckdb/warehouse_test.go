@@ -84,7 +84,7 @@ func TestWarehousePublishesImmutableEngineCapabilities(t *testing.T) {
 	}
 	for _, operation := range []engine.DDLOperation{
 		engine.DDLCreateTable, engine.DDLDropTable, engine.DDLAddColumn,
-		engine.DDLDropColumn, engine.DDLRenameColumn, engine.DDLChangeColumnType,
+		engine.DDLDropColumn, engine.DDLRenameColumn, engine.DDLChangeColumnType, engine.DDLRelaxColumn,
 	} {
 		if _, supported := capabilities.DDL(operation); !supported {
 			t.Fatalf("DuckDB runtime omitted implemented DDL operation %q", operation)

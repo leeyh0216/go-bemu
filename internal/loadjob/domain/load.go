@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,6 +50,13 @@ const (
 	CreateNever    CreateDisposition = "CREATE_NEVER"
 )
 
+type SchemaUpdateOption string
+
+const (
+	AllowFieldAddition   SchemaUpdateOption = "ALLOW_FIELD_ADDITION"
+	AllowFieldRelaxation SchemaUpdateOption = "ALLOW_FIELD_RELAXATION"
+)
+
 type JobReference struct {
 	ProjectID string
 	Location  string
@@ -81,7 +89,7 @@ type LoadConfiguration struct {
 	CreateDisposition   CreateDisposition
 	Schema              []Field
 	Autodetect          bool
-	SchemaUpdateOptions []string
+	SchemaUpdateOptions []SchemaUpdateOption
 	IgnoreUnknownValues bool
 	MaxBadRecords       int64
 	UnsupportedOptions  []string
@@ -151,7 +159,13 @@ func normalizeConfiguration(configuration LoadConfiguration) LoadConfiguration {
 	}
 	configuration.SourceURIs = append([]string(nil), configuration.SourceURIs...)
 	configuration.Schema = cloneFields(configuration.Schema)
-	configuration.SchemaUpdateOptions = append([]string(nil), configuration.SchemaUpdateOptions...)
+	configuration.SchemaUpdateOptions = append([]SchemaUpdateOption(nil), configuration.SchemaUpdateOptions...)
+	for index, option := range configuration.SchemaUpdateOptions {
+		configuration.SchemaUpdateOptions[index] = SchemaUpdateOption(strings.ToUpper(string(option)))
+	}
+	sort.Slice(configuration.SchemaUpdateOptions, func(left, right int) bool {
+		return configuration.SchemaUpdateOptions[left] < configuration.SchemaUpdateOptions[right]
+	})
 	configuration.UnsupportedOptions = append([]string(nil), configuration.UnsupportedOptions...)
 	return configuration
 }
@@ -182,6 +196,21 @@ func ValidateConfiguration(configuration LoadConfiguration) error {
 	case CreateIfNeeded, CreateNever:
 	default:
 		return fmt.Errorf("%w: unknown createDisposition %q", ErrInvalid, configuration.CreateDisposition)
+	}
+	seenSchemaUpdates := make(map[SchemaUpdateOption]struct{}, len(configuration.SchemaUpdateOptions))
+	for _, option := range configuration.SchemaUpdateOptions {
+		switch option {
+		case AllowFieldAddition, AllowFieldRelaxation:
+		default:
+			return fmt.Errorf("%w: unknown schemaUpdateOption %q", ErrInvalid, option)
+		}
+		if _, duplicate := seenSchemaUpdates[option]; duplicate {
+			return fmt.Errorf("%w: duplicate schemaUpdateOption %q", ErrInvalid, option)
+		}
+		seenSchemaUpdates[option] = struct{}{}
+	}
+	if len(configuration.SchemaUpdateOptions) != 0 && configuration.WriteDisposition != WriteAppend {
+		return fmt.Errorf("%w: schemaUpdateOptions require WRITE_APPEND for an undecorated destination", ErrInvalid)
 	}
 	if configuration.MaxBadRecords < 0 {
 		return fmt.Errorf("%w: maxBadRecords must not be negative", ErrInvalid)

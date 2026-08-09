@@ -30,7 +30,10 @@ func (planner duckDBLoadAdapterPlanner) ValidateLoadRequest(
 	operation := engine.SchemaOperationValidate
 	if request.CreateDestination {
 		operation = engine.SchemaOperationCreate
+	} else if request.UpdateDestination {
+		operation = engine.SchemaOperationUpdate
 	}
+	plannedIntent := request.SchemaPlan.Intent()
 	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
 		Operation: operation,
 		Target: catalogdomain.TableReference{
@@ -38,7 +41,8 @@ func (planner duckDBLoadAdapterPlanner) ValidateLoadRequest(
 			DatasetID: request.Destination.Reference.DatasetID,
 			TableID:   request.Destination.Reference.TableID,
 		},
-		AfterSchema: request.Destination.Schema,
+		BeforeSchema: plannedIntent.BeforeSchema(), AfterSchema: request.Destination.Schema,
+		Additions: plannedIntent.Additions(), Relaxations: plannedIntent.Relaxations(),
 	})
 	if err != nil {
 		return "", classifyLoadSchemaPlanningError(err)
@@ -60,12 +64,14 @@ func (planner duckDBLoadAdapterPlanner) ValidateLoadRequest(
 	document, err := json.Marshal(struct {
 		ModelVersion      string                      `json:"modelVersion"`
 		CreateDestination bool                        `json:"createDestination"`
+		UpdateDestination bool                        `json:"updateDestination"`
 		PhysicalTypes     []string                    `json:"physicalTypes"`
 		SourceFormat      loadDomain.SourceFormat     `json:"sourceFormat"`
 		WriteDisposition  loadDomain.WriteDisposition `json:"writeDisposition"`
 	}{
-		ModelVersion: "duckdb-parquet-load-plan-v2", PhysicalTypes: physicalTypes,
+		ModelVersion: "duckdb-parquet-load-plan-v3", PhysicalTypes: physicalTypes,
 		CreateDestination: request.CreateDestination,
+		UpdateDestination: request.UpdateDestination,
 		SourceFormat:      request.SourceFormat, WriteDisposition: request.WriteDisposition,
 	})
 	if err != nil {

@@ -18,6 +18,9 @@ import (
 type testLoadRequest struct {
 	Destination       loadDomain.Table
 	CreateDestination bool
+	UpdateDestination bool
+	BeforeSchema      []loadDomain.Field
+	Evolution         catalogDomain.SchemaEvolution
 	Schema            []loadDomain.Field
 	Objects           []loadports.LocalObject
 	SourceFormat      loadDomain.SourceFormat
@@ -220,6 +223,126 @@ func TestParquetLoadPreservesNestedAndRepeatedValues(t *testing.T) {
 	}
 	if exists {
 		t.Fatal("narrowed nested decimal created a destination")
+	}
+}
+
+func TestParquetLoadAppliesAdditionsAndRelaxationsWithRowsAtomically(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	before := []loadDomain.Field{
+		{Name: "id", Type: "INT64", Mode: "REQUIRED"},
+		{Name: "payload", Type: "RECORD", Fields: []loadDomain.Field{{Name: "name", Type: "STRING", Mode: "REQUIRED"}}},
+	}
+	if err := warehouse.CreateTable(ctx, catalogDomain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "evolving_items", Schema: before,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, `INSERT INTO "bq_746573742d70726f6a656374_64617461736574"."evolving_items"
+		VALUES (1, {'name': 'old'})`); err != nil {
+		t.Fatal(err)
+	}
+	after := []loadDomain.Field{
+		{Name: "id", Type: "INT64", Mode: "NULLABLE"},
+		{Name: "payload", Type: "RECORD", Fields: []loadDomain.Field{
+			{Name: "name", Type: "STRING", Mode: "NULLABLE"},
+			{Name: "score", Type: "FLOAT64"},
+		}},
+		{Name: "metadata", Type: "RECORD", Fields: []loadDomain.Field{{Name: "source", Type: "STRING", Mode: "REQUIRED"}}},
+	}
+	evolution, err := catalogDomain.ValidateSchemaUpdate(before, after, catalogDomain.SchemaEvolutionOptions{
+		AllowFieldAddition: true, AllowFieldRelaxation: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parquet := createLoadParquet(t, warehouse, `SELECT
+		NULL::BIGINT AS id,
+		{'name': NULL::VARCHAR, 'score': 1.5::DOUBLE} AS payload,
+		{'source': 'new'::VARCHAR} AS metadata`)
+	result, err := executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "evolving_items"},
+			Schema:    after,
+		},
+		UpdateDestination: true, BeforeSchema: before, Evolution: evolution,
+		Objects: []loadports.LocalObject{{Path: parquet}}, SourceFormat: loadDomain.FormatParquet,
+		WriteDisposition: loadDomain.WriteAppend,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.UpdatedDestination || result.OutputRows != 1 {
+		t.Fatalf("load result = %+v", result)
+	}
+	var oldRows, newRows int64
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT count(*) FROM "bq_746573742d70726f6a656374_64617461736574"."evolving_items"
+		WHERE id = 1 AND payload.score IS NULL AND metadata IS NULL`).Scan(&oldRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT count(*) FROM "bq_746573742d70726f6a656374_64617461736574"."evolving_items"
+		WHERE id IS NULL AND payload.name IS NULL AND payload.score = 1.5 AND metadata.source = 'new'`).Scan(&newRows); err != nil {
+		t.Fatal(err)
+	}
+	if oldRows != 1 || newRows != 1 {
+		t.Fatalf("evolved rows old=%d new=%d", oldRows, newRows)
+	}
+}
+
+func TestParquetLoadRollsBackPartialSchemaUpdate(t *testing.T) {
+	ctx := context.Background()
+	warehouse, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = warehouse.Close() })
+	if err := warehouse.CreateDataset(ctx, "test-project", "dataset"); err != nil {
+		t.Fatal(err)
+	}
+	before := []loadDomain.Field{{Name: "id", Type: "INT64"}}
+	if err := warehouse.CreateTable(ctx, catalogDomain.Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "rollback_items", Schema: before,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, `ALTER TABLE "bq_746573742d70726f6a656374_64617461736574"."rollback_items" ADD COLUMN collision VARCHAR`); err != nil {
+		t.Fatal(err)
+	}
+	after := []loadDomain.Field{
+		{Name: "id", Type: "INT64"}, {Name: "score", Type: "FLOAT64"}, {Name: "collision", Type: "STRING"},
+	}
+	evolution, err := catalogDomain.ValidateSchemaUpdate(before, after, catalogDomain.SchemaEvolutionOptions{AllowFieldAddition: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parquet := createLoadParquet(t, warehouse, `SELECT 1::BIGINT AS id, 2.5::DOUBLE AS score, 'value'::VARCHAR AS collision`)
+	_, err = executeTestLoad(ctx, warehouse, testLoadRequest{
+		Destination: loadDomain.Table{
+			Reference: loadDomain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "rollback_items"},
+			Schema:    after,
+		},
+		UpdateDestination: true, BeforeSchema: before, Evolution: evolution,
+		Objects: []loadports.LocalObject{{Path: parquet}}, SourceFormat: loadDomain.FormatParquet,
+		WriteDisposition: loadDomain.WriteAppend,
+	})
+	if err == nil {
+		t.Fatal("load with physical schema drift succeeded")
+	}
+	var scoreColumns int64
+	if err := warehouse.db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns
+		WHERE table_schema = 'bq_746573742d70726f6a656374_64617461736574'
+		AND table_name = 'rollback_items' AND column_name = 'score'`).Scan(&scoreColumns); err != nil {
+		t.Fatal(err)
+	}
+	if scoreColumns != 0 {
+		t.Fatal("failed load retained the first schema addition")
 	}
 }
 
@@ -519,6 +642,8 @@ func executeTestLoad(ctx context.Context, warehouse *Warehouse, request testLoad
 	operation := engine.SchemaOperationValidate
 	if request.CreateDestination {
 		operation = engine.SchemaOperationCreate
+	} else if request.UpdateDestination {
+		operation = engine.SchemaOperationUpdate
 	}
 	intent, err := engine.NewSchemaIntent(engine.SchemaIntentDescriptor{
 		Operation: operation,
@@ -527,7 +652,8 @@ func executeTestLoad(ctx context.Context, warehouse *Warehouse, request testLoad
 			DatasetID: request.Destination.Reference.DatasetID,
 			TableID:   request.Destination.Reference.TableID,
 		},
-		AfterSchema: request.Destination.Schema,
+		BeforeSchema: request.BeforeSchema, AfterSchema: request.Destination.Schema,
+		Additions: request.Evolution.Additions, Relaxations: request.Evolution.Relaxations,
 	})
 	if err != nil {
 		return loadports.LoadResult{}, translateCatalogLoadTestError(err)
@@ -548,7 +674,8 @@ func executeTestLoad(ctx context.Context, warehouse *Warehouse, request testLoad
 		resolved[index] = loadports.ResolvedObject{Fingerprint: local[index].Fingerprint, Size: local[index].Size}
 	}
 	plan, err := warehouse.PlanLoad(ctx, loadports.LoadPlanRequest{
-		Destination: request.Destination, CreateDestination: request.CreateDestination, SchemaPlan: schemaPlan,
+		Destination: request.Destination, CreateDestination: request.CreateDestination,
+		UpdateDestination: request.UpdateDestination, SchemaPlan: schemaPlan,
 		SourceFormat: request.SourceFormat, WriteDisposition: request.WriteDisposition,
 		Objects: resolved,
 	})

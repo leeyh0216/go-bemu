@@ -274,6 +274,16 @@ func (w *Warehouse) ApplySchemaAdditions(ctx context.Context, table domain.Table
 			_ = tx.Rollback()
 		}
 	}()
+	if err := applySchemaAdditionsTx(ctx, tx, table, additions); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema update transaction: %w", err)
+	}
+	return nil
+}
+
+func applySchemaAdditionsTx(ctx context.Context, tx *sql.Tx, table domain.Table, additions []domain.SchemaAddition) error {
 	tableName := quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + "." + quoteIdentifier(table.ID)
 	retypedRoots := make(map[string]struct{})
 	for _, addition := range additions {
@@ -312,8 +322,33 @@ func (w *Warehouse) ApplySchemaAdditions(ctx context.Context, table domain.Table
 			return fmt.Errorf("apply schema addition %s: %w", strings.Join(addition.Path, "."), execErr)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit schema update transaction: %w", err)
+	return nil
+}
+
+func applySchemaRelaxationsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	table domain.Table,
+	relaxations []domain.SchemaRelaxation,
+) error {
+	tableName := quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)) + "." + quoteIdentifier(table.ID)
+	for _, relaxation := range relaxations {
+		if len(relaxation.Path) == 0 {
+			return fmt.Errorf("%w: schema relaxation path is empty", domain.ErrInvalid)
+		}
+		// DuckDB STRUCT children do not carry independent NOT NULL constraints.
+		// Their logical mode is catalog metadata, while a top-level REQUIRED
+		// column is represented physically and must be relaxed in this transaction.
+		if len(relaxation.Path) != 1 {
+			continue
+		}
+		statement := fmt.Sprintf(
+			"ALTER TABLE %s ALTER COLUMN %s DROP NOT NULL",
+			tableName, quoteIdentifier(relaxation.Path[0]),
+		)
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("apply schema relaxation %s: %w", strings.Join(relaxation.Path, "."), err)
+		}
 	}
 	return nil
 }

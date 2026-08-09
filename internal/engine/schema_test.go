@@ -97,6 +97,57 @@ func TestSchemaIntentRequiresExactTypedAdditions(t *testing.T) {
 	}
 }
 
+func TestSchemaIntentRequiresExactTypedLoadUpdates(t *testing.T) {
+	target := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "events"}
+	before := []domain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}}
+	after := []domain.Field{
+		{Name: "id", Type: "INT64", Mode: "NULLABLE"},
+		{Name: "score", Type: "FLOAT64"},
+	}
+	evolution, err := domain.ValidateSchemaUpdate(before, after, domain.SchemaEvolutionOptions{
+		AllowFieldAddition: true, AllowFieldRelaxation: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := NewSchemaIntent(SchemaIntentDescriptor{
+		Operation: SchemaOperationUpdate, Target: target,
+		BeforeSchema: before, AfterSchema: after,
+		Additions: evolution.Additions, Relaxations: evolution.Relaxations,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evolution.Relaxations[0].Path[0] = "changed"
+	if got := strings.Join(intent.Relaxations()[0].Path, "."); got != "id" {
+		t.Fatalf("relaxation path = %q", got)
+	}
+
+	descriptor := schemaTestCapabilities(t).Descriptor()
+	descriptor.DDL[DDLRelaxColumn] = DDLCapability{
+		Guarantee: DDLGuaranteeAtomicPhysicalStatement, MaxFieldPathDepth: 15,
+	}
+	capabilities, err := NewCapabilities(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := NewSchemaPlanner(capabilities, &fakeSchemaAdapterPlanner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planner.Plan(context.Background(), intent); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewSchemaIntent(SchemaIntentDescriptor{
+		Operation: SchemaOperationUpdate, Target: target,
+		BeforeSchema: before, AfterSchema: after, Additions: evolution.Additions,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing relaxation error = %v", err)
+	}
+}
+
 func TestSchemaPlannerRejectsCapabilityAndBindingDrift(t *testing.T) {
 	capabilities := schemaTestCapabilities(t)
 	adapter := &fakeSchemaAdapterPlanner{}

@@ -74,6 +74,7 @@ type testCatalog struct {
 	datasetLocation string
 	publishErr      error
 	published       *[]domain.Table
+	updated         *[]domain.Table
 }
 
 func (c testCatalog) GetTable(_ context.Context, reference domain.TableReference) (domain.Table, error) {
@@ -99,6 +100,21 @@ func (c testCatalog) PublishTable(_ context.Context, table domain.Table) error {
 	}
 	if c.published != nil {
 		*c.published = append(*c.published, table)
+	}
+	return nil
+}
+
+func (c testCatalog) PublishSchemaUpdate(
+	_ context.Context,
+	reference domain.TableReference,
+	_ []domain.Field,
+	updated []domain.Field,
+) error {
+	if c.publishErr != nil {
+		return c.publishErr
+	}
+	if c.updated != nil {
+		*c.updated = append(*c.updated, domain.Table{Reference: reference, Schema: catalogdomain.CloneFields(updated)})
 	}
 	return nil
 }
@@ -209,6 +225,12 @@ func testLoaderCapabilities() engine.Capabilities {
 		},
 		DDL: map[engine.DDLOperation]engine.DDLCapability{
 			engine.DDLCreateTable: {Guarantee: engine.DDLGuaranteeAtomicPhysicalTable},
+			engine.DDLAddColumn: {
+				Guarantee: engine.DDLGuaranteeAtomicPhysicalTable, MaxFieldPathDepth: 15,
+			},
+			engine.DDLRelaxColumn: {
+				Guarantee: engine.DDLGuaranteeAtomicPhysicalStatement, MaxFieldPathDepth: 15,
+			},
 		},
 	})
 	if err != nil {
@@ -225,7 +247,9 @@ func (l *gatedLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, obje
 	l.once.Do(func() { close(l.started) })
 	select {
 	case <-l.release:
-		return ports.LoadResult{OutputRows: 3, CreatedDestination: request.CreateDestination}, nil
+		return ports.LoadResult{
+			OutputRows: 3, CreatedDestination: request.CreateDestination, UpdatedDestination: request.UpdateDestination,
+		}, nil
 	case <-ctx.Done():
 		return ports.LoadResult{}, ctx.Err()
 	}
@@ -250,7 +274,9 @@ func (l *testLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objec
 		<-ctx.Done()
 		return ports.LoadResult{}, ctx.Err()
 	}
-	return ports.LoadResult{OutputRows: 3, CreatedDestination: request.CreateDestination}, nil
+	return ports.LoadResult{
+		OutputRows: 3, CreatedDestination: request.CreateDestination, UpdatedDestination: request.UpdateDestination,
+	}, nil
 }
 
 func (l *testLoader) InferParquetSchema(
@@ -403,6 +429,98 @@ func TestServiceInfersMissingParquetDestinationAfterDownload(t *testing.T) {
 	loader.mu.Unlock()
 	if inferCalls != 1 || !inferOptions.EnableListInference {
 		t.Fatalf("schema inference calls=%d options=%+v", inferCalls, inferOptions)
+	}
+}
+
+func TestServiceInfersAndPublishesAllowedExistingSchemaUpdate(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+	before := []domain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED", Description: "stable metadata"}}
+	after := []domain.Field{{Name: "id", Type: "INTEGER", Mode: "NULLABLE"}, {Name: "score", Type: "FLOAT64"}}
+	loader := &testLoader{inferredSchema: after}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US", Schema: before,
+	}
+	updated := make([]domain.Table, 0, 1)
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		NewMemoryJobRepository(), objects, testCatalog{table: table, updated: &updated}, loader,
+		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.SchemaUpdateOptions = []domain.SchemaUpdateOption{
+		domain.AllowFieldAddition, domain.AllowFieldRelaxation,
+	}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "update-destination"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error != nil {
+		t.Fatalf("job = %+v", job)
+	}
+	if len(updated) != 1 || len(updated[0].Schema) != 2 || updated[0].Schema[0].Mode != "NULLABLE" ||
+		updated[0].Schema[1].Name != "score" || updated[0].Schema[1].Type != "FLOAT64" {
+		t.Fatalf("published schema updates = %#v", updated)
+	}
+	if updated[0].Schema[0].Type != "INT64" || updated[0].Schema[0].Description != "stable metadata" {
+		t.Fatalf("inference replaced canonical field metadata: %#v", updated[0].Schema[0])
+	}
+	loader.mu.Lock()
+	inferCalls := loader.inferCalls
+	loader.mu.Unlock()
+	if inferCalls != 1 {
+		t.Fatalf("inference calls = %d", inferCalls)
+	}
+}
+
+func TestMergeInferredSchemaUpdateRelaxesOnlyWhenRequested(t *testing.T) {
+	current := []domain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED", Description: "canonical"}}
+	inferred := []domain.Field{{Name: "id", Type: "INTEGER", Mode: "NULLABLE"}, {Name: "score", Type: "FLOAT"}}
+	additionOnly := mergeInferredSchemaUpdate(current, inferred, false)
+	if additionOnly[0].Mode != "REQUIRED" || additionOnly[0].Description != "canonical" || len(additionOnly) != 2 {
+		t.Fatalf("addition-only inferred schema = %#v", additionOnly)
+	}
+	withRelaxation := mergeInferredSchemaUpdate(current, inferred, true)
+	if withRelaxation[0].Mode != "NULLABLE" || withRelaxation[0].Type != "INT64" {
+		t.Fatalf("relaxing inferred schema = %#v", withRelaxation)
+	}
+}
+
+func TestServiceRejectsUnapprovedSchemaDriftBeforeObjectAccess(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US", Schema: []domain.Field{{Name: "id", Type: "INT64"}},
+	}
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	service, err := NewService(
+		NewMemoryJobRepository(), objects, testCatalog{table: table}, &testLoader{},
+		testClock{value: time.Unix(1, 0)}, testIDs{}, config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.Schema = []domain.Field{{Name: "id", Type: "STRING"}}
+	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "reject-drift"}
+	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForDone(t, service, reference)
+	if job.Error == nil || job.Error.Reason != "invalid" {
+		t.Fatalf("job = %+v", job)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	if opens != 0 {
+		t.Fatalf("rejected schema drift opened %d objects", opens)
 	}
 }
 

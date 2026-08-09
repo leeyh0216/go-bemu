@@ -309,7 +309,8 @@ service.
 | Avro/ORC/CSV/NDJSON load | Unsupported with terminal `notImplemented` job error |
 | `WRITE_APPEND` / `WRITE_EMPTY` / `WRITE_TRUNCATE` | Verified in one DuckDB transaction |
 | Parquet schema inference | Supported for scalar/STRUCT fields; LIST-to-REPEATED is opt-in with `enableListInference=true` |
-| `autodetect`, `schemaUpdateOptions`, multipart/resumable download | Unsupported |
+| load `schemaUpdateOptions` | `ALLOW_FIELD_ADDITION` and `ALLOW_FIELD_RELAXATION` are supported for `WRITE_APPEND`. Explicit schemas and Parquet-inferred schemas support top-level and nested updates; other drift fails before destination mutation. |
+| `autodetect`, query-job schema updates, multipart/resumable download | Unsupported |
 | REST/gRPC TLS | Implemented when configured |
 | BigQuery-compatible endpoint authentication | Intentionally absent; missing, arbitrary, and malformed credentials are ignored |
 | Disposable service-account, authorized-user, WIF, and direct-token files | Implemented by the loopback-only `bqemu-auth-fixture` development helper |
@@ -321,8 +322,12 @@ The load target is
 [`JobConfigurationLoad`](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad).
 The load path downloads bounded immutable objects into a private temporary
 workspace, then applies the selected disposition atomically. Download is outside
-the destination transaction. Load job metadata and idempotency identity persist
-in SQLite; downloaded objects and temporary workspaces do not. The uploading
+the destination transaction. For an existing destination, approved schema
+changes and appended rows share one DuckDB transaction. The updated canonical
+schema is published to SQLite after that commit; durable recovery across an
+interruption between those two stores remains unfinished. Load job metadata and
+idempotency identity persist in SQLite; downloaded objects and temporary
+workspaces do not. The uploading
 process and BQEMU configure their GCS endpoints independently, and both must
 resolve to the same object-store service. See [Getting
 started](getting-started.md) for the Compose settings.

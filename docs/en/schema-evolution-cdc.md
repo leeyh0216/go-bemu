@@ -42,7 +42,7 @@ an explicit transaction and tests existing-row null semantics.
 SQLite persists canonical metadata across restarts while DuckDB stores the
 physical table. Cross-store publication is not yet one durable atomic operation,
 and direct DuckDB changes are never canonical BigQuery metadata changes. DDL
-recovery, load/query `schemaUpdateOptions`, and Storage Write schema notification
+recovery, query-job `schemaUpdateOptions`, and Storage Write schema notification
 remain separate gaps.
 
 <!-- section: load-schema-updates -->
@@ -57,11 +57,15 @@ Those paths require staging, validation against the destination's current
 schema, atomic data plus metadata publication, and a durable job error. They are
 not implemented merely by accepting the JSON option.
 
-The current Parquet load path validates casts against an existing table and
-applies a write disposition atomically. It can also create a missing destination
-atomically from an explicit or inferred Parquet schema. It still rejects
-`schemaUpdateOptions` and the separate `autodetect` request flag, so load-driven
-schema evolution remains unsupported.
+The Parquet load path supports `ALLOW_FIELD_ADDITION` and
+`ALLOW_FIELD_RELAXATION` for an existing `WRITE_APPEND` destination. The update
+may come from an explicit request schema or Parquet inference. Only end-position
+NULLABLE/REPEATED additions and REQUIRED-to-NULLABLE relaxations are accepted,
+including nested fields. A typed staging table is validated first, then the
+physical schema update and row append commit in one DuckDB transaction. The
+canonical SQLite schema is published after that commit; interruption recovery
+between the two stores is still a gap. Query-job schema updates and the separate
+`autodetect` flag remain unsupported.
 
 <!-- section: write-schema-updates -->
 ## Storage Write Schema Changes
@@ -152,8 +156,9 @@ layer or integration case that must change.
 Verified schema tests cover top-level, nested, and repeated-record additions,
 populated-table nulls, rejected destructive changes, transactional physical
 failure, stale ETags, and public-process behavior. Durable cross-store recovery,
-load/query schema-update paths, and Storage Write schema notification remain
-gaps. CDC later requires out-of-order and
+query-job schema updates, and Storage Write schema notification remain gaps.
+Load-job addition and relaxation are covered at the domain, plan, DuckDB, and
+REST boundaries. CDC later requires out-of-order and
 duplicate sequence values, UPSERT/DELETE, missing key, invalid pseudocolumn,
 reconnect/replay offsets, multiple streams, commit visibility, apply lag, and
 failure recovery. Promotion must still compare result types with [BigQuery data

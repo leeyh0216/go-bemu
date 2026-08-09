@@ -141,7 +141,7 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		},
 		SourceFormat: loadDomain.SourceFormat(wire.SourceFormat), WriteDisposition: loadDomain.WriteDisposition(wire.WriteDisposition),
 		CreateDisposition: loadDomain.CreateDisposition(wire.CreateDisposition), Autodetect: wire.Autodetect,
-		SchemaUpdateOptions: append([]string(nil), wire.SchemaUpdateOptions...), IgnoreUnknownValues: wire.IgnoreUnknownValues,
+		SchemaUpdateOptions: loadSchemaUpdateOptions(wire.SchemaUpdateOptions), IgnoreUnknownValues: wire.IgnoreUnknownValues,
 		MaxBadRecords: wire.MaxBadRecords, UnsupportedOptions: unsupported,
 	}
 	if wire.ParquetOptions != nil && wire.ParquetOptions.EnableListInference != nil {
@@ -158,6 +158,14 @@ func (h *combinedJobHandlers) insertLoadJob(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, loadJobFromDomain(job))
+}
+
+func loadSchemaUpdateOptions(options []string) []loadDomain.SchemaUpdateOption {
+	result := make([]loadDomain.SchemaUpdateOption, len(options))
+	for index, option := range options {
+		result[index] = loadDomain.SchemaUpdateOption(option)
+	}
+	return result
 }
 
 func (h *combinedJobHandlers) getJob(w http.ResponseWriter, r *http.Request) {

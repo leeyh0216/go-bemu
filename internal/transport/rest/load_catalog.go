@@ -18,6 +18,7 @@ type LoadCatalogUseCases interface {
 	GetTable(context.Context, string, string, string) (catalogDomain.Table, error)
 	GetDataset(context.Context, string, string) (catalogDomain.Dataset, error)
 	PublishMaterializedTable(context.Context, catalogDomain.Table) error
+	PublishLoadedTableSchema(context.Context, catalogDomain.TableReference, []catalogDomain.Field, []catalogDomain.Field) error
 }
 
 // NewLoadTableCatalog adapts the existing catalog application boundary to the
@@ -42,6 +43,17 @@ func (c *loadTableCatalog) PublishTable(ctx context.Context, table loadDomain.Ta
 		Location:  table.Location,
 		Schema:    catalogDomain.CloneFields(table.Schema),
 	})
+	return mapCatalogLoadError(err)
+}
+
+func (c *loadTableCatalog) PublishSchemaUpdate(
+	ctx context.Context,
+	reference loadDomain.TableReference,
+	expected, updated []loadDomain.Field,
+) error {
+	err := c.catalog.PublishLoadedTableSchema(ctx, catalogDomain.TableReference{
+		ProjectID: reference.ProjectID, DatasetID: reference.DatasetID, TableID: reference.TableID,
+	}, catalogDomain.CloneFields(expected), catalogDomain.CloneFields(updated))
 	return mapCatalogLoadError(err)
 }
 

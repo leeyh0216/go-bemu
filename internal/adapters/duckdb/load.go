@@ -126,6 +126,19 @@ func (w *Warehouse) ExecuteLoad(
 			return result, fmt.Errorf("create load destination: %w", err)
 		}
 		result.CreatedDestination = true
+	} else if request.UpdateDestination {
+		intent := request.SchemaPlan.Intent()
+		updated := catalogdomain.Table{
+			ProjectID: table.ProjectID, DatasetID: table.DatasetID, ID: table.TableID,
+			Schema: catalogdomain.CloneFields(request.Destination.Schema),
+		}
+		if err := applySchemaAdditionsTx(ctx, tx, updated, intent.Additions()); err != nil {
+			return result, err
+		}
+		if err := applySchemaRelaxationsTx(ctx, tx, updated, intent.Relaxations()); err != nil {
+			return result, err
+		}
+		result.UpdatedDestination = true
 	}
 	switch request.WriteDisposition {
 	case loadDomain.WriteEmpty:

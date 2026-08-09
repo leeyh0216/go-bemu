@@ -171,9 +171,12 @@ physical destination and inserts its rows in that same transaction; catalog
 metadata is published only after commit, with physical compensation on a
 publication failure. When the request omits a schema, scalar and STRUCT fields
 are inferred from the Parquet schema; LIST fields additionally require
-`parquetOptions.enableListInference=true`. Local paths and non-GCS URI schemes
-are rejected before job persistence. The separate `autodetect` request flag,
-`schemaUpdateOptions`,
+`parquetOptions.enableListInference=true`. An existing `WRITE_APPEND`
+destination accepts only explicitly enabled nullable field additions and
+REQUIRED-to-NULLABLE relaxations. The physical schema update and appended rows
+share the destination transaction; canonical SQLite metadata is published
+after commit. Local paths and non-GCS URI schemes are rejected before job
+persistence. The separate `autodetect` request flag, query-job schema updates,
 Avro/ORC/CSV/NDJSON, and
 multipart/resumable download are unsupported. Job metadata and idempotency
 identity persist in SQLite; downloaded objects and temporary staging workspaces

@@ -50,7 +50,7 @@ BigQuery는 부분 변경에 `tables.patch` 사용을 권장합니다. `tables.u
 저장합니다. 두 저장소에 걸친 공개 과정은 아직 하나의 영속적인 원자 작업이 아닙니다.
 DuckDB에서 직접 수행한 변경은 기준 BigQuery 메타데이터 변경으로 보지 않습니다.
 
-DDL 복구, 적재·쿼리의 `schemaUpdateOptions`, Storage Write 스키마 알림은 별도
+DDL 복구, 쿼리 작업의 `schemaUpdateOptions`, Storage Write 스키마 알림은 별도
 미지원 항목입니다.
 
 <!-- section: load-schema-updates -->
@@ -67,10 +67,13 @@ DDL 복구, 적재·쿼리의 `schemaUpdateOptions`, Storage Write 스키마 알
 데이터와 메타데이터를 원자적으로 공개하고 작업 오류를 영속화해야 합니다. JSON
 옵션을 받는 것만으로 이 기능을 구현했다고 볼 수는 없습니다.
 
-현재 Parquet 적재 경로는 기존 테이블을 기준으로 유형 변환을 검증하고 쓰기 방식을
-원자적으로 적용합니다. 요청에 정확한 스키마가 있거나 Parquet 스키마를 추론할 수
-있으면 누락된 대상도 같은 트랜잭션에서 생성합니다. `schemaUpdateOptions`와 별도의
-`autodetect` 요청 필드는 거부하므로 적재 작업을 통한 스키마 변경은 지원하지 않습니다.
+현재 Parquet 적재 경로는 기존 `WRITE_APPEND` 대상에서 `ALLOW_FIELD_ADDITION`과
+`ALLOW_FIELD_RELAXATION`을 지원합니다. 명시적 요청 스키마와 Parquet 추론 스키마를
+모두 사용할 수 있습니다. 최상위와 중첩 필드에서 끝 위치의 NULLABLE/REPEATED 추가와
+REQUIRED에서 NULLABLE로의 완화만 허용합니다. 타입을 검증한 준비 테이블을 먼저 만든
+뒤 물리 스키마 변경과 행 추가를 DuckDB 트랜잭션 하나에서 커밋합니다. 기준 SQLite
+스키마는 그 뒤 게시하므로 두 저장소 사이에서 중단된 경우의 복구는 아직 남아 있습니다.
+쿼리 작업의 스키마 변경과 별도의 `autodetect` 요청 필드는 지원하지 않습니다.
 
 <!-- section: write-schema-updates -->
 ## Storage Write 스키마 변경
@@ -170,8 +173,9 @@ fix_hint=<다음 조치 경계>
 있는 테이블에서 새 필드가 null인지도 확인합니다. 파괴적인 변경 거부, 트랜잭션 중
 저장소 오류, 오래된 ETag, 공개 프로세스 동작도 검증합니다.
 
-두 저장소에 걸친 영속 복구, 적재·쿼리 스키마 변경, Storage Write 스키마 알림은
-아직 지원하지 않습니다.
+두 저장소에 걸친 영속 복구, 쿼리 작업 스키마 변경, Storage Write 스키마 알림은
+아직 지원하지 않습니다. 적재 작업의 필드 추가와 완화는 도메인, 계획, DuckDB, REST
+경계에서 검증합니다.
 
 향후 CDC 검증에는 순서가 뒤바뀌거나 중복된 순서 값이 필요합니다. `UPSERT`와
 `DELETE`, 누락된 키, 잘못된 의사 열도 시험해야 합니다. 재연결과 오프셋 재전송, 여러
