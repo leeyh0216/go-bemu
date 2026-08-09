@@ -361,6 +361,88 @@
           }
         },
         {
+          "id": "media-upload",
+          "runnerAdapter": {
+            "id": "python-pytest-v1",
+            "family": "python",
+            "runtimeKind": "python-pytest",
+            "selectorPrefix": "pytest",
+            "requiredVersions": [
+              "python",
+              "client"
+            ],
+            "requiredArtifactUsages": [
+              "python-wheel"
+            ],
+            "bootstrap": {},
+            "setupOperationIds": [
+              "bqemu.health.ready",
+              "bqemu.projects.create",
+              "bqemu.projects.delete"
+            ]
+          },
+          "compatibilityProfile": {
+            "id": "google-cloud-bigquery-python-media-upload-v1",
+            "scenarioIds": [
+              "python-dataframe-media-upload"
+            ]
+          },
+          "scenarioSet": {
+            "id": "python-media-upload-contract",
+            "scenarios": [
+              {
+                "id": "python-dataframe-media-upload",
+                "trafficSource": {
+                  "kind": "annotations",
+                  "reason": ""
+                },
+                "operationIds": [
+                  "bigquery.jobs.get",
+                  "bigquery.jobs.insert.upload",
+                  "bigquery.jobs.insert.upload-resume",
+                  "bigquery.tables.get"
+                ],
+                "selectors": [
+                  "pytest:tests/integration/python/test_media_upload_contract.py"
+                ],
+                "testEvidence": [
+                  "python:tests/integration/python/test_media_upload_contract.py:test_dataframe_writers_use_bounded_parquet_media_upload"
+                ],
+                "operationExpectations": [
+                  {
+                    "operationId": "bigquery.jobs.get",
+                    "min": 3,
+                    "max": 0,
+                    "after": [
+                      "bigquery.jobs.insert.upload"
+                    ]
+                  },
+                  {
+                    "operationId": "bigquery.jobs.insert.upload",
+                    "min": 3,
+                    "max": 0,
+                    "after": []
+                  },
+                  {
+                    "operationId": "bigquery.jobs.insert.upload-resume",
+                    "min": 1,
+                    "max": 0,
+                    "after": [
+                      "bigquery.jobs.insert.upload"
+                    ]
+                  },
+                  {
+                    "operationId": "bigquery.tables.get",
+                    "min": 0,
+                    "max": 0,
+                    "after": []
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
           "id": "public",
           "runnerAdapter": {
             "id": "python-pytest-v1",

@@ -96,6 +96,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       python: ${{ steps.matrix.outputs.python }}
+      media: ${{ steps.matrix.outputs.media }}
       bq: ${{ steps.matrix.outputs.bq }}
       auth: ${{ steps.matrix.outputs.auth }}
       load: ${{ steps.matrix.outputs.load }}
@@ -109,6 +110,7 @@ jobs:
         id: matrix
         run: |
           go run ./tests/integration/cmd/integrationctl matrix --root . --family python --lane required --execution public --output-key python >> "$GITHUB_OUTPUT"
+          go run ./tests/integration/cmd/integrationctl matrix --root . --family python --lane required --execution media-upload --output-key media >> "$GITHUB_OUTPUT"
           go run ./tests/integration/cmd/integrationctl matrix --root . --family bq --lane required --execution public --output-key bq >> "$GITHUB_OUTPUT"
           go run ./tests/integration/cmd/integrationctl matrix --root . --lane required --execution public --output-key auth >> "$GITHUB_OUTPUT"
           go run ./tests/integration/cmd/integrationctl matrix --root . --lane required --execution indirect-load --output-key load >> "$GITHUB_OUTPUT"
@@ -201,6 +203,56 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: failure-diagnostics-consumer-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          path: |
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+  python-media-upload:
+    name: Python dataframe media upload / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+    needs: consumer-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.consumer-matrix.outputs.media) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.runtimeProfile.versions.python }}
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Install hash-locked dataframe dependencies
+        run: uv pip sync --system --require-hashes tests/integration/python/dataframe-requirements.lock
+      - name: Run real dataframe media upload contract
+        env:
+          BQEMU_CONSUMER_CASE: ${{ matrix.id }}
+          BQEMU_PYTEST_TIMEOUT_SECONDS: "900"
+        run: python -m tests.integration.framework.consumer_runner --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
+      - name: Publish test summary and structured evidence
+        if: always()
+        uses: ./.github/actions/test-report
+        with:
+          title: Python dataframe media upload / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+          junit-files: .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+          report-directory: .artifacts/reports/media-${{ matrix.id }}-${{ matrix.executionId }}
+          artifact-name: test-report-media-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          artifact-paths: |
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: failure-diagnostics-media-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
           path: |
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
@@ -434,6 +486,7 @@ jobs:
       - go-tests
       - sql-regression
       - python-client
+      - python-media-upload
       - bq-cli
       - load-contract
       - spark-contract
@@ -450,6 +503,7 @@ jobs:
           GO_RESULT: ${{ needs.go-tests.result }}
           SQL_REGRESSION_RESULT: ${{ needs.sql-regression.result }}
           PYTHON_RESULT: ${{ needs.python-client.result }}
+          MEDIA_RESULT: ${{ needs.python-media-upload.result }}
           BQ_RESULT: ${{ needs.bq-cli.result }}
           LOAD_RESULT: ${{ needs.load-contract.result }}
           SPARK_RESULT: ${{ needs.spark-contract.result }}
@@ -470,6 +524,7 @@ jobs:
             "go-tests:$GO_RESULT" \
             "sql-regression:$SQL_REGRESSION_RESULT" \
             "python-client:$PYTHON_RESULT" \
+            "python-media-upload:$MEDIA_RESULT" \
             "bq-cli:$BQ_RESULT" \
             "load-contract:$LOAD_RESULT" \
             "spark-contract:$SPARK_RESULT" \

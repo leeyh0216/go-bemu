@@ -78,6 +78,8 @@ compatibilityProfiles:
     scenarioIds: [spark-pyspark-public-edge, spark-scala-public-edge]
   - id: google-cloud-bigquery-python-indirect-load-v1
     scenarioIds: [python-indirect-load]
+  - id: google-cloud-bigquery-python-media-upload-v1
+    scenarioIds: [python-dataframe-media-upload]
   - id: bq-cli-indirect-load-v1
     scenarioIds: [bq-indirect-load]
   - id: spark-bigquery-connector-indirect-load-v1
@@ -150,6 +152,26 @@ scenarios:
         min: 1
         max: 0
         after: [bigquery.jobs.insert]
+  - id: python-dataframe-media-upload
+    trafficSource: {kind: annotations}
+    selectors: [pytest:tests/integration/python/test_media_upload_contract.py]
+    operationExpectations:
+      - operationId: bigquery.tables.get
+        min: 0
+        max: 0
+        after: []
+      - operationId: bigquery.jobs.insert.upload
+        min: 3
+        max: 0
+        after: []
+      - operationId: bigquery.jobs.insert.upload-resume
+        min: 1
+        max: 0
+        after: [bigquery.jobs.insert.upload]
+      - operationId: bigquery.jobs.get
+        min: 3
+        max: 0
+        after: [bigquery.jobs.insert.upload]
   - id: bq-indirect-load
     trafficSource:
       kind: runner-evidence
@@ -235,6 +257,8 @@ scenarioSets:
     scenarioIds: [spark-scala-public-edge]
   - id: python-indirect-load-contract
     scenarioIds: [python-indirect-load]
+  - id: python-media-upload-contract
+    scenarioIds: [python-dataframe-media-upload]
   - id: bq-indirect-load-contract
     scenarioIds: [bq-indirect-load]
   - id: spark-pyspark-indirect-load-contract

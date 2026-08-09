@@ -9,12 +9,14 @@
       "versions": ["3.43.0"]
     }
   ],
-  "description": "Source-derived REST metadata, query lifecycle, and tabledata.list profile for the official google-cloud-bigquery Python client 3.43.0.",
+  "description": "Source-derived REST metadata, query lifecycle, tabledata.list, and bounded Parquet dataframe media-upload profile for the official Python BigQuery client.",
   "sources": [
     "https://pypi.org/project/google-cloud-bigquery/3.43.0/",
     "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/_job_helpers.py#L420-L641",
     "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/client.py#L4118-L4237",
     "https://github.com/googleapis/google-cloud-python/blob/google-cloud-bigquery-v3.43.0/packages/google-cloud-bigquery/google/cloud/bigquery/table.py#L1838-L1995",
+    "https://pypi.org/project/pandas-gbq/0.35.1/",
+    "https://github.com/googleapis/python-bigquery-pandas/blob/v0.35.1/pandas_gbq/gbq.py",
     "https://github.com/googleapis/google-cloud-python/blob/google-api-core-v2.34.0/packages/google-api-core/google/api_core/page_iterator.py#L397-L420",
     "https://cloud.google.com/python/docs/reference/bigquery/latest/google.cloud.bigquery.client.Client",
     "https://cloud.google.com/bigquery/docs/reference/rest/v2",
@@ -35,7 +37,9 @@
     "rest.jobs.location": "verified",
     "rest.jobs.duplicate-conflict": "verified",
     "rest.etag-precondition": "verified",
-    "jobs.load": "planned",
+    "jobs.load": "partial",
+    "jobs.load.media.parquet": "verified",
+    "dataframe.media-upload": "verified",
     "jobs.copy": "planned",
     "jobs.extract": "planned",
     "tabledata.insertAll": "planned",
@@ -258,6 +262,36 @@
         "method": "GET",
         "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}/data",
         "requiredFields": ["request.maxResults", "request.formatOptions.useInt64Timestamp", "response.kind", "response.totalRows", "response.rows", "response.pageToken", "client.pages", "client.totalRows", "client.nextPageToken"]
+      }
+    ],
+    "python-dataframe-media-upload": [
+      {
+        "stage": "multipart_upload",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/upload/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.uploadType=multipart", "request.configuration.load.sourceFormat=PARQUET", "response.jobReference"]
+      },
+      {
+        "stage": "resumable_initiate",
+        "protocol": "REST",
+        "method": "POST",
+        "target": "/upload/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.uploadType=resumable", "request.configuration.load.sourceFormat=PARQUET", "response.Location"]
+      },
+      {
+        "stage": "resumable_chunk",
+        "protocol": "REST",
+        "method": "PUT",
+        "target": "/upload/bigquery/v2/projects/{project}/jobs",
+        "requiredFields": ["request.Content-Range", "response.Range|response.jobReference"]
+      },
+      {
+        "stage": "poll_load_job",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/jobs/{job}",
+        "requiredFields": ["request.location", "response.status.state", "response.statistics.load"]
       }
     ]
   }

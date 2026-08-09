@@ -120,6 +120,14 @@ load 전용 흐름은 `load:` adapter가 선택하고 구조화한 runtime evide
 증명합니다. 선택 test function으로 직접 표현하지 못하는 예외는 `trafficSource`에
 명시하며, 다른 scenario kind에는 사용할 수 없습니다.
 
+dataframe media upload는 `runner-evidence` 예외가 아니라 선택된 Python test입니다. CI는
+`tests/integration/python/dataframe-requirements.lock`을 설치하며, 로컬에서 같은 환경을
+준비할 때는 `make python-dataframe-setup`을 사용합니다. 이 test는 fake-GCS runtime을
+소유하고 외부 client는 BQEMU 공개 endpoint로만 연결하며 multipart와 resumable Parquet
+upload를 모두 확인합니다. dataframe helper를 검증할 때는 호출 전에 같은 endpoint-aware
+client로 destination table을 만들어야 합니다. 누락된 table을 생성하는 과정에서 helper가
+기본 endpoint client를 새로 만들 수 있기 때문입니다.
+
 REST setup 또는 assertion query에는 phase-aware harness helper를 사용합니다. helper가
 request log에 `setup` 또는 `assertion`을 기록하고 runner는 그 응답을 호출자 wire
 claim에서 제외합니다. 새 harness helper를 추가하기 전에 이 mechanism을 확장합니다.

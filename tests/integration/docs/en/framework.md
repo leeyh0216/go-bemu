@@ -127,6 +127,16 @@ sequence from structured runtime evidence rather than a selected test function.
 The exception is explicit in `trafficSource` and cannot be used by another
 scenario kind.
 
+Dataframe media upload is a selected Python test, not a `runner-evidence`
+exception. Its CI job installs
+`tests/integration/python/dataframe-requirements.lock`; use
+`make python-dataframe-setup` when preparing that environment locally. The
+test owns a fake-GCS runtime, sends the external client only to BQEMU's public
+endpoint, and verifies both multipart and resumable Parquet uploads. When
+testing the dataframe helper, create the destination table through the same
+endpoint-aware client before calling it: otherwise that helper may construct a
+new default-endpoint client while creating a missing table.
+
 Use the phase-aware harness helper for REST setup or assertion queries. It
 marks the request log as `setup` or `assertion`, and the runner excludes those
 responses from the caller's wire claim. Extend that mechanism before adding a

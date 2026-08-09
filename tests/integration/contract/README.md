@@ -69,6 +69,13 @@ diffs are observed execution evidence, not inputs to the generator.
    together. Real external-process runs belong in CI unless the task explicitly
    requires a local run.
 
+For dataframe media uploads, keep the actual caller test under
+`tests/integration/python/` and use the dedicated
+`dataframe-requirements.lock`. It is an annotation-backed Python execution,
+not a `runner-evidence` shortcut. Seed the destination through the same
+endpoint-aware client before invoking a dataframe helper so an absent table
+does not cause it to build a default-endpoint client.
+
 ## Generated Outputs
 
 - `consumers.normalized.json`: runner and workflow matrix input.

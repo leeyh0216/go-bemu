@@ -30,13 +30,14 @@ PYTHON3 ?= python3
 
 SQLC_VERSION ?= v1.31.1
 
-.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test ci-report-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup python-dataframe-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test ci-report-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
 	  'make doctor       Validate Go, CGO, Docker, and configuration prerequisites' \
 	  'make setup        Run doctor and download Go modules' \
-	  'make python-setup Create a Python 3.13 venv from the hash lock' \
+	  'make python-setup Create a Python 3.13 venv from the base client hash lock' \
+	  'make python-dataframe-setup Install the dataframe media-upload integration hash lock' \
 	  'make auth-client-setup Install pinned Python and Spark client dependencies' \
 	  'make auth-fixtures Generate local TLS, credential, token, and Java trust files' \
 	  'make auth-client-test Run real TLS credential contracts for Python, bq, PySpark, and Scala Spark' \
@@ -73,6 +74,10 @@ setup: doctor
 python-setup:
 	uv venv --python "$(BQEMU_PYTHON_VERSION)" .venv
 	uv pip sync --python "$(PYTHON)" --require-hashes tests/integration/python/requirements.lock
+
+python-dataframe-setup:
+	uv venv --python "$(BQEMU_PYTHON_VERSION)" .venv
+	uv pip sync --python "$(PYTHON)" --require-hashes tests/integration/python/dataframe-requirements.lock
 
 build:
 	mkdir -p $(dir $(BINARY)) $(dir $(AUTH_FIXTURE_BINARY))
