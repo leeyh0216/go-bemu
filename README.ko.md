@@ -5,55 +5,43 @@
 
 # go-bemu
 
-`go-bemu`는 애플리케이션과 커넥터를 시험할 때 사용하는 로컬 BigQuery 호환
-서비스입니다. BQEMU를 테스트 프로세스와 함께 실행하고 에뮬레이터 프로젝트를 만든
-뒤, 클라이언트가 로컬 REST 또는 Storage gRPC 주소를 사용하도록 설정합니다.
+`go-bemu`는 애플리케이션과 프로토콜 테스트를 위한 로컬 BigQuery 호환 서비스입니다.
+BigQuery REST와 Storage gRPC 주소를 제공하고 로컬 카탈로그 상태를 보존하며, Parquet
+load job에는 외부 GCS 호환 서비스를 사용합니다. 공개 리소스 형태는 [BigQuery REST API
+레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest)를 따릅니다.
 
-API와 RPC의 정확한 지원 범위는 [호환성](docs/ko/compatibility.md)에 정리되어
-있습니다. BigQuery 요청과 응답 리소스는 공개 [BigQuery API
-레퍼런스](https://cloud.google.com/bigquery/docs/reference/rest)를 기준으로 합니다.
-
-<!-- section: quick-start -->
-## Docker Compose로 실행하기
+<!-- section: start -->
+## 시작하기
 
 ```bash
 docker compose up --build -d --wait
-
-curl --fail -X POST http://localhost:9050/bqemu/v1/projects \
-  -H 'Content-Type: application/json' \
-  -d '{"projectId":"test-project"}'
+curl --fail http://localhost:9050/readyz
 ```
 
-기본 브랜치에서 게시한 이미지를 사용하려면 로컬 빌드 대신 다음 명령을 실행합니다.
+기본 Compose 프로젝트는 BQEMU와 필수 fake GCS 서비스를 함께 시작합니다. 상태는
+`bqemu-data` 볼륨에 남습니다. 로컬 테스트 상태가 더 이상 필요 없으면
+`docker compose down --volumes`로 삭제합니다.
 
-```bash
-export BQEMU_IMAGE=ghcr.io/leeyh0216/go-bemu:edge
-docker compose pull bqemu
-docker compose up --no-build -d --wait
-```
+<!-- section: connect -->
+## 접속하기
 
-Compose 프로젝트는 `bqemu-data` 볼륨에 데이터를 보관합니다. 테스트 데이터를 더
-이상 사용하지 않는다면 `docker compose down --volumes`로 볼륨까지 삭제합니다.
+| 호출 프로세스 위치 | REST 주소 | Storage gRPC 주소 |
+| --- | --- | --- |
+| Compose를 실행한 호스트 | `http://localhost:9050` | `localhost:9060` |
+| 같은 Compose의 다른 서비스 | `http://bqemu:9050` | `bqemu:9060` |
+| 호스트에서 BQEMU를 실행하는 개발 컨테이너 | `http://host.docker.internal:9050` | `host.docker.internal:9060` |
 
-<!-- section: endpoints -->
-## 접속 주소
+호출 프로세스에 맞는 주소를 설정합니다. BQEMU가 같은 컨테이너에서 실행되지 않는다면
+컨테이너 안에서 `localhost`를 사용하면 안 됩니다.
 
-| 서비스 | 기본 주소 |
-| --- | --- |
-| BigQuery REST와 상태 확인 | `http://localhost:9050` |
-| BigQuery Storage gRPC | `localhost:9060` |
+<!-- section: docs -->
+## 문서
 
-컨테이너에서 실행하는 클라이언트는 Compose 실행 위치에 따라 BQEMU 서비스 이름이나
-`host.docker.internal`을 사용합니다. TLS를 적용해도 포트는 같으며 REST에는 HTTPS를
-사용합니다.
-
-<!-- section: next-steps -->
-## 다음 문서
-
-- [시작하기](docs/ko/getting-started.md): 데이터 세트와 테이블을 만들고 첫 쿼리를
-  실행하는 방법, TLS 설정, 개발 컨테이너 연결 방법을 설명합니다.
-- [검토된 통합 예제](tests/integration/docs/ko/index.md): CI에서 검증하는 버전 고정
-  프로세스와 실행 환경 설정입니다.
-- [클라이언트 인증 파일과 TLS](docs/ko/client-credentials-and-tls.md)
-- [호환성](docs/ko/compatibility.md): operation ID별 API와 RPC 지원 범위입니다.
-- [문서 색인](docs/ko/index.md)
+- [시작하기](docs/ko/getting-started.md): 리소스 생성, 첫 쿼리, 필수 fake GCS 사용법
+- [설정](docs/ko/configuration.md): 주소 구성, 시작 프로젝트와 데이터세트, 상태 보존,
+  TLS, 실행 한도
+- [현재 지원 범위](docs/ko/compatibility.md): 지금 사용할 수 있는 기능, 제한 기능,
+  미지원 기능을 한 페이지로 정리
+- [API 및 RPC 레퍼런스](docs/ko/api-rpc-compatibility.md): 자동 생성한 정확한 메서드와
+  endpoint 인벤토리
+- [유지보수 문서](docs/ko/maintainers/index.md): 구현, CI, 릴리스, 기여 문서

@@ -1,0 +1,51 @@
+name: Render test report
+description: Publish a concise job summary and a downloadable JUnit HTML report.
+
+inputs:
+  title:
+    description: Human-readable job title.
+    required: true
+  junit-files:
+    description: Newline-separated JUnit XML paths or glob patterns.
+    required: false
+    default: ""
+  report-directory:
+    description: Directory for the generated summary and HTML report.
+    required: true
+  artifact-name:
+    description: Name for the downloadable test report artifact.
+    required: true
+  artifact-paths:
+    description: Additional structured evidence to include in the report artifact.
+    required: false
+    default: ""
+  retention-days:
+    description: Artifact retention period.
+    required: false
+    default: "7"
+
+runs:
+  using: composite
+  steps:
+    - id: render
+      name: Render concise job result
+      shell: bash
+      env:
+        INPUT_TITLE: ${{ inputs.title }}
+        INPUT_JUNIT_FILES: ${{ inputs.junit-files }}
+        INPUT_REPORT_DIRECTORY: ${{ inputs.report-directory }}
+      run: |
+        set -euo pipefail
+        python3 scripts/ci_junit_report.py \
+          --title "$INPUT_TITLE" \
+          --junit-files "$INPUT_JUNIT_FILES" \
+          --output-dir "$INPUT_REPORT_DIRECTORY"
+    - name: Upload JUnit HTML report and structured evidence
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ inputs.report-directory }}
+          ${{ inputs.artifact-paths }}
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.retention-days }}

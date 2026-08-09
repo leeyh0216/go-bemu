@@ -83,6 +83,42 @@ DuckDB가 SQL을 받아들였다는 사실만으로는 BigQuery 동작을 재현
 저장소의 필수 검증을 모두 실행합니다. 생성된 매니페스트와 문서, 검증 자료는
 원본과 같은 커밋에 포함해야 합니다. CI는 오래된 생성 파일을 거부합니다.
 
+<!-- section: implementation-workflow -->
+## 구현, 테스트, 생성 절차
+
+호출자가 볼 수 있는 변경에는 다음 순서를 사용합니다. 사람이 소유하는 판단은 작게
+유지하고, 나머지는 저장소가 검사하도록 합니다.
+
+1. **소유 경계에서 구현합니다.** domain/application/adapter 동작과 집중 테스트를
+   추가합니다. 공개 동작에는 REST 또는 gRPC transport test도 필요합니다. 엔진만
+   통과하는 테스트를 공개 근거로 쓰지 않습니다.
+2. **공개 operation을 한 번만 설명합니다.** `contract/operations.yaml`에 operation을
+   추가하거나 바꾸고, 선언한 각 Go test에 literal
+   `contracttest.Operation(t, "operation.id")` annotation을 넣습니다.
+   `make contract-generate`는 정규 계약 JSON, 실행 환경 route/RPC spec, EN/KO API 표를
+   다시 만듭니다. 이 생성물은 직접 수정하지 않습니다.
+3. **SQL은 resource로 관리합니다.** SQL 회귀 데이터는
+   `internal/sqltest/testdata/cases/<case-id>/`의 `dataset.json`, `case.json`,
+   `expected.json`으로 추가합니다. SQLite repository query는
+   `internal/adapters/sqlite/queries/*.sql`에 두고 `make sqlc-generate`를 실행합니다.
+   생성된 sqlc source는 SQL resource와 함께 검토하며 직접 수정하지 않습니다.
+4. **외부 호출자 동작은 통합 프레임워크로 추가합니다.** 테스트를
+   `tests/integration/<family>`에 두고 테스트 함수에 literal operation annotation을
+   붙입니다. runtime/provenance 또는 runner 계약이 바뀔 때만 versioned case를
+   추가합니다. `make integration-contract-generate`는 펼친 실행 matrix와 통합
+   호환성 페이지를 생성합니다.
+5. **로컬에서는 가장 작은 유효 검사를 실행합니다.** 바꾼 package와 함께
+   `make contract-check`, `make integration-contract-check`, `make sqlc-check` 중 맞는
+   검사를 실행합니다. 문서나 CI report 변경에는
+   `go test ./docs ./tests/integration/cipolicy`, `make ci-report-test`를 실행합니다.
+   비용이 큰 실제 프로세스 matrix는 CI가 소유합니다.
+6. **원본, 테스트, 생성물을 함께 커밋합니다.** 오래된 생성 파일은 reviewer가 정리할
+   일이 아니라 실패입니다.
+
+[기여 프레임워크](docs/ko/maintainers/development-workflow.md)는 입력, 생성 output,
+annotation 규칙, 실패 상황을 자세히 설명합니다. versioned 외부 프로세스 case를 만드는
+방법은 [통합 프레임워크 안내](tests/integration/docs/ko/framework.md)를 참고하세요.
+
 <!-- section: evolution-pipeline -->
 ## 호환성 확장 절차
 

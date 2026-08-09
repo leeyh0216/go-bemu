@@ -30,7 +30,7 @@ PYTHON3 ?= python3
 
 SQLC_VERSION ?= v1.31.1
 
-.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
+.PHONY: help doctor docker-doctor setup python-setup auth-spark-setup auth-client-setup auth-fixtures auth-client-test auth-runner-test ci-report-test build run format format-check contract-generate contract-check integration-contract-generate integration-contract-check sqlc-generate sqlc-check consumer-runner-test test test-race python-test bq-test spark-prepare spark-contract spark-scala-contract spark-contract-setup vet check config-check github-actions-policy ci-static ci-test-all ci-test-sql-regression ci-test-core ci-test-adapters ci-test-storage-read ci-test-storage-write ci-test-transport ci-test-composition docker-build docker-up docker-down docker-logs clean
 
 help:
 	@printf '%s\n' \
@@ -40,6 +40,7 @@ help:
 	  'make auth-client-setup Install pinned Python and Spark client dependencies' \
 	  'make auth-fixtures Generate local TLS, credential, token, and Java trust files' \
 	  'make auth-client-test Run real TLS credential contracts for Python, bq, PySpark, and Scala Spark' \
+	  'make ci-report-test Validate the CI JUnit summary and HTML renderer' \
 	  'make build        Build the emulator and local credential helper' \
 	  'make run          Run locally with repository data and temp directories' \
 	  'make contract-generate Regenerate canonical API/RPC contract artifacts' \
@@ -103,6 +104,9 @@ auth-client-test:
 
 auth-runner-test:
 	"$(PYTHON3)" -m unittest discover -s tests/integration/auth -p 'test_*.py'
+
+ci-report-test:
+	"$(PYTHON3)" -m unittest discover -s tests/integration/cireport -p 'test_*.py'
 
 run:
 	mkdir -p "$(BQEMU_LOCAL_DATA_DIR)" "$(BQEMU_TEMP_DIRECTORY)"
@@ -197,7 +201,7 @@ vet:
 github-actions-policy:
 	CGO_ENABLED=1 go test ./tests/integration/cipolicy
 
-ci-static: github-actions-policy format-check contract-check integration-contract-check sqlc-check consumer-runner-test auth-runner-test vet config-check
+ci-static: github-actions-policy format-check contract-check integration-contract-check sqlc-check consumer-runner-test auth-runner-test ci-report-test vet config-check
 
 ci-test-all:
 	CGO_ENABLED=1 go test -timeout "$(BQEMU_GO_TEST_TIMEOUT)" $(GO_TEST_FLAGS) ./...

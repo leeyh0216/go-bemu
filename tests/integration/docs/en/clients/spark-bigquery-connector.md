@@ -5,9 +5,9 @@
 
 # PySpark And Scala Spark
 
-The required runtime is Spark `3.5.8`, Scala `2.12.18` (binary `2.12`), Java
-`17`, and Spark BigQuery Connector `0.44.2`. Connector-specific behavior is
-bound to the reviewed [connector source
+This guide is validated with Spark `3.5.8`, Scala `2.12.18` (binary `2.12`),
+Java `17`, and Spark BigQuery Connector `0.44.2`. Connector-specific behavior
+is bound to the reviewed [connector source
 revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92).
 
 <!-- section: endpoints -->
@@ -109,11 +109,6 @@ physical partition pruning are not supported.
 <!-- section: direct -->
 ## Direct Read And Write Calls
 
-The normalized cases are
-`spark-pyspark-3.5.8-connector-0.44.2` and
-`spark-scala-3.5.8-connector-0.44.2`. Their public scenario IDs are
-`spark-pyspark-public-edge` and `spark-scala-public-edge`.
-
 | Flow | Operation order |
 | --- | --- |
 | Table read | `bigquery.tables.get` -> `grpc.bigquery-read.create-read-session` -> one or more `grpc.bigquery-read.read-rows` streams |
@@ -129,10 +124,11 @@ inspect committed stream state.
 <!-- section: indirect -->
 ## Indirect Parquet Write
 
-Start the optional fake GCS Compose profile:
+Fake GCS is part of the default Compose runtime. Start the stack before an
+indirect write:
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 ```
 
 Include the Spark BigQuery Connector and Hadoop GCS Connector JARs, then add the
@@ -165,8 +161,7 @@ The Compose configuration passes `http://fake-gcs:4443` to BQEMU through
 the host network namespace. These values address the same fake GCS service from
 different callers.
 
-The `spark-pyspark-indirect-load` and `spark-scala-indirect-load` scenarios run
-this sequence:
+The PySpark and Scala integration flows run this sequence:
 
 1. Spark writes temporary Parquet objects through the Hadoop GCS Connector.
 2. The BigQuery connector calls `bigquery.tables.get` for the destination.

@@ -3,39 +3,33 @@
 
 [English](index.md) | [한국어](../ko/index.md)
 
-# User Documentation
+# go-bemu Documentation
 
-These documents are for people running BQEMU through its public endpoints.
-BigQuery resources follow the public [BigQuery REST API
-reference](https://cloud.google.com/bigquery/docs/reference/rest).
+This is the user path for running BQEMU. It answers where to connect, which
+resources to create, and whether a feature is usable. Public resource shapes
+follow the [BigQuery REST API reference](https://cloud.google.com/bigquery/docs/reference/rest).
 
 <!-- section: start -->
-## Start Here
+## Start
 
-- [Getting started](getting-started.md): run Compose, create resources, send the
-  first query, add fake GCS, and connect from a development container.
-- [Client credentials and TLS](client-credentials-and-tls.md): generate local
-  service-account, authorized-user, WIF, direct-token, certificate, and
-  truststore fixtures.
+- [Getting started](getting-started.md): run Compose, choose the correct
+  endpoint, create a project/dataset/table, and run a query.
+- [Configuration](configuration.md): configure the service and bootstrap
+  multiple projects and datasets before it becomes ready.
 
-<!-- section: integrations -->
-## Integration Examples
+<!-- section: use -->
+## Use The Service
 
-Version-pinned process setup, scenario IDs, request order, and CI evidence are
-kept in the [integration test guides](../../tests/integration/docs/en/index.md).
+- [Local credentials and TLS](client-credentials-and-tls.md): optional local
+  TLS and credential fixtures for callers that require them.
+- [Compatibility](compatibility.md): concise use-now, limited, and unavailable
+  behavior.
+- [API and RPC reference](api-rpc-compatibility.md): exact generated public
+  method inventory. Use it when a caller depends on a particular field or RPC.
 
-<!-- section: compatibility -->
-## Compatibility References
+<!-- section: maintain -->
+## Maintain The Service
 
-- [Compatibility](compatibility.md): status definitions and links to the
-  generated API/RPC table.
-- [API and RPC compatibility](api-rpc-compatibility.md): generated method,
-  endpoint, condition, test, and issue rows.
-- [Consumer compatibility](../../tests/integration/docs/en/consumer-compatibility.md): generated integration-test client
-  versions, runtime artifacts, and scenario selectors.
-
-<!-- section: maintainers -->
-## Maintainer Documentation
-
-Architecture, adapter contracts, implementation notes, runbooks, and version
-onboarding are kept in the separate [maintainer index](maintainers/index.md).
+Implementation, integration-test evidence, architecture, CI, releases, and
+contribution instructions are kept in the [maintainer documentation](maintainers/index.md).
+They are not prerequisites for using the local service.

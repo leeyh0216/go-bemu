@@ -57,15 +57,15 @@ into streams, as defined by
 Write stream type controls visibility and commit behavior, as described by the
 [Storage Write API](https://cloud.google.com/bigquery/docs/write-api).
 
-**Current implementation:** REST metadata/query plus Parquet load jobs
+**Current implementation:** REST metadata, query jobs, and Parquet load jobs
 form the public control plane. Public Storage Read materializes one bounded
 DuckDB snapshot, encodes Arrow or Avro, and exposes deterministic logical ranges
 with offset resume. Public Storage Write accepts ProtoRows on PENDING and default
 streams, validates offsets, finalizes PENDING streams, and commits a validated
 group through one serialized DuckDB transaction. Both data planes are Partial:
-Read lacks split/compression/historical snapshots, restart recovery, and nested-field projection;
-Write lacks CDC, ArrowRows, BUFFERED/explicit COMMITTED streams, FlushRows, and
-durable staging.
+Read lacks split/compression/historical snapshots and restoration of snapshot
+bytes after restart; Write lacks CDC, ArrowRows, BUFFERED/explicit COMMITTED
+streams, and FlushRows.
 
 <!-- section: catalog-physical-model -->
 ## Catalog and Physical Model
@@ -205,9 +205,10 @@ inside one DuckDB transaction. Storage Write validates all named PENDING streams
 before its serialized coordinator applies one DuckDB transaction, following the
 atomic group contract of
 [`BatchCommitWriteStreams`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams).
-Query and load job metadata is SQLite-durable, but query result rows and the
-Storage Write stream ledger are not yet restart-durable. Object download is
-deliberately outside the load commit.
+Query and load job metadata plus the Storage Write lifecycle/receipt ledger are
+SQLite-durable. Query result rows and Storage Read snapshot bytes remain
+process-local and are unavailable after restart. Object download is deliberately
+outside the load commit.
 
 <!-- section: sql-boundary -->
 ## SQL Dialect Boundary
@@ -236,11 +237,11 @@ actions remains #8.
 ## Runtime, TLS, and Public Access
 
 The process composes one storage engine and a BQEMU-owned SQLite state store.
-SQLite owns canonical catalog, query/load job metadata, and Storage Read
-lifecycle metadata. System clock/ID adapters, application services, public
-REST/gRPC listeners, and an optional admin listener are composed around those
-ports. One certificate pair enables TLS on the public listeners and on admin
-when enabled.
+SQLite owns canonical catalog, query/load job metadata, Storage Read lifecycle
+metadata, and the Storage Write lifecycle/receipt ledger. System clock/ID
+adapters, application services, public REST/gRPC listeners, and an optional
+admin listener are composed around those ports. One certificate pair enables
+TLS on the public listeners and on admin when enabled.
 
 BigQuery-compatible REST and gRPC endpoints do not authenticate or authorize
 callers. Missing, arbitrary, malformed, and expired-looking `Authorization`

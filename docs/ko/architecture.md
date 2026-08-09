@@ -67,8 +67,8 @@ RPC는 대량의 행 데이터를 이동합니다.
 결정합니다. 자세한 내용은 [Storage Write
 API](https://cloud.google.com/bigquery/docs/write-api)에 설명되어 있습니다.
 
-**현재 구현:** 공개 제어 영역은 REST 메타데이터와 쿼리, 선택적으로 활성화하는
-Parquet 적재 작업으로 구성됩니다.
+**현재 구현:** 공개 제어 영역은 REST 메타데이터, 쿼리 작업, Parquet 적재 작업으로
+구성됩니다.
 
 공개 Storage Read는 크기 제한을 둔 DuckDB 스냅샷 하나를 구체화합니다. 결과는
 Arrow 또는 Avro로 인코딩합니다. 각 스트림은 정해진 논리 범위와 재개 가능한
@@ -79,9 +79,8 @@ Arrow 또는 Avro로 인코딩합니다. 각 스트림은 정해진 논리 범�
 트랜잭션 하나로 커밋합니다.
 
 두 데이터 영역은 부분 지원(`Partial`) 상태입니다. 읽기에는 스트림 분할, 압축,
-과거 스냅샷, 재시작 복구 기능이 없습니다. 쓰기에는 CDC,
-`ArrowRows`, `BUFFERED` 스트림, 명시적 `COMMITTED` 스트림, `FlushRows`, 영속
-준비 영역이 없습니다.
+과거 스냅샷, 재시작 뒤 스냅샷 바이트 복구 기능이 없습니다. 쓰기에는 CDC,
+`ArrowRows`, `BUFFERED` 스트림, 명시적 `COMMITTED` 스트림, `FlushRows`가 없습니다.
 
 <!-- section: catalog-physical-model -->
 ## 카탈로그와 저장 모델
@@ -256,9 +255,10 @@ Storage Write는 이름이 지정된 모든 `PENDING` 스트림을 먼저 검증
 [`BatchCommitWriteStreams`](https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.BigQueryWrite.BatchCommitWriteStreams)로
 정의된 원자적 그룹 계약을 따릅니다.
 
-쿼리와 로드 작업 메타데이터는 SQLite에 저장합니다. 쿼리 결과 행과 Storage Write
-스트림 원장은 아직 재시작 후 복구하지 않습니다. 객체 다운로드는 의도적으로 적재
-커밋 밖에서 수행합니다.
+쿼리와 로드 작업 메타데이터, Storage Write 수명 주기와 receipt 원장은 SQLite에
+저장합니다. 쿼리 결과 행과 Storage Read 스냅샷 바이트는 프로세스 메모리에만 두며
+재시작 뒤에는 사용할 수 없습니다. 객체 다운로드는 의도적으로 적재 커밋 밖에서
+수행합니다.
 
 <!-- section: sql-boundary -->
 ## SQL 문법 경계
@@ -289,9 +289,9 @@ visitor 경로를 사용합니다. 지원 expression과 action을 넘어서는 p
 ## 실행 환경, TLS, 공개 접근
 
 프로세스는 저장 엔진 하나와 BQEMU 전용 SQLite 상태 저장소를 구성합니다. SQLite는
-기준 카탈로그, 쿼리·로드 작업 메타데이터, Storage Read 수명 주기 메타데이터를
-소유합니다. 그 주위에 시스템 시계와 ID 어댑터, 애플리케이션 서비스, 공개 REST/gRPC
-수신기를 구성합니다. 관리용 수신기는 선택 사항입니다.
+기준 카탈로그, 쿼리·로드 작업 메타데이터, Storage Read 수명 주기 메타데이터, Storage
+Write 수명 주기와 receipt 원장을 소유합니다. 그 주위에 시스템 시계와 ID 어댑터,
+애플리케이션 서비스, 공개 REST/gRPC 수신기를 구성합니다. 관리용 수신기는 선택 사항입니다.
 
 인증서 한 쌍으로 공개 수신기와 활성화된 관리 수신기에 TLS를 적용할 수 있습니다.
 

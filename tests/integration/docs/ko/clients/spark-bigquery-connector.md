@@ -5,8 +5,8 @@
 
 # PySpark와 Scala Spark
 
-Spark `3.5.8`, Scala `2.12.18`(바이너리 `2.12`), Java `17`, Spark BigQuery
-Connector `0.44.2`를 사용합니다. 커넥터에 따라 달라지는 동작은 검토한 [커넥터 소스
+이 안내는 Spark `3.5.8`, Scala `2.12.18`(바이너리 `2.12`), Java `17`, Spark BigQuery
+Connector `0.44.2` 조합으로 검증했습니다. 커넥터에 따라 달라지는 동작은 검토한 [커넥터 소스
 리비전](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)을
 기준으로 합니다.
 
@@ -109,10 +109,6 @@ predicate, DATE/TIMESTAMP 비교의 pushdown을 검증합니다. 필드 기반 �
 <!-- section: direct -->
 ## 직접 읽기와 쓰기 호출
 
-정규화된 사례 ID는 `spark-pyspark-3.5.8-connector-0.44.2`와
-`spark-scala-3.5.8-connector-0.44.2`입니다. 공개 scenario ID는
-`spark-pyspark-public-edge`와 `spark-scala-public-edge`입니다.
-
 | 동작 | Operation 순서 |
 | --- | --- |
 | 테이블 읽기 | `bigquery.tables.get` -> `grpc.bigquery-read.create-read-session` -> 하나 이상의 `grpc.bigquery-read.read-rows` 스트림 |
@@ -129,10 +125,10 @@ PySpark scenario는 반영한 스트림 상태를 확인하기 위해
 <!-- section: indirect -->
 ## Parquet 간접 쓰기
 
-선택형 fake GCS Compose 구성을 시작합니다.
+fake GCS는 기본 Compose 실행 환경에 포함됩니다. 간접 쓰기 전에 전체 stack을 시작합니다.
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 ```
 
 Spark BigQuery Connector와 Hadoop GCS Connector JAR를 포함하고 Hadoop 주소를
@@ -164,8 +160,7 @@ Compose 설정은 `BQEMU_LOAD_GCS_ENDPOINT`를 통해 `http://fake-gcs:4443`을 
 전달합니다. 호스트 네트워크에서 실행하는 Spark는 `http://localhost:4443`을
 사용합니다. 두 값은 서로 다른 호출자가 같은 fake GCS 서비스를 바라보도록 합니다.
 
-`spark-pyspark-indirect-load`와 `spark-scala-indirect-load` scenario는 다음 순서로
-실행됩니다.
+PySpark와 Scala 통합 흐름은 다음 순서로 실행됩니다.
 
 1. Spark가 Hadoop GCS Connector를 통해 임시 Parquet 객체를 업로드합니다.
 2. BigQuery 커넥터가 대상 테이블에 `bigquery.tables.get`을 호출합니다.

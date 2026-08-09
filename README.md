@@ -5,55 +5,46 @@
 
 # go-bemu
 
-`go-bemu` provides a local BigQuery-compatible endpoint for application and
-protocol integration tests. Run BQEMU beside your test process, create an emulator project,
-and point the client at the local REST or Storage gRPC endpoint.
-
-The exact API and RPC surface is listed in [Compatibility](docs/en/compatibility.md).
-BigQuery request and response resources follow the public [BigQuery API
+`go-bemu` is a local BigQuery-compatible service for application and protocol
+tests. It exposes BigQuery REST and Storage gRPC endpoints, persists local
+catalog state, and uses an external GCS-compatible service for Parquet load
+jobs. Its public resource shapes follow the [BigQuery REST API
 reference](https://cloud.google.com/bigquery/docs/reference/rest).
 
-<!-- section: quick-start -->
-## Docker Compose
+<!-- section: start -->
+## Start
 
 ```bash
 docker compose up --build -d --wait
-
-curl --fail -X POST http://localhost:9050/bqemu/v1/projects \
-  -H 'Content-Type: application/json' \
-  -d '{"projectId":"test-project"}'
+curl --fail http://localhost:9050/readyz
 ```
 
-To run the image published from the default branch instead of building it:
+The default Compose project starts BQEMU and the required fake GCS service.
+State is retained in the `bqemu-data` volume. Remove it with
+`docker compose down --volumes` when the local test state is no longer needed.
 
-```bash
-export BQEMU_IMAGE=ghcr.io/leeyh0216/go-bemu:edge
-docker compose pull bqemu
-docker compose up --no-build -d --wait
-```
+<!-- section: connect -->
+## Connect
 
-The Compose project keeps data in the `bqemu-data` volume. Remove the volume
-with `docker compose down --volumes` when the test state is no longer needed.
+| Calling process | REST endpoint | Storage gRPC endpoint |
+| --- | --- | --- |
+| Host running Compose | `http://localhost:9050` | `localhost:9060` |
+| Sibling Compose service | `http://bqemu:9050` | `bqemu:9060` |
+| Development container with BQEMU on the host | `http://host.docker.internal:9050` | `host.docker.internal:9060` |
 
-<!-- section: endpoints -->
-## Endpoints
+Set the endpoint in the calling process. Do not use `localhost` from a
+container unless BQEMU runs in that same container.
 
-| Service | Default endpoint |
-| --- | --- |
-| BigQuery REST and health | `http://localhost:9050` |
-| BigQuery Storage gRPC | `localhost:9060` |
+<!-- section: docs -->
+## Documentation
 
-Containerized clients use the BQEMU service name or
-`host.docker.internal`, depending on where Compose runs. TLS uses the same
-ports and changes the REST scheme to HTTPS.
-
-<!-- section: next-steps -->
-## Next Steps
-
-- [Getting started](docs/en/getting-started.md): create a dataset and table,
-  run the first query, enable TLS, and connect from a development container.
-- [Reviewed integration examples](tests/integration/docs/en/index.md):
-  version-pinned process and runtime setups verified by CI.
-- [Client credentials and TLS](docs/en/client-credentials-and-tls.md)
-- [Compatibility](docs/en/compatibility.md): API/RPC support by operation ID.
-- [Documentation index](docs/en/index.md)
+- [Getting started](docs/en/getting-started.md): create resources, run a query,
+  and use the required fake GCS service.
+- [Configuration](docs/en/configuration.md): endpoint topology, bootstrap
+  projects and datasets, persistence, TLS, and runtime limits.
+- [What works](docs/en/compatibility.md): use-now, limited, and unavailable
+  behavior in one page.
+- [API and RPC reference](docs/en/api-rpc-compatibility.md): generated exact
+  method and endpoint inventory.
+- [Maintainer documentation](docs/en/maintainers/index.md): implementation,
+  CI, release, and contribution material.

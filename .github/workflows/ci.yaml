@@ -139,15 +139,24 @@ jobs:
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
         run: python -m tests.integration.framework.consumer_runner --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
-      - name: Upload contract evidence
+      - name: Publish test summary and structured evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: ./.github/actions/test-report
         with:
-          name: consumer-${{ matrix.id }}-${{ github.run_id }}
-          path: |
+          title: Python / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+          junit-files: .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+          report-directory: .artifacts/reports/consumer-${{ matrix.id }}-${{ matrix.executionId }}
+          artifact-name: test-report-consumer-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          artifact-paths: |
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: failure-diagnostics-consumer-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          path: |
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
           if-no-files-found: ignore
@@ -175,15 +184,24 @@ jobs:
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
         run: python3 -m tests.integration.framework.consumer_runner --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
-      - name: Upload contract evidence
+      - name: Publish test summary and structured evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: ./.github/actions/test-report
         with:
-          name: consumer-${{ matrix.id }}-${{ github.run_id }}
-          path: |
+          title: Command line / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+          junit-files: .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+          report-directory: .artifacts/reports/consumer-${{ matrix.id }}-${{ matrix.executionId }}
+          artifact-name: test-report-consumer-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          artifact-paths: |
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: failure-diagnostics-consumer-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          path: |
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
           if-no-files-found: ignore
@@ -240,19 +258,30 @@ jobs:
             python=python3
           fi
           "$python" -m tests.integration.framework.consumer_runner --case "$BQEMU_CONSUMER_CASE" --execution "$BQEMU_CONSUMER_EXECUTION"
-      - name: Upload load evidence
+      - name: Publish test summary and structured evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: ./.github/actions/test-report
         with:
-          name: load-${{ matrix.id }}-${{ github.run_id }}
-          path: |
+          title: Indirect load / ${{ matrix.id }} / ${{ matrix.executionId }}
+          junit-files: |
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/load/**/*.xml
+          report-directory: .artifacts/reports/load-${{ matrix.id }}-${{ matrix.executionId }}
+          artifact-name: test-report-load-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          artifact-paths: |
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
-            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
-            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/load/*/evidence.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/load/*/*.safe.json
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: failure-diagnostics-load-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          path: |
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
+            .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -376,13 +405,23 @@ jobs:
             BQEMU_AUTH_CASE="$CONSUMER_CASE" \
             BQEMU_AUTH_JUNIT=".artifacts/auth/$CONSUMER_CASE/junit-$CONSUMER_CASE.xml" \
             BQEMU_AUTH_DIAGNOSTICS=".artifacts/auth/$CONSUMER_CASE/events.ndjson"
-      - name: Upload case-specific diagnostics and JUnit
+      - name: Publish test summary and structured evidence
         if: always()
+        uses: ./.github/actions/test-report
+        with:
+          title: Credential and TLS / ${{ matrix.id }} / ${{ matrix.runnerAdapter.id }}
+          junit-files: .artifacts/auth/${{ matrix.id }}/junit-${{ matrix.id }}.xml
+          report-directory: .artifacts/reports/auth-${{ matrix.id }}
+          artifact-name: test-report-auth-${{ matrix.id }}-${{ github.run_id }}
+          artifact-paths: .artifacts/auth/${{ matrix.id }}/junit-${{ matrix.id }}.xml
+      - name: Upload failure diagnostics
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: auth-client-${{ matrix.id }}-diagnostics-${{ github.run_id }}
-          path: .artifacts/auth/${{ matrix.id }}
-          if-no-files-found: error
+          name: failure-diagnostics-auth-${{ matrix.id }}-${{ github.run_id }}
+          path: |
+            .artifacts/auth/${{ matrix.id }}/events.ndjson
+          if-no-files-found: ignore
           retention-days: 7
 
   validation-complete:
@@ -418,6 +457,12 @@ jobs:
           CONTAINER_RESULT: ${{ needs.container-smoke.result }}
         run: |
           failed=0
+          {
+            echo "## Required validation"
+            echo
+            echo "| Job | Result |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
           for result in \
             "static-validation:$STATIC_RESULT" \
             "consumer-matrix:$CONSUMER_MATRIX_RESULT" \
@@ -434,10 +479,16 @@ jobs:
             job=${result%%:*}
             status=${result#*:}
             printf '%s\n' "required_job=$job result=$status"
+            printf '| `%s` | `%s` |\n' "$job" "$status" >> "$GITHUB_STEP_SUMMARY"
             if test "$status" != success; then
               failed=1
             fi
           done
+          if test "$failed" -eq 0; then
+            printf '\nAll release-blocking validation jobs succeeded.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '\nAt least one release-blocking validation job did not succeed. Publication is blocked.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
           exit "$failed"
 
   publish:

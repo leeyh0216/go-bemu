@@ -22,7 +22,7 @@ var (
 	pinnedConnectorURL = regexp.MustCompile(`github\.com/GoogleCloudDataproc/spark-bigquery-connector/(blob|tree)/(0\.44\.2|[0-9a-f]{40})(/|\b)`)
 	pinnedFlinkURL     = regexp.MustCompile(`github\.com/GoogleCloudDataproc/flink-bigquery-connector/(blob|tree)/1\.2\.0(/|\b)`)
 	pinnedGoccyURL     = regexp.MustCompile(`github\.com/goccy/bigquery-emulator/(blob|tree)/v0\.8\.1(/|\b)`)
-	primarySourceURL   = regexp.MustCompile(`https://(cloud\.google\.com/|github\.com/(GoogleCloudDataproc/(spark-bigquery-connector/(blob|tree)/(0\.44\.2|[0-9a-f]{40})|flink-bigquery-connector/(blob|tree)/1\.2\.0)|goccy/bigquery-emulator/(blob|tree)/v0\.8\.1)|duckdb\.org/|arrow\.apache\.org/|avro\.apache\.org/)`)
+	primarySourceURL   = regexp.MustCompile(`https://(cloud\.google\.com/|docs\.github\.com/|github\.com/(GoogleCloudDataproc/(spark-bigquery-connector/(blob|tree)/(0\.44\.2|[0-9a-f]{40})|flink-bigquery-connector/(blob|tree)/1\.2\.0)|goccy/bigquery-emulator/(blob|tree)/v0\.8\.1)|duckdb\.org/|arrow\.apache\.org/|avro\.apache\.org/)`)
 )
 
 func TestBilingualDocumentationParityAndProvenance(t *testing.T) {

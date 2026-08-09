@@ -309,8 +309,9 @@ of racing an active query; process teardown owns those remaining resources.
 Storage cleanup during startup or early-return paths. HTTP readiness does not
 flip to false before draining, outstanding operation counts are not reported,
 and a second signal has no dedicated immediate-exit path. Abrupt termination can
-lose the process-local catalog, jobs, Read sessions, Write streams, and load
-idempotency records even when the DuckDB file persists.
+lose process-local query-result rows and Storage Read snapshot bytes. Catalog,
+job, load-idempotency, and Storage Write lifecycle metadata are persisted and
+reconciled from the configured SQLite state store on the next startup.
 
 Tests cover query admission rejection, active sync/async cancellation, bounded
 query drain, and query-before-Storage close order. Idle shutdown, an active REST

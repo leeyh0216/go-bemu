@@ -12,6 +12,8 @@
 <!-- section: architecture -->
 ## 아키텍처와 계약
 
+- [공개 operation 계약](../../../contract/README.ko.md): REST 또는 gRPC operation 추가,
+  테스트 근거 연결, 실행 환경/문서 생성물 갱신 절차를 설명합니다.
 - [아키텍처](../architecture.md): 패키지 경계, 의존성 방향, 실행 환경 구성, 영속성
   소유권을 설명합니다.
 - [BigQuery와 커넥터 내부 동작](../bigquery-internals.md): 프로토콜 흐름, 커넥터
@@ -33,8 +35,12 @@
 <!-- section: workflow -->
 ## 저장소 작업 절차
 
+- [기여 프레임워크](development-workflow.md): 동작 구현 위치, 공개 계약 annotation, 생성물
+  갱신, 집중 검증 절차를 설명합니다.
 - [유지보수 안내서](../maintainer-guide.md): 로컬 실행 준비, 소비자 버전 추가,
   호환성 문제 진단, 배포 절차를 설명합니다.
+- [CI 리포트](ci-reporting.md): Actions 요약, 내려받는 JUnit HTML, 구조화된 증거,
+  실패할 때만 남기는 진단 정보를 설명합니다.
 - [기여 안내](../../../CONTRIBUTING.ko.md): 이슈 단위 변경, 검증, 커밋, 검토 절차를
   설명합니다.
 - [호환성 매니페스트](../compatibility.md): 코드, 테스트, 자동 생성 문서가 함께

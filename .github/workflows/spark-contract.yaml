@@ -99,15 +99,24 @@ jobs:
         env:
           BQEMU_CONSUMER_CASE: ${{ matrix.id }}
         run: .artifacts/spark/venv/bin/python -m tests.integration.framework.consumer_runner --case "$BQEMU_CONSUMER_CASE" --execution "${{ matrix.executionId }}"
-      - name: Upload Spark diagnostics
+      - name: Publish test summary and structured evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: ./.github/actions/test-report
         with:
-          name: consumer-${{ matrix.id }}-${{ github.run_id }}
-          path: |
+          title: Spark / ${{ matrix.id }} / ${{ matrix.scenarioSet.id }}
+          junit-files: .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+          report-directory: .artifacts/reports/spark-${{ matrix.id }}-${{ matrix.executionId }}
+          artifact-name: test-report-spark-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          artifact-paths: |
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/evidence.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/diff.json
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/junit.xml
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: failure-diagnostics-spark-${{ matrix.id }}-${{ matrix.executionId }}-${{ github.run_id }}
+          path: |
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner.log
             .artifacts/consumers/${{ matrix.id }}/${{ matrix.executionId }}/runner-error.txt
             .artifacts/spark/diagnostics/emulator-tail.log

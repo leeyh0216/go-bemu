@@ -75,6 +75,45 @@ repository checks before committing. Generated manifests, documentation, and
 evidence belong in the same commit as their source. CI rejects stale generated
 artifacts.
 
+<!-- section: implementation-workflow -->
+## Implement, Test, And Generate
+
+Use this sequence for every caller-visible change. It keeps the human-owned
+decision small and makes the repository check the rest.
+
+1. **Implement at the owning boundary.** Add the domain/application/adapter
+   behavior and a focused test. A public behavior also needs a REST or gRPC
+   transport test; do not use an engine-only test as public evidence.
+2. **Describe a public operation once.** Add or change the operation in
+   `contract/operations.yaml`, then annotate each declared Go test with a
+   literal `contracttest.Operation(t, "operation.id")`. Run
+   `make contract-generate`. It regenerates normalized contract JSON, runtime
+   route/RPC specifications, and EN/KO API tables. Never edit those outputs by
+   hand.
+3. **Keep SQL as a resource.** Add SQL regression data under
+   `internal/sqltest/testdata/cases/<case-id>/` as `dataset.json`, `case.json`,
+   and `expected.json`. Put SQLite repository queries in
+   `internal/adapters/sqlite/queries/*.sql`, then run `make sqlc-generate`.
+   Generated sqlc source is reviewed with the SQL resource, not edited directly.
+4. **Add caller behavior through the integration framework.** Put the test in
+   `tests/integration/<family>`, attach literal operation annotations to the
+   test function, and add a versioned case only when a runtime/provenance or
+   runner contract changes. Run `make integration-contract-generate` to write
+   the expanded execution matrix and integration compatibility pages.
+5. **Run the smallest useful checks locally.** Run the changed package plus
+   the matching generator check: `make contract-check`,
+   `make integration-contract-check`, or `make sqlc-check`. Run
+   `go test ./docs ./tests/integration/cipolicy` and `make ci-report-test` for
+   documentation or CI-report changes. CI owns the expensive real-process
+   matrices.
+6. **Commit the source, test, and generated output together.** A stale
+   generated file is a failure, not a reviewer cleanup task.
+
+The [contribution framework](docs/en/maintainers/development-workflow.md)
+explains the inputs, generated outputs, annotation rules, and failure modes in
+detail. The [integration framework guide](tests/integration/docs/en/framework.md)
+shows how to create a versioned external-process case.
+
 <!-- section: evolution-pipeline -->
 ## Compatibility Evolution Pipeline
 

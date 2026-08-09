@@ -12,6 +12,9 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 <!-- section: architecture -->
 ## Architecture And Contracts
 
+- [Public operation contract](../../../contract/README.md): how to add a REST
+  or gRPC operation, attach test evidence, and regenerate runtime/documentation
+  artifacts.
 - [Architecture](../architecture.md): package boundaries, dependency direction,
   runtime composition, and persistence ownership.
 - [BigQuery protocol internals](../bigquery-internals.md): protocol flows,
@@ -33,8 +36,13 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 <!-- section: workflow -->
 ## Repository Workflow
 
+- [Contribution framework](development-workflow.md): where to implement a
+  behavior, annotate a public contract, regenerate artifacts, and run focused
+  checks.
 - [Maintainer guide](../maintainer-guide.md): local bootstrap, consumer-version
   onboarding, compatibility diagnosis, and release runbooks.
+- [CI reports](ci-reporting.md): Actions summaries, downloadable JUnit HTML,
+  structured evidence, and failure-only diagnostics.
 - [Contributing](../../../CONTRIBUTING.md): issue-scoped changes, validation,
   commits, and review.
 - [Compatibility manifest](../compatibility.md): the public contract that code,
