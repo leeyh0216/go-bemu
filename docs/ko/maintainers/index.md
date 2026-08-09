@@ -12,6 +12,7 @@
 <!-- section: architecture -->
 ## 아키텍처와 계약
 
+- [애플리케이션 경계](application-boundaries.md): handler 소유권과 의존 방향을 설명합니다.
 - [아키텍처](../architecture.md): 패키지 경계, 의존성 방향, 실행 환경 구성, 영속성
   소유권을 설명합니다.
 - [BigQuery와 커넥터 내부 동작](../bigquery-internals.md): 프로토콜 흐름, 커넥터

@@ -12,6 +12,7 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 <!-- section: architecture -->
 ## Architecture And Contracts
 
+- [Application boundaries](application-boundaries.md): handler ownership and dependency direction.
 - [Architecture](../architecture.md): package boundaries, dependency direction,
   runtime composition, and persistence ownership.
 - [BigQuery protocol internals](../bigquery-internals.md): protocol flows,
