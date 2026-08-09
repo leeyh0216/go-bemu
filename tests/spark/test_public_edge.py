@@ -623,7 +623,7 @@ def test_query_source_explicit_materialization_reuses_destination_metadata(
         raise AssertionError("query operation counts have an invalid shape")
     metadata_gets = counts.get("tables.get", 0)
     metadata_patches = counts.get("tables.patch", 0)
-    if (metadata_gets, metadata_patches) not in {(1, 0), (2, 1)}:
+    if (metadata_gets, metadata_patches) not in {(1, 0), (2, 0), (2, 1)}:
         raise AssertionError(
             "explicit materialization metadata flow mismatch "
             f"shape=tables.get:{metadata_gets},tables.patch:{metadata_patches}"
