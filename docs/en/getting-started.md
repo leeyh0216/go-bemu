@@ -94,7 +94,7 @@ BQEMU does not include a GCS server. The optional load profile starts an
 external fake GCS service and enables BQEMU's outbound GCS JSON adapter:
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 curl --fail http://localhost:4443/storage/v1/b
 ```
 

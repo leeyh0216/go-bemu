@@ -126,7 +126,7 @@ PySpark scenario는 반영한 스트림 상태를 확인하기 위해
 선택형 fake GCS Compose 구성을 시작합니다.
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 ```
 
 Spark BigQuery Connector와 Hadoop GCS Connector JAR를 포함하고 Hadoop 주소를

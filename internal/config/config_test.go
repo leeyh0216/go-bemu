@@ -167,7 +167,7 @@ func TestEveryLeafOverrideIsTyped(t *testing.T) {
 		"storage.write.maxStagedBytes=8388608", "storage.write.maxStagedBytesPerStream=4194304",
 		"storage.write.orphanTtl=2h", "storage.write.cleanupInterval=30s",
 		"storage.write.protocolModelVersion=test-storage-v1",
-		"load.enabled=true", "load.gcsEndpoint=http://fake-gcs:4443", "load.allowFileSources=true",
+		"load.gcsEndpoint=http://fake-gcs:4443",
 		"load.operationTimeout=30s", "load.maxObjects=20", "load.maxObjectBytes=1048576",
 		"load.maxTotalBytes=2097152", "load.maxMetadataBytes=65536", "load.maxListedObjects=30",
 		"logging.level=debug", "logging.format=text",
@@ -369,9 +369,9 @@ func TestStorageWriteByteLimitRelationshipsAreValidated(t *testing.T) {
 
 func TestLoadConfigurationRequiresExplicitEndpointAndPositiveBounds(t *testing.T) {
 	for name, overrides := range map[string][]string{
-		"missing-endpoint": {"--set", "load.enabled=true"},
+		"missing-endpoint": {"--set", "load.gcsEndpoint="},
 		"relative-endpoint": {
-			"--set", "load.enabled=true", "--set", "load.gcsEndpoint=fake-gcs:4443",
+			"--set", "load.gcsEndpoint=fake-gcs:4443",
 		},
 		"object-over-total": {
 			"--set", "load.maxObjectBytes=2048", "--set", "load.maxTotalBytes=1024",

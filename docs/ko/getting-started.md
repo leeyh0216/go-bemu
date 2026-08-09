@@ -95,7 +95,7 @@ BQEMU에는 GCS 서버가 포함되어 있지 않습니다. 선택형 로드 구
 서비스를 실행하고 BQEMU의 outbound GCS JSON 어댑터를 활성화합니다.
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 curl --fail http://localhost:4443/storage/v1/b
 ```
 

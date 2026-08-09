@@ -55,6 +55,7 @@ Compose 프로젝트는 `bqemu-data` 볼륨에 데이터를 보관합니다. 테
 - [Python BigQuery 클라이언트](docs/ko/clients/python-bigquery.md)
 - [`bq` CLI](docs/ko/clients/bq-cli.md)
 - [PySpark와 Scala Spark](docs/ko/clients/spark-bigquery-connector.md)
+- [실행 위치별 엔드포인트와 클라이언트 Lab](docs/ko/runtime-endpoints.md)
 - [클라이언트 인증 파일과 TLS](docs/ko/client-credentials-and-tls.md)
 - [호환성](docs/ko/compatibility.md): operation ID별 API와 RPC 지원 범위입니다.
 - [문서 색인](docs/ko/index.md)

@@ -22,14 +22,8 @@ func TestComposeLoadJobsIsExplicitAndUsesConfiguredAdapters(t *testing.T) {
 	cfg := config.Defaults()
 
 	jobs := loadapplication.NewMemoryJobRepository()
-	service, err := composeLoadJobs(cfg, jobs, catalog, warehouse, clock, system.IDGenerator{})
-	if err != nil || service != nil {
-		t.Fatalf("disabled load composition = %#v, %v", service, err)
-	}
-
-	cfg.Load.Enabled = true
 	cfg.Load.GCSEndpoint = "http://127.0.0.1:4443"
-	service, err = composeLoadJobs(cfg, jobs, catalog, warehouse, clock, system.IDGenerator{})
+	service, err := composeLoadJobs(cfg, jobs, catalog, warehouse, clock, system.IDGenerator{})
 	if err != nil || service == nil {
 		t.Fatalf("enabled load composition = %#v, %v", service, err)
 	}

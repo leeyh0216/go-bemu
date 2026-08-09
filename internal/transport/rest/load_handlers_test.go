@@ -69,15 +69,11 @@ func TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects, err := objectstore.NewGCSOnlyRouter(gcs)
-	if err != nil {
-		t.Fatal(err)
-	}
 	loadConfig := loadApplication.DefaultConfig()
 	loadConfig.TempDirectory = t.TempDir()
 	loadConfig.OperationTimeout = 5 * time.Second
 	loads, err := loadApplication.NewService(
-		loadApplication.NewMemoryJobRepository(), objects, NewLoadTableCatalog(catalog), warehouse,
+		loadApplication.NewMemoryJobRepository(), gcs, NewLoadTableCatalog(catalog), warehouse,
 		clock, ids, loadConfig,
 	)
 	if err != nil {
@@ -140,7 +136,11 @@ func TestCombinedJobsAPIReturnsStrictLoadGapsAsTerminalJobs(t *testing.T) {
 	_, _ = catalog.CreateTable(ctx, domain.Table{ProjectID: "test-project", DatasetID: "analytics", ID: "events", Schema: []domain.Field{{Name: "id", Type: "INT64"}}})
 	config := loadApplication.DefaultConfig()
 	config.TempDirectory = t.TempDir()
-	loads, err := loadApplication.NewService(loadApplication.NewMemoryJobRepository(), objectstore.FileSystem{}, NewLoadTableCatalog(catalog), warehouse, clock, ids, config)
+	gcs, err := objectstore.NewGCSJSON(objectstore.GCSJSONConfig{Endpoint: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loads, err := loadApplication.NewService(loadApplication.NewMemoryJobRepository(), gcs, NewLoadTableCatalog(catalog), warehouse, clock, ids, config)
 	if err != nil {
 		t.Fatal(err)
 	}

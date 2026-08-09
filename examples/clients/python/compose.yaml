@@ -1,0 +1,11 @@
+services:
+  python-client:
+    image: python:3.13-slim
+    depends_on:
+      bqemu:
+        condition: service_healthy
+    environment:
+      BIGQUERY_EMULATOR_HOST: bqemu:9050
+      BQEMU_REST_ENDPOINT: http://bqemu:9050
+      BQEMU_STORAGE_GRPC_ENDPOINT: bqemu:9060
+    command: ["sh", "-c", "python -c 'import urllib.request; urllib.request.urlopen(\"http://bqemu:9050/readyz\").read()' && sleep infinity"]

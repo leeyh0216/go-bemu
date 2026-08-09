@@ -101,9 +101,9 @@ The exact pinned client source is retained in the
 `BQEMU_STORAGE_WRITE_MAX_CONCURRENT_APPEND_REQUESTS`) is acquired before gRPC
 `Recv`, bounding concurrent protobuf decode, clone, and digest memory across
 bidi streams before weighted coordinator admission begins.
-`load.enabled`
-requires an absolute `load.gcsEndpoint`; `load.allowFileSources` defaults false,
-and object/list/download limits are enforced. Runtime contract-profile
+`load.gcsEndpoint` is always required and must be an absolute HTTP(S) URL for a
+fake-GCS-compatible JSON service. Load sources are restricted to `gs://` object
+URIs, and object/list/download limits are enforced. Runtime contract-profile
 negotiation remains uncomposed. A valid setting is not a claim beyond each
 Partial capability.
 

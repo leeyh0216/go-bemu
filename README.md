@@ -55,6 +55,7 @@ ports and changes the REST scheme to HTTPS.
 - [Python BigQuery client](docs/en/clients/python-bigquery.md)
 - [`bq` CLI](docs/en/clients/bq-cli.md)
 - [PySpark and Scala Spark](docs/en/clients/spark-bigquery-connector.md)
+- [Runtime endpoints and client labs](docs/en/runtime-endpoints.md)
 - [Client credentials and TLS](docs/en/client-credentials-and-tls.md)
 - [Compatibility](docs/en/compatibility.md): API/RPC support by operation ID.
 - [Documentation index](docs/en/index.md)

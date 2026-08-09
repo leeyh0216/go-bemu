@@ -321,9 +321,7 @@ operations:
     support: partial
     verification: public-process
     rest: {method: POST, path: '/bigquery/v2/projects/{projectId}/jobs', discovery: true}
-    supportedInput: {en: Query jobs are accepted; configured Parquet load input is described by the condition., ko: 쿼리 작업을 받으며 설정된 Parquet 로드 입력은 조건 항목에 따릅니다.}
-    conditions:
-      - {setting: load.enabled, equals: true, effect: input-branch, verification: transport, tests: [go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs], en: Configured Parquet load job input is accepted., ko: 설정된 Parquet 로드 작업 입력을 받습니다.}
+    supportedInput: {en: Query jobs and configured Parquet load jobs are accepted., ko: 쿼리 작업과 설정된 Parquet 로드 작업을 받습니다.}
     limitations: {policy: tracked, byDesign: [], en: "Discovery retains media-body metadata required by bq 2.1.31, but the media upload endpoints are not registered; unsupported load formats end with notImplemented.", ko: "bq 2.1.31에 필요한 media-body 메타데이터는 Discovery에 유지하지만 미디어 업로드 엔드포인트는 등록하지 않습니다. 지원하지 않는 로드 형식은 notImplemented로 종료됩니다."}
     issues: ['#5', '#26']
     sources: [bigquery-rest-v2]

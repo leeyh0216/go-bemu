@@ -27,6 +27,7 @@ BigQuery 리소스는 공개 [BigQuery REST API
   3.5.8](clients/spark-bigquery-connector.md). 검토한 [커넥터 소스
   리비전](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)을
   기준으로 합니다.
+- [실행 위치별 엔드포인트와 클라이언트 Lab](runtime-endpoints.md)
 
 각 문서에는 시험한 scenario ID, 공개 operation ID, 요청 순서, 요청과 응답 형식이
 정리되어 있습니다.

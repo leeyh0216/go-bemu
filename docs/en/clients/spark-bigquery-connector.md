@@ -125,7 +125,7 @@ inspect committed stream state.
 Start the optional fake GCS Compose profile:
 
 ```bash
-docker compose -f compose.yaml -f compose.load.yaml up --build -d --wait
+docker compose up --build -d --wait
 ```
 
 Include the Spark BigQuery Connector and Hadoop GCS Connector JARs, then add the

@@ -218,7 +218,7 @@ func (l *testLoader) ExecuteLoad(ctx context.Context, plan ports.LoadPlan, objec
 }
 
 func TestServiceIsIdempotentAndCleansWorkspace(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
 	loader := &testLoader{}
 	service := newTestService(t, objects, loader, time.Second)
 	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-1"}
@@ -250,14 +250,44 @@ func TestServiceIsIdempotentAndCleansWorkspace(t *testing.T) {
 			t.Fatalf("workspace file remains: %s (%v)", path, err)
 		}
 	}
-	configuration.SourceURIs = []string{"file:///different.parquet"}
+	configuration.SourceURIs = []string{"gs://test-bucket/different.parquet"}
 	if _, err := service.Submit(context.Background(), reference, configuration); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("configuration conflict = %v", err)
 	}
 }
 
+func TestServiceRejectsNonGCSURIWithoutPersistingJob(t *testing.T) {
+	objects := &testObjectStore{objects: map[string][]byte{}}
+	repository := &trackingJobRepository{MemoryJobRepository: NewMemoryJobRepository()}
+	config := DefaultConfig()
+	config.TempDirectory = t.TempDir()
+	table := domain.Table{
+		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		Location:  "US", Schema: []domain.Field{{Name: "id", Type: "INT64"}},
+	}
+	service, err := NewService(repository, objects, testCatalog{table: table}, &testLoader{}, testClock{value: time.Unix(1, 0)}, testIDs{}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := testConfiguration(domain.FormatParquet)
+	configuration.SourceURIs = []string{"file:///must-not-be-read.parquet"}
+	_, err = service.Submit(context.Background(), domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "invalid-source"}, configuration)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("non-GCS source error = %v", err)
+	}
+	if repository.createOrGetCalls != 0 {
+		t.Fatalf("invalid source persisted %d jobs", repository.createOrGetCalls)
+	}
+	objects.mu.Lock()
+	opens := objects.opens
+	objects.mu.Unlock()
+	if opens != 0 {
+		t.Fatalf("invalid source opened %d objects", opens)
+	}
+}
+
 func TestServiceConcurrentIdempotentSubmissionsExecuteOnce(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
 	loader := &testLoader{}
 	service := newTestService(t, objects, loader, time.Second)
 	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-concurrent"}
@@ -291,7 +321,7 @@ func TestServiceConcurrentIdempotentSubmissionsExecuteOnce(t *testing.T) {
 }
 
 func TestServicePublishesOutputBytesToConcurrentReaders(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
 	loader := &gatedLoader{started: make(chan struct{}), release: make(chan struct{})}
 	service := newTestService(t, objects, loader, time.Second)
 	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-statistics-race"}
@@ -358,12 +388,12 @@ func TestServicePublishesOutputBytesToConcurrentReaders(t *testing.T) {
 }
 
 func TestServiceRecordsStrictFormatGapWithoutDownloading(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.avro": []byte("secret")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.avro": []byte("secret")}}
 	loader := &testLoader{}
 	service := newTestService(t, objects, loader, time.Second)
 	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-avro"}
 	configuration := testConfiguration(domain.FormatAvro)
-	configuration.SourceURIs = []string{"file:///source.avro"}
+	configuration.SourceURIs = []string{"gs://test-bucket/source.avro"}
 	if _, err := service.Submit(context.Background(), reference, configuration); err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +410,7 @@ func TestServiceRecordsStrictFormatGapWithoutDownloading(t *testing.T) {
 }
 
 func TestServiceRecordsUnsupportedOptionsWithoutSideEffects(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
 	loader := &testLoader{}
 	service := newTestService(t, objects, loader, time.Second)
 	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-options"}
@@ -406,7 +436,7 @@ func TestServiceRecordsUnsupportedOptionsWithoutSideEffects(t *testing.T) {
 
 func TestServiceRejectsDownloadedSizeDriftBeforeLoaderExecution(t *testing.T) {
 	objects := &testObjectStore{
-		objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}, sizeOffset: 1,
+		objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}, sizeOffset: 1,
 	}
 	loader := &testLoader{}
 	service := newTestService(t, objects, loader, time.Second)
@@ -430,7 +460,7 @@ func TestServiceRejectsDownloadedSizeDriftBeforeLoaderExecution(t *testing.T) {
 }
 
 func TestServicePersistsTimeoutAsTerminalError(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
 	loader := &testLoader{block: true}
 	service := newTestService(t, objects, loader, 10*time.Millisecond)
 	reference := domain.JobReference{ProjectID: "test-project", Location: "US", JobID: "load-timeout"}
@@ -444,7 +474,7 @@ func TestServicePersistsTimeoutAsTerminalError(t *testing.T) {
 }
 
 func TestServiceRejectsReplaceableEngineSchemaBoundsBeforeObjectAccess(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
 	descriptor := testLoaderCapabilities().Descriptor()
 	descriptor.Decimal.MaxPrecision, descriptor.Decimal.MaxScale = 10, 4
 	capabilities, err := engine.NewCapabilities(descriptor)
@@ -487,7 +517,7 @@ func TestServiceRejectsReplaceableEngineSchemaBoundsBeforeObjectAccess(t *testin
 
 func TestServiceRejectsRecursiveSchemaDuplicatesBeforeJobPublication(t *testing.T) {
 	jobs := &trackingJobRepository{MemoryJobRepository: NewMemoryJobRepository()}
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
 	loader := &testLoader{}
 	table := domain.Table{
 		Reference: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"}, Location: "US",
@@ -527,7 +557,7 @@ func TestServiceRejectsRecursiveSchemaDuplicatesBeforeJobPublication(t *testing.
 }
 
 func TestServiceReportsStableNestedRepeatedParquetCapabilityBeforeObjectAccess(t *testing.T) {
-	objects := &testObjectStore{objects: map[string][]byte{"file:///source.parquet": []byte("parquet")}}
+	objects := &testObjectStore{objects: map[string][]byte{"gs://test-bucket/source.parquet": []byte("parquet")}}
 	loader := &testLoader{testLoadPlanner: testLoadPlanner{
 		loadPlanErr: ports.UnsupportedLoadPlan(domain.CapabilityParquetNestedRepeatedV1),
 	}}
@@ -641,7 +671,7 @@ func newTestService(t *testing.T, objects ports.ObjectStore, loader ports.Loader
 
 func testConfiguration(format domain.SourceFormat) domain.LoadConfiguration {
 	return domain.LoadConfiguration{
-		SourceURIs: []string{"file:///source.parquet"}, Destination: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
+		SourceURIs: []string{"gs://test-bucket/source.parquet"}, Destination: domain.TableReference{ProjectID: "test-project", DatasetID: "dataset", TableID: "items"},
 		SourceFormat: format, WriteDisposition: domain.WriteAppend,
 	}
 }

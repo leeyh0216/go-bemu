@@ -349,22 +349,10 @@
         "discovery": true
       },
       "supportedInput": {
-        "en": "Query jobs are accepted; configured Parquet load input is described by the condition.",
-        "ko": "쿼리 작업을 받으며 설정된 Parquet 로드 입력은 조건 항목에 따릅니다."
+        "en": "Query jobs and configured Parquet load jobs are accepted.",
+        "ko": "쿼리 작업과 설정된 Parquet 로드 작업을 받습니다."
       },
-      "conditions": [
-        {
-          "setting": "load.enabled",
-          "equals": true,
-          "effect": "input-branch",
-          "verification": "transport",
-          "tests": [
-            "go:internal/transport/rest/load_handlers:TestCombinedJobsAPIExecutesParquetLoadAndPreservesQueryJobs"
-          ],
-          "en": "Configured Parquet load job input is accepted.",
-          "ko": "설정된 Parquet 로드 작업 입력을 받습니다."
-        }
-      ],
+      "conditions": [],
       "limitations": {
         "policy": "tracked",
         "byDesign": [],

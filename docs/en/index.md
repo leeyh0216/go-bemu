@@ -26,6 +26,7 @@ reference](https://cloud.google.com/bigquery/docs/reference/rest).
 - [PySpark and Scala Spark 3.5.8 with connector
   0.44.2](clients/spark-bigquery-connector.md), bound to the reviewed [connector
   revision](https://github.com/GoogleCloudDataproc/spark-bigquery-connector/tree/719817782a214b8ca72be520870013a3e0253d92)
+- [Runtime endpoints and client labs](runtime-endpoints.md)
 
 Each guide identifies the tested scenario IDs, public operation IDs, request
 order, and request/response shapes.

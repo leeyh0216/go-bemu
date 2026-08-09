@@ -1,0 +1,11 @@
+services:
+  aws-client:
+    image: amazon/aws-cli:2.27.56
+    depends_on:
+      bqemu:
+        condition: service_healthy
+    environment:
+      BQEMU_REST_ENDPOINT: http://bqemu:9050
+      BQEMU_OBJECT_STORE_ENDPOINT: http://bqemu:9050
+      AWS_EC2_METADATA_DISABLED: "true"
+    entrypoint: ["/bin/sh", "-c", "sleep infinity"]
