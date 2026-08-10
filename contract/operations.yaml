@@ -6,7 +6,7 @@ sources:
   - id: bigquery-storage-v1
     url: https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1
   - id: discovery-v1
-    url: https://developers.google.com/discovery/v1/reference/apis/getRest
+    url: https://bigquery.googleapis.com/discovery/v1/apis/bigquery/v2/rest
   - id: bqemu-public-api
     url: https://github.com/leeyh0216/go-bemu
   - id: grpc-health-v1

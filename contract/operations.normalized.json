@@ -15,7 +15,7 @@
     },
     {
       "id": "discovery-v1",
-      "url": "https://developers.google.com/discovery/v1/reference/apis/getRest"
+      "url": "https://bigquery.googleapis.com/discovery/v1/apis/bigquery/v2/rest"
     },
     {
       "id": "google-api-media-upload",
