@@ -65,7 +65,9 @@ with offset resume. Public Storage Write accepts ProtoRows on PENDING and defaul
 streams, validates offsets, finalizes PENDING streams, and commits a validated
 group through one serialized DuckDB transaction. Both data planes are Partial:
 Read lacks split/compression/historical snapshots, restart recovery, and nested-field projection;
-Write lacks CDC, ArrowRows, BUFFERED/explicit COMMITTED streams, FlushRows, and
+Write has a partial default-stream CDC path (declared primary keys and paired
+ProtoRows pseudocolumns with ordered UPSERT/DELETE); it lacks ArrowRows,
+BUFFERED/explicit COMMITTED streams, FlushRows, asynchronous CDC apply, and
 durable staging.
 
 <!-- section: catalog-physical-model -->

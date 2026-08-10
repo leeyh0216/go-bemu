@@ -118,6 +118,21 @@ jobs:
       - name: Run data-driven SQL regression cases
         run: make ci-test-sql-regression
 
+  flink-cdc-contract:
+    name: Flink CDC released-client contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run checksum-pinned released Flink CDC contract
+        env:
+          BQEMU_ARTIFACT_TIMEOUT_SECONDS: "300"
+        run: python3 -m tests.integration.flink.run_contract --timeout 900
+
   consumer-matrix:
     name: Normalize required consumer matrix
     runs-on: ubuntu-latest

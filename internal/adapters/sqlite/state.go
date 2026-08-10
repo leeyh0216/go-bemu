@@ -26,6 +26,7 @@ var requiredSchemaObjects = map[string]string{
 	"bqemu_tables":                            "table",
 	"bqemu_table_labels":                      "table",
 	"bqemu_table_clustering_fields":           "table",
+	"bqemu_table_primary_key_columns":         "table",
 	"bqemu_table_fields":                      "table",
 	"bqemu_table_fields_sibling_ordinal":      "index",
 	"bqemu_table_fields_parent_insert":        "trigger",

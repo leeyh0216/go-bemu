@@ -160,8 +160,12 @@ type Table struct {
 	TimePartitioning  *TimePartitioning
 	RangePartitioning *RangePartitioning
 	ClusteringFields  []string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// PrimaryKey holds the ordered, unenforced BigQuery table primary-key
+	// columns. It is persisted metadata; enforcement belongs to callers that
+	// opt into a feature such as Storage Write API CDC.
+	PrimaryKey []string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 func (t Table) Validate() error {
@@ -179,6 +183,38 @@ func (t Table) Validate() error {
 	}
 	if err := validateTableClustering(t); err != nil {
 		return err
+	}
+	if err := validateTablePrimaryKey(t); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateTablePrimaryKey(table Table) error {
+	if table.PrimaryKey == nil {
+		return nil
+	}
+	if len(table.PrimaryKey) == 0 {
+		return fmt.Errorf("%w: primary key must contain at least one column", ErrInvalid)
+	}
+	fields := make(map[string]Field, len(table.Schema))
+	for _, field := range table.Schema {
+		fields[strings.ToLower(field.Name)] = field
+	}
+	seen := make(map[string]struct{}, len(table.PrimaryKey))
+	for _, name := range table.PrimaryKey {
+		canonical := strings.ToLower(strings.TrimSpace(name))
+		field, ok := fields[canonical]
+		if !ok {
+			return fmt.Errorf("%w: primary key column %q does not exist in the top-level schema", ErrInvalid, name)
+		}
+		if _, duplicate := seen[canonical]; duplicate {
+			return fmt.Errorf("%w: primary key column %q is duplicated", ErrInvalid, name)
+		}
+		if strings.EqualFold(field.Mode, "REPEATED") {
+			return fmt.Errorf("%w: primary key column %q cannot be repeated", ErrInvalid, name)
+		}
+		seen[canonical] = struct{}{}
 	}
 	return nil
 }

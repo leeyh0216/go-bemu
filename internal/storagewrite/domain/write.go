@@ -113,6 +113,10 @@ type AppendRequest struct {
 	SchemaFingerprint string
 	PayloadDigest     string
 	TraceID           string
+	// CDC is true when the negotiated ProtoSchema carries the two Storage
+	// Write CDC pseudocolumns. It is connection-scoped protocol metadata, not
+	// a user table column.
+	CDC bool
 }
 
 type AppendResult struct {

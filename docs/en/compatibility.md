@@ -285,8 +285,11 @@ service.
 | atomic batch commit | Verified for a validated group: destination insert and staging/receipt deletion share one transaction |
 | ArrowRows, BUFFERED/explicit COMMITTED streams, and `FlushRows` | Unsupported |
 
-CDC, missing-value default expressions, independent-store restore proof, and
-distributed write concurrency remain unsupported. SQLite persists stream,
+Default-stream CDC is partial: declared primary keys, paired ProtoRows
+pseudocolumns, ordered UPSERT/DELETE, and a retained local per-key ledger are
+implemented; asynchronous apply, staleness, and released-client recovery/parallel-writer
+E2E are not. Missing-value default expressions, independent-store restore proof,
+and distributed write concurrency remain unsupported. SQLite persists stream,
 receipt, and commit-group phases; startup classifies interrupted operations as
 unresolved before accepting requests. PENDING rows do not accumulate as decoded
 Go objects, but the stable staged-byte charge is not an exact DuckDB

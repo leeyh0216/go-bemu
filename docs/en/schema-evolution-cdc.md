@@ -95,9 +95,20 @@ including pseudocolumn spelling, sequence-number format, ordering, and delete
 payload requirements, are in [BigQuery change data
 capture](https://cloud.google.com/bigquery/docs/change-data-capture).
 
-The emulator currently has no primary-key constraint metadata, CDC mutation
-queue, apply watermark, background apply job, staleness model, or CDC metrics.
-Therefore CDC is **unsupported**. Treating an `UPSERT` as an immediate DuckDB
+The emulator supports a deliberately narrow CDC subset on the default stream:
+declared primary-key metadata, paired CDC pseudocolumns in a ProtoRows schema,
+ordered synchronous UPSERT/DELETE application, and a durable per-key sequence
+ledger. Pseudocolumns are never projected into user-table reads. The local
+diagnostic port exposes its latest applied time and key count, but is not an
+`INFORMATION_SCHEMA` or `upsert_stream_apply_watermark` parity claim.
+
+This remains **partial**, rather than a general CDC implementation. CDC is
+rejected on PENDING streams and when ordinary rows are mixed on the same
+connection. The documented one-to-four hexadecimal sequence shape is validated;
+an equal-prefix pair with different section counts fails explicitly because the
+public contract does not define its precedence. There is no asynchronous apply
+queue, `max_staleness` model, production CDC metrics, or released-client recovery
+and parallel-writer E2E evidence. Treating an `UPSERT` as an immediate DuckDB
 `INSERT OR REPLACE` would hide ordering, duplicate, delete, and visibility bugs.
 
 <!-- section: stream-ledger -->
@@ -158,8 +169,8 @@ populated-table nulls, rejected destructive changes, transactional physical
 failure, stale ETags, and public-process behavior. Durable cross-store recovery,
 query-job schema updates, and Storage Write schema notification remain gaps.
 Load-job addition and relaxation are covered at the domain, plan, DuckDB, and
-REST boundaries. CDC later requires out-of-order and
-duplicate sequence values, UPSERT/DELETE, missing key, invalid pseudocolumn,
-reconnect/replay offsets, multiple streams, commit visibility, apply lag, and
-failure recovery. Promotion must still compare result types with [BigQuery data
+REST boundaries. CDC coverage proves ordered UPSERT/DELETE, missing-key and
+invalid-pseudocolumn rejection, reconnect/replay offsets, and a retained
+per-key ledger. It still needs multiple streams, commit visibility, apply lag,
+failure recovery, and released-client recovery/parallel-writer E2E. Promotion must still compare result types with [BigQuery data
 types](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types).

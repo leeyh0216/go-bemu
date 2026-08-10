@@ -437,6 +437,7 @@ func cloneTable(table domain.Table) domain.Table {
 	clone.Labels = cloneStringMap(table.Labels)
 	clone.Schema = domain.CloneFields(table.Schema)
 	clone.ClusteringFields = append([]string(nil), table.ClusteringFields...)
+	clone.PrimaryKey = append([]string(nil), table.PrimaryKey...)
 	if table.ExpirationTime != nil {
 		value := *table.ExpirationTime
 		clone.ExpirationTime = &value

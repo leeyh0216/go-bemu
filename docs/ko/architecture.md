@@ -80,9 +80,10 @@ Arrow 또는 Avro로 인코딩합니다. 각 스트림은 정해진 논리 범�
 트랜잭션 하나로 커밋합니다.
 
 두 데이터 영역은 부분 지원(`Partial`) 상태입니다. 읽기에는 스트림 분할, 압축,
-과거 스냅샷, 재시작 복구 기능이 없습니다. 쓰기에는 CDC,
-`ArrowRows`, `BUFFERED` 스트림, 명시적 `COMMITTED` 스트림, `FlushRows`, 영속
-준비 영역이 없습니다.
+과거 스냅샷, 재시작 복구 기능이 없습니다. 쓰기에는 선언한 기본 키와 쌍을 이룬
+ProtoRows 의사 열을 사용하는 기본 스트림 CDC 부분 경로가 있지만, `ArrowRows`,
+`BUFFERED` 스트림, 명시적 `COMMITTED` 스트림, `FlushRows`, 비동기 CDC 적용, 영속
+준비 영역은 없습니다.
 
 <!-- section: catalog-physical-model -->
 ## 카탈로그와 저장 모델

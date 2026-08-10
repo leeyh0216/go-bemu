@@ -34,6 +34,7 @@ func TestCatalogMetadataSurvivesRepositoryRestart(t *testing.T) {
 	var _ ports.ViewRepository = catalog.(ports.ViewRepository)
 
 	project, dataset, table := completeCatalogMetadata()
+	table.PrimaryKey = []string{"bucket", "event_time"}
 	if err := catalog.CreateProject(ctx, project); err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +198,7 @@ func TestCatalogUpdatesAndCascadesAreDurable(t *testing.T) {
 	table.TimePartitioning = nil
 	table.Labels = nil
 	table.ClusteringFields = nil
+	table.PrimaryKey = nil
 	table.UpdatedAt = table.UpdatedAt.Add(2 * time.Hour)
 	if err := catalog.UpdateTable(ctx, table); err != nil {
 		t.Fatal(err)
@@ -274,6 +276,10 @@ func TestLegacyMigrationLedgerImportsIntoGooseHistory(t *testing.T) {
 		db.Close()
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE bqemu_table_primary_key_columns`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `CREATE TABLE bqemu_schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -309,7 +315,7 @@ WHERE type = 'table' AND name = 'bqemu_schema_migrations'`).Scan(&legacyCount); 
 FROM bqemu_goose_db_version WHERE is_applied = 1`).Scan(&maximumVersion); err != nil {
 		t.Fatal(err)
 	}
-	if legacyCount != 0 || maximumVersion != 8 {
+	if legacyCount != 0 || maximumVersion != 9 {
 		t.Fatalf("legacy import retained ledger=%d with Goose version=%d", legacyCount, maximumVersion)
 	}
 }
@@ -357,6 +363,7 @@ func TestEmbeddedGooseMigrationsAreVersionedSQLResources(t *testing.T) {
 		"migrations/00006_drop_legacy_migration_ledger.sql",
 		"migrations/00007_logical_views.sql",
 		"migrations/00008_runtime_pair_generation.sql",
+		"migrations/00009_table_primary_key.sql",
 	}
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("migration resource paths = %#v, want %#v", paths, want)

@@ -87,3 +87,29 @@ func TestTableValidatesClusteringFields(t *testing.T) {
 		})
 	}
 }
+
+func TestTableValidatesPrimaryKeyMetadata(t *testing.T) {
+	base := Table{
+		ProjectID: "test-project", DatasetID: "dataset", ID: "events",
+		Schema: []Field{{Name: "account_id", Type: "STRING"}, {Name: "event_id", Type: "INT64"}, {Name: "items", Type: "STRING", Mode: "REPEATED"}},
+	}
+	valid := base
+	valid.PrimaryKey = []string{"account_id", "event_id"}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid primary key error = %v", err)
+	}
+	for name, primaryKey := range map[string][]string{
+		"empty":     {},
+		"missing":   {"missing"},
+		"duplicate": {"account_id", "ACCOUNT_ID"},
+		"repeated":  {"items"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			table := base
+			table.PrimaryKey = primaryKey
+			if err := table.Validate(); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}

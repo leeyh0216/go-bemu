@@ -313,6 +313,7 @@ func cloneTable(table domain.Table) domain.Table {
 	clone := table
 	clone.Schema = cloneFields(table.Schema)
 	clone.ClusteringFields = append([]string(nil), table.ClusteringFields...)
+	clone.PrimaryKey = append([]string(nil), table.PrimaryKey...)
 	clone.Labels = cloneStringMap(table.Labels)
 	if table.ExpirationTime != nil {
 		expiration := *table.ExpirationTime

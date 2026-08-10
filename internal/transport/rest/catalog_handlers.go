@@ -306,6 +306,9 @@ func (s *Server) createTable(w http.ResponseWriter, r *http.Request) {
 	if request.Clustering != nil {
 		table.ClusteringFields = append([]string(nil), request.Clustering.Fields...)
 	}
+	if request.TableConstraints != nil && request.TableConstraints.PrimaryKey != nil {
+		table.PrimaryKey = append([]string{}, request.TableConstraints.PrimaryKey.Columns...)
+	}
 	created, err := s.catalog.CreateTable(r.Context(), table)
 	if err != nil {
 		writeError(w, err)

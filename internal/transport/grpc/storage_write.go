@@ -25,6 +25,9 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -214,6 +217,7 @@ type appendConnection struct {
 	streamName string
 	descriptor []byte
 	traceID    string
+	cdc        *bool
 }
 
 func (c appendConnection) convert(request *storagepb.AppendRowsRequest) (writedomain.AppendRequest, appendConnection, error) {
@@ -258,14 +262,44 @@ func (c appendConnection) convert(request *storagepb.AppendRowsRequest) (writedo
 	if c.streamName == "" {
 		traceID = request.GetTraceId()
 	}
-	next := appendConnection{streamName: canonical, descriptor: append([]byte(nil), descriptor...), traceID: traceID}
+	isCDC, detectErr := cdcSchema(descriptor)
+	if detectErr != nil {
+		return writedomain.AppendRequest{}, c, writedomain.NewError(writedomain.ErrorInvalidArgument, "storage_write.append", detectErr)
+	}
+	if c.cdc != nil && *c.cdc != isCDC {
+		return writedomain.AppendRequest{}, c, writedomain.NewError(writedomain.ErrorFailedPrecondition, "storage_write.append", errors.New("CDC and ordinary INSERT rows cannot be mixed on one AppendRows connection"))
+	}
+	nextCDC := isCDC
+	next := appendConnection{streamName: canonical, descriptor: append([]byte(nil), descriptor...), traceID: traceID, cdc: &nextCDC}
 	return writedomain.AppendRequest{
 		StreamName: canonical, Offset: cloneOffset(request.GetOffset()),
 		Descriptor: append([]byte(nil), descriptor...), Rows: cloneProtoRows(protoData.GetRows().GetSerializedRows()),
 		PayloadBytes: proto.Size(request.GetProtoRows()), WireBytes: proto.Size(request),
 		SchemaFingerprint: digestBytes(descriptor),
-		PayloadDigest:     digestRows(protoData.GetRows().GetSerializedRows()), TraceID: traceID,
+		PayloadDigest:     digestRows(protoData.GetRows().GetSerializedRows()), TraceID: traceID, CDC: isCDC,
 	}, next, nil
+}
+
+// cdcSchema recognizes CDC from the official pseudocolumn pair. Keeping this
+// at the RPC boundary makes connection-mode inheritance explicit before any
+// row bytes reach the application ledger.
+func cdcSchema(serialized []byte) (bool, error) {
+	var message descriptorpb.DescriptorProto
+	if err := proto.Unmarshal(serialized, &message); err != nil {
+		return false, fmt.Errorf("decode ProtoSchema descriptor: %w", err)
+	}
+	name, syntax := "bqemu_cdc_probe.proto", "proto2"
+	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{Name: &name, Syntax: &syntax, MessageType: []*descriptorpb.DescriptorProto{&message}}, nil)
+	if err != nil || file.Messages().Len() != 1 {
+		return false, errors.New("invalid ProtoSchema descriptor")
+	}
+	fields := file.Messages().Get(0).Fields()
+	changeType := fields.ByName(protoreflect.Name("_change_type")) != nil
+	sequence := fields.ByName(protoreflect.Name("_change_sequence_number")) != nil
+	if changeType != sequence {
+		return false, errors.New("CDC ProtoSchema requires both _change_type and _change_sequence_number")
+	}
+	return changeType, nil
 }
 
 func (c appendConnection) responseStream(request *storagepb.AppendRowsRequest) string {

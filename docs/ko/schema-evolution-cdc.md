@@ -107,12 +107,19 @@ BigQuery는 백그라운드에서 변경을 적용합니다. 따라서 변경이
 삭제 데이터 요구 사항을 포함한 기준 규칙은 [BigQuery 변경 데이터
 캡처](https://cloud.google.com/bigquery/docs/change-data-capture)에 있습니다.
 
-현재 에뮬레이터에는 기본 키 제약 메타데이터가 없습니다. CDC 변경 대기열, 적용
-기준점, 백그라운드 적용 작업, 지연 허용 모델, CDC 측정값도 없습니다. 따라서 CDC는
-**지원하지 않습니다**.
+에뮬레이터는 기본 스트림에서 제한된 CDC 부분 집합을 지원합니다. 선언한 기본 키
+메타데이터, ProtoRows 스키마의 쌍을 이룬 CDC 의사 열, 순서가 있는 동기
+UPSERT/DELETE 적용, 키별 영속 순서 원장이 그 범위입니다. 의사 열은 사용자 테이블
+조회에 노출하지 않습니다. 로컬 진단 포트는 마지막 적용 시각과 키 수를 제공하지만,
+이는 `INFORMATION_SCHEMA`나 `upsert_stream_apply_watermark` 호환 주장이 아닙니다.
 
-`UPSERT`를 DuckDB `INSERT OR REPLACE`로 즉시 처리하면 안 됩니다. 이 방식은 순서,
-중복, 삭제, 공개 시점 오류를 숨깁니다.
+이 범위는 일반 CDC 구현이 아니라 **부분 지원**입니다. PENDING 스트림 CDC와 같은
+연결에서 ordinary row를 CDC와 섞는 동작은 거부합니다. 문서의 1~4개 hexadecimal
+section 형식은 검증하지만, 접두어가 같고 section 수가 다른 두 값은 공개 계약에
+우선순위 규칙이 없으므로 명시적으로 실패합니다. 비동기 적용 대기열, `max_staleness`
+모델, production CDC 측정값, 릴리스 client 복구·병렬 writer E2E 근거는 아직 없습니다.
+`UPSERT`를 DuckDB `INSERT OR REPLACE`로 즉시 처리하면 순서, 중복, 삭제, 공개 시점
+오류를 숨깁니다.
 
 <!-- section: stream-ledger -->
 ## 필요한 스트림·CDC 원장
@@ -177,9 +184,9 @@ fix_hint=<다음 조치 경계>
 아직 지원하지 않습니다. 적재 작업의 필드 추가와 완화는 도메인, 계획, DuckDB, REST
 경계에서 검증합니다.
 
-향후 CDC 검증에는 순서가 뒤바뀌거나 중복된 순서 값이 필요합니다. `UPSERT`와
-`DELETE`, 누락된 키, 잘못된 의사 열도 시험해야 합니다. 재연결과 오프셋 재전송, 여러
-스트림, 커밋 공개 시점, 적용 지연, 실패 복구도 검증해야 합니다.
+CDC 검증은 순서가 뒤바뀌거나 중복된 순서 값, `UPSERT`/`DELETE`, 누락된 키와 잘못된
+의사 열 거부, 재연결과 오프셋 재전송, 키별 영속 원장을 다룹니다. 여러 스트림, 커밋
+공개 시점, 적용 지연, 실패 복구, 릴리스 client 복구·병렬 writer E2E는 아직 필요합니다.
 
 승격할 때도 [BigQuery 데이터
 유형](https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types)과 결과

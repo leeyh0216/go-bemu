@@ -35,6 +35,7 @@ import (
 
 var (
 	_ writeports.Coordinator                    = (*StorageWriteCoordinator)(nil)
+	_ writeports.CDCStateInspector              = (*StorageWriteCoordinator)(nil)
 	_ interface{ Close(context.Context) error } = (*StorageWriteCoordinator)(nil)
 )
 
@@ -69,6 +70,25 @@ type StorageWriteCoordinator struct {
 	closeErr        error
 }
 
+func (c *StorageWriteCoordinator) CDCApplyState(ctx context.Context, table writedomain.TableReference) (writeports.CDCApplyState, error) {
+	value, err := c.submit(ctx, func(operationContext context.Context) (any, error) {
+		var state writeports.CDCApplyState
+		statement := "SELECT MAX(applied_at), COUNT(*) FROM " + quoteIdentifier(storageWriteCDCSchema) + "." + quoteIdentifier(storageWriteCDCLedgerTable) + " WHERE project_id = ? AND dataset_id = ? AND table_id = ?"
+		var applied sql.NullTime
+		if err := c.warehouse.db.QueryRowContext(operationContext, statement, table.ProjectID, table.DatasetID, table.TableID).Scan(&applied, &state.KeyCount); err != nil {
+			return nil, fmt.Errorf("read CDC apply state: %w", err)
+		}
+		if applied.Valid {
+			state.AppliedAt = applied.Time.UTC()
+		}
+		return state, nil
+	})
+	if err != nil {
+		return writeports.CDCApplyState{}, err
+	}
+	return value.(writeports.CDCApplyState), nil
+}
+
 type coordinatorOperation struct {
 	ctx       context.Context
 	callerCtx context.Context
@@ -90,11 +110,28 @@ type preparedBatch struct {
 	destinationColumns []string
 	columnTypes        []string
 	rows               [][]any
+	cdc                *preparedCDCBatch
+}
+
+type preparedCDCBatch struct {
+	changes []preparedCDCChange
+}
+
+type preparedCDCChange struct {
+	changeType  writedomain.CDCChangeType
+	sequence    writedomain.CDCSequenceNumber
+	key         string
+	columns     []string
+	columnTypes []string
+	row         []any
+	keyColumns  []string
+	keyValues   []any
 }
 
 type tableLayout struct {
-	schema  writedomain.TableSchema
-	columns []columnLayout
+	schema     writedomain.TableSchema
+	columns    []columnLayout
+	primaryKey []columnLayout
 }
 
 type columnLayout struct {
@@ -183,7 +220,11 @@ func (c *StorageWriteCoordinator) AppendDefault(ctx context.Context, batch write
 				_ = tx.Rollback()
 			}
 		}()
-		if insertErr := insertPreparedBatch(operationContext, tx, prepared); insertErr != nil {
+		if prepared.cdc != nil {
+			if applyErr := applyPreparedCDC(operationContext, tx, prepared); applyErr != nil {
+				return nil, applyErr
+			}
+		} else if insertErr := insertPreparedBatch(operationContext, tx, prepared); insertErr != nil {
 			return nil, insertErr
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
@@ -195,6 +236,9 @@ func (c *StorageWriteCoordinator) AppendDefault(ctx context.Context, batch write
 }
 
 func (c *StorageWriteCoordinator) StagePending(ctx context.Context, batch writeports.AppendBatch) (err error) {
+	if batch.CDC {
+		return invalidRowsError("CDC rows are supported on the default stream only")
+	}
 	admissionBytes := batchInFlightBytes(batch)
 	globalInFlight, streamInFlight := c.admission.snapshot(batch.StreamName)
 	globalStaged, streamStaged := c.stagedSnapshot(batch.StreamName)
@@ -444,6 +488,9 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer stor
 	if err != nil {
 		return preparedBatch{}, invalidRowsError("invalid ProtoSchema: %v", err)
 	}
+	if batch.CDC {
+		return prepareCDCBatch(batch, layout, message)
+	}
 	columnsByName := make(map[string]columnLayout, len(layout.columns))
 	for _, column := range layout.columns {
 		columnsByName[strings.ToLower(column.field.Name)] = column
@@ -504,6 +551,114 @@ func (c *StorageWriteCoordinator) prepareBatch(ctx context.Context, queryer stor
 		streamName: batch.StreamName, table: batch.Table, startOffset: batch.StartOffset,
 		columns: columns, destinationColumns: destinationColumns, columnTypes: columnTypes, rows: decodedRows,
 	}, nil
+}
+
+func prepareCDCBatch(batch writeports.AppendBatch, layout tableLayout, message protoreflect.MessageDescriptor) (preparedBatch, error) {
+	if len(layout.primaryKey) == 0 {
+		return preparedBatch{}, invalidRowsError("CDC destination table requires declared primary-key metadata")
+	}
+	if len(layout.primaryKey) > 16 {
+		return preparedBatch{}, invalidRowsError("CDC destination table primary key has %d columns; BigQuery CDC permits at most 16", len(layout.primaryKey))
+	}
+	columnsByName := make(map[string]columnLayout, len(layout.columns))
+	for _, column := range layout.columns {
+		columnsByName[strings.ToLower(column.field.Name)] = column
+	}
+	fields := message.Fields()
+	changeTypeField := fields.ByName("_change_type")
+	sequenceField := fields.ByName("_change_sequence_number")
+	if changeTypeField == nil || sequenceField == nil {
+		return preparedBatch{}, invalidRowsError("CDC ProtoSchema requires _change_type and _change_sequence_number")
+	}
+	columns, types, targets := make([]string, 0, fields.Len()-2), make([]string, 0, fields.Len()-2), make([]columnLayout, 0, fields.Len()-2)
+	fieldIndex := make(map[string]int, fields.Len())
+	for index := 0; index < fields.Len(); index++ {
+		field := fields.Get(index)
+		fieldIndex[strings.ToLower(string(field.Name()))] = index
+		if field == changeTypeField || field == sequenceField {
+			continue
+		}
+		target, exists := columnsByName[strings.ToLower(string(field.Name()))]
+		if !exists {
+			return preparedBatch{}, invalidRowsError("CDC ProtoSchema field %q is not present in destination table", field.Name())
+		}
+		columns, types, targets = append(columns, target.field.Name), append(types, target.duckDBType), append(targets, target)
+	}
+	keyIndexes := make([]int, len(layout.primaryKey))
+	keyColumns := make([]string, len(layout.primaryKey))
+	for index, key := range layout.primaryKey {
+		found := -1
+		for fieldIndex := 0; fieldIndex < len(targets); fieldIndex++ {
+			if strings.EqualFold(targets[fieldIndex].field.Name, key.field.Name) {
+				found = fieldIndex
+				break
+			}
+		}
+		if found < 0 {
+			return preparedBatch{}, invalidRowsError("CDC ProtoSchema must include primary-key column %q", key.field.Name)
+		}
+		keyIndexes[index], keyColumns[index] = found, key.field.Name
+	}
+	changes := make([]preparedCDCChange, 0, len(batch.Rows))
+	for rowIndex, serialized := range batch.Rows {
+		row := dynamicpb.NewMessage(message)
+		if err := proto.Unmarshal(serialized, row); err != nil {
+			return preparedBatch{}, invalidRowsError("decode CDC ProtoRow %d: %v", rowIndex, err)
+		}
+		if err := proto.CheckInitialized(row); err != nil {
+			return preparedBatch{}, invalidRowsError("CDC ProtoRow %d misses a required field: %v", rowIndex, err)
+		}
+		if len(row.GetUnknown()) != 0 {
+			return preparedBatch{}, invalidRowsError("CDC ProtoRow %d contains fields absent from ProtoSchema", rowIndex)
+		}
+		if !row.Has(changeTypeField) || !row.Has(sequenceField) {
+			return preparedBatch{}, invalidRowsError("CDC ProtoRow %d requires _change_type and _change_sequence_number", rowIndex)
+		}
+		changeType, err := writedomain.ParseCDCChangeType(row.Get(changeTypeField).String())
+		if err != nil {
+			return preparedBatch{}, invalidRowsError("CDC ProtoRow %d: %v", rowIndex, err)
+		}
+		sequence, err := writedomain.ParseCDCSequenceNumber(row.Get(sequenceField).String())
+		if err != nil {
+			return preparedBatch{}, invalidRowsError("CDC ProtoRow %d: %v", rowIndex, err)
+		}
+		values := make([]any, len(targets))
+		for valueIndex, target := range targets {
+			field := fields.Get(fieldIndex[strings.ToLower(target.field.Name)])
+			if !field.IsList() && !row.Has(field) {
+				// DELETE only needs the declared key. A full Flink-generated
+				// descriptor may still contain required non-key destination fields
+				// whose row values are intentionally omitted.
+				if !target.isNullable && changeType != writedomain.CDCChangeTypeDelete {
+					return preparedBatch{}, invalidRowsError("required destination column %q is absent", target.field.Name)
+				}
+				values[valueIndex] = nil
+				continue
+			}
+			converted, err := convertProtoValue(field, row.Get(field), target)
+			if err != nil {
+				return preparedBatch{}, invalidRowsError("convert CDC ProtoRow %d field %q: %v", rowIndex, field.Name(), err)
+			}
+			bindable, err := storageWriteBindableValue(target.field, converted)
+			if err != nil {
+				return preparedBatch{}, invalidRowsError("bind CDC ProtoRow %d field %q: %v", rowIndex, field.Name(), err)
+			}
+			values[valueIndex] = bindable
+		}
+		keyValues := make([]any, len(keyIndexes))
+		for index, valueIndex := range keyIndexes {
+			if values[valueIndex] == nil {
+				return preparedBatch{}, invalidRowsError("CDC primary-key column %q is absent or null", keyColumns[index])
+			}
+			keyValues[index] = values[valueIndex]
+		}
+		keyBytes, err := json.Marshal(keyValues)
+		if err != nil {
+			return preparedBatch{}, invalidRowsError("encode CDC primary key: %v", err)
+		}
+		changes = append(changes, preparedCDCChange{changeType: changeType, sequence: sequence, key: observability.Digest(keyBytes), columns: append([]string(nil), columns...), columnTypes: append([]string(nil), types...), row: values, keyColumns: append([]string(nil), keyColumns...), keyValues: keyValues})
+	}
+	return preparedBatch{streamName: batch.StreamName, table: batch.Table, startOffset: batch.StartOffset, cdc: &preparedCDCBatch{changes: changes}}, nil
 }
 
 func invalidRowsError(format string, args ...any) error {
@@ -589,6 +744,14 @@ func (c *StorageWriteCoordinator) describeTable(ctx context.Context, queryer sto
 		field := canonicalStorageWriteField(catalogField)
 		layout.schema.Fields = append(layout.schema.Fields, field)
 		layout.columns = append(layout.columns, columnLayout{field: field, duckDBType: physical.dataType, isNullable: actualNullable})
+	}
+	for _, name := range catalogTable.PrimaryKey {
+		for _, column := range layout.columns {
+			if strings.EqualFold(column.field.Name, name) {
+				layout.primaryKey = append(layout.primaryKey, column)
+				break
+			}
+		}
 	}
 	return layout, nil
 }
@@ -846,6 +1009,148 @@ func insertPreparedBatch(ctx context.Context, executor interface {
 }, batch preparedBatch) error {
 	return insertPreparedBatchInto(ctx, executor, batch,
 		physicalSchema(batch.table.ProjectID, batch.table.DatasetID), batch.table.TableID)
+}
+
+func applyPreparedCDC(ctx context.Context, tx *sql.Tx, batch preparedBatch) error {
+	if batch.cdc == nil {
+		return nil
+	}
+	for rowIndex, change := range batch.cdc.changes {
+		apply, err := shouldApplyCDC(ctx, tx, batch.table, change)
+		if err != nil {
+			return fmt.Errorf("resolve CDC ProtoRow %d at offset %d: %w", rowIndex, batch.startOffset+int64(rowIndex), err)
+		}
+		if !apply {
+			continue
+		}
+		if change.changeType == writedomain.CDCChangeTypeDelete {
+			if err := deleteCDCRow(ctx, tx, batch.table, change); err != nil {
+				return fmt.Errorf("delete CDC ProtoRow %d: %w", rowIndex, err)
+			}
+		} else if err := upsertCDCRow(ctx, tx, batch.table, change); err != nil {
+			return fmt.Errorf("upsert CDC ProtoRow %d: %w", rowIndex, err)
+		}
+		if err := recordCDCSequence(ctx, tx, batch.table, change); err != nil {
+			return fmt.Errorf("record CDC ProtoRow %d: %w", rowIndex, err)
+		}
+	}
+	return nil
+}
+
+func cdcPredicate(columns []string) string {
+	parts := make([]string, len(columns))
+	for index, column := range columns {
+		parts[index] = quoteIdentifier(column) + " = ?"
+	}
+	return strings.Join(parts, " AND ")
+}
+
+func deleteCDCRow(ctx context.Context, tx *sql.Tx, table writedomain.TableReference, change preparedCDCChange) error {
+	statement := fmt.Sprintf("DELETE FROM %s.%s WHERE %s", quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)), quoteIdentifier(table.TableID), cdcPredicate(change.keyColumns))
+	_, err := tx.ExecContext(ctx, statement, change.keyValues...)
+	return err
+}
+
+func upsertCDCRow(ctx context.Context, tx *sql.Tx, table writedomain.TableReference, change preparedCDCChange) error {
+	assignments := make([]string, len(change.columns))
+	for index, column := range change.columns {
+		assignments[index] = quoteIdentifier(column) + " = ?"
+	}
+	args := append(append([]any(nil), change.row...), change.keyValues...)
+	statement := fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)), quoteIdentifier(table.TableID), strings.Join(assignments, ", "), cdcPredicate(change.keyColumns))
+	result, err := tx.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 0 {
+		return nil
+	}
+	placeholders := make([]string, len(change.columns))
+	for index := range placeholders {
+		placeholders[index] = "?"
+	}
+	statement = fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s)", quoteIdentifier(physicalSchema(table.ProjectID, table.DatasetID)), quoteIdentifier(table.TableID), quoteIdentifiers(change.columns), strings.Join(placeholders, ", "))
+	_, err = tx.ExecContext(ctx, statement, change.row...)
+	return err
+}
+
+func quoteIdentifiers(columns []string) string {
+	result := make([]string, len(columns))
+	for index, column := range columns {
+		result[index] = quoteIdentifier(column)
+	}
+	return strings.Join(result, ", ")
+}
+
+type cdcLedgerEntry struct {
+	sequence    writedomain.CDCSequenceNumber
+	ingestOrder int64
+}
+
+func shouldApplyCDC(ctx context.Context, tx *sql.Tx, table writedomain.TableReference, change preparedCDCChange) (bool, error) {
+	statement := fmt.Sprintf("SELECT sequence_text, ingest_order FROM %s.%s WHERE project_id = ? AND dataset_id = ? AND table_id = ? AND key_fingerprint = ?", quoteIdentifier(storageWriteCDCSchema), quoteIdentifier(storageWriteCDCLedgerTable))
+	var text string
+	var order int64
+	err := tx.QueryRowContext(ctx, statement, table.ProjectID, table.DatasetID, table.TableID, change.key).Scan(&text, &order)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	prior, err := writedomain.ParseCDCSequenceNumber(text)
+	if err != nil {
+		return false, fmt.Errorf("stored CDC sequence is invalid: %w", err)
+	}
+	comparison, comparable := compareCDCSequences(change.sequence, prior)
+	if !comparable {
+		return false, fmt.Errorf("CDC sequence numbers with equal prefixes and unequal section counts have no documented precedence")
+	}
+	return comparison >= 0, nil // equal sequence resolves by later ingestion in serialized coordinator order.
+}
+
+func compareCDCSequences(left, right writedomain.CDCSequenceNumber) (int, bool) {
+	limit := left.SectionCount()
+	if right.SectionCount() < limit {
+		limit = right.SectionCount()
+	}
+	for index := 0; index < limit; index++ {
+		if left.Section(index) < right.Section(index) {
+			return -1, true
+		}
+		if left.Section(index) > right.Section(index) {
+			return 1, true
+		}
+	}
+	if left.SectionCount() != right.SectionCount() {
+		return 0, false
+	}
+	return 0, true
+}
+
+func recordCDCSequence(ctx context.Context, tx *sql.Tx, table writedomain.TableReference, change preparedCDCChange) error {
+	var order int64
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(ingest_order), 0) + 1 FROM "+quoteIdentifier(storageWriteCDCSchema)+"."+quoteIdentifier(storageWriteCDCLedgerTable)).Scan(&order); err != nil {
+		return err
+	}
+	statement := fmt.Sprintf(`INSERT INTO %s.%s (project_id, dataset_id, table_id, key_fingerprint, sequence_text, section_count, section_0, section_1, section_2, section_3, ingest_order, applied_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (project_id, dataset_id, table_id, key_fingerprint) DO UPDATE SET sequence_text = excluded.sequence_text, section_count = excluded.section_count, section_0 = excluded.section_0, section_1 = excluded.section_1, section_2 = excluded.section_2, section_3 = excluded.section_3, ingest_order = excluded.ingest_order, applied_at = excluded.applied_at`, quoteIdentifier(storageWriteCDCSchema), quoteIdentifier(storageWriteCDCLedgerTable))
+	sections := [4]uint64{change.sequence.Section(0), change.sequence.Section(1), change.sequence.Section(2), change.sequence.Section(3)}
+	_, err := tx.ExecContext(ctx, statement, table.ProjectID, table.DatasetID, table.TableID, change.key, cdcSequenceText(change.sequence), change.sequence.SectionCount(), sections[0], sections[1], sections[2], sections[3], order, time.Now().UTC())
+	return err
+}
+
+func cdcSequenceText(sequence writedomain.CDCSequenceNumber) string {
+	parts := make([]string, sequence.SectionCount())
+	for index := range parts {
+		parts[index] = fmt.Sprintf("%X", sequence.Section(index))
+	}
+	return strings.Join(parts, "/")
 }
 
 func insertPreparedBatchInto(ctx context.Context, executor interface {

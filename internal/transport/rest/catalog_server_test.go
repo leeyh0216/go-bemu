@@ -127,9 +127,13 @@ func TestCatalogRESTMetadataPatchETagAndSchemaEvolution(t *testing.T) {
 		"tableReference":{"tableId":"events"},"schema":{"fields":[
 			{"name":"id","type":"INT64"},
 			{"name":"payload","type":"RECORD","fields":[{"name":"name","type":"STRING"}]}
-		]}
+		]},"tableConstraints":{"primaryKey":{"columns":["id"]}}
 	}`, http.StatusOK)
 	table := request(http.MethodGet, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events", "", http.StatusOK)
+	constraints, ok := table["tableConstraints"].(map[string]any)
+	if !ok || constraints["primaryKey"].(map[string]any)["columns"].([]any)[0] != "id" {
+		t.Fatalf("table constraints = %#v", table["tableConstraints"])
+	}
 	tableETag := table["etag"].(string)
 	table = catalogRequestWithETag(t, server.URL, http.MethodPatch, "/bigquery/v2/projects/test-project/datasets/analytics/tables/events", `{
 		"description":"patched","labels":{"owner":"test"},"expirationTime":"1800000000000",

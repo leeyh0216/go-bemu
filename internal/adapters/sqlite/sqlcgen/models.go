@@ -186,6 +186,14 @@ type BqemuTableLabel struct {
 	LabelValue string
 }
 
+type BqemuTablePrimaryKeyColumn struct {
+	ProjectID string
+	DatasetID string
+	TableID   string
+	Ordinal   int64
+	FieldName string
+}
+
 type BqemuView struct {
 	ProjectID           string
 	DatasetID           string

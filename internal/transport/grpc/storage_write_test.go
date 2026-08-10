@@ -339,6 +339,28 @@ func TestStorageWriteConfiguredDeadlineMapsToGRPCDeadlineExceeded(t *testing.T) 
 	}
 }
 
+func TestCDCSchemaRequiresBothPseudocolumns(t *testing.T) {
+	name := "CDC"
+	field := func(name string, number int32) *descriptorpb.FieldDescriptorProto {
+		typ, label := descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+		return &descriptorpb.FieldDescriptorProto{Name: &name, Number: &number, Type: &typ, Label: &label}
+	}
+	full, err := proto.Marshal(&descriptorpb.DescriptorProto{Name: &name, Field: []*descriptorpb.FieldDescriptorProto{field("_change_type", 1), field("_change_sequence_number", 2)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := cdcSchema(full); err != nil || !got {
+		t.Fatalf("cdcSchema(full) = %v, %v", got, err)
+	}
+	partial, err := proto.Marshal(&descriptorpb.DescriptorProto{Name: &name, Field: []*descriptorpb.FieldDescriptorProto{field("_change_type", 1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cdcSchema(partial); err == nil {
+		t.Fatal("partial CDC pseudocolumn schema was accepted")
+	}
+}
+
 func TestStorageWriteCanceledAppendMapsToEmbeddedCanceled(t *testing.T) {
 	err := writedomain.NewError(writedomain.ErrorCanceled, "storage_write.append", context.Canceled)
 	if got := storageWriteCode(err); got != codes.Canceled {

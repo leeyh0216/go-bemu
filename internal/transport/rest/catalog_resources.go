@@ -164,6 +164,14 @@ type viewResource struct {
 	UseLegacySQL bool   `json:"useLegacySql"`
 }
 
+type primaryKeyResource struct {
+	Columns []string `json:"columns"`
+}
+
+type tableConstraintsResource struct {
+	PrimaryKey *primaryKeyResource `json:"primaryKey,omitempty"`
+}
+
 type tableResource struct {
 	Kind                string                     `json:"kind,omitempty"`
 	ETag                string                     `json:"etag,omitempty"`
@@ -180,6 +188,7 @@ type tableResource struct {
 	TimePartitioning    *timePartitioningResource  `json:"timePartitioning,omitempty"`
 	RangePartitioning   *rangePartitioningResource `json:"rangePartitioning,omitempty"`
 	Clustering          *clusteringResource        `json:"clustering,omitempty"`
+	TableConstraints    *tableConstraintsResource  `json:"tableConstraints,omitempty"`
 	DefaultRoundingMode *domain.RoundingMode       `json:"defaultRoundingMode,omitempty"`
 	View                *viewResource              `json:"view,omitempty"`
 	CreationTime        string                     `json:"creationTime,omitempty"`
@@ -268,6 +277,9 @@ func tableFromDomain(table domain.Table, baseURL string) tableResource {
 	}
 	if len(table.ClusteringFields) > 0 {
 		resource.Clustering = &clusteringResource{Fields: append([]string(nil), table.ClusteringFields...)}
+	}
+	if table.PrimaryKey != nil {
+		resource.TableConstraints = &tableConstraintsResource{PrimaryKey: &primaryKeyResource{Columns: append([]string(nil), table.PrimaryKey...)}}
 	}
 	return resource
 }

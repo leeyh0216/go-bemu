@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1",
+  "connectorVersion": "1.2.0",
+  "flinkVersion": "1.17.1",
+  "artifact": {
+    "id": "flink-1.17-connector-bigquery-shaded",
+    "kind": "maven-jar",
+    "url": "https://repo.maven.apache.org/maven2/com/google/cloud/flink/flink-1.17-connector-bigquery/1.2.0/flink-1.17-connector-bigquery-1.2.0-shaded.jar",
+    "output": "flink-1.17-connector-bigquery-1.2.0-shaded.jar",
+    "size": 28955121,
+    "sha256": "5d5328be73505972deb867d4814915365b15e955a420369a2250aa1ac3d04699"
+  },
+  "runtime": {
+    "id": "apache-flink-1.17.1-scala_2.12-java11-linux-amd64",
+    "kind": "oci-image",
+    "image": "flink@sha256:d50dd931a53add0125d35e6cc47d13c15fa6bbb65050b975b95d4d89c2a82581"
+  },
+  "source": {
+    "kind": "release-tag",
+    "url": "https://github.com/GoogleCloudDataproc/flink-bigquery-connector/tree/1.2.0",
+    "cdcSchemaProvider": "https://github.com/GoogleCloudDataproc/flink-bigquery-connector/blob/1.2.0/flink-1.17-connector-bigquery/flink-connector-bigquery/src/main/java/com/google/cloud/flink/bigquery/sink/serializer/BigQueryCdcSchemaProvider.java"
+  }
+}

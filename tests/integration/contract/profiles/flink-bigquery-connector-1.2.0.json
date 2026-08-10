@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "1",
+  "id": "flink-bigquery-connector-1.2.0",
+  "consumers": [
+    {
+      "kind": "connector-artifact",
+      "name": "flink-1.17-connector-bigquery-shaded",
+      "versions": ["1.2.0"]
+    }
+  ],
+  "description": "Source-derived Flink 1.17 connector 1.2.0 CDC protocol profile. The Maven artifact is used directly; upstream source is never cloned or built.",
+  "sources": [
+    "https://github.com/GoogleCloudDataproc/flink-bigquery-connector/tree/1.2.0",
+    "https://github.com/GoogleCloudDataproc/flink-bigquery-connector/blob/1.2.0/flink-1.17-connector-bigquery/flink-connector-bigquery/src/main/java/com/google/cloud/flink/bigquery/sink/serializer/BigQueryCdcSchemaProvider.java",
+    "https://repo.maven.apache.org/maven2/com/google/cloud/flink/flink-1.17-connector-bigquery/1.2.0/flink-1.17-connector-bigquery-1.2.0-shaded.jar",
+    "https://cloud.google.com/bigquery/docs/change-data-capture",
+    "https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1"
+  ],
+  "capabilities": {
+    "grpc.storage_write.default_stream": "partial",
+    "grpc.storage_write.cdc": "partial",
+    "cdc.primary_key_metadata": "partial",
+    "cdc.apply_watermark": "partial",
+    "flink.e2e": "planned"
+  },
+  "flows": {
+    "cdc-default-append": [
+      {
+        "stage": "destination_metadata",
+        "protocol": "REST",
+        "method": "GET",
+        "target": "/bigquery/v2/projects/{project}/datasets/{dataset}/tables/{table}",
+        "requiredFields": ["response.tableReference", "response.schema.fields"]
+      },
+      {
+        "stage": "get_default_stream",
+        "protocol": "gRPC",
+        "method": "UNARY",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/GetWriteStream",
+        "requiredFields": ["request.name", "request.view", "response.name", "response.location"]
+      },
+      {
+        "stage": "append_cdc_rows",
+        "protocol": "gRPC",
+        "method": "BIDI_STREAM",
+        "target": "/google.cloud.bigquery.storage.v1.BigQueryWrite/AppendRows",
+        "requiredFields": ["request.first.write_stream", "request.first.proto_rows.writer_schema", "request.first.proto_rows.rows", "request.first.proto_rows.fields._change_type", "request.first.proto_rows.fields._change_sequence_number", "response.append_result.offset"]
+      }
+    ]
+  }
+}

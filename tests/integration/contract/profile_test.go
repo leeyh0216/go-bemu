@@ -40,6 +40,23 @@ func TestRegistryResolvesDSv2ByArtifactIdentity(t *testing.T) {
 	}
 }
 
+func TestRegistryResolvesPinnedFlinkArtifactIdentity(t *testing.T) {
+	profile, ok := DefaultRegistry().ForConsumerVersion(
+		"connector-artifact", "flink-1.17-connector-bigquery-shaded", "1.2.0",
+	)
+	if !ok || profile.ID != "flink-bigquery-connector-1.2.0" {
+		t.Fatalf("Flink artifact resolved to %#v, %t", profile, ok)
+	}
+	if profile.Capabilities["grpc.storage_write.cdc"] != CapabilityPartial {
+		t.Fatalf("Flink CDC capability state = %s, want partial", profile.Capabilities["grpc.storage_write.cdc"])
+	}
+	if _, ok := DefaultRegistry().ForConsumerVersion(
+		"connector-artifact", "flink-1.17-connector-bigquery-shaded", "1.2.1",
+	); ok {
+		t.Fatal("unreviewed Flink release must not silently select the 1.2.0 profile")
+	}
+}
+
 func TestRegistryResolvesPinnedPythonClientVersion(t *testing.T) {
 	registry := DefaultRegistry()
 	profile, ok := registry.ForClientVersion("google-cloud-bigquery-python", "3.43.0")

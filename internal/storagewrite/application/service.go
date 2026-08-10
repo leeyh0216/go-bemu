@@ -222,6 +222,9 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 	if err != nil {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, err)
 	}
+	if request.CDC && !isDefault {
+		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("CDC rows are supported on the default stream only"))
+	}
 	if len(request.Rows) == 0 {
 		return domain.AppendResult{}, domain.NewError(domain.ErrorInvalidArgument, operation, errors.New("at least one ProtoRow is required"))
 	}
@@ -323,6 +326,7 @@ func (s *Service) Append(ctx context.Context, request domain.AppendRequest) (dom
 		WireBytes: int64(request.WireBytes), Descriptor: descriptor, Rows: request.Rows,
 		SchemaFingerprint: fingerprint, PayloadDigest: request.PayloadDigest,
 		TraceID: request.TraceID,
+		CDC:     request.CDC,
 	}
 	batch.PayloadDigest = computedPayloadDigest
 	sideEffect := "coordinator.stage_pending"

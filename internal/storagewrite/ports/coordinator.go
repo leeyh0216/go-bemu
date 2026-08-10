@@ -86,6 +86,7 @@ type AppendBatch struct {
 	SchemaFingerprint string
 	PayloadDigest     string
 	TraceID           string
+	CDC               bool
 }
 
 type CommitRequest struct {
@@ -113,6 +114,17 @@ type Coordinator interface {
 type CoordinatorRuntime interface {
 	Coordinator
 	Close(context.Context) error
+}
+
+// CDCApplyState is an optional read-only diagnostic surface for the local CDC
+// apply frontier. It does not expose CDC pseudocolumns through table reads.
+type CDCApplyState struct {
+	AppliedAt time.Time
+	KeyCount  int64
+}
+
+type CDCStateInspector interface {
+	CDCApplyState(context.Context, domain.TableReference) (CDCApplyState, error)
 }
 
 type CoordinatorFactory interface {

@@ -1285,6 +1285,97 @@ func TestDecodePackedDateTimeMicros(t *testing.T) {
 	}
 }
 
+func TestStorageWriteCDCDefaultAppliesPrimaryKeyOrderedUpsertAndDelete(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	table := domain.Table{ProjectID: "test-project", DatasetID: "dataset", ID: "cdc_items", PrimaryKey: []string{"id"}, Schema: []domain.Field{
+		{Name: "id", Type: "INT64", Mode: "REQUIRED"}, {Name: "value", Type: "STRING", Mode: "REQUIRED"},
+	}}
+	warehouse, coordinator, reference := newStorageWriteTableFixtureWithConfig(t, table, storageWriteCoordinatorTestConfig())
+	descriptor := storageWriteDescriptor(t,
+		protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+		protoField("value", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+		protoField("_change_type", 3, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+		protoField("_change_sequence_number", 4, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+	)
+	appendCDC := func(offset int64, values map[string]any) error {
+		return coordinator.AppendDefault(ctx, writeports.AppendBatch{StreamName: reference.Name() + "/streams/_default", Table: reference, StartOffset: offset, Descriptor: descriptor, Rows: [][]byte{storageWriteRow(t, descriptor, values)}, CDC: true})
+	}
+	if err := appendCDC(0, map[string]any{"id": int64(1), "value": "old", "_change_type": "UPSERT", "_change_sequence_number": "10"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCDC(1, map[string]any{"id": int64(1), "value": "new", "_change_type": "UPSERT", "_change_sequence_number": "11"}); err != nil {
+		t.Fatal(err)
+	}
+	resolver := coordinator.resolver
+	if err := coordinator.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	coordinator, err = NewStorageWriteCoordinator(ctx, warehouse, resolver, storageWriteCoordinatorTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = coordinator.Close(ctx) }()
+	if err := appendCDC(2, map[string]any{"id": int64(1), "value": "stale", "_change_type": "UPSERT", "_change_sequence_number": "0F"}); err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	if err := warehouse.db.QueryRowContext(ctx, "SELECT value FROM "+quoteIdentifier(physicalSchema(reference.ProjectID, reference.DatasetID))+"."+quoteIdentifier(reference.TableID)+" WHERE id = 1").Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != "new" {
+		t.Fatalf("out-of-order CDC update won: %q", value)
+	}
+	if err := appendCDC(3, map[string]any{"id": int64(1), "_change_type": "DELETE", "_change_sequence_number": "12"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := storageWriteRowCount(t, ctx, warehouse, reference); got != 0 {
+		t.Fatalf("CDC delete left %d rows", got)
+	}
+	state, err := coordinator.CDCApplyState(ctx, reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AppliedAt.IsZero() || state.KeyCount != 1 {
+		t.Fatalf("CDC apply state = %#v, want nonzero watermark for one key", state)
+	}
+}
+
+func TestStorageWriteCDCApplyStateMigratesRetainedLegacyLedger(t *testing.T) {
+	ctx, cancel := duckDBStorageWriteTestContext(t)
+	defer cancel()
+	table := domain.Table{ProjectID: "test-project", DatasetID: "dataset", ID: "cdc_legacy", PrimaryKey: []string{"id"}, Schema: []domain.Field{{Name: "id", Type: "INT64", Mode: "REQUIRED"}}}
+	warehouse, coordinator, reference := newStorageWriteTableFixtureWithConfig(t, table, storageWriteCoordinatorTestConfig())
+	descriptor := storageWriteDescriptor(t,
+		protoField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT64, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+		protoField("_change_type", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+		protoField("_change_sequence_number", 3, descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+	)
+	if err := coordinator.AppendDefault(ctx, writeports.AppendBatch{StreamName: reference.Name() + "/streams/_default", Table: reference, Descriptor: descriptor, Rows: [][]byte{storageWriteRow(t, descriptor, map[string]any{"id": int64(1), "_change_type": "UPSERT", "_change_sequence_number": "1"})}, CDC: true}); err != nil {
+		t.Fatal(err)
+	}
+	resolver := coordinator.resolver
+	if err := coordinator.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.db.ExecContext(ctx, "ALTER TABLE "+quoteIdentifier(storageWriteCDCSchema)+"."+quoteIdentifier(storageWriteCDCLedgerTable)+" DROP COLUMN applied_at"); err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewStorageWriteCoordinator(ctx, warehouse, resolver, storageWriteCoordinatorTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = coordinator.Close(ctx) }()
+	state, err := coordinator.CDCApplyState(ctx, reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.KeyCount != 1 || state.AppliedAt.IsZero() {
+		t.Fatalf("migrated CDC apply state = %#v", state)
+	}
+}
+
 func newStorageWriteFixture(t *testing.T, fields []domain.Field) (*Warehouse, *StorageWriteCoordinator, writedomain.TableReference) {
 	return newStorageWriteFixtureWithConfig(t, fields, storageWriteCoordinatorTestConfig())
 }

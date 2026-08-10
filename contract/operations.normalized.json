@@ -1699,8 +1699,8 @@
         "method": "AppendRows"
       },
       "supportedInput": {
-        "en": "ProtoRows, exact pending-stream offsets, connection inheritance, and default-stream append are supported.",
-        "ko": "ProtoRows와 PENDING 스트림의 정확한 오프셋, 연결 상속, 기본 스트림 추가를 지원합니다."
+        "en": "ProtoRows, exact pending-stream offsets, connection inheritance, default-stream append, and default-stream CDC with declared keys plus paired pseudocolumns are supported.",
+        "ko": "ProtoRows와 PENDING 스트림의 정확한 오프셋, 연결 상속, 기본 스트림 추가, 선언한 키와 쌍을 이룬 의사 열을 사용하는 기본 스트림 CDC를 지원합니다."
       },
       "conditions": [
         {
@@ -1722,6 +1722,7 @@
         "ko": "ArrowRows와 누락 값의 기본 표현식은 지원하지 않습니다."
       },
       "issues": [
+        "#20",
         "#7"
       ],
       "sources": [
@@ -1814,8 +1815,8 @@
       "limitations": {
         "policy": "tracked",
         "byDesign": [],
-        "en": "Explicit COMMITTED and BUFFERED streams and CDC mode are not implemented.",
-        "ko": "명시적 COMMITTED 및 BUFFERED 스트림과 CDC 모드는 지원하지 않습니다."
+        "en": "Explicit COMMITTED and BUFFERED streams are not implemented. CDC is default-stream-only and lacks asynchronous apply and released-client E2E evidence.",
+        "ko": "명시적 COMMITTED와 BUFFERED 스트림은 구현하지 않았습니다. CDC는 기본 스트림 전용이며 비동기 적용과 릴리스 client E2E 근거가 없습니다."
       },
       "issues": [
         "#20",

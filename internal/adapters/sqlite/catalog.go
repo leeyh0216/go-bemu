@@ -270,6 +270,7 @@ func (r *catalogRepository) UpdateTable(ctx context.Context, table domain.Table)
 		for _, statement := range []string{
 			`DELETE FROM bqemu_table_labels WHERE project_id = ? AND dataset_id = ? AND table_id = ?`,
 			`DELETE FROM bqemu_table_clustering_fields WHERE project_id = ? AND dataset_id = ? AND table_id = ?`,
+			`DELETE FROM bqemu_table_primary_key_columns WHERE project_id = ? AND dataset_id = ? AND table_id = ?`,
 			`DELETE FROM bqemu_table_fields WHERE project_id = ? AND dataset_id = ? AND table_id = ?`,
 		} {
 			if _, err := tx.ExecContext(ctx, statement, table.ProjectID, table.DatasetID, table.ID); err != nil {
@@ -782,6 +783,13 @@ func insertTableChildren(ctx context.Context, tx *sql.Tx, table domain.Table) er
 			return err
 		}
 	}
+	for ordinal, field := range table.PrimaryKey {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO bqemu_table_primary_key_columns
+    (project_id, dataset_id, table_id, ordinal, field_name) VALUES (?, ?, ?, ?, ?)`,
+			table.ProjectID, table.DatasetID, table.ID, ordinal, field); err != nil {
+			return err
+		}
+	}
 	return insertFields(ctx, tx, table, "", table.Schema)
 }
 
@@ -859,6 +867,32 @@ WHERE project_id = ? AND dataset_id = ? AND table_id = ? ORDER BY ordinal`,
 			clustering = []string{}
 		}
 		table.ClusteringFields = clustering
+	}
+
+	primaryKeyRows, err := q.QueryContext(ctx, `SELECT ordinal, field_name FROM bqemu_table_primary_key_columns
+WHERE project_id = ? AND dataset_id = ? AND table_id = ? ORDER BY ordinal`,
+		table.ProjectID, table.DatasetID, table.ID)
+	if err != nil {
+		return err
+	}
+	for expectedOrdinal := 0; primaryKeyRows.Next(); expectedOrdinal++ {
+		var ordinal int
+		var fieldName string
+		if err := primaryKeyRows.Scan(&ordinal, &fieldName); err != nil {
+			primaryKeyRows.Close()
+			return err
+		}
+		if ordinal != expectedOrdinal {
+			primaryKeyRows.Close()
+			return errors.New("table primary-key ordinals are not contiguous")
+		}
+		table.PrimaryKey = append(table.PrimaryKey, fieldName)
+	}
+	if err := primaryKeyRows.Close(); err != nil {
+		return err
+	}
+	if err := primaryKeyRows.Err(); err != nil {
+		return err
 	}
 
 	table.Schema, err = loadFields(ctx, q, *table)

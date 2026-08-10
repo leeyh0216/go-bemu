@@ -28,7 +28,10 @@ import (
 
 const (
 	storageWriteInternalSchema = "_bqemu_storage_write"
+	// CDC ordering survives coordinator recreation; PENDING staging does not.
+	storageWriteCDCSchema      = "_bqemu_storage_write_cdc"
 	storageWriteReceiptTable   = "pending_receipts"
+	storageWriteCDCLedgerTable = "cdc_ledger"
 )
 
 type storageWriteByteAdmission struct {
@@ -144,6 +147,9 @@ func (c *StorageWriteCoordinator) initializeStaging(ctx context.Context) (err er
 	if err := createStorageWriteCatalog(ctx, tx); err != nil {
 		return err
 	}
+	if err := createStorageWriteCDCCatalog(ctx, tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit Storage Write staging initialization: %w", err)
 	}
@@ -168,6 +174,33 @@ func createStorageWriteCatalog(ctx context.Context, tx *sql.Tx) error {
 	)`, quoteIdentifier(storageWriteInternalSchema), quoteIdentifier(storageWriteReceiptTable))
 	if _, err := tx.ExecContext(ctx, statement); err != nil {
 		return fmt.Errorf("create Storage Write receipt catalog: %w", err)
+	}
+	return nil
+}
+
+func createStorageWriteCDCCatalog(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoteIdentifier(storageWriteCDCSchema)); err != nil {
+		return fmt.Errorf("create Storage Write CDC schema: %w", err)
+	}
+	cdcStatement := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.%s (
+		project_id VARCHAR NOT NULL, dataset_id VARCHAR NOT NULL, table_id VARCHAR NOT NULL,
+		key_fingerprint VARCHAR NOT NULL, sequence_text VARCHAR NOT NULL,
+		section_count INTEGER NOT NULL, section_0 UBIGINT NOT NULL, section_1 UBIGINT NOT NULL,
+		section_2 UBIGINT NOT NULL, section_3 UBIGINT NOT NULL, ingest_order BIGINT NOT NULL,
+		applied_at TIMESTAMP NOT NULL,
+		PRIMARY KEY (project_id, dataset_id, table_id, key_fingerprint)
+	)`, quoteIdentifier(storageWriteCDCSchema), quoteIdentifier(storageWriteCDCLedgerTable))
+	if _, err := tx.ExecContext(ctx, cdcStatement); err != nil {
+		return fmt.Errorf("create Storage Write CDC ledger: %w", err)
+	}
+	// The ledger is deliberately retained across coordinator recreation. Keep
+	// the table forward-compatible with ledgers created by the initial CDC
+	// implementation before apply-state observability was added.
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE "+quoteIdentifier(storageWriteCDCSchema)+"."+quoteIdentifier(storageWriteCDCLedgerTable)+" ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP"); err != nil {
+		return fmt.Errorf("migrate Storage Write CDC apply state: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE "+quoteIdentifier(storageWriteCDCSchema)+"."+quoteIdentifier(storageWriteCDCLedgerTable)+" SET applied_at = CURRENT_TIMESTAMP WHERE applied_at IS NULL"); err != nil {
+		return fmt.Errorf("backfill Storage Write CDC apply state: %w", err)
 	}
 	return nil
 }
