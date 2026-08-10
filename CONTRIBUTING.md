@@ -112,8 +112,10 @@ test pass.
    `git add -A`; stage only the issue-owned paths or patch hunks.
 7. Commit with the issue number, push promptly, and link the commit and CI run
    from the issue.
-8. Close the issue only after the commit is on the target branch and the
-   required `validation-complete` job has succeeded.
+8. Push the issue-owned branch, link its immutable commit and successful
+   required `validation-complete` run from the issue, then close the issue.
+   Merging is a separate release/PR decision; it is not a reason to leave a
+   completed issue open.
 
 Use `refs #N` while any acceptance criterion remains. Use `closes #N` only when
 the commit completes the issue. If implementation uncovers more work, update
