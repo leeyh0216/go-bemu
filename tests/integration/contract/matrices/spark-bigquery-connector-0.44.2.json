@@ -955,7 +955,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/integration/spark/evidence/direct-pending-0.44.2.json",
-          "fingerprint": "sha256:c8bd37c8069154c6ea13a7f2cb8188aba67a82b990edbf88d5e2461c8bce23aa"
+          "fingerprint": "sha256:492e404a5fde2acd7eb07d4b9df2913d475f99d2e2b3e3b042bca9142f4bd284"
         },
         {
           "kind": "artifact-lock",
@@ -989,7 +989,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/integration/spark/evidence/direct-pending-0.44.2.json",
-          "fingerprint": "sha256:c8bd37c8069154c6ea13a7f2cb8188aba67a82b990edbf88d5e2461c8bce23aa"
+          "fingerprint": "sha256:492e404a5fde2acd7eb07d4b9df2913d475f99d2e2b3e3b042bca9142f4bd284"
         },
         {
           "kind": "artifact-lock",
@@ -1023,7 +1023,41 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/integration/spark/evidence/direct-pending-0.44.2.json",
-          "fingerprint": "sha256:c8bd37c8069154c6ea13a7f2cb8188aba67a82b990edbf88d5e2461c8bce23aa"
+          "fingerprint": "sha256:492e404a5fde2acd7eb07d4b9df2913d475f99d2e2b3e3b042bca9142f4bd284"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/integration/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-EXACT-APPEND-SIXTEEN-V1",
+      "flow": "write-direct-pending",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "exactly-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "struct-array",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-16",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "direct-writer",
+        "direct-partition-writer"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/integration/spark/evidence/direct-pending-0.44.2.json",
+          "fingerprint": "sha256:492e404a5fde2acd7eb07d4b9df2913d475f99d2e2b3e3b042bca9142f4bd284"
         },
         {
           "kind": "artifact-lock",
@@ -1057,7 +1091,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/integration/spark/evidence/default-stream-0.44.2.json",
-          "fingerprint": "sha256:8284f841cbd64fd9229de1c7e71817320b0b345e1e0cf6e59fce300d76f518a3"
+          "fingerprint": "sha256:a9ffa87fcc4d594ea0abd54f2fd99a44956d5631e62d62cd542df5922470e639"
         },
         {
           "kind": "artifact-lock",
@@ -1091,7 +1125,7 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/integration/spark/evidence/default-stream-0.44.2.json",
-          "fingerprint": "sha256:8284f841cbd64fd9229de1c7e71817320b0b345e1e0cf6e59fce300d76f518a3"
+          "fingerprint": "sha256:a9ffa87fcc4d594ea0abd54f2fd99a44956d5631e62d62cd542df5922470e639"
         },
         {
           "kind": "artifact-lock",
@@ -1125,7 +1159,41 @@
         {
           "kind": "real-process-trace",
           "ref": "tests/integration/spark/evidence/default-stream-0.44.2.json",
-          "fingerprint": "sha256:8284f841cbd64fd9229de1c7e71817320b0b345e1e0cf6e59fce300d76f518a3"
+          "fingerprint": "sha256:a9ffa87fcc4d594ea0abd54f2fd99a44956d5631e62d62cd542df5922470e639"
+        },
+        {
+          "kind": "artifact-lock",
+          "ref": "tests/integration/spark/artifacts.lock.json",
+          "fingerprint": "sha256:14bff272031cc602ac5e037e5c02739435e11f818ab4632aa59253a80f31ffbf"
+        }
+      ]
+    },
+    {
+      "id": "SBQ-WRITE-DIRECT-ALO-APPEND-SIXTEEN-V1",
+      "flow": "write-direct-default",
+      "axes": {
+        "operation": "write",
+        "transport": "rest+storage-write",
+        "execution": "batch",
+        "format": "PROTO_ROWS",
+        "delivery": "at-least-once",
+        "saveMode": "append",
+        "readShape": "not-applicable",
+        "typeFamily": "struct-array",
+        "auth": "static-access-token",
+        "parallelism": "spark-partition-16",
+        "tablePartitioning": "unpartitioned"
+      },
+      "state": "verified",
+      "officialSourceRefs": [
+        "connector-readme",
+        "direct-partition-writer"
+      ],
+      "evidence": [
+        {
+          "kind": "real-process-trace",
+          "ref": "tests/integration/spark/evidence/default-stream-0.44.2.json",
+          "fingerprint": "sha256:a9ffa87fcc4d594ea0abd54f2fd99a44956d5631e62d62cd542df5922470e639"
         },
         {
           "kind": "artifact-lock",

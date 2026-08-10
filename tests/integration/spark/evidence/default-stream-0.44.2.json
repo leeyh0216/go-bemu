@@ -3,9 +3,10 @@
   "capabilityIds": [
     "SBQ-WRITE-DIRECT-ALO-APPEND-ONE-V1",
     "SBQ-WRITE-DIRECT-ALO-APPEND-TWO-V1",
-    "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1"
+    "SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1",
+    "SBQ-WRITE-DIRECT-ALO-APPEND-SIXTEEN-V1"
   ],
-  "observedOn": "2026-08-08",
+  "observedOn": "2026-08-10",
   "consumer": {
     "connector": "spark-bigquery-connector-0.44.2",
     "spark": "3.5.8",
@@ -26,8 +27,9 @@
     {"stage": "default_append_1", "operation": "GetWriteStream+AppendRows", "shape": "spark-partitions:1 append-batches:1 contiguous-offset-start:0 offset-end:2 appended-rows:2", "fingerprint": "sha256:8cd34709db75ec005e61e837f572dba25a7c91fc41f444b9937d8ce77b3cda75", "status": "OK"},
     {"stage": "default_append_2", "operation": "GetWriteStream+AppendRows", "shape": "spark-partitions:2 append-batches:2 contiguous-offset-start:0 offset-end:2 appended-rows:2", "fingerprint": "sha256:3f51cb7bfa6253adaeeb662c255635f7ea2a71948ac6127743f687d041077d6a", "status": "OK"},
     {"stage": "default_append_4", "operation": "GetWriteStream+AppendRows", "shape": "spark-partitions:4 append-batches:2 contiguous-offset-start:0 offset-end:2 appended-rows:2", "fingerprint": "sha256:9dd733b3445a1e06b211d62ab6ed31481ad5d90ebca616ffe081c6fca957432d", "status": "OK"},
-    {"stage": "copy_query", "operation": "jobs.insert+jobs.get+getQueryResults", "shape": "cases:3 labels-keys:0 priority:INTERACTIVE write-disposition:WRITE_APPEND copied-rows-per-case:2", "status": "DONE"},
-    {"stage": "spark_assertion", "operation": "query-count", "shape": "cases:3 expected-count-per-case:2", "status": "passed"}
+    {"stage": "default_append_16", "operation": "GetWriteStream+AppendRows", "shape": "spark-partitions:16 append-batches:observed contiguous-offset-start:0 offset-end:16 appended-rows:16", "status": "OK"},
+    {"stage": "copy_query", "operation": "jobs.insert+jobs.get+getQueryResults", "shape": "cases:4 labels-keys:0 priority:INTERACTIVE write-disposition:WRITE_APPEND copied-rows:2,2,2,16", "status": "DONE"},
+    {"stage": "spark_assertion", "operation": "query-count", "shape": "cases:4 appended-rows:2,2,2,16", "status": "passed"}
   ],
   "redaction": {
     "rawRows": false,

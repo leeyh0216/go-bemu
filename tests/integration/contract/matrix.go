@@ -240,7 +240,7 @@ func validateAxes(location string, axes MatrixAxes) error {
 		"saveMode":          stringSet("append", "overwrite", "ignore", "error-if-exists", "not-applicable"),
 		"readShape":         stringSet("table", "projection", "filter", "count", "query", "view", "not-applicable"),
 		"tablePartitioning": stringSet("unpartitioned", "time", "ingestion-time", "integer-range", "dynamic-overwrite", "not-applicable"),
-		"parallelism":       stringSet("read-stream-1", "read-stream-2", "read-stream-4", "read-stream-16", "read-stream-negotiated", "spark-partition-1", "spark-partition-2", "spark-partition-4", "spark-partition-negotiated", "not-applicable"),
+		"parallelism":       stringSet("read-stream-1", "read-stream-2", "read-stream-4", "read-stream-16", "read-stream-negotiated", "spark-partition-1", "spark-partition-2", "spark-partition-4", "spark-partition-16", "spark-partition-negotiated", "not-applicable"),
 		"typeFamily":        stringSet("boolean-integer-float", "string-bytes", "numeric-bignumeric", "temporal", "struct-array", "json", "map", "ml-vector-matrix", "geography", "not-applicable"),
 		"auth":              stringSet("static-access-token", "service-account-file", "service-account-base64", "adc-service-account", "adc-user", "wif-external-account", "impersonation", "custom-token-provider", "not-applicable"),
 	}

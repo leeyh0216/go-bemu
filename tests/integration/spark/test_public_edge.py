@@ -934,6 +934,12 @@ def test_query_result_count(
                 "SBQ-WRITE-DIRECT-EXACT-APPEND-FOUR-V1"
             ),
         ),
+        pytest.param(
+            16,
+            marks=pytest.mark.capability(
+                "SBQ-WRITE-DIRECT-EXACT-APPEND-SIXTEEN-V1"
+            ),
+        ),
     ],
 )
 def test_direct_pending_exact_append(
@@ -952,9 +958,19 @@ def test_direct_pending_exact_append(
             {"name": "payload", "type": "STRING", "mode": "NULLABLE"},
         ],
     )
+    row_count = max(8, logical_partitions)
     frame = spark_session.createDataFrame(
-        [(index, f"row-{index}") for index in range(8)], ["id", "payload"]
-    ).repartition(logical_partitions)
+        spark_session.sparkContext.parallelize(
+            [(index, f"row-{index}") for index in range(row_count)],
+            logical_partitions,
+        ),
+        ["id", "payload"],
+    )
+    if frame.rdd.getNumPartitions() != logical_partitions:
+        pytest.fail(
+            "direct exact source partition mismatch "
+            f"shape=actual:{frame.rdd.getNumPartitions()},expected:{logical_partitions}"
+        )
     writer = frame.write.format("bigquery")
     for key, value in connector_options(public_edge).items():
         writer = writer.option(key, value)
@@ -989,9 +1005,9 @@ def test_direct_pending_exact_append(
         "pending_stream_count": logical_partitions,
         "pending_stream_types_valid": True,
         "append_batch_count": logical_partitions,
-        "append_row_count": 8,
+        "append_row_count": row_count,
         "commit_stream_count": logical_partitions,
-        "commit_row_count": 8,
+        "commit_row_count": row_count,
         "commit_succeeded": True,
         "stream_lifecycle_correlated": True,
     }
@@ -1006,16 +1022,16 @@ def test_direct_pending_exact_append(
         test_timeout,
         f"SELECT COUNT(*) AS row_count FROM `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}`",
     )
-    if result["rows"][0]["f"][0]["v"] != "8":
+    if result["rows"][0]["f"][0]["v"] != str(row_count):
         pytest.fail("committed row count mismatch shape=single-count")
-    partition_name = {1: "ONE", 2: "TWO", 4: "FOUR"}[logical_partitions]
+    partition_name = {1: "ONE", 2: "TWO", 4: "FOUR", 16: "SIXTEEN"}[logical_partitions]
     record_capability(
         f"SBQ-WRITE-DIRECT-EXACT-APPEND-{partition_name}-V1",
         (
             f"pending-streams:{logical_partitions} "
             f"append-calls:{logical_partitions} "
             f"finalize-calls:{logical_partitions} "
-            "get-write-stream-calls:0 batch-commit-calls:1 committed-rows:8"
+            f"get-write-stream-calls:0 batch-commit-calls:1 committed-rows:{row_count}"
         ),
     )
 
@@ -1376,6 +1392,12 @@ def test_direct_pending_exact_dynamic_partition_overwrite(
             4,
             marks=pytest.mark.capability("SBQ-WRITE-DIRECT-ALO-APPEND-FOUR-V1"),
         ),
+        pytest.param(
+            16,
+            marks=pytest.mark.capability(
+                "SBQ-WRITE-DIRECT-ALO-APPEND-SIXTEEN-V1"
+            ),
+        ),
     ],
 )
 def test_direct_default_stream_at_least_once(
@@ -1394,8 +1416,14 @@ def test_direct_default_stream_at_least_once(
             {"name": "payload", "type": "STRING", "mode": "NULLABLE"},
         ],
     )
-    frame = spark_session.createDataFrame([(1, "one"), (2, "two")], ["id", "payload"])
-    partitioned = frame.repartition(logical_partitions)
+    row_count = max(2, logical_partitions)
+    partitioned = spark_session.createDataFrame(
+        spark_session.sparkContext.parallelize(
+            [(index, f"row-{index}") for index in range(row_count)],
+            logical_partitions,
+        ),
+        ["id", "payload"],
+    )
     if partitioned.rdd.getNumPartitions() != logical_partitions:
         pytest.fail(
             "default stream source partition mismatch "
@@ -1414,18 +1442,18 @@ def test_direct_default_stream_at_least_once(
     append_batches, appended_rows = observe_default_append_offsets(
         public_edge, since=log_position
     )
-    if appended_rows != 2:
+    if appended_rows != row_count:
         pytest.fail(
-            f"default append row mismatch shape=observed:{appended_rows},expected:2"
+            f"default append row mismatch shape=observed:{appended_rows},expected:{row_count}"
         )
     result = query(
         public_edge,
         test_timeout,
         f"SELECT COUNT(*) AS row_count FROM `{public_edge.project_id}.{public_edge.dataset_id}.{table_id}`",
     )
-    if result["rows"][0]["f"][0]["v"] != "2":
+    if result["rows"][0]["f"][0]["v"] != str(row_count):
         pytest.fail("default stream row count mismatch shape=single-count")
-    partition_name = {1: "ONE", 2: "TWO", 4: "FOUR"}[logical_partitions]
+    partition_name = {1: "ONE", 2: "TWO", 4: "FOUR", 16: "SIXTEEN"}[logical_partitions]
     record_capability(
         f"SBQ-WRITE-DIRECT-ALO-APPEND-{partition_name}-V1",
         (
