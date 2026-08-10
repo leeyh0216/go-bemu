@@ -9,7 +9,6 @@
 bin
 data
 docs
-tests
 web
 *.duckdb
 *.duckdb.wal

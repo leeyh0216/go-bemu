@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "2",
+  "include": [
+    {
+      "caseId": "bq-cli-2.1.31",
+      "executionId": "public",
+      "family": "bq",
+      "composeService": "consumer-bq"
+    },
+    {
+      "caseId": "google-cloud-bigquery-python-3.43.0",
+      "executionId": "public",
+      "family": "python",
+      "composeService": "consumer-python"
+    },
+    {
+      "caseId": "spark-pyspark-3.5.8-connector-0.44.2",
+      "executionId": "public",
+      "family": "spark",
+      "composeService": "consumer-spark"
+    },
+    {
+      "caseId": "spark-scala-3.5.8-connector-0.44.2",
+      "executionId": "public",
+      "family": "spark",
+      "composeService": "consumer-spark"
+    }
+  ]
+}

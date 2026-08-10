@@ -1049,13 +1049,19 @@ def public_edge(
     tmp_path_factory: pytest.TempPathFactory, test_timeout: float
 ) -> Iterator[PublicEdge]:
     work = tmp_path_factory.mktemp("spark-public-edge")
-    binary = work / "go-bemu"
-    _run(
-        ["go", "build", "-trimpath", "-o", str(binary), "./cmd/emulator"],
-        cwd=REPOSITORY_ROOT,
-        timeout=test_timeout,
-        stage="build-current-emulator",
-    )
+    configured_binary = os.getenv("BQEMU_EMULATOR_BINARY", "")
+    if configured_binary:
+        binary = Path(configured_binary)
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            pytest.fail("configured emulator binary is not executable")
+    else:
+        binary = work / "go-bemu"
+        _run(
+            ["go", "build", "-trimpath", "-o", str(binary), "./cmd/emulator"],
+            cwd=REPOSITORY_ROOT,
+            timeout=test_timeout,
+            stage="build-current-emulator",
+        )
     certificate, private_key, truststore = _create_tls_identity(work, test_timeout)
     http_port, grpc_port = _free_port(), _free_port()
     project_id = "spark-contract-" + uuid.uuid4().hex[:8]

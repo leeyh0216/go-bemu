@@ -390,6 +390,56 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
+  consumer-tool-images:
+    name: Consumer tool images
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      BQEMU_IMAGE: go-bemu:tools-ci
+      BQEMU_PYTHON_TOOL_IMAGE: go-bemu-python-tool:tools-ci
+      BQEMU_BQ_TOOL_IMAGE: go-bemu-bq-tool:tools-ci
+      BQEMU_SPARK_TOOL_IMAGE: go-bemu-spark-tool:tools-ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build product and pinned consumer images
+        run: |
+          docker build --tag "$BQEMU_IMAGE" .
+          docker build --file tools/consumer/python.Dockerfile --tag "$BQEMU_PYTHON_TOOL_IMAGE" .
+          docker build --file tools/consumer/bq.Dockerfile --tag "$BQEMU_BQ_TOOL_IMAGE" .
+          docker build --file tools/consumer/spark.Dockerfile --tag "$BQEMU_SPARK_TOOL_IMAGE" .
+      - name: Verify generated public consumer tool matrix
+        run: |
+          expected='["bq-cli-2.1.31:consumer-bq","google-cloud-bigquery-python-3.43.0:consumer-python","spark-pyspark-3.5.8-connector-0.44.2:consumer-spark","spark-scala-3.5.8-connector-0.44.2:consumer-spark"]'
+          actual="$(jq -c '[.include[] | "\(.caseId):\(.composeService)"] | sort' tests/integration/contract/consumer-tools.matrix.json)"
+          test "$actual" = "$expected"
+          docker compose -f compose.yaml -f compose.tools.yaml --profile tools config --services >/tmp/compose-tool-services
+          jq -r '.include[].composeService' tests/integration/contract/consumer-tools.matrix.json | sort -u | while read -r service; do
+            grep -Fxq "$service" /tmp/compose-tool-services
+          done
+      - name: Run Python and bq tool contracts through Compose
+        run: |
+          docker compose -f compose.yaml -f compose.tools.yaml --profile tools up --no-build --abort-on-container-exit --exit-code-from consumer-python consumer-python
+          docker compose -f compose.yaml -f compose.tools.yaml --profile tools up --no-build --abort-on-container-exit --exit-code-from consumer-bq consumer-bq
+      - name: Run Spark tool public-edge contract
+        run: docker compose -f compose.yaml -f compose.tools.yaml --profile tools run --rm consumer-spark
+      - name: Capture tool-image diagnostics
+        if: failure()
+        run: |
+          mkdir -p .artifacts/tool-images
+          docker compose -f compose.yaml -f compose.tools.yaml ps --all >.artifacts/tool-images/compose-ps.txt || true
+          docker compose -f compose.yaml -f compose.tools.yaml logs --no-color >.artifacts/tool-images/compose.log 2>&1 || true
+      - name: Upload tool-image diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tool-image-diagnostics-${{ github.run_id }}
+          path: .artifacts/tool-images
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Stop Compose services
+        if: always()
+        run: docker compose -f compose.yaml -f compose.tools.yaml down --volumes --remove-orphans
+
   spark-contract:
     name: Spark BigQuery Connector contract
     permissions:
@@ -481,6 +531,7 @@ jobs:
       - spark-contract
       - auth-client-test
       - container-smoke
+      - consumer-tool-images
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -499,6 +550,7 @@ jobs:
           SPARK_RESULT: ${{ needs.spark-contract.result }}
           AUTH_CLIENT_RESULT: ${{ needs.auth-client-test.result }}
           CONTAINER_RESULT: ${{ needs.container-smoke.result }}
+          TOOL_IMAGES_RESULT: ${{ needs.consumer-tool-images.result }}
         run: |
           failed=0
           for result in \
@@ -515,6 +567,7 @@ jobs:
             "spark-contract:$SPARK_RESULT" \
             "auth-client-test:$AUTH_CLIENT_RESULT" \
             "container-smoke:$CONTAINER_RESULT"
+            "consumer-tool-images:$TOOL_IMAGES_RESULT"
           do
             job=${result%%:*}
             status=${result#*:}

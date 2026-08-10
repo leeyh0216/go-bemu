@@ -1,0 +1,84 @@
+# Client-only Compose profiles. They use the bqemu service DNS name rather
+# than a host-published port, so they exercise the same public edge in a clean
+# Docker/Compose environment.
+services:
+  consumer-python:
+    build:
+      context: .
+      dockerfile: tools/consumer/python.Dockerfile
+    image: ${BQEMU_PYTHON_TOOL_IMAGE:-go-bemu-python-tool:dev}
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:mode=0700
+    depends_on:
+      bqemu:
+        condition: service_healthy
+    environment:
+      BQEMU_TEST_ENDPOINT: http://bqemu:9050
+      BQEMU_TEST_PROJECT: compose-tool-contract
+      BQEMU_PYTEST_TIMEOUT_SECONDS: "90"
+      BQEMU_RUNTIME_VERSIONS_JSON: '{"client":"3.43.0","python":"3.13"}'
+    command:
+      - -p
+      - no:cacheprovider
+      - -q
+      - tests/integration/python/test_admin_contract.py
+      - tests/integration/python/test_query_contract.py
+    profiles: [tools]
+
+  consumer-bq:
+    build:
+      context: .
+      dockerfile: tools/consumer/bq.Dockerfile
+    image: ${BQEMU_BQ_TOOL_IMAGE:-go-bemu-bq-tool:dev}
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:mode=0700
+    depends_on:
+      bqemu:
+        condition: service_healthy
+    environment:
+      BQEMU_TEST_ENDPOINT: http://bqemu:9050
+      BQEMU_TEST_PROJECT: compose-tool-contract
+      BQEMU_BQCLI_VERSION: "2.1.31"
+      BQEMU_BQCLI_TIMEOUT_SECONDS: "90"
+    profiles: [tools]
+
+  consumer-spark:
+    build:
+      context: .
+      dockerfile: tools/consumer/spark.Dockerfile
+    image: ${BQEMU_SPARK_TOOL_IMAGE:-go-bemu-spark-tool:dev}
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:mode=0700
+      - /workspace/.artifacts:mode=0700
+    environment:
+      SPARK_HOME: /opt/pyspark/deps
+      BQEMU_RUNTIME_VERSIONS_JSON: '{"spark":"3.5.8","connector":"0.44.2","scala":"2.12.18","scalaBinary":"2.12","java":"17","python":"3.11","hadoopGcsConnector":"2.2.8"}'
+      BQEMU_SPARK_CONNECTOR_JAR: /opt/connectors/spark-bigquery.jar
+      BQEMU_SPARK_CONNECTOR_SPEC_JSON: '{"variant":"dsv1-with-dependencies-2.12","output":"spark-bigquery.jar","size":42160396,"sha256":"516699b6ef6bd5208b16b79a8b9fcefad9903ad2f8871d99a7c7c4cd1fe7f23e","provider":"com.google.cloud.spark.bigquery.Scala212BigQueryRelationProvider","connectorVersion":"0.44.2"}'
+      BQEMU_SPARK_TRACE_PATH: /tmp/bqemu-spark.trace
+      BQEMU_SPARK_TEST_TIMEOUT_SECONDS: "180"
+    command:
+      - -p
+      - no:cacheprovider
+      - -q
+      - tests/integration/spark/test_public_edge.py::test_storage_read_arrow_and_avro
+      - tests/integration/spark/test_scala_public_edge.py::test_scala_spark_reads_through_connector
+    profiles: [tools]
