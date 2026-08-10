@@ -45,7 +45,7 @@ func TestCatalogServiceExecutesSemanticDDLThroughPlannedStorage(t *testing.T) {
 	schema := []domain.Field{
 		{Name: "id", Type: "INT64", Mode: "REQUIRED"},
 		{Name: "note", Type: "STRING"},
-		{Name: "convertible", Type: "STRING"},
+		{Name: "convertible", Type: "INT64"},
 	}
 	if err := execute("create", domain.DDLCommandDescriptor{Kind: domain.DDLCreateTable, Schema: schema}); err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestCatalogServiceExecutesSemanticDDLThroughPlannedStorage(t *testing.T) {
 	}
 	insert, err := gateway.Analyze(ctx, ports.QueryRequest{
 		ProjectID: "test-project",
-		SQL:       "INSERT INTO `test-project.analytics.events` VALUES (1, 'not-an-integer', '7')",
+		SQL:       "INSERT INTO `test-project.analytics.events` VALUES (1, 'not-an-integer', 7)",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestCatalogServiceExecutesSemanticDDLThroughPlannedStorage(t *testing.T) {
 	}
 	if err := execute("type", domain.DDLCommandDescriptor{
 		Kind: domain.DDLAlterColumnType, Name: "convertible",
-		Field: domain.Field{Name: "convertible", Type: "INT64", Mode: "NULLABLE"},
+		Field: domain.Field{Name: "convertible", Type: "NUMERIC", Mode: "NULLABLE"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,11 +95,11 @@ func TestCatalogServiceExecutesSemanticDDLThroughPlannedStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(table.Schema) != 3 || table.Schema[1].Name != "message" || table.Schema[2].Type != "INT64" {
+	if len(table.Schema) != 3 || table.Schema[1].Name != "message" || table.Schema[2].Type != "NUMERIC" {
 		t.Fatalf("ALTER schema = %#v", table.Schema)
 	}
 	page, err := service.ListTableData(ctx, target.ProjectID, target.DatasetID, target.TableID, 0, ports.TableDataMaxResults{Value: 10, Present: true})
-	if err != nil || page.TotalRows != 1 || page.Rows[0][1] != "not-an-integer" || page.Rows[0][2] != int64(7) {
+	if err != nil || page.TotalRows != 1 || page.Rows[0][1] != "not-an-integer" || page.Rows[0][2] != "7" {
 		t.Fatalf("ALTER data = %#v, error = %v", page, err)
 	}
 	if err := execute("truncate", domain.DDLCommandDescriptor{Kind: domain.DDLTruncateTable}); err != nil {

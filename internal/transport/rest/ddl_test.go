@@ -50,7 +50,7 @@ func TestGoogleSQLDDLMutatesCatalogAndStorageThroughPublicREST(t *testing.T) {
 		return request("/bigquery/v2/projects/test-project/queries", `{"query":`+ddlQuoteJSON(sql)+`,"useLegacySql":false}`, status)
 	}
 
-	query("CREATE TABLE `test-project.analytics.events` (id INT64 NOT NULL, note STRING, convertible STRING)", http.StatusOK)
+	query("CREATE TABLE `test-project.analytics.events` (id INT64 NOT NULL, note STRING, convertible INT64)", http.StatusOK)
 	table := staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodGet,
 		"/bigquery/v2/projects/test-project/datasets/analytics/tables/events", "", http.StatusOK)
 	fields := table["schema"].(map[string]any)["fields"].([]any)
@@ -72,11 +72,11 @@ func TestGoogleSQLDDLMutatesCatalogAndStorageThroughPublicREST(t *testing.T) {
 		t.Fatalf("ALTER statementType = %#v", statement)
 	}
 
-	query("INSERT INTO `test-project.analytics.events` VALUES (1, 'not-an-integer', '7', 2.50)", http.StatusOK)
+	query("INSERT INTO `test-project.analytics.events` VALUES (1, 'not-an-integer', 7, 2.50)", http.StatusOK)
 	if result := query("ALTER TABLE `test-project.analytics.events` ALTER COLUMN message SET DATA TYPE INT64", http.StatusOK); result["errors"] == nil {
 		t.Fatal("incompatible SET DATA TYPE unexpectedly succeeded")
 	}
-	if result := query("ALTER TABLE `test-project.analytics.events` ALTER COLUMN convertible SET DATA TYPE INT64", http.StatusOK); result["errors"] != nil {
+	if result := query("ALTER TABLE `test-project.analytics.events` ALTER COLUMN convertible SET DATA TYPE NUMERIC", http.StatusOK); result["errors"] != nil {
 		t.Fatalf("compatible SET DATA TYPE failed: %#v", result)
 	}
 	if result := query("ALTER TABLE `test-project.analytics.events` DROP COLUMN score", http.StatusOK); result["errors"] != nil {
@@ -85,7 +85,7 @@ func TestGoogleSQLDDLMutatesCatalogAndStorageThroughPublicREST(t *testing.T) {
 	table = staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodGet,
 		"/bigquery/v2/projects/test-project/datasets/analytics/tables/events", "", http.StatusOK)
 	fields = table["schema"].(map[string]any)["fields"].([]any)
-	if len(fields) != 3 || fields[1].(map[string]any)["name"] != "message" || fields[2].(map[string]any)["type"] != "INT64" {
+	if len(fields) != 3 || fields[1].(map[string]any)["name"] != "message" || fields[2].(map[string]any)["type"] != "NUMERIC" {
 		t.Fatalf("ALTER schema = %#v", fields)
 	}
 	data := staticOverwriteRESTRequest(t, ctx, server.URL, http.MethodGet,

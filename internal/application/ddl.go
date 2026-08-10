@@ -239,6 +239,9 @@ func applyDDLFieldChange(
 			strings.EqualFold(replacement.Mode, "REPEATED") || len(replacement.Fields) != 0 {
 			return nil, engine.FieldChangeDescriptor{}, "", unsupportedDDL("SET DATA TYPE supports top-level scalar columns only")
 		}
+		if err := validateDDLTypeConversion(before, replacement); err != nil {
+			return nil, engine.FieldChangeDescriptor{}, "", err
+		}
 		replacement.Name = before.Name
 		replacement.Mode = before.Mode
 		replacement.Description = before.Description
@@ -248,6 +251,43 @@ func applyDDLFieldChange(
 		}, engine.TableMutationChangeColumnType, nil
 	default:
 		return nil, engine.FieldChangeDescriptor{}, "", unsupportedDDL("ALTER TABLE action is not supported")
+	}
+}
+
+// validateDDLTypeConversion admits only the widening conversions documented
+// for BigQuery ALTER COLUMN SET DATA TYPE.  The engine is still required to
+// prove existing data can be converted before publishing the mutation.
+func validateDDLTypeConversion(before, after domain.Field) error {
+	from := canonicalDDLType(before.Type)
+	to := canonicalDDLType(after.Type)
+	if from == to {
+		if (from == "NUMERIC" || from == "BIGNUMERIC") &&
+			before.Precision != nil && after.Precision != nil && *after.Precision >= *before.Precision &&
+			((before.Scale == nil && after.Scale == nil) || (before.Scale != nil && after.Scale != nil && *after.Scale >= *before.Scale)) {
+			return nil
+		}
+		return fmt.Errorf("%w: SET DATA TYPE does not widen %s; capability=%s", domain.ErrInvalid, from, domain.CapabilitySchemaTypeConversionV1)
+	}
+	allowed := map[string]map[string]bool{
+		"INT64":   {"NUMERIC": true, "BIGNUMERIC": true, "FLOAT64": true},
+		"NUMERIC": {"BIGNUMERIC": true, "FLOAT64": true},
+	}
+	if allowed[from][to] {
+		return nil
+	}
+	return fmt.Errorf("%w: SET DATA TYPE conversion %s -> %s is not a supported BigQuery widening; capability=%s", domain.ErrInvalid, from, to, domain.CapabilitySchemaTypeConversionV1)
+}
+
+func canonicalDDLType(fieldType string) string {
+	switch strings.ToUpper(strings.TrimSpace(fieldType)) {
+	case "INTEGER":
+		return "INT64"
+	case "FLOAT":
+		return "FLOAT64"
+	case "BOOL":
+		return "BOOLEAN"
+	default:
+		return strings.ToUpper(strings.TrimSpace(fieldType))
 	}
 }
 
