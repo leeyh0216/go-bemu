@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,60 @@ func TestConstantFalseMergeCrossesRESTJobLifecycle(t *testing.T) {
 		"query":"INSERT INTO `+"`test-project.analytics.temporary`"+` VALUES (3, 'new'), (4, 'replacement')",
 		"useLegacySql":false
 	}`, http.StatusOK)
+
+	// An expression outside the supported GoogleSQL subset must fail before the
+	// MERGE can reach DuckDB. The public job boundary must therefore leave both
+	// the destination contents and the source table untouched.
+	unsupportedMerge := "MERGE `test-project.analytics.destination` AS target " +
+		"USING `test-project.analytics.temporary` AS source " +
+		"ON READ_CSV('/private/unsupported.csv') " +
+		"WHEN MATCHED THEN DELETE"
+	unsupportedBody, err := json.Marshal(map[string]any{
+		"query": unsupportedMerge, "useLegacySql": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// BigQuery synchronous query responses carry analysis failures in a 200
+	// getQueryResults envelope rather than turning them into an HTTP error.
+	unsupported := request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", string(unsupportedBody), http.StatusOK)
+	errors, ok := unsupported["errors"].([]any)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("unsupported MERGE response = %#v", unsupported)
+	}
+	message := errors[0].(map[string]any)["message"].(string)
+	if !strings.Contains(message, "READ_CSV") || !strings.Contains(message, "query.googlesql.analysis-invalid-v1") {
+		t.Fatalf("unsupported MERGE error = %q", message)
+	}
+	// The rejection must be independent of the MERGE action in which the
+	// unsupported expression occurs. In particular, an UPDATE action must not
+	// reach DuckDB merely because its match predicate itself is supported.
+	unsupportedUpdate := "MERGE `test-project.analytics.destination` AS target " +
+		"USING `test-project.analytics.temporary` AS source " +
+		"ON target.id = source.id " +
+		"WHEN MATCHED THEN UPDATE SET payload = READ_CSV('/private/unsupported.csv')"
+	unsupportedUpdateBody, err := json.Marshal(map[string]any{
+		"query": unsupportedUpdate, "useLegacySql": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupported = request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", string(unsupportedUpdateBody), http.StatusOK)
+	errors, ok = unsupported["errors"].([]any)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("unsupported MERGE update response = %#v", unsupported)
+	}
+	message = errors[0].(map[string]any)["message"].(string)
+	if !strings.Contains(message, "READ_CSV") || !strings.Contains(message, "query.googlesql.analysis-invalid-v1") {
+		t.Fatalf("unsupported MERGE update error = %q", message)
+	}
+	unchanged := request(http.MethodPost, "/bigquery/v2/projects/test-project/queries", `{
+		"query":"SELECT id, payload FROM `+"`test-project.analytics.destination`"+` ORDER BY id",
+		"useLegacySql":false
+	}`, http.StatusOK)
+	if rows, ok := unchanged["rows"].([]any); !ok || len(rows) != 2 {
+		t.Fatalf("unsupported MERGE mutated destination: %#v", unchanged["rows"])
+	}
 
 	merge := "MERGE `test-project.analytics.destination`\n" +
 		"USING (SELECT * FROM `test-project.analytics.temporary`)\n" +
