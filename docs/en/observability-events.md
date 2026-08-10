@@ -1,4 +1,11 @@
+<!-- doc-id: observability-events -->
+<!-- lang: en -->
+
+[English](observability-events.md) | [한국어](../ko/observability-events.md)
+
 # Observability event contract
+
+<!-- section: event-vocabulary -->
 
 The runtime emits a small synchronous event vocabulary. These are structured
 log records, not a delivery API: bqemu has no EventBus or outbox.
@@ -15,3 +22,5 @@ log records, not a delivery API: bqemu has no EventBus or outbox.
 
 This table is generated from the `internal/observability.EventKind` descriptor;
 the contract test keeps the checked-in catalog aligned with that descriptor.
+The surrounding request contract follows the [BigQuery REST API
+reference](https://cloud.google.com/bigquery/docs/reference/rest).
