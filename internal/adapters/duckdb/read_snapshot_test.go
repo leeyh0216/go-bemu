@@ -35,6 +35,28 @@ import (
 
 const readSnapshotTestModelVersion = "google.cloud.bigquery.storage.v1@duckdb-adapter-test"
 
+func TestDuckDBReadSnapshotCloseHonorsDeadlineWithOpenIterator(t *testing.T) {
+	snapshot := &duckDBReadSnapshot{
+		metadata:      readdomain.SnapshotMetadata{RowCount: 1},
+		maxBatchBytes: 1,
+	}
+	iterator, err := snapshot.OpenRange(t.Context(), 0, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := snapshot.Close(shutdownCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() error = %v, want deadline exceeded", err)
+	}
+	if err := iterator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The asynchronous cleanup launched after deadline expiry must not retain
+	// the reader after its transport-side iterator completes.
+	snapshot.readers.Wait()
+}
+
 func TestDuckDBReadSnapshotAppliesProjectionRestrictionAndStableResume(t *testing.T) {
 	ctx, cancel := duckDBReadTestContext(t)
 	defer cancel()

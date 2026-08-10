@@ -681,7 +681,26 @@ func (s *duckDBReadSnapshot) Close(ctx context.Context) (resultErr error) {
 	}
 	s.closed = true
 	s.mu.Unlock()
-	s.readers.Wait()
+	readersDone := make(chan struct{})
+	go func() {
+		s.readers.Wait()
+		close(readersDone)
+	}()
+	select {
+	case <-readersDone:
+	case <-ctx.Done():
+		// A blocked transport may retain an iterator after shutdown starts.
+		// Marking the snapshot closed prevents new ranges immediately; deferred
+		// cleanup releases the owned spill once that iterator finishes, while the
+		// caller receives its configured shutdown deadline on time.
+		go func() { _ = s.finishClose(context.WithoutCancel(ctx), readersDone) }()
+		return ctx.Err()
+	}
+	return s.finishClose(ctx, readersDone)
+}
+
+func (s *duckDBReadSnapshot) finishClose(ctx context.Context, readersDone <-chan struct{}) (resultErr error) {
+	<-readersDone
 	if s.spillPath == "" {
 		return nil
 	}

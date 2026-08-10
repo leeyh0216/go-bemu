@@ -99,14 +99,12 @@ func (s *Service) Close(ctx context.Context) error {
 func (s *Service) closeSnapshots(ctx context.Context, operation string, states []*sessionState) error {
 	var result error
 	for _, state := range states {
-		state.mu.Lock()
 		s.logger.InfoContext(ctx, "closing read snapshot",
 			"event", "side_effect.before", "side_effect", "snapshot.close",
 			"operation", operation, "model_version", s.config.ProtocolModelVersion,
 			"session", state.session.Name,
 		)
 		err := state.snapshot.Close(ctx)
-		state.mu.Unlock()
 		budgetErr := s.releaseSnapshotBudget(ctx, operation, state)
 		attrs := []any{
 			"event", "side_effect.after", "side_effect", "snapshot.close",

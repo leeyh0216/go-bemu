@@ -361,7 +361,7 @@ func TestCloseRejectsCommitAfterReservationWasReleased(t *testing.T) {
 	assertOneReservationReleaseLog(t, logs.String())
 }
 
-func TestCloseKnownGapStalledReadCanOutliveShutdownDeadline(t *testing.T) {
+func TestCloseReturnsBeforeStalledTransportSendReleases(t *testing.T) {
 	ctx, cancel := testContext(t)
 	defer cancel()
 	snapshot := newFakeSnapshot(domain.FormatArrow, 1)
@@ -388,9 +388,9 @@ func TestCloseKnownGapStalledReadCanOutliveShutdownDeadline(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 
-	// Known issue #6 gap: ReadRows holds the per-session read lock while the
-	// transport send callback is stalled. sync.RWMutex has no context-aware
-	// Lock, so Close cannot honor its deadline until that callback returns.
+	// ReadRows may be stalled in the transport callback, but shutdown must mark
+	// the session unavailable and close its snapshot without waiting for that
+	// callback to return.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer shutdownCancel()
 	closeStarted := make(chan struct{})
@@ -400,11 +400,13 @@ func TestCloseKnownGapStalledReadCanOutliveShutdownDeadline(t *testing.T) {
 		closeResult <- service.Close(shutdownCtx)
 	}()
 	<-closeStarted
-	<-shutdownCtx.Done()
 	select {
 	case err := <-closeResult:
-		t.Fatalf("known stalled-read gap changed; Close returned before send release: %v", err)
-	default:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-shutdownCtx.Done():
+		t.Fatal("Close waited for stalled transport send")
 	}
 
 	releaseOnce.Do(func() { close(releaseSend) })
@@ -413,11 +415,6 @@ func TestCloseKnownGapStalledReadCanOutliveShutdownDeadline(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
-	select {
-	case <-closeResult:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
