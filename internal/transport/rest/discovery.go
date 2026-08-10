@@ -68,6 +68,11 @@ func catalogDiscoveryResources() map[string]any {
 		"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
 		"tableId": discoveryPathParameter("tableId"),
 	}
+	tableGet := map[string]any{
+		"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
+		"tableId": discoveryPathParameter("tableId"), "selectedFields": discoveryQueryParameter("string"),
+		"view": discoveryQueryParameter("string"),
+	}
 	datasetMutation := map[string]any{
 		"projectId": discoveryPathParameter("projectId"), "datasetId": discoveryPathParameter("datasetId"),
 		"accessPolicyVersion": discoveryQueryParameter("integer"), "updateMode": discoveryQueryParameter("string"),
@@ -104,7 +109,7 @@ func catalogDiscoveryResources() map[string]any {
 		}},
 		"tables": map[string]any{"methods": map[string]any{
 			"insert": discoveryMethod("bigquery.tables.insert", "POST", "projects/{projectId}/datasets/{datasetId}/tables", "Table", "Table", projectDataset, "projectId", "datasetId"),
-			"get":    discoveryMethod("bigquery.tables.get", "GET", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "", "Table", projectDatasetTable, "projectId", "datasetId", "tableId"),
+			"get":    discoveryMethod("bigquery.tables.get", "GET", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "", "Table", tableGet, "projectId", "datasetId", "tableId"),
 			"patch":  discoveryMethod("bigquery.tables.patch", "PATCH", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "Table", "Table", tableMutation, "projectId", "datasetId", "tableId"),
 			"update": discoveryMethod("bigquery.tables.update", "PUT", "projects/{projectId}/datasets/{datasetId}/tables/{tableId}", "Table", "Table", tableMutation, "projectId", "datasetId", "tableId"),
 			"list": discoveryMethod("bigquery.tables.list", "GET", "projects/{projectId}/datasets/{datasetId}/tables", "", "TableList", map[string]any{

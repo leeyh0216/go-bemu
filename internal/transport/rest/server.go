@@ -63,6 +63,7 @@ type Server struct {
 	mediaUpload         *MediaUploadSupport
 	operationRoutes     []operationRouteRegistration
 	discoveryExtensions []discoveryExtension
+	tableStatistics     ports.TableStatisticsReader
 }
 
 type Option func(*Server)
@@ -83,6 +84,9 @@ func NewCatalogServer(catalog CatalogUseCases, readiness ports.HealthChecker, ba
 	server := &Server{
 		catalog: catalog, readiness: readiness, baseURL: strings.TrimRight(baseURL, "/"),
 		requestBodyLimits: normalizedRequestBodyLimits(0, 0),
+	}
+	if statistics, ok := readiness.(ports.TableStatisticsReader); ok {
+		server.tableStatistics = statistics
 	}
 	for _, option := range options {
 		option(server)

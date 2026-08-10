@@ -52,6 +52,19 @@ func TestListTableDataPagesRealDuckDBRowsAndReportsExactTotal(t *testing.T) {
 	}
 }
 
+func TestTableStatisticsReportsCanonicalRowAndByteTotals(t *testing.T) {
+	ctx, cancel := duckDBTableDataTestContext(t)
+	defer cancel()
+	warehouse, reference := newDuckDBTableDataFixture(t, ctx)
+	statistics, err := warehouse.TableStatistics(ctx, reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statistics.RowCount != 3 || statistics.LogicalBytes <= 0 || statistics.PhysicalBytes != statistics.LogicalBytes {
+		t.Fatalf("table statistics = %#v", statistics)
+	}
+}
+
 func TestListTableDataTrimsCanonicalPageAndRejectsOversizedRow(t *testing.T) {
 	ctx, cancel := duckDBTableDataTestContext(t)
 	defer cancel()

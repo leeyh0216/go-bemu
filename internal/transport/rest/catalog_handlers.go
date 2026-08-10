@@ -182,6 +182,10 @@ func rejectTableDefaultRoundingMode(present bool) error {
 }
 
 func (s *Server) getDataset(w http.ResponseWriter, r *http.Request) {
+	if err := validateDatasetMetadataView(r.URL.Query().Get("datasetView")); err != nil {
+		writeError(w, err)
+		return
+	}
 	dataset, err := s.catalog.GetDataset(r.Context(), r.PathValue("projectId"), r.PathValue("datasetId"))
 	if err != nil {
 		writeError(w, err)
@@ -210,6 +214,12 @@ func (s *Server) listDatasets(w http.ResponseWriter, r *http.Request) {
 		}
 		datasets = visible
 	}
+	filters, err := parseDatasetLabelFilters(r.URL.Query().Get("filter"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	datasets = filterDatasetsByLabels(datasets, filters)
 	start, end, nextPageToken, err := pageBounds(r, len(datasets))
 	if err != nil {
 		writeError(w, err)
@@ -439,13 +449,27 @@ func (s *Server) mutateTable(w http.ResponseWriter, r *http.Request, replace boo
 }
 
 func (s *Server) getTable(w http.ResponseWriter, r *http.Request) {
+	if err := validateTableMetadataView(r.URL.Query().Get("view")); err != nil {
+		writeError(w, err)
+		return
+	}
 	table, err := s.catalog.GetTable(r.Context(), r.PathValue("projectId"), r.PathValue("datasetId"), r.PathValue("tableId"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	selected, err := projectSelectedTableFields(table.Schema, r.URL.Query().Get("selectedFields"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	table.Schema = selected
 	resource, err := s.tableResource(r.Context(), table, s.baseURLFor(r))
 	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.applyTableMetadataView(r.Context(), table, &resource, r.URL.Query().Get("view")); err != nil {
 		writeError(w, err)
 		return
 	}
