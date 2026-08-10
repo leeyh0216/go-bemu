@@ -11,6 +11,7 @@ import (
 
 const CapabilitySchemaAdditiveV1 = "CAP-SCHEMA-ADDITIVE-V1"
 const CapabilitySchemaUpdateV1 = "CAP-SCHEMA-UPDATE-V1"
+const CapabilitySchemaTypeConversionV1 = "CAP-SCHEMA-TYPE-CONVERSION-V1"
 
 type SchemaAddition struct {
 	Path  []string
