@@ -591,6 +591,7 @@
                 ],
                 "testEvidence": [
                   "python:tests/integration/python/test_query_contract.py:test_synchronous_and_polled_query_jobs",
+                  "python:tests/integration/python/test_query_contract.py:test_google_sql_ddl_updates_the_official_python_client_view",
                   "python:tests/integration/python/test_query_lifecycle_contract.py:test_query_destination_job_lifecycle_pagination_and_metadata_patch"
                 ],
                 "operationExpectations": [

@@ -52,9 +52,6 @@ def test_failed_query_is_done_with_invalid_query_error(
 
 @pytest.mark.operation("bigquery.jobs.insert")
 @pytest.mark.operation("bigquery.jobs.getQueryResults")
-@pytest.mark.operation("bigquery.datasets.insert")
-@pytest.mark.operation("bigquery.datasets.delete")
-@pytest.mark.operation("bigquery.tables.get")
 def test_google_sql_ddl_updates_the_official_python_client_view(
     bq_client: bigquery.Client, project_id: str, test_timeout: float
 ) -> None:
