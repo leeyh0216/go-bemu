@@ -173,6 +173,92 @@ logging:
 	listener.Close()
 }
 
+func TestRuntimeGoogleSQLDDLAndPhysicalStateSurviveRestart(t *testing.T) {
+	directory := t.TempDir()
+	httpAddress := unusedLoopbackAddress(t)
+	grpcAddress := unusedLoopbackAddress(t)
+	baseURL := "http://" + httpAddress
+	configPath := filepath.Join(directory, "bqemu.yaml")
+	configBody := fmt.Sprintf(`
+apiVersion: config.bqemu.dev/v1alpha1
+kind: BQEMUConfig
+defaults:
+  projectId: default-project
+  location: US
+server:
+  http:
+    address: %q
+    publicUrl: %q
+  grpc:
+    address: %q
+database:
+  adapter: duckdb
+  dsn: %q
+  tempDirectory: %q
+state:
+  dsn: %q
+runtime:
+  shutdownTimeout: "5s"
+  serverDrainTimeout: "2s"
+  storageCloseTimeout: "2s"
+storage:
+  read:
+    enabled: false
+  write:
+    enabled: false
+logging:
+  level: error
+  format: text
+`, httpAddress, baseURL, grpcAddress,
+		filepath.Join(directory, "engine.duckdb"), filepath.Join(directory, "tmp"),
+		filepath.Join(directory, "state.sqlite"))
+	if err := os.WriteFile(configPath, []byte(strings.TrimSpace(configBody)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := startRuntimeForRestartTest(t, configPath, baseURL)
+	runtimeRequest(t, baseURL, http.MethodPost, "/bqemu/v1/projects", `{"projectId":"ddl-restart"}`, http.StatusOK)
+	runtimeRequest(t, baseURL, http.MethodPost, "/bigquery/v2/projects/ddl-restart/datasets", `{
+  "datasetReference":{"datasetId":"analytics"},"location":"US"
+}`, http.StatusOK)
+	execute := func(statement string) {
+		result := runtimeRequest(t, baseURL, http.MethodPost, "/bigquery/v2/projects/ddl-restart/queries",
+			fmt.Sprintf(`{"query":%q,"useLegacySql":false}`, statement), http.StatusOK)
+		if errorsValue, found := result["errors"]; found && errorsValue != nil {
+			t.Fatalf("DDL %q errors = %#v", statement, errorsValue)
+		}
+	}
+	execute("CREATE TABLE `ddl-restart.analytics.events` (id INT64, score INT64, old_name STRING)")
+	execute("INSERT INTO `ddl-restart.analytics.events` (id, score, old_name) VALUES (1, 7, 'row')")
+	execute("ALTER TABLE `ddl-restart.analytics.events` ADD COLUMN note STRING")
+	execute("ALTER TABLE `ddl-restart.analytics.events` RENAME COLUMN old_name TO title")
+	execute("ALTER TABLE `ddl-restart.analytics.events` ALTER COLUMN score SET DATA TYPE NUMERIC")
+	execute("ALTER TABLE `ddl-restart.analytics.events` DROP COLUMN note")
+	execute("TRUNCATE TABLE `ddl-restart.analytics.events`")
+	execute("CREATE TABLE `ddl-restart.analytics.dropped` (id INT64)")
+	execute("DROP TABLE `ddl-restart.analytics.dropped`")
+	stop()
+
+	stop = startRuntimeForRestartTest(t, configPath, baseURL)
+	t.Cleanup(stop)
+	table := runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/ddl-restart/datasets/analytics/tables/events", "", http.StatusOK)
+	fields := table["schema"].(map[string]any)["fields"].([]any)
+	if len(fields) != 3 || fields[0].(map[string]any)["name"] != "id" ||
+		fields[1].(map[string]any)["name"] != "score" || fields[1].(map[string]any)["type"] != "NUMERIC" ||
+		fields[2].(map[string]any)["name"] != "title" {
+		t.Fatalf("restarted DDL schema = %#v", fields)
+	}
+	query := runtimeRequest(t, baseURL, http.MethodPost, "/bigquery/v2/projects/ddl-restart/queries",
+		fmt.Sprintf(`{"query":%q,"useLegacySql":false}`, "SELECT count(*) AS count FROM `ddl-restart.analytics.events`"), http.StatusOK)
+	if rows, found := query["rows"].([]any); !found || len(rows) != 1 ||
+		rows[0].(map[string]any)["f"].([]any)[0].(map[string]any)["v"] != "0" {
+		t.Fatalf("restarted TRUNCATE result = %#v", query)
+	}
+	runtimeRequest(t, baseURL, http.MethodGet,
+		"/bigquery/v2/projects/ddl-restart/datasets/analytics/tables/dropped", "", http.StatusNotFound)
+}
+
 func TestRuntimeJobMetadataSurvivesRestart(t *testing.T) {
 	previousLogger := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
