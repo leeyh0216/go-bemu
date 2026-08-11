@@ -22,6 +22,11 @@ const (
 	duckDBMergeSourceCardinalityV1       = "query.googlesql.merge-source-cardinality-v1"
 )
 
+// Keep the query-result payload retained by the job repository bounded until
+// result spilling is introduced. The public REST layer still paginates the
+// retained rows; callers must materialize a destination for larger outputs.
+var duckDBMaxRetainedQueryRows = 1_000_000
+
 type duckDBStatementRunner interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -183,6 +188,9 @@ func readDuckDBStatementRows(rows *sql.Rows, output duckDBStatementOutput) (doma
 	}
 	result := domain.QueryResult{Columns: columns}
 	for rows.Next() {
+		if len(result.Rows) >= duckDBMaxRetainedQueryRows {
+			return domain.QueryResult{}, fmt.Errorf("%w: query result exceeds retained row limit %d", domain.ErrBackend, duckDBMaxRetainedQueryRows)
+		}
 		values := make([]any, len(columnTypes))
 		destinations := make([]any, len(columnTypes))
 		for index := range values {

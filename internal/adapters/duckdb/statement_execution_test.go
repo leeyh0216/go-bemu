@@ -80,6 +80,30 @@ func TestExecuteStatementRunsGoogleSQLScriptWithResolvedVariables(t *testing.T) 
 	}
 }
 
+func TestExecuteStatementRejectsResultBeyondRetainedRowLimit(t *testing.T) {
+	ctx, cancel := duckDBQueryTestContext(t)
+	defer cancel()
+	warehouse := newStatementExecutionWarehouse(t, ctx)
+	reference := domain.TableReference{ProjectID: "test-project", DatasetID: "analytics", TableID: "source"}
+	if _, err := warehouse.ExecuteStatement(ctx, newTypedSourceSeedStatement(t, reference)); err != nil {
+		t.Fatal(err)
+	}
+	previous := duckDBMaxRetainedQueryRows
+	duckDBMaxRetainedQueryRows = 1
+	t.Cleanup(func() { duckDBMaxRetainedQueryRows = previous })
+	gateway, err := googlesqladapter.NewGateway(statementExecutionCatalog{snapshot: statementExecutionSnapshot()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := gateway.Analyze(ctx, ports.QueryRequest{ProjectID: "test-project", DefaultDataset: "analytics", SQL: "SELECT id FROM analytics.source ORDER BY id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.ExecuteStatement(ctx, statement); !errors.Is(err, domain.ErrBackend) || !strings.Contains(err.Error(), "retained row limit") {
+		t.Fatalf("ExecuteStatement() error = %v, want bounded backend failure", err)
+	}
+}
+
 func TestExecuteStatementRunsGenericDeclareMergeScriptAtomically(t *testing.T) {
 	ctx, cancel := duckDBQueryTestContext(t)
 	defer cancel()
